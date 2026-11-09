@@ -28,6 +28,15 @@ void testI18n.use(initReactI18next).init({
           namespace: { notReady: '未就绪', offline: '离线', migrate: '迁移分区', help: '分区用途说明' },
           gaps: { resolve: '核销已覆盖缺口', help: '核销说明' },
           date: { label: '迁移日期（该日分区）', help: '日期说明' },
+          // 迁移危险确认：首击只开确认框，标题/描述/确认字都要能找到。
+          migration: {
+            title: '确认迁移日志分区',
+            description: '节点 {{node}} · 存储命名空间 {{namespace}} · UTC 日 {{day}}',
+            confirm: '确认迁移',
+            denied: '整日跨命名空间迁移仅平台管理员可用',
+            success: '分区已迁移到 COLD',
+            unknown: '请求未取得明确回执，迁移结果未知；不会自动重发。',
+          },
           error: {
             // 与主控台 zh.json 的 logsRuntime.error.* 保持一致：这些文案是「按 code 本地化」的
             // 断言目标，若与真实语言包不符，测试通过也说明不了线上表现。
@@ -53,7 +62,8 @@ function renderPanel(props: Partial<PanelProps> = {}) {
     onUpload: vi.fn().mockResolvedValue(true),
     onInstall: vi.fn().mockResolvedValue(true),
     onControl: vi.fn().mockResolvedValue(true),
-    onMigrate: vi.fn().mockResolvedValue(true),
+    // 迁移成功约定返回 null（失败返回错误文案），故 mock 也必须是 null 才会关窗。
+    onMigrate: vi.fn().mockResolvedValue(null),
     onResolveGaps: vi.fn().mockResolvedValue(true),
     ...props,
   }
@@ -61,7 +71,7 @@ function renderPanel(props: Partial<PanelProps> = {}) {
     return <I18nextProvider i18n={testI18n}>{children}</I18nextProvider>
   }
   const result = render(
-    <NodeLogRuntimePanel os="linux" arch="amd64" online {...handlers} />,
+    <NodeLogRuntimePanel nodeId={1} os="linux" arch="amd64" online {...handlers} />,
     { wrapper: Wrapper },
   )
   return { ...handlers, ...result }
@@ -92,8 +102,13 @@ describe('NodeLogRuntimePanel（ADR-103 b 范式）', () => {
 
     fireEvent.change(screen.getByLabelText('迁移日期（该日分区）'), { target: { value: '2026-09-23' } })
     await user.click(screen.getByRole('button', { name: '迁移分区' }))
+    // 迁移不可逆，所以首击只开危险确认、不直接上报；在确认框里点「确认迁移」才交日期。
     // 视图只交日期；`node:<id>` 前缀属应用侧知识，由外壳拼装。
+    await waitFor(() => expect(onMigrate).not.toHaveBeenCalled())
+    await user.click(await screen.findByRole('button', { name: '确认迁移' }))
     await waitFor(() => expect(onMigrate).toHaveBeenCalledWith('2026-09-23'))
+    // 确认成功后确认框关闭（否则下面的按钮被遮罩拦住）。
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 
     await user.click(screen.getByRole('button', { name: '核销已覆盖缺口' }))
     expect(onResolveGaps).toHaveBeenCalledTimes(1)

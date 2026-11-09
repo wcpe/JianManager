@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Download, Info, MoreHorizontal, Radio } from 'lucide-react'
+import { AlertTriangle, Download, Info, Radio } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -270,7 +270,6 @@ export function LogsPageView({
 }: LogsPageViewProps) {
   const { t } = useTranslation()
 
-  const legacyView = view === 'legacy'
   const federationDegraded = federation?.degraded === true
   const federationNotReady = federation?.federatedNotReady === true
   // 洞察栏：事件数先解构出来（`insights` 未注入时两者自然为空），facet 缺省空数组。
@@ -361,10 +360,9 @@ export function LogsPageView({
       <div className="jm-toolbar-surface flex flex-wrap items-center gap-1 p-1">
         <Segments aria-label={t('logs.viewLabel')}>
           {LOG_VIEWS.filter(
-            // legacy 是「切换前存量日志」的只读入口，不是平级主视图：收纳到右侧「更多」，
-            // 避免与平台/节点视图并列造成误解，也减少工具栏元素数量。
-            (candidate) =>
-              candidate !== 'legacy' && (isPlatformAdmin || candidate === 'node_instance'),
+            // 主视图切换：节点实例视图仅平台管理员可见。
+            // legacy 已随 CP logs 表下线（2026-10-29），不在取值域内，无需再排除。
+            (candidate) => isPlatformAdmin || candidate === 'node_instance',
           ).map((candidate) => (
             <Segment
               key={candidate}
@@ -375,31 +373,9 @@ export function LogsPageView({
             </Segment>
           ))}
         </Segments>
-        {/* 右侧收纳：非常用入口（Legacy 只读）进「更多」，保持主视图区稳定。 */}
-        <div className="ml-auto flex items-center">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                data-testid="logs-more-trigger"
-                aria-label={t('logs.more')}
-              >
-                <MoreHorizontal className="size-4" />
-                {t('logs.more')}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                data-testid="logs-view-legacy"
-                disabled={!isPlatformAdmin}
-                onSelect={() => onChangeView('legacy')}
-              >
-                {t('logs.view_legacy')}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        {/* 「更多」收纳区原本只放 Legacy 只读入口；legacy 已随 CP logs 表下线
+            （2026-10-29）从取值域移除，菜单随之删空——留着空壳会渲染一个点了
+            什么都不会发生的按钮，是比没有更糟的死入口。 */}
       </div>
 
       {/* 强筛选工具栏 */}
@@ -501,7 +477,6 @@ export function LogsPageView({
           size="auto"
           aria-pressed={follow}
           onClick={onToggleFollow}
-          disabled={legacyView}
           className={cn(
             'ml-auto inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors duration-200 ease-ios',
             follow

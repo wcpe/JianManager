@@ -13,6 +13,7 @@ export interface DraftDiffItem {
 export type SettingCategory =
   | 'appearance'
   | 'logging'
+  | 'logAcquisition'
   | 'runtime'
   | 'policy'
   | 'network'
@@ -41,6 +42,9 @@ export const MAX_DIRECT_PROBE_TIMEOUT_MS = 10_000
  * 断言每个键都能归入非 security 分类。**后端加了可编辑键而这里没同步，测试会红。**
  */
 export function keyCategory(key: string): SettingCategory {
+  // `log.acq.*` 是日志采集配置（平台默认 + Worker 覆盖，经心跳下发），与 `log.level`
+  // （CP 自身日志级别）语义不同，故必须在 `log.` 判定之前分流到独立分类。
+  if (key.startsWith('log.acq.')) return 'logAcquisition'
   if (key.startsWith('log.') || key.startsWith('debug.')) return 'logging'
   if (key.startsWith('jdk.') || key.startsWith('graceful_stop.') || key.startsWith('direct_probe.')) return 'runtime'
   if (key.startsWith('runtime.mirror.')) return 'runtime'
@@ -177,6 +181,60 @@ export function validateSettingDraft(key: string, value: string): string | undef
       return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(v)
         ? undefined
         : 'settings.invalidInviteSmtpPassword'
+    case 'log.acq.path_overrides': {
+      // 空 = 无覆盖；非空须为 JSON 对象文本（值为字符串），形如 {"inst:1":"proxy.log.0"}。
+      // 同时校验每条路径本身：必须是**相对实例工作目录**的路径，绝对路径与折叠 `..`
+      // 后的逃逸一律拒绝。后端也会拒，但前端当场提示能省一次往返——而两个入口
+      // （设置页 / 节点日志采集面板）必须同口径，否则同一非法值在一处当场报错、
+      // 在另一处要先提交一次才失败，属于口径漂移。
+      if (v === '') return undefined
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(v)
+      } catch {
+        return 'settings.logAcqInvalidPathOverrides'
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return 'settings.logAcqInvalidPathOverrides'
+      }
+      /**
+       * 键也要校验：后端强制键为规范的 `inst:<十进制ID>`，否则该覆盖永远不会命中
+       * 任何实例（Worker 按 `inst:<数字>` 精确匹配）。只校验值的话，
+       * `{"1":"logs/a.log"}`（把实例 ID 当键）在前端「合法」、提交后被后端 422。
+       */
+      for (const target of Object.keys(parsed as Record<string, unknown>)) {
+        const m = /^inst:(\d+)$/.exec(target)
+        // 与后端同口径：必须是十进制、且回拼后与原文一致（排除 `inst:007`、全角数字等）。
+        if (!m || target !== `inst:${Number(m[1])}`) {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+      }
+      for (const path of Object.values(parsed as Record<string, unknown>)) {
+        if (typeof path !== 'string' || path.trim() === '') {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+        // 首尾空白：后端直接拒绝而不静默 trim（trim 后落库仍是原串会让路径带空格查不到文件）。
+        if (path !== path.trim()) {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+        const p = path.trim().replace(/\\/g, '/')
+        if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+        // 折叠 `..` 后仍以 `..` 开头 ⇒ 逃出工作目录。
+        const parts: string[] = []
+        for (const seg of p.split('/')) {
+          if (seg === '' || seg === '.') continue
+          if (seg === '..') {
+            if (parts.length === 0) return 'settings.logAcqInvalidPathOverrides'
+            parts.pop()
+            continue
+          }
+          parts.push(seg)
+        }
+      }
+      return undefined
+    }
     default:
       return undefined
   }

@@ -1,4 +1,4 @@
-/** 
+/**
  * 日志联邦覆盖 / 失败态纯函数（foundation）。
  *
  * 硬约束（spec §3.1 / 验收）：
@@ -154,13 +154,26 @@ function summarizeTargets(coverage: Coverage | null | undefined): CoverageTarget
   return stats
 }
 
-function hasDuplicateUnresolved(
+/**
+ * 重复质量维度 → 两个**互不相同**的判据。
+ *
+ * 为什么要拆（proto 语义）：`LOG_QUALITY_DUPLICATE_CONFLICT`（身份冲突）与
+ * `LOG_QUALITY_DUPLICATE_UNRESOLVED`（重复事件无法对账）是两个状态，处置方式也不同——
+ * 前者可由 `LogClearIdentityConflicts` 人工清空后消失，后者没有任何可清的对象。
+ * 旧实现把两者并成一个布尔，于是 unresolved 用户会看到「确认并清空冲突」按钮，
+ * 点下去后端没有冲突可清，形成误导死路。
+ */
+function detectDuplicateQuality(
   reasons: PartialReason[],
   quality?: Quality | null,
-): boolean {
-  if (reasons.includes(PARTIAL_REASONS.DUPLICATE_UNRESOLVED)) return true
-  const dq = typeof quality?.duplicateQuality === 'string' ? quality.duplicateQuality.toUpperCase() : ''
-  return dq === 'UNRESOLVED' || dq === 'CONFLICT'
+): { conflict: boolean; unresolved: boolean } {
+  const dq =
+    typeof quality?.duplicateQuality === 'string' ? quality.duplicateQuality.toUpperCase() : ''
+  return {
+    conflict: dq === 'CONFLICT',
+    // 覆盖原因里的 DUPLICATE_UNRESOLVED 只描述「未对账」，不构成身份冲突。
+    unresolved: dq === 'UNRESOLVED' || reasons.includes(PARTIAL_REASONS.DUPLICATE_UNRESOLVED),
+  }
 }
 
 function pickPrimaryReason(reasons: PartialReason[]): PartialReason | undefined {
@@ -171,15 +184,15 @@ function pickPrimaryReason(reasons: PartialReason[]): PartialReason | undefined 
   return reasons[0]
 }
 
-/** 
+/**
  * 汇总 Coverage → 结构化横幅数据。
  *
  * **契约**：入参为 null/undefined（典型：请求失败后无 body）或 complete 非 true 时，
  * 返回的 `emptySuccessAllowed` 必须为 false；绝不把 failed query 映射成
  * complete + empty 的成功空态。
  *
- * quality 不在本函数签名内；重复未对账请通过
- * `classifyLogViewState({ coverage, quality })` 或 {@link mergeQualityIntoSummary} 处理。
+ * quality 只作为**质量标记**并入（duplicateConflict / duplicateUnresolved），
+ * 不改变 status / complete / emptySuccessAllowed——质量与覆盖完整性是两个正交维度。
  */
 export function formatCoverageSummary(
   coverage: Coverage | null | undefined,
@@ -201,6 +214,7 @@ export function formatCoverageSummary(
       reasons: [],
       reasonKeys: [],
       targetStats: { ...EMPTY_STATS },
+      duplicateConflict: false,
       duplicateUnresolved: false,
     }
   }
@@ -209,16 +223,20 @@ export function formatCoverageSummary(
   const reasons = normalizeReasons(cov.partialReasons)
   const targetStats = summarizeTargets(cov)
   const enumerationState = cov.enumerationState
-  const duplicateUnresolved = hasDuplicateUnresolved(reasons, quality)
+  const duplicate = detectDuplicateQuality(reasons, quality)
   // 未校验标记：快路径（Query.Fast）尚未做逐目标完整性校验。独立于缺失原因；
   // 仅 complete=false 时有意义（complete 时忽略，避免自相矛盾的摘要）。
   const pending = cov.complete === true ? false : cov.pending === true
 
   const completeFlag = cov.complete === true
-  // 防御：complete=true 但仍有 partial_reasons / 目标未纳入 / 重复未解析 → 不得当完整成功。
+  // 防御：complete=true 但仍有 partial_reasons / 目标未纳入 → 不得当完整成功。
+  //
+  // 质量维度**不在此处**：`duplicate_quality` 与完整性正交（types.ts / spec §3.1）。
+  // 把 quality 也算进这里，会让 `coverage.complete=true` + conflict 的响应被渲染成
+  // 「覆盖不完整（部分结果）」，并且凭空补一条 EXPORT_INCOMPLETE 原因——这是谎报。
+  // 质量对导出的阻断由 classifyLogViewState 的 allowsExportDownload 单独承担。
   const hasExcluded = targetStats.total > 0 && targetStats.excluded > 0
-  const effectiveComplete =
-    completeFlag && reasons.length === 0 && !duplicateUnresolved && !hasExcluded
+  const effectiveComplete = completeFlag && reasons.length === 0 && !hasExcluded
 
   if (!completeFlag) {
     // complete=false 或缺失（undefined）一律 partial 语义，禁止空成功。
@@ -232,7 +250,8 @@ export function formatCoverageSummary(
       reasonKeys: reasons.map(reasonI18nKey),
       targetStats,
       enumerationState,
-      duplicateUnresolved,
+      duplicateConflict: duplicate.conflict,
+      duplicateUnresolved: duplicate.unresolved,
     }
   }
 
@@ -249,7 +268,8 @@ export function formatCoverageSummary(
       ),
       targetStats,
       enumerationState,
-      duplicateUnresolved,
+      duplicateConflict: duplicate.conflict,
+      duplicateUnresolved: duplicate.unresolved,
     }
   }
 
@@ -258,41 +278,42 @@ export function formatCoverageSummary(
     complete: true,
     pending: false,
     // complete 时允许 UI 在 items.length===0 呈现成功空态（仍需 items 确认）。
+    // 质量标记不否决它：空结果是否成立属于覆盖维度结论，质量只说明重复事件的账目
+    // 是否已对清，两者不能互相冒充。
     emptySuccessAllowed: true,
     summaryKey: LOGS_FEDERATION_KEYS.coverageComplete,
     reasons: [],
     reasonKeys: [],
     targetStats,
     enumerationState,
-    duplicateUnresolved: false,
+    duplicateConflict: duplicate.conflict,
+    duplicateUnresolved: duplicate.unresolved,
   }
 }
 
-/** 
- * 将 quality 并入已格式化的 coverage 摘要（重复未解析 → 降级为 partial）。
- * formatCoverageSummary 已可直接传 quality；本函数供已缓存 summary 的调用方使用。
+/**
+ * 将 quality 并入已格式化的 coverage 摘要（只补质量标记）。
+ *
+ * **刻意不改** status / complete / summaryKey / emptySuccessAllowed：质量维度与覆盖完整性
+ * 正交，把 UNRESOLVED 映射成「覆盖不完整」就是谎报覆盖。导出阻断由
+ * {@link classifyLogViewState} 与 {@link exportBlockedKeyFor} 消费这两个标记后单独表达。
  */
 export function mergeQualityIntoSummary(
   summary: FormattedCoverageSummary,
   quality?: Quality | null,
 ): FormattedCoverageSummary {
-  if (!quality || quality.duplicateQuality !== 'UNRESOLVED') return summary
-  if (summary.duplicateUnresolved && summary.status === 'partial') return summary
+  const duplicate = detectDuplicateQuality(summary.reasons, quality)
+  if (!duplicate.conflict && !duplicate.unresolved) return summary
+  if (
+    summary.duplicateConflict === duplicate.conflict &&
+    summary.duplicateUnresolved === duplicate.unresolved
+  ) {
+    return summary
+  }
   return {
     ...summary,
-    status: 'partial',
-    complete: false,
-    emptySuccessAllowed: false,
-    summaryKey: LOGS_FEDERATION_KEYS.coveragePartial,
-    duplicateUnresolved: true,
-    reasons: summary.reasons.includes(PARTIAL_REASONS.DUPLICATE_UNRESOLVED)
-      ? summary.reasons
-      : [...summary.reasons, PARTIAL_REASONS.DUPLICATE_UNRESOLVED],
-    reasonKeys: (
-      summary.reasons.includes(PARTIAL_REASONS.DUPLICATE_UNRESOLVED)
-        ? summary.reasons
-        : [...summary.reasons, PARTIAL_REASONS.DUPLICATE_UNRESOLVED]
-    ).map(reasonI18nKey),
+    duplicateConflict: duplicate.conflict,
+    duplicateUnresolved: duplicate.unresolved,
   }
 }
 
@@ -326,7 +347,7 @@ function stateFromReason(reason: PartialReason): LogViewState {
   }
 }
 
-/** 
+/**
  * 导出阻断原因码（后端 incomplete_reasons）→ 专用 i18n key；无法精确归因时返回 undefined。
  *
  * 为什么需要它：导出闸阻断报告里的原因码此前全部落到泛化的「导出未通过完整性校验」，
@@ -360,6 +381,8 @@ function exportBlockedKeyFor(
     return LOGS_FEDERATION_KEYS.exportBlockedPermission
   }
   if (state === 'view_stale') return LOGS_FEDERATION_KEYS.exportBlockedViewStale
+  // 身份冲突优先于「未对账」：前者有可执行的人工清空路径，给出的文案也要指向它。
+  if (coverage.duplicateConflict) return LOGS_FEDERATION_KEYS.exportBlockedConflict
   if (coverage.duplicateUnresolved) return LOGS_FEDERATION_KEYS.exportBlockedUnresolved
   if (state === 'query_failed' || state === 'unknown') {
     return LOGS_FEDERATION_KEYS.exportBlockedFailed
@@ -383,7 +406,7 @@ function exportBlockedKeyFor(
   return LOGS_FEDERATION_KEYS.exportBlockedIncomplete
 }
 
-/** 
+/**
  * 分类日志联邦响应 → UI 视图状态。
  *
  * - `ok===false` / `errorCode` / coverage 缺失 → `query_failed`（失败，非空成功）。
@@ -505,15 +528,24 @@ export function classifyLogViewState(
   const viewEnumerationEnded = nextCursorNull || enumState === 'EXHAUSTED'
   const historyGap = reasons.some((r) => HISTORY_GAP_REASONS.has(r))
   // nextCursor=null 单独不足以宣称全量历史完整。
+  // 质量降级（冲突 / 未对账）同样否决：重复账目没对清时，「全量历史已完整枚举」不可断言。
   const historyFullyEnumerated =
-    viewEnumerationEnded && coverage.complete && !historyGap && !coverage.duplicateUnresolved
+    viewEnumerationEnded &&
+    coverage.complete &&
+    !historyGap &&
+    !coverage.duplicateUnresolved &&
+    !coverage.duplicateConflict
 
   const allowsExportDownload =
     // 未校验（verifying）同样开放导出入口：产出物由后端慢路径在下载前做完整校验，
     // 「只有校验后可下载」由后端闸保证；前端把「未校验」当「已失败」会把导出永久锁死 ✗。
     ((coverage.complete && !isIncomplete) || state === 'verifying') &&
     !isFailure &&
+    // 质量维度阻断导出（覆盖完整性仍然可以是 true）：冲突行已被跳过、未对账则去重账目
+    // 不明，两种都不该发布「完整」产物。这是**唯一**由质量造成的阻断，不得外溢成
+    // 「覆盖不完整」。
     !coverage.duplicateUnresolved &&
+    !coverage.duplicateConflict &&
     res.exportStatus !== 'FAILED' &&
     res.exportStatus !== 'INCOMPLETE' &&
     res.exportStatus !== 'PENDING' &&
@@ -522,10 +554,15 @@ export function classifyLogViewState(
     errorCode !== PARTIAL_REASONS.VIEW_STALE
 
   // ready_complete 且空列表时用「合法空态」文案。
+  // 覆盖完整但质量降级：标题只描述质量，绝不说「覆盖不完整」（那是谎报）。
   const bannerKey =
-    state === 'ready_complete' && items !== null && items.length === 0
-      ? LOGS_FEDERATION_KEYS.viewReadyCompleteEmpty
-      : VIEW_BANNER_KEY[state]
+    state === 'ready_complete' && coverage.duplicateConflict
+      ? LOGS_FEDERATION_KEYS.viewQualityConflict
+      : state === 'ready_complete' && coverage.duplicateUnresolved
+        ? LOGS_FEDERATION_KEYS.viewQualityUnresolved
+        : state === 'ready_complete' && items !== null && items.length === 0
+          ? LOGS_FEDERATION_KEYS.viewReadyCompleteEmpty
+          : VIEW_BANNER_KEY[state]
 
   return {
     state,
@@ -546,7 +583,7 @@ export function classifyLogViewState(
   }
 }
 
-/** 
+/**
  * 导出下载 affordance：**已判定缺失 / 失败 / 未决**时不给下载入口；
  * 未校验（verifying，快路径 Pending）例外——入口开放，由后端慢路径在产出前做完整校验。
  *
@@ -574,7 +611,7 @@ export function resolveExportDownloadAffordance(
   }
 }
 
-/** 
+/**
  * 薄 UI 适配：把 classify 结果映射为 Coverage 横幅 props。
  * LogsPage 未改版时可先在测试 / 后续横幅组件中消费；不触碰页面本体。
  */
@@ -582,21 +619,29 @@ export function toCoverageBannerProps(
   classified: ClassifiedLogViewState,
 ): CoverageBannerProps {
   const { state, coverage } = classified
+  // 覆盖完整、仅质量维度降级：横幅必须仍然可见——导出被阻断且需要用户处置
+  // （选节点清冲突 / 缩小范围重试），藏起来等于把人留在「导出灰着、不知为何」的死路。
+  const qualityDegraded =
+    coverage.complete && (coverage.duplicateConflict || coverage.duplicateUnresolved)
   // verifying（未校验）用 info 温和色：既不是 success（未验证不得宣称完整），
   // 也不是 warning（没有具体缺失，不能渲染成「结果有问题」）。
   const tone: CoverageBannerProps['tone'] =
-    state === 'ready_complete'
-      ? 'success'
-      : classified.isFailure
-        ? 'danger'
-        : state === 'verifying'
-          ? 'info'
-          : classified.isIncomplete
-            ? 'warning'
-            : 'success'
+    classified.isFailure
+      ? 'danger'
+      : state === 'verifying'
+        ? 'info'
+        : // 质量降级用 warning：覆盖结论是完整的，但存在需要处置的质量问题。
+          qualityDegraded
+          ? 'warning'
+          : state === 'ready_complete'
+            ? 'success'
+            : classified.isIncomplete
+              ? 'warning'
+              : 'success'
 
   return {
-    visible: classified.isFailure || classified.isIncomplete || !coverage.complete,
+    visible:
+      classified.isFailure || classified.isIncomplete || !coverage.complete || qualityDegraded,
     tone,
     titleKey: classified.bannerKey,
     reasonKeys: [...coverage.reasonKeys],

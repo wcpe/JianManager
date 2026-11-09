@@ -123,7 +123,8 @@ describe('SettingsPage 布尔设置项（输入侧优化）', () => {
     const user = userEvent.setup()
     renderWithProviders(<SettingsPage />)
 
-    await user.click(await screen.findByRole('button', { name: /日志/ }))
+    // 精确名：`日志采集` 是独立分区，宽松的 /日志/ 会同时命中两者。
+    await user.click(await screen.findByRole('button', { name: /^日志$/ }))
     // 键名在标签与等宽说明里各出现一次，故用 getAllByText。
     expect((await screen.findAllByText('debug.mode')).length).toBeGreaterThan(0)
 

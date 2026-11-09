@@ -47,6 +47,13 @@ export interface ChannelDialogViewProps {
   renderBindDialog?: (args: ChannelBindDialogArgs) => ReactNode
   /** 扫码回填完成后的提示钩子（容器注入 toast）。 */
   onBindFilled?: () => void
+  /**
+   * QQ 接入状态只读观测区插槽（容器注入具体实现，如 QQConnectivityPanel）。
+   *
+   * 为何做成桶：这不是一个表单字段，而是旁路观测——网关连没连、机器人进了哪些群，
+   * 都只读自后端，不影响本表单的提交内容。视图不直接取数，保持「取数归容器」。
+   */
+  renderQQStatus?: () => ReactNode
 }
 
 const CHANNEL_TYPES = ['inapp', 'webhook', 'email', 'dingtalk', 'wecom', 'feishu', 'discord', 'telegram', 'qq'] as const
@@ -76,6 +83,7 @@ export function ChannelDialogView({
   submitting = false,
   renderBindDialog,
   onBindFilled,
+  renderQQStatus,
 }: ChannelDialogViewProps) {
   const { t } = useTranslation()
   const isEdit = !!channel
@@ -388,6 +396,11 @@ export function ChannelDialogView({
                 />
                 <p className="text-xs text-muted-foreground mt-1">{t('alerts.qqBaseUrlHint')}</p>
               </Panel>
+
+              {/* 分区四：接入状态——只读观测：网关连没连、机器人进了哪些群。
+                  刻意不提供群选择/建群通道入口：群主动消息被平台拒（40034105），
+                  给入口等于给运维一个用不了的功能。 */}
+              {renderQQStatus?.()}
             </>
           )}
 

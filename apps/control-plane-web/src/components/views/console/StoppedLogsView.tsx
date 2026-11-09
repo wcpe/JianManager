@@ -9,9 +9,18 @@ import { Button } from '@jianmanager/ui/components/button'
 export interface StoppedLogsViewProps {
   instanceId: number
   status: string
-  /** 日志条目（应用侧 `useLogs`；后端按时间倒序返回，这里自行正序展示）。 */
+  /** 日志条目（应用侧取数；后端按时间倒序返回，这里自行正序展示）。 */
   entries?: LogEntry[]
   isLoading?: boolean
+  /**
+   * 加载失败时的错误文案 key；null/undefined 表示未失败。
+   *
+   * 为何由容器算：失败要区分 403 无权限 / 超时 / 一般加载失败，而状态码只有取数层看得到。
+   * 本视图不触达 api，所以只接一个已算好的 key。
+   */
+  errorKey?: string | null
+  /** 重试回调（失败态展示重试按钮）；缺省时不渲染按钮。 */
+  onRetry?: () => void
   /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
   onNotify?: (kind: 'success' | 'error', message: string) => void
   /** 渲染「完整历史」链接（应用侧接路由；缺省时不渲染该入口）。 */
@@ -32,6 +41,8 @@ export function StoppedLogsView({
   status,
   entries: rawEntries,
   isLoading,
+  errorKey,
+  onRetry,
   onNotify,
   renderLink,
 }: StoppedLogsViewProps) {
@@ -78,9 +89,26 @@ export function StoppedLogsView({
           })}
         </div>
       </div>
+      {/* 失败横幅：既包括「无行可展示」也包括「有旧行但本次未刷新」。
+          后者不能直接报错（旧行还有用），也不能拿旧行充新——必须明确说“本次未刷新”。 */}
+      {errorKey && (
+        <div role="alert" className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2 text-xs text-status-warning">
+          <span>
+            {t(errorKey)}
+            {entries.length > 0 && ` · ${t('instanceDetail.historyStale')}`}
+          </span>
+          {onRetry && (
+            <button type="button" className="shrink-0 underline" onClick={onRetry}>
+              {t('logsFederation.action.retry')}
+            </button>
+          )}
+        </div>
+      )}
       <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto p-2 font-mono text-xs leading-relaxed text-gray-300">
         {isLoading ? (
           <p className="text-gray-500">{t('common.loading')}</p>
+        ) : errorKey && entries.length === 0 ? (
+          <p className="text-gray-500">{t('instanceDetail.historyNotLoaded')}</p>
         ) : entries.length === 0 ? (
           // 空态居中卡片：原先一行灰字吊在左上角， pane 大半空白显得像坏了。
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">

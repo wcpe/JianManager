@@ -15,6 +15,7 @@ import {
   Archive,
   Cpu,
   ExternalLink,
+  FileCog,
   HeartPulse,
   Lock,
   Mail,
@@ -70,6 +71,7 @@ const GITHUB_TOKEN_NEW_URL = `https://github.com/settings/personal-access-tokens
 const CATEGORY_ICON: Record<SettingCategory, LucideIcon> = {
   appearance: Palette,
   logging: ScrollText,
+  logAcquisition: FileCog,
   runtime: Cpu,
   policy: HeartPulse,
   network: Network,
@@ -207,7 +209,7 @@ export function SettingsPageView({
   const [pendingCat, setPendingCat] = useState<SettingCategory | null>(null)
 
   const categories: SettingCategory[] = isPlatformAdmin
-    ? ['appearance', 'logging', 'runtime', 'policy', 'network', 'backup', 'email', 'security']
+    ? ['appearance', 'logging', 'logAcquisition', 'runtime', 'policy', 'network', 'backup', 'email', 'security']
     : ['appearance']
 
   // 当前分类的可编辑项（appearance 无平台项）。

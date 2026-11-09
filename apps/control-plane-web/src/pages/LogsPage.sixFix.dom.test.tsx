@@ -6,7 +6,7 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { parseAnsi } from '@/lib/console-ansi'
+import { parseAnsi } from '@/lib/console/console-ansi'
 import api from '@/api/client'
 import LogsPage from './LogsPage'
 

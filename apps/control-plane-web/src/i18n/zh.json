@@ -1679,7 +1679,19 @@
     "openNodeLog": "查看诊断日志",
     "offlineHint": "节点离线，无法拉取日志",
     "nodeTitle": "节点 {{name}} 诊断日志",
-    "platformTitle": "平台诊断日志"
+    "platformTitle": "平台诊断日志",
+    "reachable": "可达",
+    "unreachable": "不通",
+    "testFailed": "测试失败",
+    "testProxy": "测试出站连通性",
+    "proxyTestHint": "填任意地址测试 CP 能否经当前出站代理访问外网（默认 https://www.google.com）。",
+    "testJdkSource": "测试 JDK 下载源",
+    "jdkSourceTestHint": "测试 JDK 下载源（foojay）是否可达。",
+    "testNode": "测试节点存活",
+    "nodeAlive": "在线",
+    "nodeOffline": "离线",
+    "proxyTrafficHint": "经此出站代理的流量：JDK 一键下载、Worker 二进制/自更新拉取、探针依赖下载、客户端分发外呼与更新源检查等 CP/节点的对外下载与请求。",
+    "testUrlLabel": "测试目标地址"
   },
   "instanceBatch": {
     "selected": "已选 {{count}} 个",
@@ -3731,7 +3743,9 @@
     "exportScope_currentPage": "导出当前页",
     "exportScope_allMatched": "导出全部匹配",
     "exportScope_range": "导出所选时间段",
-    "platformTailHint": "已显示日志文件尾部最近 {{count}} 行（文件是唯一来源，无服务端分页）；更早的记录请在该机器上 grep，命令见诊断日志"
+    "platformTailHint": "已显示日志文件尾部最近 {{count}} 行（文件是唯一来源，无服务端分页）；更早的记录请在该机器上 grep，命令见诊断日志",
+    "more": "更多",
+    "view_legacy": "Legacy 只读"
   },
   "logsFederation": {
     "coverage": {
@@ -3821,7 +3835,27 @@
     "federatedNotReadyHint": "本视图只呈现各服务器实时日志，服务未启用时不会以平台或历史日志代替；如需启用实时查询，请到「节点」页 → 对应节点 → 日志运行时面板启用日志平台。",
     "degradedTitleShort": "日志查询服务未启用 · 本视图无数据",
     "degradedUnavailableHint": "本视图只呈现各服务器实时日志，服务暂不可达时不会以平台或历史日志代替；实时服务请稍后重试或联系管理员。",
-    "degradedUnavailableTitleShort": "实时日志查询服务暂不可用 · 本视图无数据"
+    "degradedUnavailableTitleShort": "实时日志查询服务暂不可用 · 本视图无数据",
+    "positionGaps": {
+      "title": "永久位置缺失（{{count}} 条）",
+      "description": "以下采集位置已被人工裁定放弃；这是独立位置凭据，不改变当前时间覆盖、统计质量或导出校验。",
+      "unknown": "未知（旧节点未提供）",
+      "identity": "节点：{{worker}} · 来源：{{source}} · 代次：{{generation}}",
+      "evidence": "存储空间：{{namespace}} · 位置：[{{from}}, {{to}}] · 原因：{{reason}} · 操作人：{{operator}} · 时间：{{at}}"
+    },
+    "clearConflicts": {
+      "button": "确认并清空冲突",
+      "title": "确认并清空身份冲突记录",
+      "description": "该节点存在无法自动裁定的身份冲突记录（同一事件 ID 出现不同内容）。系统在这些情况下会保留先到者并跳过冲突行，即保留的是正确版本；清空只移除这条诊断提示，不改动任何日志内容。清空后本条质量标记会消失，请先核对保留版本无误再执行。",
+      "reasonLabel": "清空理由（必填，将记入审计凭据）",
+      "reasonPlaceholder": "例如：已逐个核对 VL 中保留版本正确",
+      "confirmLabel": "确认并清空",
+      "reasonRequired": "请填写清空理由（审计凭据需要记录为何可以清）",
+      "success": "已清空 {{count}} 条身份冲突记录",
+      "partial": "已清空 {{count}} 条；{{skipped}} 个源因期间新增记录被跳过，请重新查询确认",
+      "failed": "清空身份冲突失败",
+      "scopeHint": "将清空本节点全部持有冲突记录的源（仅平台管理员）"
+    }
   },
   "users": {
     "title": "用户管理",
@@ -5897,7 +5931,11 @@
       "restart": "已重启"
     },
     "approvalCached": "审批包已缓存",
-    "approvalNotCached": "审批包未缓存"
+    "approvalNotCached": "审批包未缓存",
+    "gaps": {
+      "resolve": "核销已覆盖缺口",
+      "help": "采集或投递中断会留下「缺口」记录。当缺口所覆盖的时间段已有完整投影可证明数据完整时，可核销该缺口，避免它一直被计为风险。"
+    }
   },
   "instanceKind": {
     "plugin": "插件服",

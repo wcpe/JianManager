@@ -1,5 +1,7 @@
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
 import { useApprovedLogAssets, useControlLogRuntime, useInstallLogAsset, useLogRuntime, useMigrateLogPartition, useResolveLogIngestGaps, useUploadLogAsset } from '@/api/logRuntime'
 import NodeLogRuntimePanel, {
   namespaceNames,
@@ -41,6 +43,21 @@ export default function NodeLogRuntimeTab({
     restart: t('logsRuntime.action.restart'),
   }
   const failed = t('logsRuntime.opFailed')
+  /**
+   * 是否可以执行**整日分区迁移**（跨命名空间搬 HOT→COLD，不可逆）。
+   *
+   * 只允许平台管理员：门禁放在外壳（本组件）而非受控视图，因为判定依赖
+   * auth/me 与 JWT 两个 store，属于应用侧知识；视图只接一个已算好的布尔。
+   *
+   * `loaded` 为假时（auth/me 未回）**回退到 JWT 的 role=10**：把未加载的
+   * `isPlatformAdmin=false` 当成「服务端显式拒绝」会让首次进页面的管理员
+   * 短暂看到一个禁用按钮，那是误判而非安全。反过来，auth/me 已加载且明确
+   * 不是管理员时，旧 JWT 里的 role=10 不得再把它洗回来。
+   */
+  const jwtRole = useAuthStore((state) => state.role)
+  const permLoaded = usePermissionsStore((state) => state.loaded)
+  const permIsAdmin = usePermissionsStore((state) => state.isPlatformAdmin)
+  const canMigrate = permLoaded ? permIsAdmin : jwtRole === 10
   const runtime = useLogRuntime(nodeId, true)
   const assets = useApprovedLogAssets(true)
   const upload = useUploadLogAsset()
@@ -55,6 +72,8 @@ export default function NodeLogRuntimeTab({
 
   return (
     <NodeLogRuntimePanel
+      key={nodeId}
+      nodeId={nodeId}
       os={os}
       arch={arch}
       online={online}
@@ -64,6 +83,7 @@ export default function NodeLogRuntimeTab({
       assetsError={assets.isError ? errorMessage(assets.error, failed) : undefined}
       busy={busy}
       fetching={runtime.isFetching}
+      canMigrate={canMigrate}
       pending={{
         upload: upload.isPending,
         install: install.isPending,
@@ -106,14 +126,18 @@ export default function NodeLogRuntimeTab({
         }
       }}
       onMigrate={async (utcDay) => {
+        // 门禁在发请求前：越权即使界面被绕过也不得送到后端。
+        if (!canMigrate) return t('logsRuntime.migration.denied')
         try {
           // 存储命名空间由节点 id 拼装——这是应用侧的知识，故留在外壳。
           await migrate.mutateAsync({ storageNamespace: `node:${nodeId}`, utcDay })
           toast.success(t('logsRuntime.migrateDone'))
-          return true
+          return null
         } catch (error) {
-          toast.error(errorMessage(error, failed))
-          return false
+          // 错误文案不只给 toast：确认框要留着它让用户重试（409/502 处置不同）。
+          const message = errorMessage(error, failed)
+          toast.error(message)
+          return message
         }
       }}
       onResolveGaps={async () => {

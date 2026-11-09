@@ -2,7 +2,9 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ChannelDialogView } from '@/components/views/alerts/ChannelDialogView'
 import { useCreateAlertChannel, useUpdateAlertChannel, type AlertChannelInfo } from '@/api/alerts'
+import { usePermissionsStore } from '@/stores/permissions'
 import { QQBindDialog } from './QQBindDialog'
+import { QQConnectivityPanel } from './QQConnectivityPanel'
 
 interface ChannelDialogProps {
   /** 编辑目标；null 表示创建。 */
@@ -20,6 +22,9 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
   const { t } = useTranslation()
   const create = useCreateAlertChannel()
   const update = useUpdateAlertChannel()
+  // 接入状态区要读网关状态与已发现群，两者都需 alert.manage；无权限时不渲染区块，
+  // 也就不会发出注定 403 的请求。
+  const canManage = usePermissionsStore((s) => s.hasPerm('alert.manage'))
 
   return (
     <ChannelDialogView
@@ -34,6 +39,7 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
       renderBindDialog={({ onClose: closeBind, onBound }) => (
         <QQBindDialog onClose={closeBind} onBound={onBound} />
       )}
+      renderQQStatus={() => (canManage ? <QQConnectivityPanel /> : null)}
     />
   )
 }

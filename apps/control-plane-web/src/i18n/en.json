@@ -1567,33 +1567,6 @@
     "scanIntervalPlaceholder": "Empty = unset (falls back to node baseline), e.g. 1h",
     "pathOverridesPlaceholder": "{\"inst:1\":\"proxy.log.0\"}"
   },
-  "nodeRepair": {
-    "unavailable": "Node repair is not enabled on this deployment.",
-    "selfSuspect": "This node is flagged as a suspected bad node",
-    "selfHealthy": "No identity-conflict signals detected for this node",
-    "orphanTitle": "Resources attached to this node",
-    "orphanJdk": "JDKs",
-    "orphanInstance": "Instances",
-    "reenroll": "Re-enroll this node",
-    "reenrollHint": "Rotate UUID/secret to cut ties with a hijacked old identity; the old Worker credential is invalidated immediately.",
-    "reenrollAction": "Re-enroll",
-    "reenrollConfirmTitle": "Re-enroll node \"{{name}}\"?",
-    "reenrollConfirmDesc": "A brand-new UUID and secret will be issued for this node row. The old credential is invalidated at once; the machine must re-register with the new identity to come back online.",
-    "reenrollDone": "Re-enrolled. Save the new secret below.",
-    "reenrollDoneHint": "The new secret is shown only once. Copy and apply it to the target machine's Worker config.",
-    "reenrollFailed": "Re-enroll failed",
-    "copySecret": "Copy secret",
-    "secretCopied": "Secret copied",
-    "purge": "Purge orphaned resources",
-    "purgeHint": "Hard-delete JDK registrations and detach instances wrongly routed to this node during the hijack.",
-    "purgeAction": "Purge orphans",
-    "purgeConfirmTitle": "Purge orphans on node \"{{name}}\"?",
-    "purgeConfirmDesc": "Will delete {{jdk}} JDK registration(s) and detach {{instance}} instance(s) from this node. This is irreversible; running instances are not affected.",
-    "purgeDone": "Purged: {{jdk}} JDK(s), {{instance}} instance(s)",
-    "purgeFailed": "Purge failed",
-    "title": "Node repair",
-    "loadFailed": "Failed to load diagnostics"
-  },
   "artifactVersions": {
     "title": "ServerProbe Artifact Versions",
     "description": "Sync from GitHub Releases or upload a local jar. Syncing, uploading, and caching never change the global default automatically.",
@@ -1774,7 +1747,19 @@
     "openNodeLog": "View diagnostics log",
     "offlineHint": "Node offline, cannot pull log",
     "nodeTitle": "Node {{name}} diagnostics log",
-    "platformTitle": "Platform diagnostics log"
+    "platformTitle": "Platform diagnostics log",
+    "reachable": "可达",
+    "unreachable": "不通",
+    "testFailed": "测试失败",
+    "testProxy": "测试出站连通性",
+    "proxyTestHint": "填任意地址测试 CP 能否经当前出站代理访问外网（默认 https://www.google.com）。",
+    "testJdkSource": "测试 JDK 下载源",
+    "jdkSourceTestHint": "测试 JDK 下载源（foojay）是否可达。",
+    "testNode": "测试节点存活",
+    "nodeAlive": "在线",
+    "nodeOffline": "离线",
+    "proxyTrafficHint": "经此出站代理的流量：JDK 一键下载、Worker 二进制/自更新拉取、探针依赖下载、客户端分发外呼与更新源检查等 CP/节点的对外下载与请求。",
+    "testUrlLabel": "测试目标地址"
   },
   "instanceBatch": {
     "selected": "{{count}} selected",
@@ -3804,7 +3789,9 @@
     "exportScope_currentPage": "Export current page",
     "exportScope_allMatched": "Export all matches",
     "exportScope_range": "Export selected range",
-    "platformTailHint": "Showing the last {{count}} lines of the log file (the file is the only source; no server-side paging). For older entries, grep on that machine — see the diagnostics log for the command."
+    "platformTailHint": "Showing the last {{count}} lines of the log file (the file is the only source; no server-side paging). For older entries, grep on that machine — see the diagnostics log for the command.",
+    "more": "更多",
+    "view_legacy": "Legacy 只读"
   },
   "logsFederation": {
     "coverage": {
@@ -3894,7 +3881,27 @@
     "federatedNotReadyHint": "This view shows per-server live logs only; when the service is not enabled it will not substitute historical logs. To enable live querying, go to Nodes → node → Log runtime panel and enable the log platform.",
     "degradedTitleShort": "Log query service off · no data in this view",
     "degradedUnavailableHint": "This view shows per-server live logs only; when the service is unreachable it will not substitute historical logs. The live service: retry later or contact an administrator.",
-    "degradedUnavailableTitleShort": "Live log query service unavailable · no data in this view"
+    "degradedUnavailableTitleShort": "Live log query service unavailable · no data in this view",
+    "positionGaps": {
+      "title": "Permanent position gaps ({{count}})",
+      "description": "These ingest positions were manually abandoned. This independent evidence does not change time coverage, statistical quality, or export verification.",
+      "unknown": "Unknown (not supplied by older worker)",
+      "identity": "Worker: {{worker}} · Source: {{source}} · Generation: {{generation}}",
+      "evidence": "Storage namespace: {{namespace}} · Positions: [{{from}}, {{to}}] · Reason: {{reason}} · Operator: {{operator}} · Time: {{at}}"
+    },
+    "clearConflicts": {
+      "button": "Confirm and clear conflicts",
+      "title": "Confirm and clear identity conflict records",
+      "description": "This node holds identity conflicts that cannot be resolved automatically (the same event ID appears with different content). In such cases the system keeps the first-seen variant and skips the conflicting row, so the retained version is the correct one; clearing only removes this diagnostic notice and changes no log content. The quality marker disappears after clearing, so verify the retained versions first.",
+      "reasonLabel": "Reason (required, recorded in the audit credential)",
+      "reasonPlaceholder": "e.g. Verified each retained version in VL",
+      "confirmLabel": "Confirm and clear",
+      "reasonRequired": "Enter a reason — the audit credential must record why clearing is allowed",
+      "success": "Cleared {{count}} identity conflict record(s)",
+      "partial": "Cleared {{count}}; {{skipped}} source(s) were skipped because new records appeared — re-query to confirm",
+      "failed": "Failed to clear identity conflicts",
+      "scopeHint": "Clears every source on this node that holds conflict records (platform admins only)"
+    }
   },
   "users": {
     "title": "User Management",
@@ -5924,7 +5931,11 @@
       "restart": "restarted"
     },
     "approvalCached": "approved package cached",
-    "approvalNotCached": "approved package not cached"
+    "approvalNotCached": "approved package not cached",
+    "gaps": {
+      "resolve": "Resolve covered gaps",
+      "help": "Collection or delivery interruptions leave \"gaps\". Once a complete projection proves that window is intact, the gap can be resolved so it stops counting as a risk."
+    }
   },
   "instanceKind": {
     "plugin": "Plugin",

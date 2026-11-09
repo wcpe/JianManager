@@ -6,6 +6,7 @@ import { Archive, CheckCheck, Download, LoaderCircle, Play, RotateCw, Square, Up
 import { Button } from '@jianmanager/ui/components/button'
 import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import { Badge } from '@jianmanager/ui/components/badge'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 
 /** 日志运行时的三个分区命名空间（与 proto 对齐）。 */
 export type LogNamespace = 'hot' | 'cold' | 'rehydrate'
@@ -76,6 +77,8 @@ export const namespaceNames: Record<LogNamespace, string> = {
  * - 迁移日期与分区名由外壳拼装请求体，视图只管把用户选的日期交上去。
  */
 export interface NodeLogRuntimePanelProps {
+  /** 节点 ID（迁移确认文案要显示目标节点，防止切节点后误确认）。 */
+  nodeId: number
   /** 节点系统与架构（用于展示与审批包匹配；外壳已归一化架构别名）。 */
   os: string
   arch: string
@@ -91,6 +94,13 @@ export interface NodeLogRuntimePanelProps {
   assetsError?: string
   /** 任一写操作在途：统一禁用。 */
   busy?: boolean
+  /**
+   * 是否允许执行整日分区迁移（平台管理员）。
+   *
+   * 未传时按**允许**处理（向后兼容、也不把权限判定硬编进视图）；
+   * 生产由外壳根据 auth/me 算出后注入，且外壳在发请求前还会再拦一次。
+   */
+  canMigrate?: boolean
   /** 各动作在途标记。 */
   pending?: LogRuntimePending
   /** 刷新在途（运行时状态）。 */
@@ -103,13 +113,20 @@ export interface NodeLogRuntimePanelProps {
   onInstall: () => Promise<boolean>
   /** 起停/重启指定分区。返回是否成功。 */
   onControl: (namespace: LogNamespace, action: 'start' | 'stop' | 'restart') => Promise<boolean>
-  /** 把指定 UTC 日的分区迁移到 COLD。返回是否成功。 */
-  onMigrate: (utcDay: string) => Promise<boolean>
+  /**
+   * 把指定 UTC 日的分区迁移到 COLD。
+   *
+   * 成功返回 null；失败返回**可展示的错误文案**（由外壳从后端错误里解出）。
+   * 为何不返回 boolean：迁移失败时要让用户看到 409/502 的具体原因（“目标已迁移”、
+   * “上游挂了”处置完全不同），只在 toast 里闪一下不够——用户需要对着确认框重试。
+   */
+  onMigrate: (utcDay: string) => Promise<string | null>
   /** 核销已被 projection 覆盖的缺口。返回是否成功。 */
   onResolveGaps: () => Promise<boolean>
 }
 
 export default function NodeLogRuntimePanel({
+  nodeId,
   os,
   arch,
   online,
@@ -118,6 +135,7 @@ export default function NodeLogRuntimePanel({
   runtimeError,
   assetsError,
   busy = false,
+  canMigrate = true,
   pending,
   fetching = false,
   onRefresh,
@@ -130,7 +148,18 @@ export default function NodeLogRuntimePanel({
   const { t } = useTranslation()
   const fileInput = useRef<HTMLInputElement>(null)
   const [migrationDay, setMigrationDay] = useState('')
+  /**
+   * 迁移危险确认（暂存目标）。
+   *
+   * 为何不直接调 onMigrate：分区迁移是**不可逆**的——它把当天分区从热存储搬到 COLD，
+   * 搬错日期/节点没有回退路径。所以必须先把目标（节点 + 命名空间 + UTC 日）固定下来
+   * 给用户看一遍，确认后才发请求；且提交在途时重复点击不得再发（见 migrationInFlight）。
+   */
+  const [migrationTarget, setMigrationTarget] = useState<{ utcDay: string } | null>(null)
+  const [migrationError, setMigrationError] = useState('')
+  const migrationInFlight = useRef(false)
   const normalizedArch = arch.toLowerCase() === 'x64' ? 'amd64' : arch.toLowerCase()
+
 
   return (
     <section aria-label={t('logsRuntime.title')} className="space-y-3">
@@ -242,12 +271,46 @@ export default function NodeLogRuntimePanel({
             className="h-8 rounded-md border bg-background px-2 text-sm" />
           <span title={t('logsRuntime.date.help')}><CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.date.help')} /></span>
         </span>
-        <Button type="button" size="sm" variant="outline" disabled={busy || !online || !migrationDay}
-          onClick={() => void onMigrate(migrationDay)}>
+        <Button type="button" size="sm" variant="outline"
+          disabled={busy || !online || !migrationDay || !canMigrate}
+          title={!canMigrate ? t('logsRuntime.migration.denied') : undefined}
+          onClick={() => {
+            setMigrationError('')
+            setMigrationTarget({ utcDay: migrationDay })
+          }}>
           {pending?.migrate ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <Archive className="mr-1 size-4" />}
           {t('logsRuntime.namespace.migrate')}
         </Button>
+        {/* 越权时把原因写在按钮旁：只置灰不说缘由，用户会以为是未选日期。 */}
+        {!canMigrate && (
+          <span className="text-xs text-muted-foreground">{t('logsRuntime.migration.denied')}</span>
+        )}
       </div>
+      {/* 危险确认：把待迁移目标锁成快照后再让用户确认。迁移不可逆，
+          搬错日期没有回退路径，所以必须先给用户看一眼确定的 UTC 日。 */}
+      <DangerConfirm
+        open={migrationTarget !== null && canMigrate}
+        title={t('logsRuntime.migration.title')}
+        description={migrationTarget ? `${t('logsRuntime.migration.description', {
+          node: nodeId,
+          namespace: `node:${nodeId}`,
+          day: migrationTarget.utcDay,
+        })}${migrationError ? `\n${migrationError}` : ''}` : ''}
+        confirmLabel={t('logsRuntime.migration.confirm')}
+        pending={pending?.migrate}
+        onConfirm={() => {
+          if (!migrationTarget || migrationInFlight.current) return
+          migrationInFlight.current = true
+          setMigrationError('')
+          void onMigrate(migrationTarget.utcDay).then(
+            (err) => {
+              if (err === null) setMigrationTarget(null)
+              else setMigrationError(err)
+            },
+          ).finally(() => { migrationInFlight.current = false })
+        }}
+        onCancel={() => { if (!migrationInFlight.current) setMigrationTarget(null) }}
+      />
     </section>
   )
 }
