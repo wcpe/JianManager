@@ -483,7 +483,7 @@ func DefaultPartitionStatus(key catalog.PartitionKey, rec *catalog.Record, ref c
 	if !ref.OK {
 		return PartitionStatus{Queryable: false, NotReadyReasons: []string{ReasonNoCatalogAuthority}}
 	}
-	// 已按保留期清除（FR-501 归档对象回收）：Queryable 恒为假，且原因不能是
+	// 已按保留期清除（归档对象回收）：Queryable 恒为假，且原因不能是
 	// ARCHIVE_NOT_RESTORED——那条建议（去 rehydrate）此时是死路。
 	//
 	// 这里必须**在** Recover 之前判并直接返回：Recover 只看 Owner/Dir，不认清除标记，

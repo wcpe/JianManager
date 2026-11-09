@@ -13,10 +13,10 @@ import type { FetchTerminalCreds } from '@/lib/console/terminal-session-manager'
 import type { ConsoleHistoryState } from '@/lib/console/console-history'
 
 /** 
- * 工作区终端面板：为单个实例打开控制台（ADR-009）。
+ * 工作区终端面板：为单个实例打开控制台。
  * 复用一次性 token，逻辑与实例详情页「终端」Tab 一致：运行态可写，否则只读。
  *
- *起承载的是输出/输入分离的新控制台（{@link InstanceConsoleView}，ADR-086），
+ *起承载的是输出/输入分离的新控制台（{@link InstanceConsoleView}），
  * 不再是 xterm 渲染壳。工具栏语义（重连 / 字号 / 搜索 / 全屏）保持不变。
  */
 export interface TerminalPaneProps {
@@ -29,7 +29,7 @@ export interface TerminalPaneProps {
    */
   hideHeader?: boolean
   /** 
-   * 终端会话保活（ADR-067）：控制台 keep-alive 宿主下传 true，
+   * 终端会话保活：控制台 keep-alive 宿主下传 true，
    * 卸载/隐藏不释放连接；独立表面（画布卡片等）保持默认卸载即释放。
    */
   persistSession?: boolean

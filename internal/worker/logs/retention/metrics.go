@@ -58,7 +58,7 @@ type ArchivePurgeSource interface {
 	ArchivePurgeSnapshot() (lastRun time.Time, purged, failed, rolledBack int64)
 }
 
-// IndexSQLSource 是索引库 SQL 慢查询读数的**最小口径**（FR-485），由 ingest.Manager 实现。
+// IndexSQLSource 是索引库 SQL 慢查询读数的**最小口径**，由 ingest.Manager 实现。
 //
 // 与上面两个接口同样的理由：retention 不能反向依赖 ingest（会成环），故只声明要读的方法。
 // nil 表示未装配（例如采集未启用）——那时三条序列输出 0，抓取侧无需写特殊分支。
@@ -284,7 +284,7 @@ func writeMetrics(w io.Writer, d *Driver, prune EventStorePruneSource, purge Arc
 			name: "jm_log_retention_archive_purge_last_run_timestamp_seconds", kind: "gauge", value: purgeLastRun,
 			help: "最近一轮归档对象清除的时刻（Unix 秒），0 表示从未运行",
 		},
-		// 索引库 SQL 慢查询（FR-485 的最后一项）。indexSQL 未装配时三条恒为 0。
+		// 索引库 SQL 慢查询。indexSQL 未装配时三条恒为 0。
 		{
 			name: "jm_log_index_slow_queries_total", kind: "counter", value: sqlSlowQueries,
 			help: "累计超过阈值的索引库 SQL 语句条数（单条语句级，不含 PRAGMA/DDL）",

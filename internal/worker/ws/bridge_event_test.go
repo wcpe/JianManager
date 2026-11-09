@@ -89,7 +89,7 @@ func TestBridge_PlayerEventFieldsBubbled(t *testing.T) {
 	assert.Equal(t, "survival", cross.ToServer)
 }
 
-// TestBridge_DomainDedupBubbled 验证通道信封字段透传（ADR-027ADR-106 后 JM 不再消费语义）：
+// TestBridge_DomainDedupBubbled 验证通道信封字段透传（JM 不消费语义）：
 // 探针 event 帧的 domain/dedupKey 经 Worker 原样冒泡到 ws.PluginEvent，Worker 只透传不解析；
 // 监控/治理事件不带 domain → 这两字段为空（继续业务/监控分流）。
 func TestBridge_DomainDedupBubbled(t *testing.T) {

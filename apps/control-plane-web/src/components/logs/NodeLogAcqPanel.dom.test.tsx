@@ -1,5 +1,5 @@
 /**
- * 节点日志采集面板（FR-503）草稿生命周期 DOM 断言。
+ * 节点日志采集面板草稿生命周期 DOM 断言。
  *
  * 本面板的编辑是**暂存式**（改完还要点保存才落库），因此草稿的每一个出口都要么正确、
  * 要么可见。覆盖三条红线：
@@ -73,7 +73,7 @@ function suspendedPut(
   }
 }
 
-describe('NodeLogAcqPanel × 草稿生命周期（FR-503 / review D-02）', () => {
+describe('NodeLogAcqPanel × 草稿生命周期（review D-02）', () => {
   it('① 只提交改动的键；保存期间改动别的键不会被清掉', async () => {
     loginMockUser()
     const puts: { values: Record<string, string> }[] = []

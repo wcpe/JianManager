@@ -158,7 +158,7 @@ func TestIngest_S3Active_UploadsToChannel(t *testing.T) {
 	require.Equal(t, model.AssetBackendS3, asset.StorageBackend)
 	require.Equal(t, ch.ID, asset.StorageChannelID)
 	require.Equal(t, model.AssetStorageExternal, asset.StorageState)
-	require.Equal(t, wantRel, asset.RelPath, "RelPath 仍登记 CAS 键（跨后端存储键，ADR-073）")
+	require.Equal(t, wantRel, asset.RelPath, "RelPath 仍登记 CAS 键（跨后端存储键）")
 
 	require.Equal(t, data, fake.objects["jm-artifacts/jm/"+wantRel], "对象键 = bucket/prefix/CAS 相对路径")
 	_, serr := os.Stat(h.root.Abs(wantRel))

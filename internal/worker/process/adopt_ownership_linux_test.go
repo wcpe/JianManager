@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-497③ 归属复核收紧的真实进程用例（Linux：强特征依赖 /proc 的 cmdline 与 environ）。
+// 归属复核收紧的真实进程用例（Linux：强特征依赖 /proc 的 cmdline 与 environ）。
 //
 // 缺陷形态（本组用例要挡住的）：PID 被 OS 复用后，一个 **cwd 恰好落在实例 work_dir 下** 的无关进程，
 // 仅凭 cwd 单特征就通过宽口径复核 → 被自动收养 → 被 isolateAdoptedWrapper 迁进实例 cgroup，

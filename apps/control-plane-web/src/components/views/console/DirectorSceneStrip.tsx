@@ -18,11 +18,11 @@ export interface DirectorSceneStripProps {
 
 /** 
  * 导播台缩略图条：一排场景，点击瞬切；显三态（active/预热/cold）+ 序号（快捷键提示）。
- * 右侧并发上限控制：调小即时 LRU 驱逐溢出保活连接（ADR-035）。
+ * 右侧并发上限控制：调小即时 LRU 驱逐溢出保活连接。
  *
  * 三态视觉：active=主色实心 + 闪电（全速）；预热=绿点（WS 保活，瞬切零延迟）；cold=灰点（切换需重连）。
  *
- * 取值/落值由 props 注入（ADR-103）：本视图不触达 store。
+ * 取值/落值由 props 注入：本视图不触达 store。
  */
 export function DirectorSceneStrip({
   scenes,

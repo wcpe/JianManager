@@ -76,7 +76,7 @@ func crashSignal(info process.CrashInfo) string {
 
 // main 是 Worker Node 入口。
 // 若以 `daemon` 子命令模式启动（由 daemonStrategy spawn），则运行 wrapper 而非 Worker 主进程。
-// 见 ADR-003: 守护进程 Wrapper 模式。
+// 守护进程 Wrapper 模式。
 func main() {
 	if version.Requested(os.Args[1:]) {
 		fmt.Println(version.Version)
@@ -154,7 +154,7 @@ func flagValue(args []string, name string) (string, error) {
 // runDaemonWrapper 以 wrapper 子进程模式运行。
 // 配置通过环境变量 JM_DAEMON_WRAPPER_CONFIG 传递（JSON）。
 func runDaemonWrapper() {
-	// wrapper 必须在 Worker 重启后存活（ADR-003）：Worker 死后其建立的 stdout/stderr
+	// wrapper 必须在 Worker 重启后存活：Worker 死后其建立的 stdout/stderr
 	// 管道读端关闭，wrapper 下一次日志写会触发 SIGPIPE 而被默认终止。忽略之，改为 EPIPE 丢弃。
 	daemon.IgnoreBrokenPipe()
 
@@ -169,7 +169,7 @@ func runDaemonWrapper() {
 	}
 }
 
-// configPathArg 返回命令行第 1 个位置参数当且仅当它是「现存的配置文件路径」（见 ADR-051）。
+// configPathArg 返回命令行第 1 个位置参数当且仅当它是「现存的配置文件路径」。
 //
 // 历史用法 `worker /path/worker.yml` 显式传配置文件仍支持；但 setup 的 `--xxx` flag 与不存在的
 // 路径不当配置文件（否则会误判已配置而跳过 setup）。返回空串表示「未显式给配置文件」。
@@ -197,7 +197,7 @@ func setupArgs() []string {
 	return args
 }
 
-// isConfigured 报告 Worker 是否已配置（见 ADR-051）。
+// isConfigured 报告 Worker 是否已配置。
 //
 // 已配置 ⇔ 有 worker.yml/.yaml 配置文件 或 有 <data-dir>/etc/node-identity.json 身份文件。
 // 二者任一存在即视为已配置（有 yml=写过配置；有身份=注册过）→ 跳过 setup。两者皆缺=全新机器=进 setup。
@@ -307,12 +307,12 @@ func runWorker() {
 	// 以服务身份运行时先把工作目录切到 exe 所在的安装目录（与 Linux systemd WorkingDirectory 对齐）。
 	chdirToExeDirIfService()
 
-	// 加载配置：worker.yml + JIANMANAGER_ 环境变量覆盖（见 ADR-020）。
+	// 加载配置：worker.yml + JIANMANAGER_ 环境变量覆盖。
 	// 配置可选参数从命令行第 1 个参数取（如 `worker /path/worker.yml`），缺省自动查找。
 	// 第 1 个参数仅当是「现存的配置文件路径」时才当配置文件；setup 的 --xxx flag 不算（见下自检）。
 	cfgPath := configPathArg()
 
-	// 未配置自检（，见 ADR-051）：无 worker.yml/.yaml 且无 etc/node-identity.json → 进 setup。
+	// 未配置自检：无 worker.yml/.yaml 且无 etc/node-identity.json → 进 setup。
 	// setup 采集入参（TTY 交互 / 无 TTY 参数+env）→ 写 worker.yml + 首注册 + 持久化身份 → 转 run。
 	// 已配置（有 yml / 有身份 / 显式传配置文件路径）→ 跳过 setup，走现有 run（现状零变化）。
 	var setupResult *setup.Result
@@ -411,7 +411,7 @@ func runWorker() {
 		"logIngestCharset", cfg.IngestDefaultCharset())
 	startup.Mark("config")
 
-	// 出站 HTTP 客户端持有者（见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
+	// 出站 HTTP 客户端持有者：所有出站下载（自更新/JDK/CFR/服务端 jar）
 	// 经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。非法代理 URL 启动即 fail-fast。
 	// 持有者可运行时重建：CP 经心跳下发节点期望代理后即时生效（custom→节点值 / inherit→全局默认）。
 	// 启动按 worker.yml/env 基线构造；CP 下发为空时回退此基线。
@@ -433,14 +433,14 @@ func runWorker() {
 	nodeUUID := "local-dev"
 
 	// 解析并初始化项目自包含数据根（配置 data_dir，缺省 ./data，可经 JIANMANAGER_DATA_DIR 覆盖）。
-	// 运行态数据全部收口到此根，整体可迁移。参见 ADR-010。
+	// 运行态数据全部收口到此根，整体可迁移。
 	root, err := dataroot.Init(cfg.DataDir)
 	if err != nil {
 		slog.Error("初始化数据根失败", "error", err)
 		os.Exit(1)
 	}
 
-	// 本地身份提前加载（见 ADR-061）：WS 令牌密钥初始值优先取身份文件持久化值
+	// 本地身份提前加载：WS 令牌密钥初始值优先取身份文件持久化值
 	// （上次 CP 下发），回退 worker.yml jwt_secret（旧 CP/首装兼容）——须在 WS 服务器构造前
 	// 就绪，消除「注册完成前用旧密钥校验」窗口。注册流程复用本次加载结果，不二次读文件。
 	etcDir := root.EtcDir()
@@ -505,7 +505,7 @@ func runWorker() {
 	})
 
 	// 初始化 JDK 管理器：托管根 <dataRoot>/opt/jdks；可选追加系统 JDK 探测目录。
-	// 参见 ADR-010：JDK 从旧的 <serversDir>/jdks 迁移到 opt/jdks。
+	// JDK 从旧的 <serversDir>/jdks 迁移到 opt/jdks。
 	var systemJDKDirs []string
 	if v := os.Getenv("JIANMANAGER_JDK_SYSTEM_DIRS"); v != "" {
 		for _, d := range strings.Split(v, string(os.PathListSeparator)) {
@@ -548,7 +548,7 @@ func runWorker() {
 		})
 	})
 
-	// 这是 ADR-003「平台重启不杀游戏服」的关键路径。
+	// 这是 「平台重启不杀游戏服」的关键路径。
 	//
 	// 本函数只同步完成「快速首拨」（每条 PID 记录拨一次），首拨失败的记录转后台按
 	// recover.retry_backoff 序列继续重试（最长 ≈127s）。故下面的运行期孤儿扫描不会被接管重试
@@ -783,7 +783,7 @@ func runWorker() {
 	// 声明在驱动器之外，是因为它由两个独立开关共同决定（保留策略总开关 + 本项开关），
 	// 且必须与 /metrics 的读数出口共用同一个实例。
 	var logArchivePurge *retention.ArchiveObjectReclaimer
-	// 日志 Catalog journal：**纯内存**（2026-11-05 架构决策 ADR-102）。
+	// 日志 Catalog journal：**纯内存**（2026-11-05 架构决策）。
 	//
 	// # 历史沿革（读到这里的人需要知道为什么绕了一圈）
 	//
@@ -1268,7 +1268,7 @@ func runWorker() {
 	slog.Info("节点制品缓存已启用", "dir", root.ArtifactCacheDir(), "maxBytes", cfg.ArtifactCache.MaxBytes)
 
 	// Bot 管理器：按需 spawn bot-worker(Node) 子进程，经 stdin/stdout IPC 管理 Mineflayer Bot。
-	// 入口脚本解析顺序（见 ADR-072迁移见 ADR-064）：
+	// 入口脚本解析顺序（迁移后口径）：
 	// JIANMANAGER_BOT_WORKER_PATH 显式覆盖 > 数据根自愈物化副本（注册后拉取，见下方
 	// botdist.Ensure）> apps/bot-worker/dist/index.js（仓库内直跑新布局）> 旧相对路径
 	// bot-worker/dist/index.js（存量部署把 bot-worker 平铺在安装目录，不因升级断 Bot 能力）。
@@ -1323,7 +1323,7 @@ func runWorker() {
 	}
 	workerServer.SetBotManager(botMgr)
 
-	// 反编译器（见 ADR-018）：解析 CFR jar（配置路径>内嵌>数据根缓存>按需下载 sha256 pin），
+	// 反编译器：解析 CFR jar（配置路径>内嵌>数据根缓存>按需下载 sha256 pin），
 	// 缓存落数据根 cache/tools；反编译经实例/系统 JDK 受控调起 CFR，只读+超时+体积上限+失败降级。
 	decompProvider := decompiler.NewProvider(decompiler.Config{
 		ConfigPath:    cfg.Decompiler.CFRPath,
@@ -1335,7 +1335,7 @@ func runWorker() {
 	})
 	workerServer.SetDecompiler(decompProvider)
 
-	// 终端会话隧道桥（M2，见 ADR-066）：TerminalSession 回环拨本机 WS 终端服务，
+	// 终端会话隧道桥（M2）：TerminalSession 回环拨本机 WS 终端服务，
 	// 令牌校验/会话层单一真源仍是 ws.TerminalServer。
 	workerServer.SetTerminalWSAddr(fmt.Sprintf("ws://127.0.0.1:%d/ws/terminal", wsPort))
 
@@ -1373,7 +1373,7 @@ func runWorker() {
 		}
 	})
 
-	// 插件桥服务端（ServerProbe 反向 WS见 ADR-016）：与终端 WS 并列、同一监听端口。
+	// 插件桥服务端（ServerProbe 反向 WS）：与终端 WS 并列、同一监听端口。
 	// 探针主动连入 /ws/plugin-bridge，事件经 gRPC StreamPluginEvents 冒泡到 CP；token 校验使用 CP 下发的专用 WS 密钥。
 	pluginBridge := ws.NewPluginBridgeServer(wsTokenSecret)
 	// 托管模式（ServerProbe PR#64）：探针在零监听承诺下不再开 /metrics，
@@ -1451,7 +1451,7 @@ func runWorker() {
 	wsAddr := localWSAddr(wsPort)
 	wsServer := &http.Server{Addr: wsAddr, Handler: wsMux}
 
-	// 注册到 Control Plane（见 ADR-020）。
+	// 注册到 Control Plane。
 	// Control Plane 未启动时 Worker 不退出，按指数退避重试直到注册成功。
 	// 崩溃快照上报：进程非正常退出时，把策略捕获的退出码/信号/时长 +
 	// 终端环形缓冲的尾部输出（最后 200 行 / 64KB）组装为快照，异步经 gRPC 上报 CP
@@ -1476,7 +1476,7 @@ func runWorker() {
 	var identityForPersist *register.Identity
 
 	if setupResult != nil {
-		// 本次启动由 setup 完成首注册并已持久化身份（见 ADR-051）：
+		// 本次启动由 setup 完成首注册并已持久化身份：
 		// 直接复用其换得的身份转 run，不再二次注册、不重复消费一次性 token。
 		regResult = &register.Result{
 			NodeUUID:      setupResult.Identity.NodeUUID,
@@ -1500,7 +1500,7 @@ func runWorker() {
 		}
 		if identity != nil {
 			// 重注册：沿用既有身份的节点名，并经 metadata 出示 node_uuid + node_secret，
-			// CP 据此按 UUID 匹配既有节点（而非可重复的 name），杜绝重名覆写（见 ADR-039）。
+			// CP 据此按 UUID 匹配既有节点（而非可重复的 name），杜绝重名覆写。
 			regCfg.NodeName = identity.NodeName
 			regCfg.NodeUUID = identity.NodeUUID
 			regCfg.NodeSecret = identity.NodeSecret
@@ -1527,7 +1527,7 @@ func runWorker() {
 		slog.Info("已注册到 Control Plane", "nodeUUID", nodeUUID)
 
 		// 首次注册成功后持久化身份（含 node_secret，0600），重启复用、不重复消费 token。
-		// CP 下发的 WS 令牌密钥一并持久化（见 ADR-061）。
+		// CP 下发的 WS 令牌密钥一并持久化。
 		if identity == nil {
 			fresh := &register.Identity{
 				NodeUUID:      regResult.NodeUUID,
@@ -1562,7 +1562,7 @@ func runWorker() {
 	// 孤儿处置审计上报（456）同样就绪：此后运行期扫描/接管兜底的处置动作可落 CP 审计库。
 	orphanAuditReporter.SetIdentity(nodeUUID, regResult.NodeSecret)
 
-	// bot-worker dist 自愈下发（见 ADR-072）：注册成功即持身份从 CP 拉取内嵌归档，
+	// bot-worker dist 自愈下发：注册成功即持身份从 CP 拉取内嵌归档，
 	// 物化到数据根后切换 bot 入口路径。显式 JIANMANAGER_BOT_WORKER_PATH 时尊重覆盖不自愈；
 	// CP 未内嵌/拉取失败回退本地已有（物化副本或旧相对路径），只告警不阻断启动。
 	if !botWorkerPathPinned {
@@ -1583,7 +1583,7 @@ func runWorker() {
 		}
 	}
 
-	// CP 下发的 WS 令牌密钥热应用（见 ADR-061）：注册响应非空即应用到终端/插件桥。
+	// CP 下发的 WS 令牌密钥热应用：注册响应非空即应用到终端/插件桥。
 	// 旧 CP 未下发密钥时仅可使用此前由 CP 持久化的密钥，绝不回退 worker.yml 的 jwt_secret。
 	currentWSSecret := wsTokenSecret
 	if regResult.WSTokenSecret != "" {
@@ -1619,7 +1619,7 @@ func runWorker() {
 	}()
 
 	// 启动心跳上报（携带注册获得的 node_secret 供 Control Plane 鉴权）。
-	// 节拍取共享契约值 directprobe.HeartbeatInterval（ADR-013 的 30s）：单拍采集预算的上界正是
+	// 节拍取共享契约值 directprobe.HeartbeatInterval：单拍采集预算的上界正是
 	// 由它反推（见 internal/platform/directprobe），两处必须同源，否则「预算 < 节拍」的护栏失效。
 	hb := heartbeat.New(cpAddr, nodeUUID, regResult.NodeSecret, directprobe.HeartbeatInterval, manager)
 	// 心跳消费同一窗口，不重新读取累计 CPU 计数或推进采样基线。
@@ -1636,9 +1636,9 @@ func runWorker() {
 	if vlSupervisor != nil {
 		hb.SetVLDiskProvider(vlDiskProviderAdapter{sup: vlSupervisor})
 	}
-	// 运行中长任务进度随心跳上报（，见 ADR-040）：心跳读 Worker gRPC Server 的内存任务表。
+	// 运行中长任务进度随心跳上报：心跳读 Worker gRPC Server 的内存任务表。
 	hb.SetTaskProvider(workerServer)
-	// CP 经心跳响应下发节点期望出站代理（见 ADR-043）：generation 变化时重建出站持有者，
+	// CP 经心跳响应下发节点期望出站代理：generation 变化时重建出站持有者，
 	// 注入到各下载点（JDK/CFR/自更新/服务端 jar）即时生效；下发为空回退本地 worker.yml/env。
 	hb.SetProxyRebuilder(func(c httpclient.Config) error {
 		if err := outboundProvider.Rebuild(c); err != nil {
@@ -1648,7 +1648,7 @@ func runWorker() {
 		slog.Info("出站代理已据 CP 下发运行时更新", "proxy", httpclient.Sanitize(c.URL), "noProxy", c.NoProxy)
 		return nil
 	})
-	// CP 经心跳下发 WS 令牌密钥（见 ADR-061）：值变化即热更新终端/插件桥校验并补写
+	// CP 经心跳下发 WS 令牌密钥：值变化即热更新终端/插件桥校验并补写
 	// 身份文件——CP 轮换密钥后 Worker 不重启自愈。心跳单 goroutine 应用，无并发写身份文件。
 	hb.SetWSSecretApplier(currentWSSecret, func(secret string) error {
 		terminalServer.SetJWTSecret(secret)
@@ -1791,7 +1791,7 @@ const maxNeedsManualPartitionsLogged = 20
 // 即使没赶上，补建也就在那一轮返回零计数，不会假装成功。
 const catalogBackfillStartDelay = 30 * time.Second
 
-// 日志分区 Catalog 的 journal 使用**纯内存**（2026-11-05 架构决策，ADR-102）。
+// 日志分区 Catalog 的 journal 使用**纯内存**（2026-11-05 架构决策）。
 //
 // # 为什么不再落盘
 //

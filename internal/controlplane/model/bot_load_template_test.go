@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func openFR370DB(t *testing.T) *gorm.DB {
+func openBotLoadTemplateDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
@@ -28,7 +28,7 @@ func openFR370DB(t *testing.T) *gorm.DB {
 }
 
 func TestBotLoadTemplate_ActiveNameKeyUniqueAndSoftDeleteReuse(t *testing.T) {
-	db := openFR370DB(t)
+	db := openBotLoadTemplateDB(t)
 	user := &model.User{Username: "u1", Password: "x", Role: model.RolePlatformAdmin}
 	require.NoError(t, db.Create(user).Error)
 
@@ -56,7 +56,7 @@ func TestBotLoadTemplate_ActiveNameKeyUniqueAndSoftDeleteReuse(t *testing.T) {
 }
 
 func TestBotStressSession_V2ColumnsAndMetricUnique(t *testing.T) {
-	db := openFR370DB(t)
+	db := openBotLoadTemplateDB(t)
 	node := &model.Node{Name: "n", Host: "127.0.0.1", Secret: "s"}
 	require.NoError(t, db.Create(node).Error)
 	inst := &model.Instance{NodeID: node.ID, Name: "i", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, WorkDir: "w", StartCommand: "java"}

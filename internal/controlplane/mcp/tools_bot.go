@@ -44,7 +44,7 @@ func botDomainExec(name string) (botToolExec, bool) {
 	return exec, ok
 }
 
-// botSendCommandSuccessText 是 ADR-075 规定的命令发送成功文案。
+// botSendCommandSuccessText 是规定的命令发送成功文案。
 // 成功边界止于 bot.chat 调用未同步抛错，绝不宣称服务器已接受或业务已生效。
 func botSendCommandSuccessText() string {
 	return "已发送（bot.chat 调用成功）；不代表服务器已接受或业务已生效"
@@ -100,7 +100,7 @@ func botToolSpecs() []toolSpec {
 		{
 			Def: ToolDef{
 				Name: "bot_send_command",
-				// ADR-075：工具描述必须写明成功边界，防 Agent 误报业务成功。
+				// 工具描述必须写明成功边界，防 Agent 误报业务成功。
 				Description: "向 Bot 下发聊天/命令。成功仅表示 bot.chat 调用成功，不代表服务器已接受或业务已生效；" +
 					"如需确认业务效果请另行观测服务器状态（须具备 bot.manage 能力）",
 				InputSchema: objectSchema(map[string]any{
@@ -226,7 +226,7 @@ func execBotSetBehavior(_ context.Context, deps ToolDeps, p *service.AgentPrinci
 	return toolOK(map[string]any{"ok": true, "botId": bot.ID, "behavior": behavior})
 }
 
-// execBotSendCommand 下发命令；返回文案严格遵循 ADR-075 的发送边界。
+// execBotSendCommand 下发命令；返回文案严格遵循发送边界。
 func execBotSendCommand(_ context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult {
 	bot, result, ok := authorizeBotTarget(deps, p, action, args)
 	if !ok {

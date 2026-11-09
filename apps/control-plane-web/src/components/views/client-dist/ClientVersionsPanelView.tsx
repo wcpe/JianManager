@@ -58,7 +58,7 @@ export interface ClientVersionsPanelVersionDetail {
 }
 
 /** 
- * 版本面板的注入契约（受控视图，ADR-103 a+b 混合范式）。
+ * 版本面板的注入契约（受控视图）。
  *
  * 受控边界（**不取数、不发 mutation、不弹 toast、不读路由**）：
  * - 版本列表与详情数据经 props 注入：`versions` 由容器 `useClientVersions` 取；`detailVersion` 是
@@ -95,7 +95,7 @@ export interface ClientVersionsPanelViewProps {
 }
 
 /** 
- * 客户端分发版本管理面板（见 ADR-022）。
+ * 客户端分发版本管理面板。
  * 历史列表 + 版本详情查看 + 运营回滚（二次确认）。
  * 历史仅管理面可见（玩家只认 latest）；发布/回滚由后端 RBAC 限平台管理员。
  *
@@ -232,7 +232,7 @@ interface VersionDetailDialogProps {
  * 两种视图：
  *  - 结构：{@link ClientFileTree} 文件树 + sync/platform 徽标 + 大小（编排语义，原有能力不减）。
  *  - 预览：应用侧注入的共享 FileBrowser 浏览文件树并预览内容（文本/配置/JSON 高亮，二进制/超大降级 +
- *    下载），经管理面 JWT 制品内容端点取文本（与玩家拉取密钥端点隔离，见 ADR-022/023）。
+ *    下载），经管理面 JWT 制品内容端点取文本（与玩家拉取密钥端点隔离）。
  */
 function VersionDetailDialog({ version, detail, isLoading, previewSlot, onClose }: VersionDetailDialogProps) {
   const { t } = useTranslation()

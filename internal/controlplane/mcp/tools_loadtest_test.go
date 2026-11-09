@@ -58,7 +58,7 @@ func newPreflightDeps(t *testing.T, db *gorm.DB, nodeID uint, nodeCapacity int) 
 		UpdatedAt:         time.Now().UTC(),
 	}}
 	reservations := service.NewBotLoadReservationStore(nil, time.Minute)
-	signer, err := service.NewBotLoadPlanTokenSigner([]byte("fr398-test-plan-token-secret"), nil)
+	signer, err := service.NewBotLoadPlanTokenSigner([]byte("loadtest-test-plan-token-secret"), nil)
 	require.NoError(t, err)
 	return ToolDeps{
 		Agent:         service.NewAgentTokenService(db),
@@ -197,7 +197,7 @@ func TestCallTool_RunCreate_PassesScenarioSnapshot(t *testing.T) {
 
 	res := CallTool(context.Background(), deps, botLoadPrincipal(f), "loadtest_run_create", map[string]any{
 		"instanceId": float64(f.instance.ID),
-		"namePrefix": "fr404",
+		"namePrefix": "loadtest",
 		"count":      float64(1),
 		"config":     map[string]any{"server": "127.0.0.1", "port": float64(25565), "auth": "offline"},
 		"scenario":   scenario,
@@ -253,6 +253,6 @@ func seedExecutorBatch(t *testing.T, db *gorm.DB, sessionID, nodeID uint, ordina
 	require.NoError(t, db.Create(&model.BotLoadBatch{
 		StressSessionID: sessionID, ExecutorNodeID: nodeID, Ordinal: ordinal,
 		PlannedCount: 5, State: model.BotLoadBatchPlanned,
-		IdempotencyKey: fmt.Sprintf("fr398-mcp-%d-%d-%d", sessionID, nodeID, ordinal),
+		IdempotencyKey: fmt.Sprintf("loadtest-mcp-%d-%d-%d", sessionID, nodeID, ordinal),
 	}).Error)
 }

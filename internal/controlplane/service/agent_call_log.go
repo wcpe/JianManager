@@ -249,7 +249,7 @@ func (s *AgentCallLogService) Count24hMap(tokenIDs []uint) (map[uint]int64, erro
 	return out, nil
 }
 
-// TokenActivity 是某 Agent Token 在窗口内的 MCP 活动聚合（ADR-096 决策 6）。
+// TokenActivity 是某 Agent Token 在窗口内的 MCP 活动聚合。
 type TokenActivity struct {
 	TokenID        uint
 	TokenName      string

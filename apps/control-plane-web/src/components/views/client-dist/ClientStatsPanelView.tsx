@@ -33,7 +33,7 @@ function platformLabel(os: string): string {
 }
 
 /** 
- * 统计看板的注入契约（受控视图，ADR-103 a 范式）。
+ * 统计看板的注入契约（受控视图）。
  *
  * 受控边界（**不取数、不读路由**）：
  * - 请求侧统计与更新侧观测经 props 注入（容器按窗口调 `/client-dist/stats` 与
@@ -63,7 +63,7 @@ export interface ClientStatsPanelViewProps {
 }
 
 /** 
- * 客户端分发统计看板（见 ADR-023/ADR-049）。
+ * 客户端分发统计看板。
  * KPI 口径统一走 `lib/client-dist-kpi`：更新率只信 observability；活跃回退 stats 时不谎报精确去重。
  * i18n+ 暗/亮色（图表用主题 token）。
  */

@@ -142,7 +142,7 @@ func (f RuntimeInstallFunc) Install(ctx context.Context, packageURL, packageSHA 
 }
 
 // Service 实现 workerpb.WorkerServiceServer 的日志查询 RPC 子集。
-// 嵌入 UnimplementedWorkerServiceServer 以保持前向兼容（Rehydrate 等后续 FR）。
+// 嵌入 UnimplementedWorkerServiceServer 以保持前向兼容（Rehydrate 等后续项）。
 type Service struct {
 	workerpb.UnimplementedWorkerServiceServer
 

@@ -6,9 +6,9 @@ import { dedupeCards, dragPayloadToCards } from '@/lib/instances/instance-librar
 import type { DragPayload } from '@/lib/instances/instance-library'
 
 /** 
- * 可组合工作区状态（单实例跨实例超级工作台 / ADR-034 取代 ADR-030）。
+ * 可组合工作区状态（单实例跨实例超级工作台）。
  *
- * 承 ADR-034 的「状态外提 + 惰性挂载」：画布维护卡片树（哪些卡、各卡 layout、实例 id），
+ * 承「状态外提 + 惰性挂载」：画布维护卡片树（哪些卡、各卡 layout、实例 id），
  * 各卡自管 dirty（在卡组件内部，store 不持久化草稿）；非激活/未挂载卡不建 WS。
  * 预设为命名布局快照，**个人级**先 `localStorage` 持久（纯函数 `lib/workspace-preset`）。
  *

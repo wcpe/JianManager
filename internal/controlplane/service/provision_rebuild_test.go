@@ -13,7 +13,7 @@ import (
 // TestProvisionFailure_EntersDamagedWithSpec 搭建下载失败 → 实例进 DAMAGED、原因写「搭建未完成」、
 // 搭建参数存 ProvisionSpec 供重建。
 func TestProvisionFailure_EntersDamagedWithSpec(t *testing.T) {
-	svc, taskSvc, node, done := newFR319Harness(t, &failingDownloadWorker{})
+	svc, taskSvc, node, done := newProvisionServerHarness(t, &failingDownloadWorker{})
 	defer done()
 
 	inst, taskID, err := svc.ProvisionServerAsync(context.Background(), ProvisionServerRequest{
@@ -31,7 +31,7 @@ func TestProvisionFailure_EntersDamagedWithSpec(t *testing.T) {
 
 // TestRebuildInstance_Guards 重建守卫：非损毁 / 损毁但无参数 分别拒绝。
 func TestRebuildInstance_Guards(t *testing.T) {
-	svc, _, node, done := newFR319Harness(t, &fakeProvisionWorker{})
+	svc, _, node, done := newProvisionServerHarness(t, &fakeProvisionWorker{})
 	defer done()
 
 	stopped := &model.Instance{NodeID: node.ID, Name: "s", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDaemon, StartCommand: "x", Status: model.InstanceStatusStopped}
@@ -49,7 +49,7 @@ func TestRebuildInstance_Guards(t *testing.T) {
 
 // TestRebuildInstance_Succeeds 损毁实例换好 worker 后重建 → 复用参数重跑搭建成功 → STOPPED。
 func TestRebuildInstance_Succeeds(t *testing.T) {
-	svc, taskSvc, node, done := newFR319Harness(t, &failingDownloadWorker{})
+	svc, taskSvc, node, done := newProvisionServerHarness(t, &failingDownloadWorker{})
 	defer done()
 
 	// 先用下载失败 worker 造损毁。

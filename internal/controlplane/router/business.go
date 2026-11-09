@@ -11,14 +11,14 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BusinessHandler JBIS 业务对接下发路由处理器（见 ADR-026/029）。
+// BusinessHandler JBIS 业务对接下发路由处理器。
 // 把前端发起的业务动作（domain.action + payload）经探针桥下发到目标实例的业务对接层；
 // CP 插件无关，仅转发信封、透传结果。探针未连/域不可用由 service 层降级（200 + available=false）。
 //
 // 高危写（write=true，对应 manifest readOnly=false）叠加横切硬化：独立权限节点
 // instance:business:write + 注入幂等键/操作者上下文（service.DispatchWrite）+ 既有审计留痕。
 //
-// ADR-106：本文件只保留 Dispatch 与 Manifest 两个通道端点。JM 不做任何业务——
+// 本文件只保留 Dispatch 与 Manifest 两个通道端点。JM 不做任何业务——
 // 不认识 domain 语义、不为任何业务域做特判，四个业务读接口（events / economy.*）已退役。
 type BusinessHandler struct {
 	bizSvc *service.BusinessService
@@ -51,7 +51,7 @@ type businessDispatchRequest struct {
 // Dispatch POST /instances/:id/business — 向某实例下发一条业务命令并取回结果。
 //
 // 读动作（write=false/缺省）：权限 instance:operate，payload 原样下发。
-// 写动作（write=true）：权限 instance:business:write，注入幂等键 + 操作者上下文并记审计（ADR-029）。
+// 写动作（write=true）：权限 instance:business:write，注入幂等键 + 操作者上下文并记审计。
 // 两者均须实例可访问。探针未连/域不可用由 service 降级（200 + available=false + error），不返回 5xx。
 func (h *BusinessHandler) Dispatch(c *gin.Context) {
 	id, err := parseID(c)
@@ -110,7 +110,7 @@ func (h *BusinessHandler) Dispatch(c *gin.Context) {
 // recordWriteAudit 记录高危写的 JM 侧审计（复用既有 AuditService）。
 // 仅在成功下发后记录；审计失败不阻断主流程（与 PlayerHandler.recordAudit 一致）。
 //
-// 审计边界（ADR-106）：只记通道事实（domain/action/幂等键/原因/是否可用），
+// 审计边界：只记通道事实（domain/action/幂等键/原因/是否可用），
 // payload 与 output 一律不入审计——JM 不理解任何业务语义，也不承担业务数据的存储与查询责任。
 func (h *BusinessHandler) recordWriteAudit(c *gin.Context, instanceID uint, req businessDispatchRequest, res *service.BusinessResult) {
 	if h.audit == nil {

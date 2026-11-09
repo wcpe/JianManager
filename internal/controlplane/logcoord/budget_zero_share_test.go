@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestReserveWorkerBudgetsZeroShareSkipsTarget 钉住 FR-480 验收项 9 的后半句：
+// TestReserveWorkerBudgetsZeroShareSkipsTarget 钉住验收项 9 的后半句：
 // 「`max_bytes` 整请求预算、**零份额不拨号**」。
 //
 // ## 为什么这条必须单独立一个用例

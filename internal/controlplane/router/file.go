@@ -437,7 +437,7 @@ type searchRequest struct {
 	Extensions []string `json:"extensions"` // 可选：限定扩展名范围
 }
 
-// Search 全文搜索 / 文件名快速打开（见 ADR-017）。
+// Search 全文搜索 / 文件名快速打开。
 // 经 gRPC 转发到目标节点 Worker 的本地倒排索引查询；CP 仅转发不持有索引。
 func (h *FileHandler) Search(c *gin.Context) {
 	id, err := parseID(c)

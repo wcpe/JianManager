@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// MetricScope 时序指标的作用域维度（ADR-013）。
+// MetricScope 时序指标的作用域维度。
 type MetricScope string
 
 const (
@@ -134,7 +134,7 @@ const (
 	MetricWorldTileEntities = "world_tile_entities"
 )
 
-// MetricSeries 时序序列的身份维度表（ADR-013）。
+// MetricSeries 时序序列的身份维度表。
 // 一条序列 = (node_uuid, instance_id?, scope, metric_key, world?)；
 // 样本/卷积表只引用 series_id，对新增指标键与动态世界天然可扩展。
 type MetricSeries struct {

@@ -8,7 +8,7 @@ import type { ConsoleImmersiveModeProps } from '@/components/views/console/Conso
 import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 
 /**
- * 沉浸控制台工作台 · 受控视图测（ADR-103）。
+ * 沉浸控制台工作台 · 受控视图测。
  *
  * 补的是**注入面契约**：`usePaneData` 提供的实例名/指标被顶栏与 pane 用上、
  * `instances` 灌进实例选择器、`onSearchInstances` 在选择器开合时通知外壳、
@@ -88,7 +88,7 @@ function renderImmersive(props: Partial<ConsoleImmersiveModeProps> = {}) {
   return { onExit, onNotify, onSearchInstances }
 }
 
-describe('ConsoleImmersiveMode（ADR-087 沉浸工作台受控视图）', () => {
+describe('ConsoleImmersiveMode（沉浸工作台受控视图）', () => {
   beforeEach(() => {
     sessionStorage.clear()
     terminalSessionManager.disposeAll()

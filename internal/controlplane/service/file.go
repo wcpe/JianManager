@@ -533,7 +533,7 @@ type SearchHit struct {
 type SearchResult struct {
 	Hits      []SearchHit `json:"hits"`
 	Truncated bool        `json:"truncated"`
-	// Indexing 为 true 表示 Worker 索引首建未就绪（ADR-024）：本次 Hits 为空，调用方应稍后用同一查询重试。
+	// Indexing 为 true 表示 Worker 索引首建未就绪：本次 Hits 为空，调用方应稍后用同一查询重试。
 	Indexing bool `json:"indexing"`
 }
 
@@ -543,7 +543,7 @@ type SearchScope struct {
 	Extensions []string `json:"extensions"`
 }
 
-// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（见 ADR-017）。
+// SearchFiles 对实例工作目录做全文搜索或文件名快速打开。
 // CP 仅经 gRPC 把查询转发到目标节点 Worker（索引是 Worker 本地资产，CP 不持有）。
 // mode 为 content（默认全文）或 filename（文件名快速打开）；maxResults<=0 时由 Worker 取默认。
 func (s *FileService) SearchFiles(instanceID uint, query, mode string, maxResults int, scope SearchScope) (*SearchResult, error) {

@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 业务事件纯透传通道（见 ADR-106）与 SSE 连接治理。
+// 业务事件纯透传通道与 SSE 连接治理。
 //
 // 职责边界（**铁律**）：JM 只做通道。
 //   - 不解析 payload：`data` 段以 json.RawMessage 原样透传，不 unmarshal 业务内容；
@@ -244,7 +244,7 @@ type BusinessStreamService struct {
 	slowDisc  atomic.Uint64
 	queueMax  atomic.Int64
 
-	// cursorWriter 是 ADR-107 的位点账本旁路写入器；nil 表示未装配账本（位点不落库，投递不受影响）。
+	// cursorWriter 是位点账本旁路写入器；nil 表示未装配账本（位点不落库，投递不受影响）。
 	// 只在装配期由 SetCursorWriter 写入，之后只读，故不需要额外同步。
 	cursorWriter *BusinessCursorWriter
 }
@@ -276,7 +276,7 @@ func NewBusinessStreamService(db *gorm.DB, buffer *BusinessStreamBuffer) *Busine
 	return s
 }
 
-// SetCursorWriter 注入位点账本写入器（ADR-107）。由 CP 装配期调用；传 nil 关闭账本。
+// SetCursorWriter 注入位点账本写入器。由 CP 装配期调用；传 nil 关闭账本。
 //
 // 必须在 StartWorkerStream 之前调用：装配后不再变更，使热路径读取无需加锁。
 func (s *BusinessStreamService) SetCursorWriter(w *BusinessCursorWriter) {
@@ -342,7 +342,7 @@ func (s *BusinessStreamService) Ingest(nodeUUID string, evt *workerpb.PluginEven
 	s.received.Add(1)
 	streamSeq := s.buffer.Append(frame)
 	s.publish(frame)
-	// ADR-107 位点旁路：把本条事件的投递位点投给异步账本写入器。
+	// 位点旁路：把本条事件的投递位点投给异步账本写入器。
 	// 放在投递之后且**非阻塞**（有界队列满即丢最旧），因此不改变上面任何一行的语义与性能。
 	s.recordCursor(frame, streamSeq, env.Seq)
 }
@@ -352,7 +352,7 @@ func (s *BusinessStreamService) Ingest(nodeUUID string, evt *workerpb.PluginEven
 // 只做一层浅解（data 保持 RawMessage，不深入解析业务载荷）；非法/空帧容错返回零值。
 //
 // 为什么要在这里顺手取 `seq`：Worker 的 workerpb.PluginEvent 只透传 domain/dedupKey，
-// 探针的 per-domain `seq` 仅存在于原始帧顶层（RawJson 就是整帧原文）。ADR-107 的位点账本
+// 探针的 per-domain `seq` 仅存在于原始帧顶层（RawJson 就是整帧原文）。位点账本
 // 需要它做缺口比对，若另外再 Parse 一次 RawJson，等于给每条事件多加一次 JSON 解码——
 // 合进同一次浅解里，热路径零额外开销。
 func splitRawEnvelope(raw string) rawEnvelope {
@@ -411,7 +411,7 @@ type rawEnvelope struct {
 	Action string
 }
 
-// recordCursor 把一条已投递事件的位点投给异步账本写入器（ADR-107 §2）。
+// recordCursor 把一条已投递事件的位点投给异步账本写入器。
 //
 // 三条硬约束：
 //   - **不阻塞**：只做一次有界队列入队，队列满由写入器丢最旧，热路径永不等待 DB；

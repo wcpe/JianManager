@@ -19,7 +19,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientVersionHandler 客户端分发 manifest 发布与面向玩家的消费端点（见 ADR-022、contract §2/§4）。
+// ClientVersionHandler 客户端分发 manifest 发布与面向玩家的消费端点（contract §2/§4）。
 //
 // 鉴权分两组、物理隔离（关键安全设计）：
 // 发布端点（运营操作）：JWT 平台管理员，挂 admin 组（同频道管理）。
@@ -27,7 +27,7 @@ import (
 //   - 消费端点（玩家）：X-Client-Key 拉取密钥鉴权（service.VerifyKey/VerifyAnyKey），挂公网组。
 //     GET /client-channels/:id/manifest、GET /client-artifacts/:sha256。
 //
-// 理由：拉取密钥半公开（随整包分发必然泄露，ADR-022 §1），用它鉴权「发布」=严重漏洞；
+// 理由：拉取密钥半公开（随整包分发必然泄露），用它鉴权「发布」=严重漏洞；
 // contract §4 只把 manifest/制品/遥测列为玩家 key 端点。发布走运营浏览器 JWT 入口。
 type ClientVersionHandler struct {
 	svc      *service.ClientVersionService
@@ -183,7 +183,7 @@ type clientRollbackRequest struct {
 }
 
 // RollbackVersion POST /client-channels/:id/rollback — 运营回滚（运营，平台管理员）。
-// 以更高版本号重发历史内容为新 latest（不下发更低号、保持单调、不触发客户端防降级，ADR-022 §3）。
+// 以更高版本号重发历史内容为新 latest（不下发更低号、保持单调、不触发客户端防降级）。
 func (h *ClientVersionHandler) RollbackVersion(c *gin.Context) {
 	if !requireNodes(c, "channel.write", "dist.publish") {
 		return
@@ -212,7 +212,7 @@ func (h *ClientVersionHandler) RollbackVersion(c *gin.Context) {
 
 // GetArtifactContent GET /client-channels/:id/files/content?sha256= — 管理面文本预览制品内容（运营，平台管理员）。
 //
-// 玩家消费端点 GET /client-artifacts/:sha256 走拉取密钥鉴权、与浏览器 JWT 入口物理隔离（ADR-022/023），
+// 玩家消费端点 GET /client-artifacts/:sha256 走拉取密钥鉴权、与浏览器 JWT 入口物理隔离，
 // 管理台无拉取密钥不能复用之取预览。故补此 JWT **只读**端点，仅服务发布页/版本详情的内容预览。
 // 二进制/压缩/超大由服务层判定并以 kind 显式返回，前端据此渲染或降级。
 func (h *ClientVersionHandler) GetArtifactContent(c *gin.Context) {
@@ -259,7 +259,7 @@ func (h *ClientVersionHandler) DownloadArtifact(c *gin.Context) {
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	// s3 制品：CP 经 BlobStore 代理直流，不走 302（见 ADR-073 决策 6）——浏览器
+	// s3 制品：CP 经 BlobStore 代理直流，不走 302——浏览器
 	// axios blob fetch 跨域跟随预签名 URL 会撞对象存储 CORS；管理面下载是低频运维动作，
 	// CP 中继代价可接受、前端零改动、对象存储无需配 CORS。
 	if asset.StorageBackend == model.AssetBackendS3 {
@@ -437,7 +437,7 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 	}
 
 	// s3 制品：鉴权/防护/限流/带宽检查全部照旧先行后，302 到预签名短时效 URL
-	// （见 ADR-073 决策 1）。CP 只当授权与调度面，字节流量走对象存储出口；
+	//。CP 只当授权与调度面，字节流量走对象存储出口；
 	// updater 已 setInstanceFollowRedirects(true) 自动跟随（跨协议限制见 spec §3.8 部署约束）。
 	if asset.StorageBackend == model.AssetBackendS3 {
 		if h.security != nil {

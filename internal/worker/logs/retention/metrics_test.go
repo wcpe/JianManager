@@ -200,7 +200,7 @@ func TestMetricsHandlerNilDriverEmitsZeros(t *testing.T) {
 		"jm_log_retention_archive_purge_failed_total",
 		"jm_log_retention_archive_purge_rolled_back_total",
 		"jm_log_retention_archive_purge_last_run_timestamp_seconds",
-		// 索引库 SQL 慢查询（FR-485）：未装配时同样必须输出 0 而非缺序列。
+		// 索引库 SQL 慢查询：未装配时同样必须输出 0 而非缺序列。
 		"jm_log_index_slow_queries_total",
 		"jm_log_index_slow_query_max_seconds",
 		"jm_log_index_slow_query_last_timestamp_seconds",

@@ -2,17 +2,17 @@ import { test, expect, type Page } from '@playwright/test'
 import { login } from './helpers'
 
 /**
- * FR-122 经济汇聚与多区聚合 / FR-123 经济定制页（JBIS M2）· 单机（Playwright + mock 模式）验收。
+ * 经济汇聚与多区聚合 / 经济定制页（JBIS M2）· 单机（Playwright + mock 模式）验收。
  *
  * 经济定制台（EconomySegment）是可组合工作区的一张功能卡，只在超级工作台 `/super` 的画布上出现：
  * 从左侧「实例库」把实例 1 的「经济」功能卡拖到画布 → 卡内渲染四块（余额 / 排行 / 转账 / 流水）。
  *
  * mock 假后端（MSW）种子经济镜像：Steve coin 1000.00、Alex coin 250.50（node-a / zone 0），
  * 业务能力 manifest 含 economy 域（使定制台可用）。据此验：
- *   - FR-123：定制台四块视图渲染 + 余额查询命中镜像 + 排行 Top-N 数值倒序。
- *   - FR-122：余额多区聚合概览卡（同币种跨节点/区合并总额 + 分布区数）。
+ *   - 定制台四块视图渲染 + 余额查询命中镜像 + 排行 Top-N 数值倒序。
+ *   - 余额多区聚合概览卡（同币种跨节点/区合并总额 + 分布区数）。
  *
- * 证据落 .tmp/acceptance/FR-122|123/。真机（真 mce 探针）由主控 chrome-devtools 补。
+ * 证据落 .tmp/acceptance/economy-views/。真机（真 mce 探针）由主控 chrome-devtools 补。
  */
 
 /**
@@ -81,7 +81,7 @@ async function openEconomyCard(page: Page): Promise<void> {
   await expect(page.getByText('经济定制台').first()).toBeVisible()
 }
 
-test('FR-123 经济定制页: 四块视图 + 余额查询命中镜像', async ({ page }) => {
+test('经济定制页: 四块视图 + 余额查询命中镜像', async ({ page }) => {
   await openEconomyCard(page)
 
   // 定制台标题 + 四个子 Tab 全部呈现（余额 / 排行 / 转账 / 流水）。
@@ -96,10 +96,10 @@ test('FR-123 经济定制页: 四块视图 + 余额查询命中镜像', async ({
   await page.getByRole('button', { name: '查询' }).first().click()
   await expect(page.getByText('1000.00').first()).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-123/single-machine-economy-balance.png', fullPage: false })
+  await page.screenshot({ path: '../.tmp/acceptance/economy-balance/single-machine-economy-balance.png', fullPage: false })
 })
 
-test('FR-122 多区聚合: 余额聚合概览 + 排行数值倒序', async ({ page }) => {
+test('多区聚合: 余额聚合概览 + 排行数值倒序', async ({ page }) => {
   await openEconomyCard(page)
 
   // 余额查询不填玩家，返回全部镜像行（Steve 1000.00 + Alex 250.50，同 coin 币种跨行）。
@@ -123,5 +123,5 @@ test('FR-122 多区聚合: 余额聚合概览 + 排行数值倒序', async ({ pa
   const bodyText = await rankTable.innerText()
   expect(bodyText.indexOf('Steve')).toBeLessThan(bodyText.indexOf('Alex'))
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-122/single-machine-economy-aggregate.png', fullPage: false })
+  await page.screenshot({ path: '../.tmp/acceptance/economy-aggregate/single-machine-economy-aggregate.png', fullPage: false })
 })

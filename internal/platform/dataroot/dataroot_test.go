@@ -79,7 +79,7 @@ func TestEnsureLayoutCreatesFHSDirs(t *testing.T) {
 	}
 }
 
-func TestLayoutMatchesADR010(t *testing.T) {
+func TestLayoutMatches(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "data")
 	r, err := Init(base)
 	if err != nil {

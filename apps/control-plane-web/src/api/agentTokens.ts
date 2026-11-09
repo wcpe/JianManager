@@ -10,7 +10,7 @@ export const WRITE_ALLOWLIST_OPTIONS = [
   { value: 'node.maintenance', labelKey: 'agentTokens.write.nodeMaintenance' },
 ] as const
 
-/** V2 能力分组选项（与后端 service.AgentCapability* 对齐ADR-080）。 */
+/** V2 能力分组选项（与后端 service.AgentCapability* 对齐）。 */
 export const CAPABILITY_OPTIONS = [
   { value: 'node.read', labelKey: 'agentTokens.capability.nodeRead' },
   { value: 'node.operate', labelKey: 'agentTokens.capability.nodeOperate' },

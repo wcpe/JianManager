@@ -278,7 +278,7 @@ func (h *BusinessReconcileHandler) reconcileTargetScope(c *gin.Context) (service
 
 // recordAudit 记录对账的 JM 侧审计。
 //
-// 审计边界（ADR-106）：只记通道事实（domain/action/requestId/规模/成功数），
+// 审计边界：只记通道事实（domain/action/requestId/规模/成功数），
 // **payload 与 output 一律不入审计**——JM 不理解业务语义，也不承担业务数据存储责任。
 func (h *BusinessReconcileHandler) recordAudit(
 	c *gin.Context, req service.BusinessReconcileRequest, resp *service.BusinessReconcileResponse,

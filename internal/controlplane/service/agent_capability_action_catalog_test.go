@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fr397ReadActions 只读内容域 action（capability=instance.read）。
-var fr397ReadActions = []string{
+// catalogReadActions 只读内容域 action（capability=instance.read）。
+var catalogReadActions = []string{
 	AgentActionFileList,
 	AgentActionFileCheckAccess,
 	AgentActionFileReadText,
@@ -22,8 +22,8 @@ var fr397ReadActions = []string{
 	AgentActionPluginList,
 }
 
-// fr397ContentActions 内容写/破坏性 action（capability=instance.content）。
-var fr397ContentActions = []string{
+// catalogContentActions 内容写/破坏性 action（capability=instance.content）。
+var catalogContentActions = []string{
 	AgentActionFileWriteText,
 	AgentActionFileRename,
 	AgentActionFileChmod,
@@ -35,29 +35,29 @@ var fr397ContentActions = []string{
 	AgentActionPluginDelete,
 }
 
-// fr397ConfigureActions 配置写 action（capability=instance.configure）。
-var fr397ConfigureActions = []string{
+// catalogConfigureActions 配置写 action（capability=instance.configure）。
+var catalogConfigureActions = []string{
 	AgentActionConfigWriteText,
 	AgentActionConfigWriteFields,
 	AgentActionConfigRollback,
 }
 
-func fr397AllActions() []string {
-	out := make([]string, 0, len(fr397ReadActions)+len(fr397ContentActions)+len(fr397ConfigureActions))
-	out = append(out, fr397ReadActions...)
-	out = append(out, fr397ContentActions...)
-	out = append(out, fr397ConfigureActions...)
+func catalogAllActions() []string {
+	out := make([]string, 0, len(catalogReadActions)+len(catalogContentActions)+len(catalogConfigureActions))
+	out = append(out, catalogReadActions...)
+	out = append(out, catalogContentActions...)
+	out = append(out, catalogConfigureActions...)
 	return out
 }
 
-func TestFR397_ActionCatalogDescriptors(t *testing.T) {
+func TestActionCatalogDescriptors(t *testing.T) {
 	cases := []struct {
 		actions    []string
 		capability string
 	}{
-		{fr397ReadActions, AgentCapabilityInstanceRead},
-		{fr397ContentActions, AgentCapabilityInstanceContent},
-		{fr397ConfigureActions, AgentCapabilityInstanceConfigure},
+		{catalogReadActions, AgentCapabilityInstanceRead},
+		{catalogContentActions, AgentCapabilityInstanceContent},
+		{catalogConfigureActions, AgentCapabilityInstanceConfigure},
 	}
 	for _, tc := range cases {
 		for _, action := range tc.actions {
@@ -77,14 +77,14 @@ func TestFR397_ActionCatalogDescriptors(t *testing.T) {
 	}
 }
 
-func TestFR397_V1TokenDeniedAll(t *testing.T) {
+func TestV1TokenDeniedAll(t *testing.T) {
 	p := &AgentPrincipal{
 		PolicyVersion:     AgentPolicyVersionV1,
 		ScopedInstanceIDs: []uint{1},
 		ScopedNodeIDs:     []uint{1},
 		WriteAllowlist:    []string{AgentWriteInstanceLife, AgentWriteNodeMaintenance},
 	}
-	for _, action := range fr397AllActions() {
+	for _, action := range catalogAllActions() {
 		_, err := CanDiscover(p, action)
 		assert.ErrorIs(t, err, ErrAgentForbidden, "V1 Token 不得发现 %s", action)
 		_, err = Authorize(p, action, AgentTrustedTarget{ResourceType: AgentResourceInstance, InstanceID: 1})
@@ -92,17 +92,17 @@ func TestFR397_V1TokenDeniedAll(t *testing.T) {
 	}
 }
 
-func TestFR397_V2CapabilityMatrix(t *testing.T) {
+func TestV2CapabilityMatrix(t *testing.T) {
 	readOnly := &AgentPrincipal{
 		PolicyVersion:     AgentPolicyVersionV2,
 		ScopedInstanceIDs: []uint{1},
 		Capabilities:      []string{AgentCapabilityInstanceRead},
 	}
-	for _, action := range fr397ReadActions {
+	for _, action := range catalogReadActions {
 		_, err := CanDiscover(readOnly, action)
 		assert.NoError(t, err, "instance.read 应可发现 %s", action)
 	}
-	for _, action := range append(append([]string{}, fr397ContentActions...), fr397ConfigureActions...) {
+	for _, action := range append(append([]string{}, catalogContentActions...), catalogConfigureActions...) {
 		_, err := CanDiscover(readOnly, action)
 		assert.ErrorIs(t, err, ErrAgentForbidden, "instance.read 不得发现写类 %s", action)
 	}
@@ -112,11 +112,11 @@ func TestFR397_V2CapabilityMatrix(t *testing.T) {
 		ScopedInstanceIDs: []uint{1},
 		Capabilities:      []string{AgentCapabilityInstanceContent},
 	}
-	for _, action := range fr397ContentActions {
+	for _, action := range catalogContentActions {
 		_, err := CanDiscover(content, action)
 		assert.NoError(t, err, "instance.content 应可发现 %s", action)
 	}
-	for _, action := range fr397ConfigureActions {
+	for _, action := range catalogConfigureActions {
 		_, err := CanDiscover(content, action)
 		assert.ErrorIs(t, err, ErrAgentForbidden, "instance.content 不得发现配置写 %s", action)
 	}
@@ -126,17 +126,17 @@ func TestFR397_V2CapabilityMatrix(t *testing.T) {
 		ScopedInstanceIDs: []uint{1},
 		Capabilities:      []string{AgentCapabilityInstanceConfigure},
 	}
-	for _, action := range fr397ConfigureActions {
+	for _, action := range catalogConfigureActions {
 		_, err := CanDiscover(configure, action)
 		assert.NoError(t, err, "instance.configure 应可发现 %s", action)
 	}
-	for _, action := range fr397ContentActions {
+	for _, action := range catalogContentActions {
 		_, err := CanDiscover(configure, action)
 		assert.ErrorIs(t, err, ErrAgentForbidden, "instance.configure 不得发现内容写 %s", action)
 	}
 }
 
-func TestFR397_ScopeOutsideDenied(t *testing.T) {
+func TestScopeOutsideDenied(t *testing.T) {
 	p := &AgentPrincipal{
 		PolicyVersion:     AgentPolicyVersionV2,
 		ScopedInstanceIDs: []uint{1},
@@ -144,13 +144,13 @@ func TestFR397_ScopeOutsideDenied(t *testing.T) {
 			AgentCapabilityInstanceRead, AgentCapabilityInstanceContent, AgentCapabilityInstanceConfigure,
 		},
 	}
-	for _, action := range fr397AllActions() {
+	for _, action := range catalogAllActions() {
 		_, err := Authorize(p, action, AgentTrustedTarget{ResourceType: AgentResourceInstance, InstanceID: 99})
 		assert.ErrorIs(t, err, ErrAgentForbidden, "scope 外应拒绝 %s", action)
 	}
 }
 
-func TestFR397_TransferConsumeNotDiscoverable(t *testing.T) {
+func TestTransferConsumeNotDiscoverable(t *testing.T) {
 	// 消费只是流水标签，不得成为可授权/可发现的 action。
 	_, ok := DescribeAgentAction(AgentActionFileTransferConsume)
 	assert.False(t, ok, "agent.file_transfer_consume 不得进 action 目录")

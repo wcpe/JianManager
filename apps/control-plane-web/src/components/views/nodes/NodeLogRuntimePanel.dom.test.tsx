@@ -84,7 +84,7 @@ const runningRuntime: LogRuntimeView = {
   ],
 }
 
-describe('NodeLogRuntimePanel（ADR-103 b 范式）', () => {
+describe('NodeLogRuntimePanel', () => {
   it('进程健康与可查询分别呈现，且三个动作各自上报回调', async () => {
     const user = userEvent.setup()
     const { onInstall, onMigrate, onResolveGaps } = renderPanel({

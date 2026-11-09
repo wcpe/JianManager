@@ -15,9 +15,9 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// TunnelRegistry 管理 Worker 主动建立的 gRPC 反向隧道（见 ADR-066）。
+// TunnelRegistry 管理 Worker 主动建立的 gRPC 反向隧道。
 // Worker 在 CP 既有 gRPC 端口上开常驻反向隧道并以节点身份（node-uuid/node-secret
-// metadata，ADR-039）锚定归属；ClientPool 只从活跃隧道取得节点通道。
+// metadata）锚定归属；ClientPool 只从活跃隧道取得节点通道。
 // 鉴权在 StreamAuthInterceptor 前置完成——到达 handler 的隧道必已通过 secret 校验，
 // 杜绝「节点 A 冒领节点 B 的指令」。
 type TunnelRegistry struct {

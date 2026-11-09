@@ -20,7 +20,7 @@ const (
 type Node struct {
 	ID   uint   `gorm:"primaryKey" json:"id"`
 	UUID string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	// Name 节点名（人类可读标签）。身份由 UUID 锚定（见 ADR-039），name 仅为可变标签，
+	// Name 节点名（人类可读标签）。身份由 UUID 锚定，name 仅为可变标签，
 	// 但活跃节点间名字唯一：唯一性由 database.AutoMigrate 建的「部分唯一索引」
 	// （仅约束 deleted_at IS NULL 的活跃行）强制，软删除节点可释放其名供新节点复用。
 	Name        string     `gorm:"type:varchar(128);not null" json:"name"`
@@ -85,7 +85,7 @@ type Node struct {
 	BotCapacityUnavailableReason string     `gorm:"type:varchar(256)" json:"botCapacityUnavailableReason"`
 	BotAvailable                 bool       `gorm:"default:false" json:"botAvailable"`
 	BotUnavailableReason         string     `gorm:"type:varchar(256)" json:"botUnavailableReason"`
-	// ProxyMode 节点出站代理模式（见 ADR-043）：
+	// ProxyMode 节点出站代理模式：
 	//   inherit（默认）= 用平台全局默认代理（settings DB > control-plane.yml > env）；
 	//   custom         = 用本节点自定义 ProxyURL/ProxyNoProxy。
 	// CP 据此算每节点期望代理经心跳响应下发，Worker 运行时重建出站 client（免登机器改 worker.yml）。
@@ -105,7 +105,7 @@ type Node struct {
 	UpdatedAt      time.Time      `json:"updatedAt"`
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 
-	// TunnelConnected 该节点当前是否有活跃反向隧道（见 ADR-066）。
+	// TunnelConnected 该节点当前是否有活跃反向隧道。
 	// 运行态字段不落库（gorm:"-"），由 NodeService 在响应时据 TunnelRegistry 填充：
 	// true=指令经隧道下发（NAT/内网节点可用），false=直拨回退（老 worker/隧道重建窗口）。
 	TunnelConnected bool `gorm:"-" json:"tunnelConnected"`

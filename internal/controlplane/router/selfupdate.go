@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/version"
 )
 
-// SelfUpdateHandler 面板自更新路由（见 ADR-020 §4）。
+// SelfUpdateHandler 面板自更新路由。
 // 挂在平台管理员组下（仅平台管理员）；升级类操作写审计（detail 仅含版本，绝不含下载凭据）。
 type SelfUpdateHandler struct {
 	svc   *service.SelfUpdateService
@@ -248,7 +248,7 @@ func (h *SelfUpdateHandler) DownloadWorkerAsset(c *gin.Context) {
 // 语义对齐 agent/bot 处理器的 RecordResultSafe 用法（E2E 验收发现：此前失败不落审计）。
 func (h *SelfUpdateHandler) respondUpgradeError(c *gin.Context, action, targetID string, err error) {
 	status, code, message := upgradeErrorMessage(err)
-	// 错误摘要可能携带 CP-local 下载 URL（含短期 token）——响应与审计统一脱敏（ADR-059）。
+	// 错误摘要可能携带 CP-local 下载 URL（含短期 token）——响应与审计统一脱敏。
 	message = sanitizeWorkerAssetToken(message)
 	if h.audit != nil {
 		h.audit.RecordResultSafe(h.currentUserID(c), action, "self_update", targetID, "", c.ClientIP(), false, message)
@@ -277,7 +277,7 @@ func upgradeErrorMessage(err error) (int, string, string) {
 }
 
 // workerAssetTokenPattern 匹配 Worker 资产下载 URL 的 query token。
-// ADR-059：token 位于 URL query，路由、审计、访问日志与错误响应必须脱敏或不记录明文。
+// token 位于 URL query，路由、审计、访问日志与错误响应必须脱敏或不记录明文。
 var workerAssetTokenPattern = regexp.MustCompile(`([?&]token=)[^&\s"']+`)
 
 // sanitizeWorkerAssetToken 脱敏消息中的下载凭据（token=… → token=REDACTED）。

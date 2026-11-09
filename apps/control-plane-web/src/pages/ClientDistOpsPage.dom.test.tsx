@@ -13,7 +13,7 @@ import Workspace from '@/components/console/Workspace'
 import DashboardPage from './DashboardPage'
 
 /** 
- * 页面 B「客户端分发运维」（`/client-dist-ops`ADR-088）。
+ * 页面 B「客户端分发运维」（`/client-dist-ops`）。
  *
  * 用例迁自旧 `ClientDistMonitoringPage.dom.test.tsx`（8 例）+ 旧 `ProtectionCenterPage` 安全侧行为：
  * - 7 Tab 同页；`data-page="client-dist-ops"`；

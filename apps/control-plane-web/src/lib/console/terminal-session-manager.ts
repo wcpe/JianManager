@@ -90,14 +90,14 @@ const MAX_RETRIES = 3
 const BASE_RETRY_DELAY = 1000
 // 连接存活超过此时长才视为「真正连上」并清零重试计数。
 const STABLE_AFTER_MS = 2000
-// 暂停渲染时的输出累积上限，超限丢最旧段（ADR-035 导播台节流）。
+// 暂停渲染时的输出累积上限，超限丢最旧段（导播台节流）。
 const PENDING_MAX = 4000
 
 /** 无会话时的稳定空快照：getSnapshot 必须返回同一引用，否则订阅方重渲染死循环。 */
 const EMPTY_LINES: readonly LogLine[] = Object.freeze([])
 
 /** 
- * 会话状态机（ADR-067）：
+ * 会话状态机：
  * connecting →（open）connected →（闲置超时）idle-disconnected →（回切）connecting；
  * closed = 断开且未在闲置降级（服务端关闭 / 重试耗尽），acquire/reconnect 可再拉起。
  */
@@ -116,7 +116,7 @@ type PendingOutput = { kind: 'stream'; text: string; stream: LogStream } | { kin
 
 interface TerminalSession {
   instanceId: number
-  /** 常驻行缓冲（ADR-086：取代 xterm 内部 buffer 成为保活缓冲的载体，是**唯一权威缓冲**）。 */
+  /** 常驻行缓冲（取代 xterm 内部 buffer 成为保活缓冲的载体，是**唯一权威缓冲**）。 */
   buffer: ConsoleLineBuffer
   ws: WebSocket | null
   state: TerminalSessionState
@@ -128,7 +128,7 @@ interface TerminalSession {
   /** 实例控制台整体是否不可见（热集 hidden 成员）。 */
   hidden: boolean
   lastVisibleAt: number
-  /** 暂停向缓冲落行（导播台节流，ADR-035）：输出进 pending，恢复时一次性 flush。 */
+  /** 暂停向缓冲落行（导播台节流）：输出进 pending，恢复时一次性 flush。 */
   paused: boolean
   pending: PendingOutput[]
   outputListeners: Set<(text: string) => void>
@@ -139,7 +139,7 @@ interface TerminalSession {
 }
 
 /** 
- * 终端连接管理器（ADR-067起缓冲由 xterm 换成行缓冲，ADR-086）：
+ * 终端连接管理器（缓冲由 xterm 换成行缓冲）：
  * 模块级单例按 instanceId 持有终端会话（行缓冲 + WS + 状态机 + 闲置计时）。
  *
  * 组件订阅制——渲染壳 mount 时 acquire 并 subscribeLines，unmount（含 `<Activity>` 隐藏）
@@ -201,7 +201,7 @@ export class TerminalSessionManager {
 
   /** 
    * 组件卸载（含 Activity 隐藏）时的解绑：只做渲染层脱钩，不断 WS、不丢缓冲。
-   * 保留为语义锚点——ADR-067 的「卸载只 detach 渲染层」在新架构下即「退订 + 不动会话」。
+   * 保留为语义锚点——「卸载只 detach 渲染层」在新架构下即「退订 + 不动会话」。
    */
   detach(instanceId: number): void {
     void instanceId
@@ -298,7 +298,7 @@ export class TerminalSessionManager {
     return this.send(instanceId, { type: 'stdin', instanceId: String(instanceId), data: line })
   }
 
-  /** 暂停/恢复向缓冲落行（导播台节流，ADR-035）：暂停期输出累积，恢复时一次性 flush。 */
+  /** 暂停/恢复向缓冲落行（导播台节流）：暂停期输出累积，恢复时一次性 flush。 */
   setPaused(instanceId: number, paused: boolean): void {
     const session = this.sessions.get(instanceId)
     if (!session) return
@@ -558,7 +558,7 @@ export class TerminalSessionManager {
         this.writeStream(session, text, msg.type === 'stderr' ? 'stderr' : 'stdout')
         for (const listener of session.outputListeners) listener(text)
       } else if (msg.type === 'state') {
-        // 错误态渲染后端诊断（见 ADR-061）：WORKER_TOKEN_REJECTED 定向提示，
+        // 错误态渲染后端诊断：WORKER_TOKEN_REJECTED 定向提示，
         // 一般错误带出 data 原因，不丢诊断信息。
         let line: string
         if (msg.state === 'error' && msg.code === 'WORKER_TOKEN_REJECTED') {
@@ -578,7 +578,7 @@ export class TerminalSessionManager {
   }
 }
 
-/** 全局单例：应用运行期唯一的终端会话持有者（ADR-067）。 */
+/** 全局单例：应用运行期唯一的终端会话持有者。 */
 export const terminalSessionManager = new TerminalSessionManager()
 
 /** 测试用工厂：创建相互隔离的管理器实例。 */

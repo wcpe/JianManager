@@ -48,9 +48,9 @@ var orphanAuditAllowedActions = map[string]struct{}{
 	"orphan.auto_adopted":  {},
 	"orphan.adopt_blocked": {},
 	"orphan.adopt_failed":  {},
-	// cgroup.isolate_failed：ADR-097「无隔离保护必须成为可观测事实」的**唯一 CP 侧留痕通道**
+	// cgroup.isolate_failed：「无隔离保护必须成为可观测事实」的**唯一 CP 侧留痕通道**
 	//（接管路径在零迁移且 wrapper 仍存活时落该审计）。缺此项时该上报被本表以 InvalidArgument
-	// 拒收、Worker 侧仅 Warn 后丢弃 ⇒「这批实例已失去 cgroup 隔离」对 CP 不可见，恰是 ADR-097
+	// 拒收、Worker 侧仅 Warn 后丢弃 ⇒「这批实例已失去 cgroup 隔离」对 CP 不可见，恰是
 	// 要消除的形态。与 docs/adr/097-cgroup-isolation-*.md 及 spec 审计动作表对齐。
 	"cgroup.isolate_failed": {},
 	// orphan.startup_detected_not_reaped：启动恢复路径发现孤儿但按非破坏策略**只观测不处置**。

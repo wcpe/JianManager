@@ -20,7 +20,7 @@ import (
 // 路由映射 422（不存在路径等按 spec 归 4xx）。
 var ErrImportRejected = errors.New("导入被拒绝")
 
-// ImportServerService 导入现有服务器（见 ADR-069）：
+// ImportServerService 导入现有服务器：
 // 探测（代理 Worker InspectServerDir）→ 就地接管 / 搬迁托管区 → 登记实例
 // （结构化启动同 provision 路径）+ 探到的内嵌 JDK 登记进 node_jdks（managed=false）。
 type ImportServerService struct {
@@ -224,7 +224,7 @@ func (s *ImportServerService) Import(ctx context.Context, req ImportServerReques
 	return inst, taskID, nil
 }
 
-// createImportedInstance 建导入实例（结构化启动同 provision，ADR-008；backend 角色可注册代理/可克隆）。
+// createImportedInstance 建导入实例（结构化启动同 provision，；backend 角色可注册代理/可克隆）。
 func (s *ImportServerService) createImportedInstance(req ImportServerRequest, specJSON []byte, inspect *ImportInspectResult, relWorkDir string) (*model.Instance, error) {
 	return s.instance.Create(CreateInstanceRequest{
 		Kind:   model.InstanceKindPlugin, // 导入的是 MC 服务端目录（插件服）

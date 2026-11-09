@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle } from 'lucide-react'
 
-/** 常驻 bot.chat 成功边界免责声明（ADR-075）。 */
+/** 常驻 bot.chat 成功边界免责声明。 */
 export function DisclaimerBanner({ className = '' }: { className?: string }) {
   const { t } = useTranslation()
   return (

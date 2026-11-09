@@ -12,7 +12,7 @@ import type { BusinessAction, BusinessResult } from '@/lib/console/business'
 import { buildBusinessPayload, isWriteAction } from '@/lib/console/business-actions'
 
 /** 
- * 业务掌控台（JBIS见 ADR-026/027）。
+ * 业务掌控台（JBIS）。
  *
  * manifest 驱动：取探针汇总的业务能力清单动态渲染域 / 动作（不硬编码具体插件），按动作 args 渲染表单，
  * 经 `POST /business` 下发 `domain.action` + payload，透传展示结果。探针未连 / 无业务 Provider 优雅降级。
@@ -25,7 +25,7 @@ import { buildBusinessPayload, isWriteAction } from '@/lib/console/business-acti
  *
  * 注：本页签只渲染能力清单 + 下发面板，不含任何具体业务域的特判（后 JM 不理解业务语义）。
  *
- * 受控视图（ADR-103 a 范式）：不取数——manifest 探测态与域清单由外壳注入，下发经回调上报。
+ * 受控视图：不取数——manifest 探测态与域清单由外壳注入，下发经回调上报。
  * 表单状态、写动作二次确认、入参还原与结果展示留在视图内。
  */
 export interface BusinessSegmentProps {

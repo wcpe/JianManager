@@ -15,7 +15,7 @@ interface InstanceConsoleCacheProps {
 }
 
 /** 
- * 跨服务器控制台热缓存宿主（ADR-067）：维护最近打开的若干服控制台（LRU），
+ * 跨服务器控制台热缓存宿主：维护最近打开的若干服控制台（LRU），
  * 每个成员一份 `<Activity>` 包裹的 {@link InstanceConsolePage}——命中热集切 visible
  * 瞬时呈现，未命中入列、超容按淘汰偏好（先无草稿者）整体卸载释放。
  * 成员可见性联动终端连接管理器：hidden 起闲置断连计时、visible 取消并按需重连。

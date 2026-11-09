@@ -24,7 +24,7 @@ import (
 // 都走「实例 → 节点 → Worker gRPC → 探针 `core.*` 命令」这条既有通道，CP **不解析**
 // 探针返回的业务内容，只做信封级映射：
 //   - 桥状态：线路健康度快照，原样透传（字段演进不改 CP）；
-//   - 域状态：域清单 + manifest 指纹，**只渲染不解释**（ADR-106）；
+//   - 域状态：域清单 + manifest 指纹，**只渲染不解释**；
 //   - 订阅：把 (topics, domains) 转成探针的 topic 表达式列表再下发。
 //
 // ## 与业务命令的分界
@@ -89,7 +89,7 @@ type BridgeStatusResult struct {
 //
 // CP 只取 OpenAPI 契约要求的几个字段；探针回执里还有 pools/routes/inbound 等更细的结构，
 // 这里刻意不建模——建模了就会有人问"能不能按 in字段筛选"，
-// 于是 CP 就长出了本不该有的语义（ADR-106 的同一条红线）。
+// 于是 CP 就长出了本不该有的语义（同一条红线）。
 type bridgeStatusWire struct {
 	Connected            bool   `json:"connected"`
 	Reconnects           int64  `json:"reconnects"`
@@ -176,7 +176,7 @@ type bridgeBusinessStatusCache struct {
 //
 // 与 BusinessService / ServerStateService 同构（db + pool 两依赖），
 // 额外持有一份内存缓存给域状态用——**不落库**：域状态是探针运行期快照，
-// 落库会让人误以为它是平台数据（ADR-106 的红线），且探针重启后即失效。
+// 落库会让人误以为它是平台数据（红线），且探针重启后即失效。
 type BridgeService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
@@ -356,7 +356,7 @@ func (s *BridgeService) SetSubscription(instanceID uint, topics, domains []strin
 //     并置 `stale=true`（比返回空更有用，OpenAPI 明确要求）；
 //   - 从未成功查过且本次也失败 → 200 + 空 domains + stale=true + error。
 //
-// 缓存只在内存、不落库：域状态是探针运行期快照，落库会让人当它是平台数据（ADR-106）。
+// 缓存只在内存、不落库：域状态是探针运行期快照，落库会让人当它是平台数据。
 func (s *BridgeService) QueryBusinessStatus(instanceID uint) (*BusinessStatusResult, error) {
 	inst, node, err := s.resolveInstanceNode(instanceID)
 	if err != nil {

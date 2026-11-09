@@ -363,7 +363,7 @@ func (s *AssistantChatService) authz() *AuthzService {
 //
 // 与 authz 同样的惰性构造理由：AuditService 无状态、只包 db。
 // 助手执行写操作必须留审计——否则管理员在平台审计里看不到「实例是助手启的」，
-// 而这是 ADR-105 最关心的提权面。
+// 而这是最关心的提权面。
 func (s *AssistantChatService) audit() *AuditService {
 	s.auditOnce.Do(func() {
 		s.auditSvc = NewAuditService(s.db)

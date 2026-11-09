@@ -124,7 +124,7 @@ func TestConfigBaseline_UpsertRejectsBadScope(t *testing.T) {
 }
 
 // TestConfigBaseline_GroupScopeFailClosed 覆盖修复（NEW-ISSUE）：group:<id> 不再静默解析为空集。
-// 组织树分组（ADR-033）与用户组（ADR-004）id 空间正交，误填用户组 id 必须报错而不是「创建成功但谁都不覆盖」。
+// 组织树分组与用户组id 空间正交，误填用户组 id 必须报错而不是「创建成功但谁都不覆盖」。
 func TestConfigBaseline_GroupScopeFailClosed(t *testing.T) {
 	db := newBaselineTestDB(t)
 	ids := seedPlainInstances(t, db, 1)
@@ -140,7 +140,7 @@ func TestConfigBaseline_GroupScopeFailClosed(t *testing.T) {
 	require.NoError(t, db.Model(&model.ConfigBaseline{}).Count(&cnt).Error)
 	require.Zero(t, cnt, "非法 group scope 不得落库")
 
-	// 2) 用户组 id（ADR-004）被填进 group: → 同样被拒（组织树里没有这个节点）。
+	// 2) 用户组 id被填进 group: → 同样被拒（组织树里没有这个节点）。
 	//    这里直接建一条用户组关联，证明它与 group: 的解析空间无关。
 	require.NoError(t, db.Create(&model.GroupInstance{GroupID: 42, InstanceID: ids[0]}).Error)
 	_, err = svc.resolveScopeInstances("group:42")

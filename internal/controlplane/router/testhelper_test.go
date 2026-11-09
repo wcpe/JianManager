@@ -305,7 +305,7 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 		BusinessBatch:     newTestBusinessBatchService(db, pool),
 		BusinessReconcile: service.NewBusinessReconcileService(db, service.NewBusinessService(db, pool)),
 		BusinessStream:    service.NewBusinessStreamService(db, nil),
-		// ADR-107 位点账本查询：只读位点，与 BusinessStream 同组鉴权。
+		// 位点账本查询：只读位点，与 BusinessStream 同组鉴权。
 		BusinessCursor:        service.NewBusinessCursorService(db, service.BusinessCursorRetentionDays),
 		Asset:                 assetSvc,
 		ArtifactVersion:       service.NewArtifactVersionService(db, assetSvc),
@@ -333,7 +333,7 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 	if tickets, err := service.NewAgentTransferTicketService(transferSecret, svcs.AgentToken, nil); err == nil {
 		svcs.AgentTransfer = tickets
 	}
-	// CP 内嵌 MCP（无状态化见 ADR-096）：只需 SSE 传输连接登记。
+	// CP 内嵌 MCP（无状态化）：只需 SSE 传输连接登记。
 	agentTok := svcs.AgentToken
 	svcs.MCP = mcp.NewHandler(mcp.NewSSEConnRegistry(), mcp.ToolDeps{
 		Instance: svcs.Instance,

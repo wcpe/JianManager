@@ -6,7 +6,7 @@ import type { ClientDistObservabilitySummary, ClientDistObservabilityCompare } f
 
 /** 
  * 分发概览洞察卡：KPI 同环比 + 异常标记 + 口径解释。
- * 「用户」= 机器（machineId 去重，ADR-023 不可信仅近似）；同环比基数来自后端 compare（前一等长窗口）。
+ * 「用户」= 机器（machineId 去重， 不可信仅近似）；同环比基数来自后端 compare（前一等长窗口）。
  */
 
 function fmtBytes(b: number): string {

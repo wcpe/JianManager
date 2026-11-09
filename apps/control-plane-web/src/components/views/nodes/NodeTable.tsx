@@ -538,7 +538,7 @@ export function NodeTable({
               )
               const cell_tunnel = (
               <TableCell>
-                {/* 反向隧道（ADR-066）：连上意味着 NAT/内网也能下发指令，是运维排障的关键信号。 */}
+                {/* 反向隧道：连上意味着 NAT/内网也能下发指令，是运维排障的关键信号。 */}
                 {node.tunnelConnected ? (
                   <span className="inline-flex items-center gap-0.5 rounded bg-status-success/15 px-1.5 py-px text-[11px] text-status-success">
                     <Network className="size-3" aria-hidden />

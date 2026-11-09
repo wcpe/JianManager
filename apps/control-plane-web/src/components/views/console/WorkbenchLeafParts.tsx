@@ -151,7 +151,7 @@ export interface SuperWorkbenchToolbarProps {
   onApplyPreset: (presetId: string) => void
   onSavePreset: (name: string) => void
   onDeletePreset: (presetId: string) => void
-  /** 打开「专注终端」（沉浸终端模式，ADR-087）：取画布上首个终端卡实例。未提供=不渲染按钮。 */
+  /** 打开「专注终端」（沉浸终端模式）：取画布上首个终端卡实例。未提供=不渲染按钮。 */
   onOpenFocusTerminals?: () => void
   /** 禁用原因（画布无终端卡等）；给出时按钮禁用并以 title 提示。 */
   focusTerminalsDisabledReason?: string

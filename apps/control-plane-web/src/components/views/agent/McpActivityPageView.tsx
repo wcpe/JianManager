@@ -3,7 +3,7 @@
  * @input Panel/Button/Table 原语、layout 页壳（PageShell/PageHeader）、lucide-react 图标、翻译上下文
  * @output McpActivityPageView、McpActivityPageViewProps、McpActivityRow、WINDOW_PRESETS、McpWindowPreset
  * @sync apps/control-plane-web/src/pages/McpActivityPage.tsx、apps/control-plane-web/src/pages/McpActivityPage.dom.test.tsx、apps/control-plane-web/e2e/mcp-activity.spec.ts
- * @since（组件受控化迁包；原ADR-096 去会话化后的 Token 级活动视图）
+ * @since（组件受控化迁包；去会话化后的 Token 级活动视图）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -110,7 +110,7 @@ function formatClients(clients: Record<string, number> | undefined): string {
 }
 
 /** 
- * MCP 活动运维页展示层（ADR-096）：按 Token 聚合的调用活动、MCP URL 展示与吊销入口。
+ * MCP 活动运维页展示层：按 Token 聚合的调用活动、MCP URL 展示与吊销入口。
  * 端点去会话化后已无「会话」可观测，故本视图只呈现窗口内的活动聚合。
  */
 export function McpActivityPageView({

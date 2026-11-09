@@ -16,24 +16,24 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-type fakeFR034ProvisionWorker struct {
+type fakeProvisionWorkerCore struct {
 	workerpb.WorkerServiceClient
 	created  *workerpb.CreateInstanceRequest
 	download *workerpb.DownloadCoreRequest
 	configs  map[string]string
 }
 
-func (f *fakeFR034ProvisionWorker) CreateInstance(_ context.Context, req *workerpb.CreateInstanceRequest, _ ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
+func (f *fakeProvisionWorkerCore) CreateInstance(_ context.Context, req *workerpb.CreateInstanceRequest, _ ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
 	f.created = req
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
-func (f *fakeFR034ProvisionWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
+func (f *fakeProvisionWorkerCore) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
 	f.download = req
 	return &workerpb.DownloadCoreResponse{Success: true, Size: 12345}, nil
 }
 
-func (f *fakeFR034ProvisionWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
+func (f *fakeProvisionWorkerCore) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
 	if f.configs == nil {
 		f.configs = make(map[string]string)
 	}
@@ -41,22 +41,22 @@ func (f *fakeFR034ProvisionWorker) WriteConfig(_ context.Context, req *workerpb.
 	return &workerpb.WriteConfigResponse{Success: true}, nil
 }
 
-func (f *fakeFR034ProvisionWorker) DeployServerProbe(context.Context, *workerpb.DeployServerProbeRequest, ...grpc.CallOption) (*workerpb.DeployServerProbeResponse, error) {
+func (f *fakeProvisionWorkerCore) DeployServerProbe(context.Context, *workerpb.DeployServerProbeRequest, ...grpc.CallOption) (*workerpb.DeployServerProbeResponse, error) {
 	return &workerpb.DeployServerProbeResponse{Success: true}, nil
 }
 
-func TestFR034ProvisionBukkitCreatesBackendAndConfiguresWorker(t *testing.T) {
+func TestProvisionBukkitCreatesBackendAndConfiguresWorker(t *testing.T) {
 	db := newJDKTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	worker := &fakeFR034ProvisionWorker{}
+	worker := &fakeProvisionWorkerCore{}
 	core := NewCoreService()
-	core.base = fakeFR034PaperCoreRepo(t)
+	core.base = fakeProvisionPaperCoreRepo(t)
 	groupSvc := NewGroupService(db)
 	instanceSvc := NewInstanceService(db, groupSvc, pool)
 	t.Cleanup(instanceSvc.Shutdown)
 	prov := NewProvisionService(db, pool, instanceSvc, core, nil)
 
-	node := &model.Node{UUID: "fr034-node", Name: "fr034-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
+	node := &model.Node{UUID: "provision-node", Name: "provision-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 	jdk := &model.NodeJDK{NodeID: node.ID, Vendor: "Temurin", MajorVersion: 21, Version: "21.0.4+9", Arch: "x64", Path: "/opt/jdks/temurin-21"}
 	require.NoError(t, db.Create(jdk).Error)
@@ -65,7 +65,7 @@ func TestFR034ProvisionBukkitCreatesBackendAndConfiguresWorker(t *testing.T) {
 	onlineMode := false
 	inst, err := prov.ProvisionBukkit(context.Background(), ProvisionBukkitRequest{
 		NodeID:     node.ID,
-		Name:       "fr034-lobby",
+		Name:       "provision-lobby",
 		CoreType:   "paper",
 		MCVersion:  "1.21.1",
 		JDKID:      jdk.ID,
@@ -84,7 +84,7 @@ func TestFR034ProvisionBukkitCreatesBackendAndConfiguresWorker(t *testing.T) {
 	require.Equal(t, 25565, inst.ServerPort)
 	require.Equal(t, 25565, inst.QueryPort)
 	require.Equal(t, 29940, inst.ProbePort)
-	require.True(t, strings.HasPrefix(inst.WorkDir, "var/servers/fr034-lobby-"), inst.WorkDir)
+	require.True(t, strings.HasPrefix(inst.WorkDir, "var/servers/provision-lobby-"), inst.WorkDir)
 	require.Equal(t, "java -Xms4096M -Xmx4096M -XX:+UseG1GC -jar server.jar nogui", inst.StartCommand)
 
 	require.NotNil(t, worker.created)
@@ -107,7 +107,7 @@ func TestFR034ProvisionBukkitCreatesBackendAndConfiguresWorker(t *testing.T) {
 	require.Contains(t, serverProps, "online-mode=false")
 }
 
-func fakeFR034PaperCoreRepo(t *testing.T) string {
+func fakeProvisionPaperCoreRepo(t *testing.T) string {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/paper/versions/1.21.1/builds" {

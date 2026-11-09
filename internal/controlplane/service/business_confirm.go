@@ -72,7 +72,7 @@ func DeriveBusinessConfirmTokenSecret(master []byte) []byte {
 // BusinessConfirmClaims 是令牌正文（签名保护，不加密）。
 //
 // 正文里**不含 payload 业务内容**：令牌只回答「谁、在什么目标集合、什么风险等级、什么时候」，
-// 不携带任何业务数据（ADR-106：JM 不持有业务语义）。
+// 不携带任何业务数据（JM 不持有业务语义）。
 type BusinessConfirmClaims struct {
 	Version int `json:"v"`
 	// TokenID 令牌子标识，便于审计串联同一次确认的签发与使用。

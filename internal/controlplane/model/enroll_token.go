@@ -4,12 +4,12 @@ import (
 	"time"
 )
 
-// NodeEnrollToken 节点 enrollment token：新增 Worker Node 时的一次性、限时准入凭据（见 ADR-020）。
+// NodeEnrollToken 节点 enrollment token：新增 Worker Node 时的一次性、限时准入凭据。
 //
 // 信任模型同构拉取密钥与 JM 既有运行时密钥惯例：落库只存明文的 SHA-256 哈希，
 // 明文仅签发时一次性返回、不可二次读取。Worker 注册时经 gRPC metadata 携带明文，
 // CP 在 Register 内校验（存在 + 未过期 + 未消费 + 未吊销）并原子标记 Used（一次性）。
-// enrollment token 只对「新节点首次落库」设门槛，已存在节点重注册不强制 token（ADR-020 §1）。
+// enrollment token 只对「新节点首次落库」设门槛，已存在节点重注册不强制 token。
 type NodeEnrollToken struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// TokenHash enrollment token 明文的 SHA-256 十六进制小写。库内不存明文。

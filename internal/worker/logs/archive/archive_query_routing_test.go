@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 )
 
-// 本文件是 FR-501「已归档（ARCHIVED）」在**查询面**上的验收。
+// 本文件是「已归档（ARCHIVED）」在**查询面**上的验收。
 //
 // 为什么落在 `logs/archive` 包而不是 `logs/query` 包：本文件验收的是「归档分区
 // 如何影响查询规划」，天然要同时握住 archive 的分区键与 query 的规划器；放在本包

@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BusinessCursorHandler 业务事件位点缺口查询端点（ADR-107 §3）。
+// BusinessCursorHandler 业务事件位点缺口查询端点。
 //
 // 契约：
 //
@@ -20,7 +20,7 @@ import (
 // 返回该 (instance, domain) 区间内**存在过的位点列表**——只有位点，没有 payload。
 //
 // 【为什么不返回"缺失区间"】JM 不知道调用方收到了哪些事件，无法单方计算缺口；
-// 由调用方拿自己的已收位点做差集是唯一正确的信息来源（ADR-107 §3）。
+// 由调用方拿自己的已收位点做差集是唯一正确的信息来源。
 // 本处理器只做参数解析与响应写出，**永不做差集、不猜缺口**。
 type BusinessCursorHandler struct {
 	cursor *service.BusinessCursorService

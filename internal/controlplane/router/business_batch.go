@@ -403,7 +403,7 @@ func (h *BusinessBatchHandler) targetScope(c *gin.Context) (service.BusinessTarg
 
 // recordAudit 记录批量执行的 JM 侧审计。
 //
-// 审计边界（ADR-106）：只记通道事实（domain/action/requestId/reason/风险等级/各项计数），
+// 审计边界：只记通道事实（domain/action/requestId/reason/风险等级/各项计数），
 // **payload 与 output 一律不入审计**——JM 不理解业务语义，也不承担业务数据存储责任。
 func (h *BusinessBatchHandler) recordAudit(c *gin.Context, req service.BusinessBatchRequest, resp *service.BusinessBatchResponse) {
 	if h.audit == nil || resp == nil {

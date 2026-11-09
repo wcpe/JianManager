@@ -52,7 +52,7 @@ func (s *NodeService) SetClientPool(pool *cpgrpc.ClientPool) {
 	s.pool = pool
 }
 
-// TunnelStatus 报告节点反向隧道连接状态（见 ADR-066）；由 TunnelRegistry 实现。
+// TunnelStatus 报告节点反向隧道连接状态；由 TunnelRegistry 实现。
 type TunnelStatus interface {
 	Connected(nodeUUID string) bool
 }
@@ -493,7 +493,7 @@ func (s *NodeService) Purge(id uint, force bool) (*NodeDeleteResult, error) {
 			}
 			result.InstancesPurged = len(ids)
 		}
-		// 日志采集的 Worker 级覆盖键（FR-503）：键名以节点 UUID 为后缀，节点彻底删除后
+		// 日志采集的 Worker 级覆盖键：键名以节点 UUID 为后缀，节点彻底删除后
 		// 必须清理，否则留下永不被消费的无主配置（§6 已登记该代价）。
 		// 注意只在此处（彻底清理）删——软删除/归档的节点仍可恢复，保留其配置是有价值的。
 		if err := deleteNodeScopedSettings(tx, node.UUID); err != nil {

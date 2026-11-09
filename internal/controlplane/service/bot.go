@@ -376,7 +376,7 @@ func (s *BotService) delegateSetBehavior(bot *model.Bot, behavior string) error 
 	return nil
 }
 
-// getWorkerClient 按 ADR-074 规则解析实际执行节点并取得 gRPC 客户端。
+// getWorkerClient 按规则解析实际执行节点并取得 gRPC 客户端。
 func (s *BotService) getWorkerClient(bot *model.Bot) (*grpc.Client, *model.Instance, *model.Node, error) {
 	node, instance, err := s.resolver.Resolve(bot)
 	if err != nil {

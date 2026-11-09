@@ -1,4 +1,4 @@
-// Package tunnel 维护 Worker→CP 的常驻 gRPC 反向隧道（见 ADR-066）。
+// Package tunnel 维护 Worker→CP 的常驻 gRPC 反向隧道。
 //
 // Worker 主动拨 CP 既有 gRPC 端口开反向隧道，把本机 WorkerService 实现挂到隧道上；
 // CP 指令经隧道下发——worker 零入站端口要求（NAT/内网可接入），断连指数退避重连。
@@ -20,7 +20,7 @@ import (
 )
 
 // nodeUUIDHeader / nodeSecretHeader 隧道建立请求携带节点身份的 gRPC metadata header 名。
-// 与 internal/worker/register、internal/controlplane/grpc 中常量一致（wire 约定，ADR-039）。
+// 与 internal/worker/register、internal/controlplane/grpc 中常量一致（wire 约定）。
 const (
 	nodeUUIDHeader   = "node-uuid"
 	nodeSecretHeader = "node-secret"
@@ -122,7 +122,7 @@ func (r *Runner) serveOnce() error {
 		}
 	}()
 
-	// 身份经 metadata 出示（ADR-039）：CP 拦截器校验通过后按 UUID 登记隧道归属。
+	// 身份经 metadata 出示：CP 拦截器校验通过后按 UUID 登记隧道归属。
 	// 用独立 serveCtx 承载附加 metadata 的派生 ctx，不回写 ctx——否则与上面读 ctx.Done() 的
 	// goroutine 数据竞争（AppendToOutgoingContext 会重新赋值 ctx 变量）。
 	serveCtx := metadata.AppendToOutgoingContext(ctx, nodeUUIDHeader, r.nodeUUID, nodeSecretHeader, r.nodeSecret)

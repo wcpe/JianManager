@@ -1,4 +1,4 @@
-// Package httpclient 的受保护出站子模块（见 ADR-105）。
+// Package httpclient 的受保护出站子模块。
 //
 // 为什么需要单独一套而不复用 New/NewProvider：那些工厂解决的是「代理怎么配」，
 // 默认信任目标地址（下载 JDK、拉 GitHub Releases 都是可信来源）。而模型供应商与

@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做通知流取数、标记已读与两处跳转接线。
+// 视图已回迁应用侧（迁包已撤销）；本层只做通知流取数、标记已读与两处跳转接线。
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useNotificationFeed, useMarkFeedRead, useMarkAllFeedRead } from '@/api/notification-feed'
@@ -7,7 +7,7 @@ import { useDebounced } from '@/lib/hooks/use-debounced'
 import { NotificationCenterPageView } from '@/components/views/notifications/NotificationCenterPageView'
 
 /** 
- * 通知中心页（见 ADR-048）容器：统一通知流查询、单条/全部标记已读两个 mutation
+ * 通知中心页容器：统一通知流查询、单条/全部标记已读两个 mutation
  * 与任务中心定位 / 告警页两处跳转留在此处；筛选状态决定请求参数（改筛选即回第 1 页），
  * 故整份留在容器，列表与分页展示交共享视图。
  * 保留同路径默认导出，路由表无需改动。

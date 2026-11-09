@@ -8,7 +8,7 @@ import (
 
 // ClientChannel 客户端分发频道：每服/每整合包一个，作为 manifest/制品端点的对外标识与路由键。
 // ChannelID 为运营者指定的 slug（URL 段），CurrentVersion 为 latest 版本指针占位（编排）。
-// 参见 ADR-022。
+//。
 type ClientChannel struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// ChannelID 频道 slug：对外标识与端点路径段，全局唯一。约束 `^[a-z0-9][a-z0-9-]{1,63}$`。
@@ -19,7 +19,7 @@ type ClientChannel struct {
 	Description string `gorm:"type:varchar(512)" json:"description"`
 	// CurrentVersion 当前 latest 版本指针占位；0=未发布。本 FR 仅建字段，编排见。
 	CurrentVersion int `gorm:"default:0;not null" json:"currentVersion"`
-	// Deprecated: PinnedCoreVersion 原为频道 pin 的 updater-core 版本号（初版，已随反转废弃，见 ADR-045 改写）。
+	// Deprecated: PinnedCoreVersion 原为频道 pin 的 updater-core 版本号（初版，已随反转废弃，改写）。
 	// updater-core 现由 CP 内嵌默认版本自动驱动 manifest agent.core，运营不再 pin/管理。保留此列（加性、默认 0）
 	// 仅为兼容存量库、避免无谓迁移；不再被任何运营端点写入、不参与 manifest 生成。
 	PinnedCoreVersion int `gorm:"default:0;not null" json:"-"`
@@ -41,7 +41,7 @@ type ClientChannel struct {
 // ClientPullKey 频道拉取密钥：玩家侧 updater 拉 manifest/制品时经请求头携带。
 // 半公开凭据（随整包分发会泄露）——仅作鉴权路由 + 吊销，不作内容可信依据（内容可信靠 manifest 签名）。
 // 鉴权只用 KeyHash（SHA-256）比对；另存 AES-256-GCM 可逆加密副本 KeyEnc供管理员查看明文。
-// 参见 ADR-022 §1、ADR-044（拉取密钥可逆加密 + 管理员可查看，修订 ADR-022 决策①的「只存哈希」）。
+//（拉取密钥可逆加密 + 管理员可查看，修订决策①的「只存哈希」）。
 type ClientPullKey struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// ChannelID 所属频道 slug（随频道删除级联清理）。
@@ -50,7 +50,7 @@ type ClientPullKey struct {
 	Name string `gorm:"type:varchar(128);not null" json:"name"`
 	// KeyHash 拉取密钥明文的 SHA-256 十六进制小写。**鉴权依据**，库内不存明文。
 	KeyHash string `gorm:"column:key_hash;type:char(64);uniqueIndex;not null" json:"-"`
-	// KeyEnc 拉取密钥明文的 AES-256-GCM 可逆加密副本（base64(nonce‖密文)见 ADR-044）。
+	// KeyEnc 拉取密钥明文的 AES-256-GCM 可逆加密副本（base64(nonce‖密文)）。
 	// 仅供平台管理员经 reveal 端点查看明文，不参与鉴权、绝不序列化给客户端。空=不可查看
 	// （存量老密钥 / 创建时未配 JIANMANAGER_CLIENT_KEY_ENC_SECRET 的密钥）。加性列、默认空。
 	// 密钥发出后永久使用；管理员可经编辑端点改值（重算 KeyHash + 重写 KeyEnc），不再提供轮换。

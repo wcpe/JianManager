@@ -353,7 +353,7 @@ export interface BotLoadStreamWarning {
   timestamp: string
 }
 
-/** 命令发送成功边界免责声明（ADR-075）。 */
+/** 命令发送成功边界免责声明。 */
 export const BOT_CHAT_SUCCESS_DISCLAIMER_ZH =
   '命令发送成功仅表示 Bot Worker 调用 bot.chat 时未同步抛错，不证明服务器接受、权限校验通过或产生预期业务效果。'
 

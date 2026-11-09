@@ -34,8 +34,8 @@ const BaselineScopeAllKey = "all"
 // ErrBaselineScopeForbidden 表示非管理员试图创建/覆盖 scope 超出其可访问实例范围的基线（越权修复）。
 var ErrBaselineScopeForbidden = errors.New("基线 scope 超出可访问实例范围")
 
-// ErrBaselineScopeGroupNotFound 表示 group:<id> 的 id 在组织树（ADR-033 InstanceGroupNode）中不存在。
-// 与用户组（ADR-004 GroupInstance）/网络群组（ADR-007 Network）的 id 空间正交，极易混淆——
+// ErrBaselineScopeGroupNotFound 表示 group:<id> 的 id 在组织树（InstanceGroupNode）中不存在。
+// 与用户组（GroupInstance）/网络群组（Network）的 id 空间正交，极易混淆——
 // 因此这里 fail-closed 报错，绝不静默解析为空集（修复：误填用户组 id 会被明确拒绝）。
 var ErrBaselineScopeGroupNotFound = errors.New("基线 scope 引用的组织树分组不存在")
 
@@ -403,8 +403,8 @@ func (s *ConfigBaselineService) currentHash(instanceID uint, filePath string) (s
 // resolveScopeInstances 解析 scopeKey 限定的实例集合。
 // 支持 group:<id>（含子树）/ network:<id> / tag:<tag> / instance:<id> / all 或空。
 //
-// group:<id> 的 id 是「组织树分组」（ADR-033 InstanceGroupNode），与用户组（ADR-004 GroupInstance）、
-// 网络群组（ADR-007）的 id 空间正交。为避免误填用户组 id 后静默解析为空集（既不报错也不下发），
+// group:<id> 的 id 是「组织树分组」（InstanceGroupNode），与用户组（GroupInstance）、
+// 网络群组的 id 空间正交。为避免误填用户组 id 后静默解析为空集（既不报错也不下发），
 // 该分支 fail-closed：分组不存在 → ErrBaselineScopeGroupNotFound；分组存在但无成员实例 →
 // ErrBaselineScopeGroupEmpty（详见 instancesByGroupNode）。
 func (s *ConfigBaselineService) resolveScopeInstances(scopeKey string) ([]model.Instance, error) {
@@ -454,7 +454,7 @@ func (s *ConfigBaselineService) resolveScopeInstances(scopeKey string) ([]model.
 	}
 }
 
-// instancesByGroupNode 解析组织树分组（ADR-033，含子树）的成员实例，fail-closed：
+// instancesByGroupNode 解析组织树分组（含子树）的成员实例，fail-closed：
 //   - 分组 id 不在组织树中 → ErrBaselineScopeGroupNotFound（很可能是误填了用户组/网络群组 id）；
 //   - 分组存在但子树内无成员实例 → ErrBaselineScopeGroupEmpty。
 //

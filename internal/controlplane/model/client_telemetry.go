@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ClientTelemetry 客户端遥测明细（见 ADR-023、contract §4.3）。
+// ClientTelemetry 客户端遥测明细（contract §4.3）。
 // **短保留 + 滚动清理**（数据量治理）。仅环境粗粒度 + 不可逆机器码；隐私可关（客户端 opt-out）。
 // 增列：core_version/arch（required）与 java_vendor/locale/timezone/memory_tier（diagnostic）。
 type ClientTelemetry struct {

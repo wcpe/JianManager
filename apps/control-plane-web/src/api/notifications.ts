@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 
- * 站内信 API（见 ADR-040）。
+ * 站内信 API。
  * 投递给当前用户的消息（任务完成/失败等）；只读/操作自己的站内信。
  */
 

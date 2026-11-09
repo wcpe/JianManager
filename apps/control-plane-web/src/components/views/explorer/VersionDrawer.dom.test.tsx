@@ -8,7 +8,7 @@ import VersionDrawer, { type VersionDrawerProps } from '@/components/views/explo
 import type { FileVersion } from '@/lib/file-browser/file-version'
 
 /** 
- *历史版本抽屉 · 受控视图测（ADR-103 c 范式）。
+ *历史版本抽屉 · 受控视图测。
  *
  * 应用侧 `VersionDrawer.dom.test.tsx` mock 取数 hook 验联动；
  * 这里补的是**受控契约**：列表渲染（含回滚来源标注）、对比选择上报、

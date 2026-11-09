@@ -24,9 +24,9 @@ import (
 // scope 兜底失效）而恒为 false → 任何 token 都删不掉分组；精确确认也会误读实例服务。
 // 修复后：这类「容器」目标按节点 scope 授权，确认名从分组服务解析。
 
-func fr435TestDB(t *testing.T) *gorm.DB {
+func groupDeleteTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := fmt.Sprintf("file:fr435_%s?mode=memory&cache=shared", t.Name())
+	dsn := fmt.Sprintf("file:group-delete%s?mode=memory&cache=shared", t.Name())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
@@ -36,8 +36,8 @@ func fr435TestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// fr435Principal 建一个 V2 token；nodeIDs/instIDs 决定 scope，instanceWrite 决定是否具备 instance.write。
-func fr435Principal(t *testing.T, db *gorm.DB, name string, instanceWrite bool, nodeIDs, instIDs []uint) *service.AgentPrincipal {
+// groupDeletePrincipal 建一个 V2 token；nodeIDs/instIDs 决定 scope，instanceWrite 决定是否具备 instance.write。
+func groupDeletePrincipal(t *testing.T, db *gorm.DB, name string, instanceWrite bool, nodeIDs, instIDs []uint) *service.AgentPrincipal {
 	t.Helper()
 	caps := []string{service.AgentCapabilityInstanceRead}
 	if instanceWrite {
@@ -55,32 +55,32 @@ func fr435Principal(t *testing.T, db *gorm.DB, name string, instanceWrite bool, 
 	return p
 }
 
-// fr435Seed 建 1 节点 + 1 实例 + 1 空分组。注意三者在各自表中均为首行，id 天然相同（=1），
+// groupDeleteSeed 建 1 节点 + 1 实例 + 1 空分组。注意三者在各自表中均为首行，id 天然相同（=1），
 // 从而构造出「分组 id 与实例 id 相同」的碰撞场景——正是缺陷会误判的条件。
-func fr435Seed(t *testing.T, db *gorm.DB) (*model.Node, *model.Instance, *model.InstanceGroupNode) {
+func groupDeleteSeed(t *testing.T, db *gorm.DB) (*model.Node, *model.Instance, *model.InstanceGroupNode) {
 	t.Helper()
-	node := &model.Node{UUID: "n-fr435", Name: "node-fr435", Status: model.NodeStatusOnline}
+	node := &model.Node{UUID: "n-group-delete", Name: "node-group-delete", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 	inst := &model.Instance{
-		UUID: "i-fr435", NodeID: node.ID, Name: "room-fr435",
+		UUID: "i-group-delete", NodeID: node.ID, Name: "room-group-delete",
 		Type: model.InstanceTypeGeneric, Role: model.InstanceRoleUniversal,
 		ProcessType: model.ProcessTypeDirect, StartCommand: "noop",
-		Status: model.InstanceStatusStopped, WorkDir: "/srv/fr435",
+		Status: model.InstanceStatusStopped, WorkDir: "/srv/group-delete",
 	}
 	require.NoError(t, db.Create(inst).Error)
-	grp, err := service.NewInstanceGroupService(db).Create("fr435-group", nil)
+	grp, err := service.NewInstanceGroupService(db).Create("group-delete-group", nil)
 	require.NoError(t, err)
 	require.Equal(t, inst.ID, grp.ID, "前置：分组 id 与实例 id 相同（碰撞场景）")
 	return node, inst, grp
 }
 
 // 节点 scope 的 V2 token（含 instance.write）应能删除空分组；且因分组 id 与实例 id 相同，
-// 该用例同时证明确认名是从「分组」而非「实例」解析的（实例名为 room-fr435 ≠ 分组名 fr435-group）。
-func TestFR435_GroupDeleteAllowsNodeScopedToken(t *testing.T) {
-	db := fr435TestDB(t)
-	node, _, grp := fr435Seed(t, db)
+// 该用例同时证明确认名是从「分组」而非「实例」解析的（实例名为 room-group-delete ≠ 分组名 group-delete-group）。
+func TestGroupDeleteAllowsNodeScopedToken(t *testing.T) {
+	db := groupDeleteTestDB(t)
+	node, _, grp := groupDeleteSeed(t, db)
 	grpSvc := service.NewInstanceGroupService(db)
-	p := fr435Principal(t, db, "node-scoped", true, []uint{node.ID}, nil)
+	p := groupDeletePrincipal(t, db, "node-scoped", true, []uint{node.ID}, nil)
 	deps := ToolDeps{Agent: service.NewAgentTokenService(db), InstanceGroup: grpSvc}
 
 	res := CallTool(context.Background(), deps, p, "instance_group_delete", map[string]any{
@@ -94,11 +94,11 @@ func TestFR435_GroupDeleteAllowsNodeScopedToken(t *testing.T) {
 }
 
 // 仅实例 scope（无节点 scope）的 V2 token 应被拒绝，且分组不得被动到。
-func TestFR435_GroupDeleteRejectsTokenWithoutNodeScope(t *testing.T) {
-	db := fr435TestDB(t)
-	_, inst, grp := fr435Seed(t, db)
+func TestGroupDeleteRejectsTokenWithoutNodeScope(t *testing.T) {
+	db := groupDeleteTestDB(t)
+	_, inst, grp := groupDeleteSeed(t, db)
 	grpSvc := service.NewInstanceGroupService(db)
-	p := fr435Principal(t, db, "instance-only", true, nil, []uint{inst.ID})
+	p := groupDeletePrincipal(t, db, "instance-only", true, nil, []uint{inst.ID})
 	deps := ToolDeps{Agent: service.NewAgentTokenService(db), InstanceGroup: grpSvc}
 
 	res := CallTool(context.Background(), deps, p, "instance_group_delete", map[string]any{
@@ -111,11 +111,11 @@ func TestFR435_GroupDeleteRejectsTokenWithoutNodeScope(t *testing.T) {
 }
 
 // 确认名不符应拒绝（不进入删除写路径）。
-func TestFR435_GroupDeleteRejectsWrongConfirmName(t *testing.T) {
-	db := fr435TestDB(t)
-	node, _, grp := fr435Seed(t, db)
+func TestGroupDeleteRejectsWrongConfirmName(t *testing.T) {
+	db := groupDeleteTestDB(t)
+	node, _, grp := groupDeleteSeed(t, db)
 	grpSvc := service.NewInstanceGroupService(db)
-	p := fr435Principal(t, db, "wrong-name", true, []uint{node.ID}, nil)
+	p := groupDeletePrincipal(t, db, "wrong-name", true, []uint{node.ID}, nil)
 	deps := ToolDeps{Agent: service.NewAgentTokenService(db), InstanceGroup: grpSvc}
 
 	res := CallTool(context.Background(), deps, p, "instance_group_delete", map[string]any{
@@ -128,11 +128,11 @@ func TestFR435_GroupDeleteRejectsWrongConfirmName(t *testing.T) {
 }
 
 // 无 instance.write 能力（仅 instance.read）不得删除分组。
-func TestFR435_GroupDeleteRequiresWriteCapability(t *testing.T) {
-	db := fr435TestDB(t)
-	node, _, grp := fr435Seed(t, db)
+func TestGroupDeleteRequiresWriteCapability(t *testing.T) {
+	db := groupDeleteTestDB(t)
+	node, _, grp := groupDeleteSeed(t, db)
 	grpSvc := service.NewInstanceGroupService(db)
-	p := fr435Principal(t, db, "read-only", false, []uint{node.ID}, nil)
+	p := groupDeletePrincipal(t, db, "read-only", false, []uint{node.ID}, nil)
 	deps := ToolDeps{Agent: service.NewAgentTokenService(db), InstanceGroup: grpSvc}
 
 	res := CallTool(context.Background(), deps, p, "instance_group_delete", map[string]any{

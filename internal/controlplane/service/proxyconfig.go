@@ -111,7 +111,7 @@ type bungeeConfigCfg struct {
 // onlineMode 决定代理是否向 Mojang 校验正版（离线模式群组服传 false）。
 //
 // listenPort 必须为正：0 会生成 `host: "0.0.0.0:0"`，BungeeCord 随即绑定随机端口，
-// 玩家入口直接消失且日志只有一行 `Listening on 0.0.0.0:0`（真实事故，见 proxy_fr035_test）。
+// 玩家入口直接消失且日志只有一行 `Listening on 0.0.0.0:0`（真实事故，见 proxy_test）。
 func buildBungeeConfig(listenPort int, motd string, onlineMode bool, entries []proxyServerEntry) (string, error) {
 	if listenPort <= 0 {
 		return "", fmt.Errorf("代理监听端口非法（%d）：拒绝生成会让入口失效的 bungee 配置", listenPort)

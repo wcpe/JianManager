@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// 外部控制面托管模式（ServerProbe PR#64 / FR-42~47）的 CP 侧实现。
+// 外部控制面托管模式（ServerProbe PR#64 /~47）的 CP 侧实现。
 //
-// ## 与既有插件桥（ADR-016）的关系
+// ## 与既有插件桥的关系
 // 旧链路：CP 签发 scope=plugin-bridge 的 JWT → 写入探针 config.yml 的 `bridge:` 段 →
 // 探针反向连 ws://<worker>:9102/ws/plugin-bridge?token=&instance=。
 // 探针只经桥上报业务事件、接收治理指令，**指标仍走 HTTP 拉取 /metrics**，

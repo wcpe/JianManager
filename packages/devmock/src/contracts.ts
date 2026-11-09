@@ -1,9 +1,9 @@
 /** 
- * devmock 自持 API 契约类型（见 ADR-064 / monorepo-unification spec §3）。
+ * devmock 自持 API 契约类型（见 monorepo-unification spec §3）。
  *
  * 依赖反转：devmock 不 import 应用内部（@/…）——本文件按 `docs/API.md` 契约
  * 自持 handler 所需的请求/响应形状（与 app 的 `src/api/*.ts` 同源心智模型）。
- * 形状漂移由既有 dom 测试看守（真组件打真 mock，字段错位即红，ADR-047 机制）；
+ * 形状漂移由既有 dom 测试看守（真组件打真 mock，字段错位即红）；
  * 将来出现第二个消费 app 再评估抽独立 api-contracts 包（YAGNI）。
  */
 
@@ -105,7 +105,7 @@ export interface CreateBackupStorageBody {
 
 // ─────────────────── 制品存储渠道（artifact-storages） ───────────────────
 
-/** 制品存储渠道：client-file 制品落点路由配置。响应永不含凭证明文/密文（ADR-073）。 */
+/** 制品存储渠道：client-file 制品落点路由配置。响应永不含凭证明文/密文。 */
 export interface ArtifactStorageChannel {
   id: number
   name: string

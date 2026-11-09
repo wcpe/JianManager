@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// TestResyncInstances_FillsRegistryForFileOps 验证 bug #2 修复（ADR-050）：
+// TestResyncInstances_FillsRegistryForFileOps 验证 bug #2 修复：
 // Worker 重启后内存注册表为空，对既有 STOPPED 实例做文件 op 本会报「实例不存在」；
 // CP 经 ResyncInstances 重推规格后，注册表被填充（STOPPED），同一文件 op 即成功。
 func TestResyncInstances_FillsRegistryForFileOps(t *testing.T) {
@@ -65,7 +65,7 @@ func TestResyncInstances_FillsRegistryForFileOps(t *testing.T) {
 	assert.Contains(t, names, "server.properties")
 }
 
-// TestResyncInstances_SkipsAlreadyRegistered 验证「只补不覆盖」（ADR-050）：
+// TestResyncInstances_SkipsAlreadyRegistered 验证「只补不覆盖」：
 // 已在注册表的实例（模拟 RecoverDaemonInstances 恢复的 RUNNING 实例）在重推中按 UUID 命中被跳过，
 // 其状态与工作目录不被重推覆盖。
 func TestResyncInstances_SkipsAlreadyRegistered(t *testing.T) {

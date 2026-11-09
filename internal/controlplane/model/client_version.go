@@ -2,9 +2,9 @@ package model
 
 import "time"
 
-// ClientVersion 客户端分发版本快照（见 ADR-022、contract §2）。
+// ClientVersion 客户端分发版本快照（contract §2）。
 // 一条记录 = 频道某次发布的完整文件清单 + 同步策略 + 自更新段。Version 单调递增、与 ClientChannel.CurrentVersion
-// 配合定位 latest。manifest 由该快照即时组装 + Ed25519 签名（不缓存签名，密钥轮换/防降级见 ADR-022）。
+// 配合定位 latest。manifest 由该快照即时组装 + Ed25519 签名（不缓存签名，密钥轮换/防降级）。
 //
 // 本 FR（latest-only）只需「能发布一版并以 latest 返回」；完整版本历史/运营回滚/管理台见。
 type ClientVersion struct {

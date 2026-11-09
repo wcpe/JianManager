@@ -7,7 +7,7 @@
  *        views/UntrustedFieldBadge、Badge/Button/Dialog/Input/Panel/Table 原语、翻译上下文
  * @output SecurityProfilesTabView、SecurityProfilesTabViewProps、ProfileMaskers
  * @sync apps/control-plane-web/src/components/client-dist/SecurityProfilesTab.tsx
- * @since（组件受控化迁包；原ADR-088 客户端画像 Tab，含面板脱敏）
+ * @since（组件受控化迁包；客户端画像 Tab，含面板脱敏）
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -36,7 +36,7 @@ export interface ProfileMaskers {
 }
 
 /** 
- * 客户端画像 Tab 的注入契约（受控视图，ADR-103 a 范式）。
+ * 客户端画像 Tab 的注入契约（受控视图）。
  *
  * 受控边界：列表与详情数据、加载/错误态经 props 注入（应用容器调
  * `useClientDistSecurityProfiles` / `useClientDistSecurityProfile`）；会触发重新取数的

@@ -47,7 +47,7 @@ function currentMatchSeq() {
  * 不发起 WS（杜绝死循环刷断连）；运行中实例放行控制台。
  * seed：id=1 RUNNING、id=2 STOPPED（见 mocks/handlers/domains/instance.ts）。
  *
- *起控制台是「DOM 输出区 + 原生命令栏」（ADR-086），故本文件的断言从
+ *起控制台是「DOM 输出区 + 原生命令栏」，故本文件的断言从
  * 「xterm 实例/缓冲」平移到「输出区 DOM / 权威行缓冲」；xterm 渲染壳随后全站下线，
  * 已无 xterm 对象可断言（原「这条路径零 xterm」的守卫随之退场）。
  */

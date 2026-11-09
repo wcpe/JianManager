@@ -60,7 +60,7 @@ class PathRulesTest {
         assertFalse(PathRules.isUnderManaged("modsxyz/foo.jar", managed));
     }
 
-    // ── FR-255：clean-all 哨兵 + 自定义排除 ──────────────────────────────
+    // ── clean-all 哨兵 + 自定义排除 ────────────────────────────────────
 
     @Test
     void allGameDirSentinelTreatsEverythingAsManaged() {

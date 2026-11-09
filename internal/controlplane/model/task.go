@@ -25,7 +25,7 @@ func (s TaskState) IsTerminal() bool {
 
 // 任务种类常量（kind）。新增长任务类型时在此登记。
 const (
-	// TaskKindJDKInstall JDK 一键下载安装任务（首批载体，见 ADR-040）。
+	// TaskKindJDKInstall JDK 一键下载安装任务（首批载体）。
 	TaskKindJDKInstall = "jdk_install"
 	// TaskKindPkgInstall 全局包安装/升级任务。
 	TaskKindPkgInstall = "pkg_install"
@@ -71,7 +71,7 @@ const (
 )
 
 // Task 一条长耗时跨进程任务（如 JDK 安装）。
-// task_id 为业务唯一键（UUID），Worker 经心跳上报进度时据此 upsert（见 ADR-040）。
+// task_id 为业务唯一键（UUID），Worker 经心跳上报进度时据此 upsert。
 type Task struct {
 	ID     uint   `gorm:"primaryKey" json:"id"`
 	TaskID string `gorm:"type:varchar(64);uniqueIndex;not null" json:"taskId"`

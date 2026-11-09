@@ -18,7 +18,7 @@ var (
 	ErrInvalidBatchAction  = errors.New("不支持的批量操作")
 )
 
-// NetworkService 管理 Network 软标签（ADR-007）：非独占分组，仅供 UI 筛选/批量运维。
+// NetworkService 管理 Network 软标签：非独占分组，仅供 UI 筛选/批量运维。
 type NetworkService struct {
 	db       *gorm.DB
 	instance *InstanceService
@@ -276,7 +276,7 @@ func (s *NetworkService) Update(id uint, name, description *string) (*NetworkDet
 	return s.Get(id)
 }
 
-// Delete 软删除群组并硬删除其成员关系；不触及成员实例与其 server_registrations（ADR-007）。
+// Delete 软删除群组并硬删除其成员关系；不触及成员实例与其 server_registrations。
 func (s *NetworkService) Delete(id uint) error {
 	if _, err := s.get(id); err != nil {
 		return err

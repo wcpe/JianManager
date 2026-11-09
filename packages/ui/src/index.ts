@@ -80,7 +80,7 @@ export * from './lib/focus-ring'
 export * from './lib/stat-card'
 export * from './lib/tone'
 
-// 【说明】本文件只导出设计系统（ADR-103）。
+// 【说明】本文件只导出设计系统。
 //
 // 早前这里堆了十几条“显式列出而非 export *：XXX 与 YYY 同名”的注释，
 // 而那些模块（bots-overview / logs-filters / instance-prefetch / …）

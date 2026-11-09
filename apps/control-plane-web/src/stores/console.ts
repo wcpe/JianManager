@@ -49,7 +49,7 @@ function persist(key: string, value: string | null): void {
 }
 
 /** 
- * 运维控制台的客户端 UI 状态（ADR-009）。
+ * 运维控制台的客户端 UI 状态。
  * 存「页眉节点作用域」「侧栏折叠/分组折叠态」。实例视图一律由 `/instances/:id`
  * 深链承载，避免 URL 与工作区状态双轨漂移。侧栏折叠态/分组态/节点作用域持久化 localStorage。
  * 打开实例后的画布/卡片/预设状态由 `stores/workspace.ts` 承载（可组合卡片工作区）。

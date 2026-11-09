@@ -52,9 +52,9 @@ class WedgeContextTest {
 
         Map<String, String> ctx = Wedge.buildContext("/game", config, 0, "{}");
 
-        // FR-256 移除的字段不应出现在 ctx
-        assertFalse(ctx.containsKey("signPublicKey"), "ctx 不应含 signPublicKey（FR-256 已移除）");
-        assertFalse(ctx.containsKey("signKeyId"), "ctx 不应含 signKeyId（FR-256 已移除）");
+        // 已移除的字段不应出现在 ctx
+        assertFalse(ctx.containsKey("signPublicKey"), "ctx 不应含 signPublicKey（已移除）");
+        assertFalse(ctx.containsKey("signKeyId"), "ctx 不应含 signKeyId（已移除）");
     }
 
     @Test

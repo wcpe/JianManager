@@ -8,7 +8,7 @@ import ProxyRegistrationsDialog from '@/components/views/instances/ProxyRegistra
 import type { ProxyRegistration } from '@/lib/instances/proxy-registration'
 
 /** 
- *代理后端注册管理 · 受控视图测（ADR-103 b 范式）。
+ *代理后端注册管理 · 受控视图测。
  *
  * 应用侧原本只有 1 个「能打开、Esc 能关」的用例；这里补的是**注册语义**：
  * 已注册项渲染、表单校验、错误码到文案的映射（ALIAS_CONFLICT / ALREADY_REGISTERED）、
@@ -102,7 +102,7 @@ async function pickBackend(user: ReturnType<typeof userEvent.setup>, label = 'lo
   await user.click(await screen.findByText(label))
 }
 
-describe('ProxyRegistrationsDialog（ADR-103 b 范式）', () => {
+describe('ProxyRegistrationsDialog', () => {
   it('渲染已注册项；无强制域名显示 --，无后端回填则退回 #id', () => {
     renderDialog({
       registrations: [reg(), reg({ id: 2, backendId: 103, alias: 'auth', forcedHost: 'auth.example.com', priority: 5, backend: undefined })],

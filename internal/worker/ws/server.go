@@ -50,7 +50,7 @@ type TerminalSession struct {
 // TerminalServer 终端 WebSocket 服务器。
 type TerminalServer struct {
 	// jwtSecret 终端一次性 token 校验密钥，secretMu 保护：CP 经注册/心跳下发新值时
-	// 由 SetJWTSecret 热更新（见 ADR-061），与握手校验读并发安全。
+	// 由 SetJWTSecret 热更新，与握手校验读并发安全。
 	jwtSecret string
 	secretMu  sync.RWMutex
 	upgrader  websocket.Upgrader
@@ -82,7 +82,7 @@ func NewTerminalServer(jwtSecret string) *TerminalServer {
 	}
 }
 
-// SetJWTSecret 热更新 token 校验密钥（见 ADR-061）：CP 经注册/心跳下发新密钥时调用。
+// SetJWTSecret 热更新 token 校验密钥：CP 经注册/心跳下发新密钥时调用。
 // 仅影响后续握手；已建立的会话不受影响（握手只校验一次）。
 func (s *TerminalServer) SetJWTSecret(secret string) {
 	s.secretMu.Lock()

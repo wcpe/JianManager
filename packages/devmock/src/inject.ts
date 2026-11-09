@@ -3,7 +3,7 @@ import { API } from './api'
 import { mockLatencyDelay } from './runtime-control'
 
 /** 
- * 错误注入框架（ADR-047 决策 6）。
+ * 错误注入框架。
  * 「成功默认铺满 + 按需注入错误」：handler 默认走 resolver 返回成功，
  * 测试 / mock 模式可对指定 (method, pattern) 注入错误码 / 空态 / 网络错误 / 延迟。
  */

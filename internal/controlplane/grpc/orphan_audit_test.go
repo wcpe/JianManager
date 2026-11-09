@@ -65,7 +65,7 @@ func TestTruncateUTF8_RuneBoundary(t *testing.T) {
 // TestOrphanAuditAllowedActions_Contract 锁定审计白名单契约（CP-3）：
 // 本表是强校验（不在表内一律拒绝），新增动作必须同时更新本表、spec 与 proto 注释。
 // 本用例守护两条不变量：
-//  1. 已知的系统级动作（含 ADR-097 的 cgroup.isolate_failed）必须在表内；
+//  1. 已知的系统级动作（含 cgroup.isolate_failed）必须在表内；
 //  2. 表内动作名不超过 maxOrphanAuditActionLen（纵深防御依赖该上限）。
 func TestOrphanAuditAllowedActions_Contract(t *testing.T) {
 	// Worker 侧会发送的系统动作：缺一则该动作的审计被 CP 拒收后静默丢弃（CP-3）。
@@ -89,7 +89,7 @@ func TestOrphanAuditAllowedActions_Contract(t *testing.T) {
 		"health.selfheal_exhausted",
 		"health.circuit_broken",
 		"health.circuit_released",
-		// ADR-097「无隔离保护必须成为可观测事实」的唯一 CP 侧留痕通道。
+		// 「无隔离保护必须成为可观测事实」的唯一 CP 侧留痕通道。
 		"cgroup.isolate_failed",
 	}
 	for _, action := range mustAllow {

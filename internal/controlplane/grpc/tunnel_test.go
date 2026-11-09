@@ -155,7 +155,7 @@ func TestPool_DoesNotFallbackToDirectWithoutTunnel(t *testing.T) {
 	require.Nil(t, client)
 }
 
-// TestReverseTunnel_SecretCannotBeReusedForAnotherNode 锁定 ADR-081 §3「UUID 与 secret 共同绑定身份」：
+// TestReverseTunnel_SecretCannotBeReusedForAnotherNode 锁定「UUID 与 secret 共同绑定身份」：
 // 已知 A 的 secret 时，冒充 B（另一个真实节点）必须被拒——secret 不能跨节点复用，身份不是「任一有效 secret」。
 func TestReverseTunnel_SecretCannotBeReusedForAnotherNode(t *testing.T) {
 	reg, db, lis := startTunnelCP(t)

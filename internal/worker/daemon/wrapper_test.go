@@ -96,8 +96,6 @@ func testWorkDir(t *testing.T) string {
 //   - Worker 拨号连接 socket
 //   - PID 文件已写入且 wrapper pid 存活
 //   - stop 控制命令使 Java 退出、wrapper 结束
-//
-// 参见 ADR-003。
 func TestWrapper_StopControl(t *testing.T) {
 	pidDir := testWorkDir(t)
 	uuid := "test-stop"

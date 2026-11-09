@@ -98,7 +98,7 @@ export interface BaselineFormValues {
 }
 
 /** 
- * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界：**不取数、不发请求、不弹 toast**。
  * - 基线列表、漂移明细、分组候选与全部加载/在途态经 props 注入
  *   （容器调 `useConfigBaselines` / `useBaselineDrift` / `useInstanceGroups`）；
  * - 三个写动作以回调上报，由容器执行 mutation 并决定成功/失败文案：保存与删除回传
@@ -199,7 +199,7 @@ interface GroupOption {
 }
 
 /** 
- * 把后端扁平组织树节点（ADR-033，parentId 邻接表）按层级展开为下拉选项。
+ * 把后端扁平组织树节点（parentId 邻接表）按层级展开为下拉选项。
  * 只读展示用途：对孤儿/环节点健壮——先走可达节点，未覆盖的兜底按根追加，绝不丢节点
  * （否则运维会遇到「分组存在但选不到」）。
  */
@@ -401,7 +401,7 @@ export function BaselineEditorDialogView({
   onSubmit,
 }: BaselineEditorDialogViewProps) {
   const { t } = useTranslation()
-  // 组织树分组（ADR-033）才是 `group:<id>` 的 id 空间：手填数字极易误填「用户组 id」
+  // 组织树分组才是 `group:<id>` 的 id 空间：手填数字极易误填「用户组 id」
   // （两者 id 正交、数值上常巧合相等），故改为从分组树选择（NEW-ISSUE 修复）。
   const groupOptions = useMemo(() => flattenGroupOptions(groups ?? []), [groups])
   const [kind, setKind] = useState<ScopeKind>(initial ? scopeKindOf(initial.scopeKey) : 'all')

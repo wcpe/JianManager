@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ClientTelemetryService 客户端遥测落库与治理（见 ADR-023）。
+// ClientTelemetryService 客户端遥测落库与治理。
 // 明细短保留 + 后台滚动清理；按 result 写时增量日聚合长保留。Record best-effort 弱一致、失败不阻塞客户端（202）。
 type ClientTelemetryService struct {
 	db            *gorm.DB

@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/rollog"
 )
 
-// LogLevelVar 是 Control Plane 日志器的动态级别持有者（ADR-015）。
+// LogLevelVar 是 Control Plane 日志器的动态级别持有者。
 //
 // 进程启动时 initLogger 用它构造 slog handler，使日志级别可在运行时切换
 // （平台设置写入 log.level 后调用 SetLogLevel 即时生效，无需重启）。
@@ -62,28 +62,28 @@ type Config struct {
 	ClientDist  ClientDistConfig  `mapstructure:"client_dist"`
 	Enroll      EnrollConfig      `mapstructure:"enroll"`
 	Update      UpdateConfig      `mapstructure:"update"`
-	// Proxy CP 出站代理配置（见 ADR-037）：自更新 feed/二进制、服务端 jar 等
+	// Proxy CP 出站代理配置：自更新 feed/二进制、服务端 jar 等
 	// 出站下载经此代理。url 留空=直连（沿用环境变量代理）。与各 Worker 各自独立配置。
 	Proxy httpclient.Config `mapstructure:"proxy"`
-	// Beacon 与 Beacon 区服配置中心的可选协同（444，见 ADR-090 §5）。
+	// Beacon 与 Beacon 区服配置中心的可选协同。
 	Beacon BeaconConfig `mapstructure:"beacon"`
-	// Binary 通用二进制运行时搭建（见 ADR-090）。
+	// Binary 通用二进制运行时搭建。
 	Binary BinaryConfig `mapstructure:"binary"`
 	// LogExport 联邦日志导出物化预算（导出闸的服务端上限）。
 	LogExport LogExportConfig `mapstructure:"log_export"`
-	// BusinessCursor 业务事件位点账本（ADR-107）。零值走默认：保留 7 天。
+	// BusinessCursor 业务事件位点账本。零值走默认：保留 7 天。
 	BusinessCursor BusinessCursorConfig `mapstructure:"business_cursor"`
 }
 
-// BusinessCursorConfig 业务事件位点账本的运维参数（ADR-107 §2 / §5）。
+// BusinessCursorConfig 业务事件位点账本的运维参数。
 //
 // 为什么放在配置文件而不是 platform_settings：本表是纯运维参数（保留期 / 队列容量），
 // 不面向业务台，也不该出现在平台的运行时设置页；yaml 与环境变量（JIANMANAGER_BUSINESS_CURSOR_*）
 // 已足够，且免去前端设置页新增分区的联动。
 type BusinessCursorConfig struct {
-	// RetentionDays 位点保留天数。默认 7（ADR-107）。<=0 表示按默认处理，不做「永不裁剪」。
+	// RetentionDays 位点保留天数。默认 7。<=0 表示按默认处理，不做「永不裁剪」。
 	RetentionDays int `mapstructure:"retention_days"`
-	// QueueSize 异步写入队列容量。默认 10000（ADR-107 §2）。<=0 取默认。
+	// QueueSize 异步写入队列容量。默认 10000。<=0 取默认。
 	QueueSize int `mapstructure:"queue_size"`
 	// BatchSize 单批落库条数。默认 500。<=0 取默认。
 	BatchSize int `mapstructure:"batch_size"`
@@ -133,7 +133,7 @@ type BinaryConfig struct {
 
 // BeaconConfig 是 JianManager ↔ Beacon 可选协同配置（推送拉取）。
 //
-// **可选协同，绝非依赖**（ADR-090 §5）：三个字段全部可选，endpoint 留空即整体跳过协同
+// **可选协同，绝非依赖**：三个字段全部可选，endpoint 留空即整体跳过协同
 // （推送不发起、拉取端点返回未配置提示），未部署 Beacon 时本平台全部功能不受影响。
 type BeaconConfig struct {
 	// Endpoint Beacon 基址（如 http://beacon.internal:8090），不带路径与尾斜杠。
@@ -144,19 +144,19 @@ type BeaconConfig struct {
 	Token string `mapstructure:"token"`
 	// Namespace 推送目标 Beacon 环境 code（如 prod/test）机器注册必须携带——
 	// Beacon 要据此解析归属才能落 server 行与身份，缺省即无从绑定。
-	// 留空时推送在后台被跳过并留痕（不盲推被拒）。单环境配置项，不做多环境映射（ADR-090 §7 未决项）。
+	// 留空时推送在后台被跳过并留痕（不盲推被拒）。单环境配置项，不做多环境映射。
 	Namespace string `mapstructure:"namespace"`
 	// PushEnabled 是否启用拓扑变更推送。默认 false，且 endpoint 为空时无效。
 	PushEnabled bool `mapstructure:"push-enabled"`
 	// PullEnabled 是否允许从 Beacon 拉取拓扑。默认 false。
-	// 注意：即便为 true，拉取也**只由手动触发**（ADR-090：不自动建树）。
+	// 注意：即便为 true，拉取也**只由手动触发**（不自动建树）。
 	PullEnabled bool `mapstructure:"pull-enabled"`
 }
 
-// UpdateConfig 面板自更新（CP/Worker 二进制在线升级）配置（GitHub 源见ADR-036 §7）。
+// UpdateConfig 面板自更新（CP/Worker 二进制在线升级）配置（GitHub 源）。
 // 全部可选、有合理默认；github_repo 与 feed_url 均空表示「未配置更新源」，检查更新返回未配置提示而非报错。
 type UpdateConfig struct {
-	// GitHubRepo owner/repo；非空即启用 GitHub Releases 源（权威来源，见 ADR-036 §7）。
+	// GitHubRepo owner/repo；非空即启用 GitHub Releases 源（权威来源）。
 	// 默认 wcpe/JianManager（项目官方仓库），开箱即可在线升级。
 	GitHubRepo string `mapstructure:"github_repo"`
 	// Channel GitHub 源渠道：stable（默认，取 /releases/latest 最新正式）| prerelease（取 latest 滚动预发布）。
@@ -173,7 +173,7 @@ type UpdateConfig struct {
 	AllowInsecure bool `mapstructure:"allow_insecure"`
 }
 
-// EnrollConfig 节点 enrollment 一键安装配置（见 ADR-020）。
+// EnrollConfig 节点 enrollment 一键安装配置。
 // 用于拼装面板「添加节点」展示的一键安装命令；全部可选、有合理默认。
 type EnrollConfig struct {
 	// AdvertiseGRPC 对外公布的 CP gRPC 地址（host:port），写入 Worker 一键命令的 --control-plane。
@@ -187,7 +187,7 @@ type EnrollConfig struct {
 	BinaryURL string `mapstructure:"binary_url"`
 }
 
-// ClientDistConfig 客户端分发（OTA）签名配置（见 ADR-022）。
+// ClientDistConfig 客户端分发（OTA）签名配置。
 type ClientDistConfig struct {
 	// SignPrivKey 客户端 manifest 签名私钥（base64 of PKCS#8 DER, Ed25519）。
 	// 敏感信息：生产须经环境变量 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入、不入库（config-files 规范）。
@@ -196,7 +196,7 @@ type ClientDistConfig struct {
 	SignPrivKey string `mapstructure:"sign_priv_key"`
 	// SignKeyID 签名公钥版本标识（轮换用，默认 k1，须与客户端内置公钥 keyId 一致）。
 	SignKeyID string `mapstructure:"sign_key_id"`
-	// KeyEncSecret 拉取密钥可逆加密密钥（base64 of 32 字节，AES-256-GCM见 ADR-044）。
+	// KeyEncSecret 拉取密钥可逆加密密钥（base64 of 32 字节，AES-256-GCM）。
 	// 敏感信息：经环境变量 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入、不入库（config-files 规范）。
 	// 未配置时优雅降级：dev_mode=true 回退内置 dev 密钥；生产未配则不写 KeyEnc、密钥不可查看（不阻断建密钥）。
 	KeyEncSecret string `mapstructure:"key_enc_secret"`
@@ -225,7 +225,7 @@ type JWTConfig struct {
 	Secret     string        `mapstructure:"secret"`
 	AccessTTL  time.Duration `mapstructure:"access_ttl"`
 	RefreshTTL time.Duration `mapstructure:"refresh_ttl"`
-	// WSSecret CP↔Worker WS 令牌密钥显式配置（见 ADR-061）：只签终端/插件桥令牌，
+	// WSSecret CP↔Worker WS 令牌密钥显式配置：只签终端/插件桥令牌，
 	// 与签用户会话的 Secret 隔离。留空时生产态自动生成并持久化到数据根、dev 回退开发值；
 	// 显式配置亦是存量部署过渡逃生口（可设旧 jwt.secret 值兼容未升级 Worker）。
 	// 环境变量 JIANMANAGER_JWT_WS_SECRET。
@@ -333,7 +333,7 @@ func (c LogConfig) Retention() rollog.Retention {
 // DefaultLogCutover* 常量，用于配置「CP 本地 logs 表的入库、归档与保留」与
 // 的入库切换。整套已随 `logs` 表一并删除：
 //
-//   - 实例日志 → Worker 的受管 VictoriaLogs（ADR-094），CP 只做授权与联邦查询；
+//   - 实例日志 → Worker 的受管 VictoriaLogs，CP 只做授权与联邦查询；
 //   - 平台（CP 自身）日志 → 自轮转文件（internal/platform/rollog），
 //     面板读尾部（/api/v1/diagnostics/log）。
 //
@@ -363,7 +363,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("jwt.secret", defaultJWTSecret)
 	v.SetDefault("jwt.access_ttl", "15m")
 	v.SetDefault("jwt.refresh_ttl", "168h")
-	// CP↔Worker WS 令牌密钥（见 ADR-061）：默认空 = 生产 autogen 持久化 / dev 回退。
+	// CP↔Worker WS 令牌密钥：默认空 = 生产 autogen 持久化 / dev 回退。
 	v.SetDefault("jwt.ws_secret", "")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
@@ -380,7 +380,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("enroll.advertise_grpc", "")
 	v.SetDefault("enroll.script_base_url", "")
 	v.SetDefault("enroll.binary_url", "")
-	// 面板自更新：默认读 GitHub Releases 源（ADR-036 §7），开箱即可在线升级。
+	// 面板自更新：默认读 GitHub Releases 源，开箱即可在线升级。
 	// github_repo 默认官方仓库、channel 默认 stable（取最新正式 release）；token 默认空（匿名 60 次/时够手动用）。
 	// feed_url/binary_base_url 为可选回退（github_repo 空且 feed_url 非空时走原 feed 路径）；仅允许 https。
 	v.SetDefault("update.github_repo", "wcpe/JianManager")
@@ -389,10 +389,10 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("update.feed_url", "")
 	v.SetDefault("update.binary_base_url", "")
 	v.SetDefault("update.allow_insecure", false)
-	// 出站代理（见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
+	// 出站代理：默认空（直连/沿用环境变量代理），不破坏现状。
 	v.SetDefault("proxy.url", "")
 	v.SetDefault("proxy.no_proxy", "")
-	// Beacon 可选协同（444，见 ADR-090 §5）：默认全关——未配置 endpoint 即整体跳过，
+	// Beacon 可选协同：默认全关——未配置 endpoint 即整体跳过，
 	// 未部署 Beacon 时本平台全部功能正常、无任何报错。
 	v.SetDefault("beacon.endpoint", "")
 	v.SetDefault("beacon.token", "")
@@ -405,7 +405,7 @@ func Load(path string) (*Config, error) {
 	// 仅「数据超 10000 行必然导出失败」的部署才需要显式调大。
 	v.SetDefault("log_export.max_rows", DefaultLogExportRows)
 	v.SetDefault("log_export.max_bytes", DefaultLogExportBytes)
-	// 业务事件位点账本（ADR-107）：默认开启、保留 7 天、队列 10000、批量 500。
+	// 业务事件位点账本：默认开启、保留 7 天、队列 10000、批量 500。
 	// 与 ADR 给出的默认值一字不差；env 侧对应 JIANMANAGER_BUSINESS_CURSOR_*。
 	v.SetDefault("business_cursor.enabled", true)
 	v.SetDefault("business_cursor.retention_days", 7)
@@ -415,7 +415,7 @@ func Load(path string) (*Config, error) {
 	if err := v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY"); err != nil {
 		return nil, fmt.Errorf("绑定客户端签名私钥环境变量失败: %w", err)
 	}
-	// 拉取密钥可逆加密密钥（见 ADR-044）：同惯例经 env 注入、不入库。
+	// 拉取密钥可逆加密密钥：同惯例经 env 注入、不入库。
 	if err := v.BindEnv("client_dist.key_enc_secret", "JIANMANAGER_CLIENT_KEY_ENC_SECRET"); err != nil {
 		return nil, fmt.Errorf("绑定客户端密钥加密环境变量失败: %w", err)
 	}

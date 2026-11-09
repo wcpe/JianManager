@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 启动命令行采集（FR-426 增补）：--username 解析、accessToken 脱敏、玩家名兜底。 */
+/** 启动命令行采集：--username 解析、accessToken 脱敏、玩家名兜底。 */
 class LaunchArgsTest {
 
     private static final String FABRIC = "net.fabricmc.loader.impl.launch.knot.KnotClient"

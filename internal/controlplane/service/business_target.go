@@ -21,7 +21,7 @@ import (
 //  3. 应用 filters（nodeId / status / role）
 //  4. 去重并按实例 ID 升序排序
 //
-// 分组树是 JM 自有真源（InstanceGroupNode 自引用邻接表，ADR-033），**不从 Beacon 依赖**。
+// 分组树是 JM 自有真源（InstanceGroupNode 自引用邻接表），**不从 Beacon 依赖**。
 // 由于是自引用邻接表，理论上允许脏数据成环，递归一律带深度上限与访问集保护。
 
 const (

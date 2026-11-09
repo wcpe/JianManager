@@ -89,7 +89,7 @@ type ArchiveEvidence struct {
 	// LastRollbackReason 最近一次回滚原因（审计用）。
 	LastRollbackReason string `json:"last_rollback_reason,omitempty"`
 
-	// —— 归档对象自身的回收（FR-501「归档对象回收」，桶内生命周期）——
+	// —— 归档对象自身的回收（「归档对象回收」，桶内生命周期）——
 	//
 	// 为什么这四个字段构成**独立的终态**，而不是把 Owner 改成一个新的 `purged` 取值：
 	// Owner 的语义是「正本在哪一层」（hot/cold/archive），而归档对象被按保留期清除之后

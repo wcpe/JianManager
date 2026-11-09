@@ -24,21 +24,21 @@ var ErrInvalidBusinessCommand = errors.New("业务命令缺少 domain 或 action
 const businessDispatchTimeout = 8 * time.Second
 
 // JBIS 元查询保留域/动作（与探针侧 BridgeClient 约定一致）：
-// 取业务能力清单而非派发到具体业务 Provider，供前端动态发现各域能力（ADR-026/027）。
+// 取业务能力清单而非派发到具体业务 Provider，供前端动态发现各域能力。
 const (
 	businessMetaDomain = "jbis"
 	manifestAction     = "manifest"
 )
 
-// BusinessService 是 JM 的**纯透传通道**编排（起见 ADR-106）。
+// BusinessService 是 JM 的**纯透传通道**编排（起）。
 //
-// 它把前端发起的动作（`domain.action` + 结构化 payload）经既有插件桥（ADR-016）下发到
+// 它把前端发起的动作（`domain.action` + 结构化 payload）经既有插件桥下发到
 // 目标实例的 ServerProbe 业务对接层（BusinessHost），由探针侧 per-plugin Provider 执行并回执。
 // CP **插件无关**：只认 domain/action/payload 信封，不理解具体业务语义；业务结果 JSON 原样透传给前端。
-// ADR-106 起 JM 不做任何业务——不定义动作名、不规定 payload/output 字段、不解析 manifest 内容，
+// 起 JM 不做任何业务——不定义动作名、不规定 payload/output 字段、不解析 manifest 内容，
 // 也不再存储任何业务数据（业务数据由下游业务台持有）。
 //
-// 降级即默认（ADR-026）：实例无节点/节点未连/探针未连/域不可用/执行失败，一律降级为
+// 降级即默认：实例无节点/节点未连/探针未连/域不可用/执行失败，一律降级为
 // available=false + 友好提示，绝不 5xx、绝不拖垮调用方（实例不存在与参数非法除外，返回 error 供路由分流）。
 type BusinessService struct {
 	db   *gorm.DB
@@ -50,10 +50,10 @@ func NewBusinessService(db *gorm.DB, pool *cpgrpc.ClientPool) *BusinessService {
 	return &BusinessService{db: db, pool: pool}
 }
 
-// WriteContext 高危写的操作者上下文与幂等键（见 ADR-029）。
+// WriteContext 高危写的操作者上下文与幂等键。
 //
 // CP 在下发前把这些字段注入 payload JSON，经探针桥透传给探针 Provider
-// （对应键名由 JBIS 约定统一，JM 不解释其业务含义，见 ADR-106）：
+// （对应键名由 JBIS 约定统一，JM 不解释其业务含义）：
 //   - TaskID 作通道幂等键，对「同一逻辑操作的重试」必须稳定。
 //   - Operator/OperatorID/NodeID/Reason 供下游对账追责，平台侧与插件侧审计可串联。
 //
@@ -71,7 +71,7 @@ type WriteContext struct {
 	Reason string
 }
 
-// 高危写注入进 payload 的约定键名（JBIS 信封约定，见 ADR-029；JM 只负责原样注入、不解释语义）。
+// 高危写注入进 payload 的约定键名（JBIS 信封约定，；JM 只负责原样注入、不解释语义）。
 const (
 	payloadKeyTaskID     = "taskId"
 	payloadKeyOperator   = "operator"
@@ -141,7 +141,7 @@ func (s *BusinessService) dispatchWithTimeout(
 	return s.sendToProbe(inst, node, result, payloadJSON, timeout), nil
 }
 
-// DispatchWrite 下发一条高危业务写动作（见 ADR-029）。
+// DispatchWrite 下发一条高危业务写动作。
 //
 // 与 Dispatch 同样解析 instance→node→client，但在下发前把操作者身份与幂等键注入 payload：
 //   - 注入 taskId（幂等键，缺失则兜底 UUID）、operator/operatorId/nodeId/reason（操作者审计贯通）；

@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { login } from './helpers'
 
 /**
- * FR-498 首屏性能测量（250ms 端到端门限）。
+ * 首屏性能测量（250ms 端到端门限）。
  *
  * # 与 navigation-benchmark 的分工
  *
@@ -38,7 +38,7 @@ const ROUTES: Route[] = [
   { label: '网络拓扑', href: '/networks/topology', ready: '[data-page="networks"]' },
 ]
 
-/** 门限：FR-498 保留的 250ms 端到端首屏。 */
+/** 门限：250ms 端到端首屏。 */
 const FIRST_PAINT_BUDGET_MS = 250
 /** 单页采样次数（取 p50）。 */
 const SAMPLES = 5
@@ -62,7 +62,7 @@ async function measureOnce(page: Page, route: Route): Promise<number> {
   return Date.now() - started
 }
 
-test.describe('FR-498 首屏性能（250ms 门限）', () => {
+test.describe('首屏性能（250ms 门限）', () => {
   test('关键页面首屏 p50 ≤ 250ms', async ({ page }) => {
     test.setTimeout(180_000)
     await login(page)
@@ -84,20 +84,20 @@ test.describe('FR-498 首屏性能（250ms 门限）', () => {
 
     // 读数打到 stdout（CI 日志与本地都能看到原始样本，便于判断是偶发还是系统性）。
     for (const r of report) {
-      console.log(`[FR-498] ${r.label}: p50=${r.p50}ms samples=[${r.samples.join(', ')}]`)
+      console.log(`${r.label}: p50=${r.p50}ms samples=[${r.samples.join(', ')}]`)
     }
     const worst = report.reduce((a, b) => (a.p50 > b.p50 ? a : b))
     const verdict = worst.p50 <= FIRST_PAINT_BUDGET_MS ? '达标' : '**未达标**'
-    console.log(`[FR-498] 最差页=${worst.label} p50=${worst.p50}ms 门限=${FIRST_PAINT_BUDGET_MS}ms ⇒ ${verdict}`)
+    console.log(`最差页=${worst.label} p50=${worst.p50}ms 门限=${FIRST_PAINT_BUDGET_MS}ms ⇒ ${verdict}`)
 
     // 墙钟成分参考（只读，帮后人定位成本在哪）：详见 spec `log-verify-chunking` §5.2。
-    console.log('[FR-498] 参考：同轮生产构建 + MSW 的构成分解')
-    console.log('[FR-498]   FCP 304–512ms / LCP 1388–1600ms / DCL 108–228ms')
-    console.log('[FR-498]   ready 等待被 mock 接口吃满：/api/v1/instances 响应 921 KB、首页 8 个接口各 ~740ms')
-    console.log('[FR-498]   客户端路由跳转（不重载文档）实测 113–922ms')
+    console.log('参考：同轮生产构建 + MSW 的构成分解')
+    console.log('  FCP 304–512ms / LCP 1388–1600ms / DCL 108–228ms')
+    console.log('  ready 等待被 mock 接口吃满：/api/v1/instances 响应 921 KB、首页 8 个接口各 ~740ms')
+    console.log('  客户端路由跳转（不重载文档）实测 113–922ms')
 
     if (!ENFORCE) {
-      console.log('[FR-498] 未设 FIRSTPAINT_ENFORCE=1 ⇒ 只记录读数，不断言门限')
+      console.log('未设 FIRSTPAINT_ENFORCE=1 ⇒ 只记录读数，不断言门限')
       return
     }
     expect(worst.p50, `最差页「${worst.label}」的 p50 必须 ≤ ${FIRST_PAINT_BUDGET_MS}ms`).toBeLessThanOrEqual(

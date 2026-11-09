@@ -152,7 +152,7 @@ func (s *Server) SetBridgeSubscription(_ context.Context, req *workerpb.SetBridg
 
 // QueryBusinessStatus 取探针已注册业务域与健康状态（`core.business_status`§2.4）。
 //
-// status_json 原样透传：CP **不解析** manifest / 健康语义（ADR-106：JM 只渲染不解释）。
+// status_json 原样透传：CP **不解析** manifest / 健康语义（JM 只渲染不解释）。
 func (s *Server) QueryBusinessStatus(_ context.Context, req *workerpb.QueryBusinessStatusRequest) (*workerpb.QueryBusinessStatusResponse, error) {
 	payload := ""
 	if domain := strings.TrimSpace(req.Domain); domain != "" {

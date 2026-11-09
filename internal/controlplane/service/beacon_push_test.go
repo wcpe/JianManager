@@ -433,7 +433,7 @@ func TestInstanceStartStopNeverPush(t *testing.T) {
 	_ = svc.Kill(inst.ID)
 	pushSvc.Shutdown()
 
-	require.Equal(t, 0, mock.requestCount(), "启停/重启绝不得触发 Beacon 推送（ADR-090 §6）")
+	require.Equal(t, 0, mock.requestCount(), "启停/重启绝不得触发 Beacon 推送")
 }
 
 // TestInstanceCreateHook_PushesAfterSuccess 创建路径真的接了推送钩子：

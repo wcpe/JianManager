@@ -2,13 +2,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 
- * 全局任务中心 API（见 ADR-040）。
+ * 全局任务中心 API。
  * 长任务（如 JDK 安装）发起即返回 taskId；进度/日志/历史经轮询 `/tasks` 查看。
  * 后端按归属收敛：非平台管理员只见自己发起的任务，平台管理员见全部。
  */
 
 /** 任务状态。pending/running 为进行中，succeeded/failed/canceled 为终态（canceled=被强制停止）。 */
-// 类型与纯逻辑（终态判定、kind 文案键、轮询启停）已回迁应用侧（迁包已撤销，见 ADR-103）；
+// 类型与纯逻辑（终态判定、kind 文案键、轮询启停）已回迁应用侧（迁包已撤销）；
 // 此处转出，调用点零改动。本模块只保留取数 hook 与请求参数类型。
 import { tasksRefetchInterval } from '@/lib/tasks/task-status'
 import type { TaskState, Task, TaskLog, TaskPage } from '@/lib/tasks/task-status'

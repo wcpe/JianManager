@@ -81,7 +81,7 @@ export interface SearchResult {
   hits: SearchHit[]
   /** 命中达到上限被截断。 */
   truncated: boolean
-  /** 索引首建未就绪（ADR-024）：hits 为空，应稍后用同一查询重试。 */
+  /** 索引首建未就绪：hits 为空，应稍后用同一查询重试。 */
   indexing: boolean
 }
 

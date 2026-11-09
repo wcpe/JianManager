@@ -4,7 +4,7 @@ import { login } from './helpers'
 /**
  * 侧栏折叠/展开 · 单机（Playwright + mock 模式）验收。
  *
- * 【已重写】原用例验的是 ADR-071 的「点顶栏 logo 折叠/展开」。该入口已在
+ * 【已重写】原用例验的是「点顶栏 logo 折叠/展开」。该入口已在
  * 「折叠后无法展开」的修复中删除：顶栏品牌区在折叠态被条件卸载，缩回去就没有出口。
  * 现在顶栏品牌区是**首页入口**（aria-label = nav.home「返回平台首页」），
  * 折叠入口只留侧栏底部常驻开关（data-testid=sidebar-collapse-toggle，

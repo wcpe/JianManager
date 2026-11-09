@@ -3,7 +3,7 @@ package service
 /*
  * 审批票的申请人归属（P0 回归）。
  *
- * 修复前：助手派生的 principal 没有 Token（ADR-105 不为人类用户签发 jmat_），
+ * 修复前：助手派生的 principal 没有 Token（不为人类用户签发 jmat_），
  * `tokenOwnerUserID(deps, 0)` 直接返回 0，于是所有经助手触发的写操作落下的审批票
  * applicant_user_id 恒为 0。这不只是“显示不好看”，而是两个实质错误：
  *   ① 幂等部分唯一索引含 applicant_user_id → **不同用户**的同 action+同目标+同参数
@@ -47,7 +47,7 @@ func TestAssistantPrincipal_CarriesActAsUserID(t *testing.T) {
 		t.Skip("该用户未派生任何能力")
 	}
 	require.Equal(t, u.ID, p.ActAsUserID, "principal 必须带上真实用户 id")
-	require.Zero(t, p.TokenID, "助手不得伪造 Token（ADR-105）")
+	require.Zero(t, p.TokenID, "助手不得伪造 Token")
 }
 
 // TestSubmitApproval_RejectsZeroApplicant 服务层 fail-fast：没有申请人就不得建票。

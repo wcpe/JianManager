@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientTelemetryHandler 客户端遥测上报端点（见 ADR-023、contract §4.3）。
+// ClientTelemetryHandler 客户端遥测上报端点（contract §4.3）。
 // 面向玩家公网：拉取密钥（X-Client-Key）鉴权 + X-Machine-Id；202 Accepted、best-effort 落库不阻塞。
 type ClientTelemetryHandler struct {
 	svc      *service.ClientTelemetryService

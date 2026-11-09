@@ -21,7 +21,7 @@ import (
 )
 
 // containerWorkDir 是实例工作目录在容器内的固定挂载点。
-// 宿主侧系统分配目录（ADR-010）bind-mount 到此，使文件管理/备份/配置编辑走同一套宿主路径。
+// 宿主侧系统分配目录 bind-mount 到此，使文件管理/备份/配置编辑走同一套宿主路径。
 // 与 itzg/minecraft-server 等常见 MC 镜像约定一致（容器内 /data 即服务器目录）。
 const containerWorkDir = "/data"
 
@@ -29,9 +29,9 @@ const containerWorkDir = "/data"
 // 超过则由 Docker 守护进程 SIGKILL（ContainerStop 的 timeout 语义）。
 const dockerStopGracePeriod = 30 * time.Second
 
-// dockerStrategy 通过本机 Docker Engine API 管理容器化实例（ADR-019）。
+// dockerStrategy 通过本机 Docker Engine API 管理容器化实例。
 // Worker 经本机 Docker 守护进程创建/启动/停止容器，stdio 经 attach 接现有终端与日志采集。
-// 容器进程的隔离由 Docker 守护进程提供，故不叠 daemon wrapper（区别于 ADR-003 的 daemon 策略）。
+// 容器进程的隔离由 Docker 守护进程提供，故不叠 daemon wrapper（区别于 daemon 策略）。
 type dockerStrategy struct {
 	mu   sync.Mutex
 	spec CommandSpec
@@ -176,11 +176,11 @@ func (d *dockerStrategy) Start(ctx context.Context) error {
 	hostCfg := &containertypes.HostConfig{
 		PortBindings: bindings,
 	}
-	// 资源限额注入 cgroup（见 ADR-019）：CPU 核数→NanoCPUs、内存 MiB→字节。
+	// 资源限额注入 cgroup：CPU 核数→NanoCPUs、内存 MiB→字节。
 	// 0 值表示不限制，保持 Docker 默认（不写 Resources 字段）。磁盘限额 v1 不注入
 	// （bind-mount 工作目录的配额依赖存储驱动，HostConfig 无法简单施加）。
 	applyResourceLimits(hostCfg, d.spec.CPULimit, d.spec.MemLimitMB)
-	// 工作目录 bind-mount 进容器（ADR-010 数据根的宿主绝对路径）。
+	// 工作目录 bind-mount 进容器（数据根的宿主绝对路径）。
 	if d.spec.WorkDir != "" {
 		hostCfg.Mounts = []mount.Mount{{
 			Type:   mount.TypeBind,
@@ -532,7 +532,7 @@ func (d *dockerStrategy) removeExistingContainer(ctx context.Context) {
 }
 
 // dockerEnv 把实例自定义环境变量转为容器 Env 列表（KEY=VALUE）。
-// docker 模式不注入宿主 JDK（JAVA_HOME/PATH），JDK 随镜像提供（ADR-019）。
+// docker 模式不注入宿主 JDK（JAVA_HOME/PATH），JDK 随镜像提供。
 func dockerEnv(env map[string]string) []string {
 	out := make([]string, 0, len(env))
 	for k, v := range env {

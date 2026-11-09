@@ -4,7 +4,7 @@ import { readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist/cl
 import type { ClientDistQueryKey } from '@/lib/client-dist/client-dist-query'
 
 /** 
- * 页面 B「客户端分发运维」安全侧共享件（ADR-088）。
+ * 页面 B「客户端分发运维」安全侧共享件。
  *
  * 展示工具（占位符/时间格式化/徽标变体/空态）已回迁应用侧，
  * 此处保留依赖 router 的查询读写 hook 并转发展示工具，调用点无需改动。

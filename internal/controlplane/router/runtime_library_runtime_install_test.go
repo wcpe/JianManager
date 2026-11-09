@@ -19,36 +19,36 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// fakeFR299InstallWorker 假 Worker：InstallRuntime 记录请求并回执成功、RemoveRuntime 成功。
-type fakeFR299InstallWorker struct {
+// fakeRuntimeInstallWorker 假 Worker：InstallRuntime 记录请求并回执成功、RemoveRuntime 成功。
+type fakeRuntimeInstallWorker struct {
 	workerpb.WorkerServiceClient
 	gotInstall *workerpb.InstallRuntimeRequest
 	gotRemove  *workerpb.RemoveRuntimeRequest
 }
 
-func (f *fakeFR299InstallWorker) InstallRuntime(_ context.Context, in *workerpb.InstallRuntimeRequest, _ ...grpc.CallOption) (*workerpb.InstallRuntimeResponse, error) {
+func (f *fakeRuntimeInstallWorker) InstallRuntime(_ context.Context, in *workerpb.InstallRuntimeRequest, _ ...grpc.CallOption) (*workerpb.InstallRuntimeResponse, error) {
 	f.gotInstall = in
 	return &workerpb.InstallRuntimeResponse{Success: true, TaskId: in.TaskId}, nil
 }
 
-func (f *fakeFR299InstallWorker) RemoveRuntime(_ context.Context, in *workerpb.RemoveRuntimeRequest, _ ...grpc.CallOption) (*workerpb.RemoveRuntimeResponse, error) {
+func (f *fakeRuntimeInstallWorker) RemoveRuntime(_ context.Context, in *workerpb.RemoveRuntimeRequest, _ ...grpc.CallOption) (*workerpb.RemoveRuntimeResponse, error) {
 	f.gotRemove = in
 	return &workerpb.RemoveRuntimeResponse{Success: true}, nil
 }
 
-func (f *fakeFR299InstallWorker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
+func (f *fakeRuntimeInstallWorker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
 	return &workerpb.ListJDKsResponse{}, nil
 }
 
-// setupFR299Router 组装含任务中心的路由（安装端点需要 TaskService）。
-func setupFR299Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
+// setupRuntimeInstallRouter 组装含任务中心的路由（安装端点需要 TaskService）。
+func setupRuntimeInstallRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	r := setupFR298Router(t, db, pool)
+	r := setupRuntimeLibraryRouter(t, db, pool)
 	return r
 }
 
-func TestFR299RuntimeInstallEndpoint(t *testing.T) {
+func TestRuntimeInstallEndpoint(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
 
@@ -60,12 +60,12 @@ func TestFR299RuntimeInstallEndpoint(t *testing.T) {
 	taskSvc := service.NewTaskService(db)
 	runtimeLibSvc.SetTaskService(taskSvc)
 
-	svcs := newFR299Services(db, pool, jdkSvc, runtimeLibSvc, taskSvc)
-	r := Setup(svcs, "test-secret-key-for-fr299")
+	svcs := newRuntimeLibraryServices(db, pool, jdkSvc, runtimeLibSvc, taskSvc)
+	r := Setup(svcs, "test-secret-key-for-runtime-install")
 	adminToken := getAdminToken(t, r)
-	memberToken := getMemberToken(t, r, "member-fr299", "password123")
+	memberToken := getMemberToken(t, r, "member-runtime-install", "password123")
 	node := createTestNode(t, db)
-	fake := &fakeFR299InstallWorker{}
+	fake := &fakeRuntimeInstallWorker{}
 	pool.SetWorkerClientForTest(node.UUID, fake)
 
 	// 非平台管理员 403。
@@ -104,7 +104,7 @@ func TestFR299RuntimeInstallEndpoint(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, badType.Code, badType.Body.String())
 
 	// 节点离线 503。
-	offline := createTestNodeWithSuffix(t, db, "fr299-offline")
+	offline := createTestNodeWithSuffix(t, db, "runtime-install-offline")
 	offlineResp := makeRequest(r, http.MethodPost, fmt.Sprintf("/api/v1/nodes/%d/runtimes/install", offline.ID), map[string]any{
 		"type": "nodejs", "major": 22,
 	}, adminToken)
@@ -117,13 +117,13 @@ func TestFR299RuntimeInstallEndpoint(t *testing.T) {
 }
 
 // 删除托管 nodejs 经统一端点：Worker RemoveRuntime 被调、记录删除（语义对齐 JDK）。
-func TestFR299DeleteManagedRuntimeRemovesFiles(t *testing.T) {
+func TestDeleteManagedRuntimeRemovesFiles(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	r := setupFR299Router(t, db, pool)
+	r := setupRuntimeInstallRouter(t, db, pool)
 	adminToken := getAdminToken(t, r)
 	node := createTestNode(t, db)
-	fake := &fakeFR299InstallWorker{}
+	fake := &fakeRuntimeInstallWorker{}
 	pool.SetWorkerClientForTest(node.UUID, fake)
 
 	rt := &model.NodeRuntime{NodeID: node.ID, Type: "nodejs", Name: "Node.js 22", Version: "22.17.0", Major: 22, Arch: "x64", Path: "/data/opt/runtimes/nodejs-22/bin/node", Managed: true}
@@ -138,15 +138,15 @@ func TestFR299DeleteManagedRuntimeRemovesFiles(t *testing.T) {
 	require.Zero(t, n)
 }
 
-// newFR299Services 组装含运行时库 + 任务中心的最小 Services（复用测试基座字段）。
-func newFR299Services(db *gorm.DB, pool *cpgrpc.ClientPool, jdkSvc *service.JDKService, runtimeLibSvc *service.RuntimeLibraryService, taskSvc *service.TaskService) *Services {
+// newRuntimeLibraryServices 组装含运行时库 + 任务中心的最小 Services（复用测试基座字段）。
+func newRuntimeLibraryServices(db *gorm.DB, pool *cpgrpc.ClientPool, jdkSvc *service.JDKService, runtimeLibSvc *service.RuntimeLibraryService, taskSvc *service.TaskService) *Services {
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
 	instanceSvc.SetDelegateBypassForTest(true)
 	nodeSvc := service.NewNodeService(db)
 	nodeSvc.SetInstanceService(instanceSvc)
-	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-fr299", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
+	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-runtime-install", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	return &Services{
 		Auth:           service.NewAuthService(db, jwtCfg),
 		User:           service.NewUserService(db),

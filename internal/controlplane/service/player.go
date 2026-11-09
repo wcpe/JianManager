@@ -22,7 +22,7 @@ var (
 	ErrInvalidBanScope    = errors.New("不支持的封禁范围")
 )
 
-// 探针治理指令 action（见 ADR-016；与探针侧 BridgePlayerGovernor 约定一致）。
+// 探针治理指令 action（与探针侧 BridgePlayerGovernor 约定一致）。
 const (
 	pluginActionKick            = "kick"
 	pluginActionBan             = "ban"
@@ -39,7 +39,7 @@ const pluginExecTimeout = 8 * time.Second
 
 // PlayerService 玩家管理服务（治理能力迁移到探针）。
 //
-// 在线玩家、踢/封/解封、白名单均经各后端子服的 ServerProbe 探针实现（退役 RCON，见 ADR-016）：
+// 在线玩家、踢/封/解封、白名单均经各后端子服的 ServerProbe 探针实现（退役 RCON）：
 // CP 经 Worker 的 SendPluginCommand(wait=true) 下发治理指令，探针执行平台 API 后同步回执。
 // BC 跨服感知通过聚合「群组内各后端探针的 list」并标注玩家所在子服实现；封禁记录入库留档
 // （model.BanRecord）。实时在线列表另由 PlayerEventService 的事件名册提供。

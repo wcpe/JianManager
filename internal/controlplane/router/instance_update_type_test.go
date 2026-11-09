@@ -10,11 +10,11 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// TestInstanceUpdate_RoleTypeCoherenceFR454（第二轮复审 N1）经 HTTP 层验证：
+// TestInstanceUpdate_RoleTypeCoherence（第二轮复审 N1）经 HTTP 层验证：
 //   - 改 role=beacon 时即便显式传 type=minecraft_java，也必须被归一为 generic 且 probe_port 归零；
 //   - 非法 type 返回 400 且不落库；
 //   - beacon→backend 需同时显式传 type=minecraft_java 才能恢复为可加载探针的 MC 服务端。
-func TestInstanceUpdate_RoleTypeCoherenceFR454(t *testing.T) {
+func TestInstanceUpdate_RoleTypeCoherence(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 	token := getAdminToken(t, r)

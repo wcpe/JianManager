@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// AssetType 制品类型。类型间物理分目录、类型内按 sha256 去重。参见 ADR-011。
+// AssetType 制品类型。类型间物理分目录、类型内按 sha256 去重。
 type AssetType string
 
 const (
@@ -21,13 +21,13 @@ const (
 	// AssetTypeBlob 通用二进制。
 	AssetTypeBlob AssetType = "blob"
 	// AssetTypeClientFile 客户端分发制品（OTA 单文件压缩/原文）。
-	// 内容寻址键 = 制品（压缩后）自身 sha256，即 manifest files[].artifact.sha256（见 ADR-022）。
+	// 内容寻址键 = 制品（压缩后）自身 sha256，即 manifest files[].artifact.sha256。
 	AssetTypeClientFile AssetType = "client-file"
-	// AssetTypeClientPack 客户端分发 .jmpack 容器（zstd 压缩段拼接 + Ed25519 签名见 ADR-021/022）。
+	// AssetTypeClientPack 客户端分发 .jmpack 容器（zstd 压缩段拼接 + Ed25519 签名）。
 	AssetTypeClientPack AssetType = "client-pack"
-	// AssetTypeClientCore updater-core jar 制品（集中版本管理见 ADR-045）。
+	// AssetTypeClientCore updater-core jar 制品（集中版本管理）。
 	// 内容寻址键 = core jar 制品（压缩后）自身 sha256，即 manifest agent.core.platforms[os].artifact.sha256。
-	// 一份 jar 三平台通用（ADR-021）：上传一份，manifest 生成时 fan-out 填各 platform 键。
+	// 一份 jar 三平台通用：上传一份，manifest 生成时 fan-out 填各 platform 键。
 	AssetTypeClientCore AssetType = "client-core"
 	// AssetTypeClientUpdaterCore updater-core jar 归档制品（见 updater-arch-simplification spec §D）。
 	// make embed-client-updater 构建的新 core jar 入库归档为此类型（不覆盖旧版，内容寻址天然多版本）。
@@ -55,12 +55,12 @@ const (
 // AssetBackendLocal 本地存储后端标识（默认）。
 const AssetBackendLocal = "local"
 
-// AssetBackendS3 S3 兼容对象存储后端标识（见 ADR-073）。
+// AssetBackendS3 S3 兼容对象存储后端标识。
 const AssetBackendS3 = "s3"
 
 // Asset 制品库资产索引（内容寻址 + 类型化元数据）。
 // sha256 既是寻址键也是去重键：同 (type, sha256) 复用同一条记录与同一份物理文件。
-// 参见 ADR-011: 制品库——类型分区的内容寻址与资产模型。
+// 制品库——类型分区的内容寻址与资产模型。
 type Asset struct {
 	ID   uint      `gorm:"primaryKey" json:"id"`
 	Type AssetType `gorm:"type:varchar(32);not null;index;uniqueIndex:idx_assets_type_sha256" json:"type"`
@@ -86,7 +86,7 @@ type Asset struct {
 	StorageState AssetStorageState `gorm:"type:varchar(32);default:hot;not null" json:"storageState"`
 	// StorageBackend 存储后端标识，默认 local。
 	StorageBackend string `gorm:"type:varchar(64);default:local;not null" json:"storageBackend"`
-	// StorageChannelID 外置存储渠道引用（见 ADR-073）：0=本地/无渠道（历史行为），
+	// StorageChannelID 外置存储渠道引用：0=本地/无渠道（历史行为），
 	// >0 时指向 artifact_storage_channels.id——位置由记录自述，不由全局活跃状态推断。
 	StorageChannelID uint `gorm:"default:0;not null;index" json:"storageChannelId"`
 	// RefCount 引用计数，>0 时禁止删除（被模板/实例占用）。

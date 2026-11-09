@@ -58,16 +58,16 @@ type Server struct {
 	// logQuery日志 RPC 装配点（T11）；nil 时 Log* 走 Unimplemented。
 	logQuery     interface{}
 	instanceLogs InstanceLogCollector
-	// logSourceOverrides 提供实例日志路径的配置化覆盖（FR-502 §3.4）；nil = 不覆盖。
+	// logSourceOverrides 提供实例日志路径的配置化覆盖；nil = 不覆盖。
 	// 由 SetInstanceLogSourceOverrides 注入。
 	logSourceOverrides InstanceLogSourceOverrides
-	// root 是本节点数据根，用于把 CP 下发的相对工作目录解析为绝对路径。参见 ADR-010。
+	// root 是本节点数据根，用于把 CP 下发的相对工作目录解析为绝对路径。
 	root *dataroot.Root
-	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。参见 ADR-006。
+	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。
 	// 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误。由 SetBotManager 注入。
 	//
 	// 用接口而非 *bot.Manager：单进程部署注入 *Manager，多分片部署注入 *ShardedManager
-	//（见 ADR-006 的分片说明），grpc 层无需感知差异。
+	//分片部署形态差异由 Bot 管理器实现吸收，grpc 层无需感知差异。
 	botMgr botManager
 	// botFleet 允许 Fleet RPC 复用 Manager，并为协议测试注入最小替身。
 	botFleet   botFleetManager
@@ -98,15 +98,15 @@ type Server struct {
 	// emitRecovered 记录 EmitOutput 兜底 recover 次数（P0 兜底 ✓）：**记日志 + 标降级，不静默** ✓。
 	emitRecovered int64
 
-	// 插件桥（ServerProbe 反向 WS见 ADR-016）。
+	// 插件桥（ServerProbe 反向 WS）。
 	// bridge 提供「实例 UUID→探针会话」表与下发能力；为 nil 表示本节点未启用插件桥。由 SetPluginBridge 注入。
 	bridge *ws.PluginBridgeServer
 
-	// terminalWSAddr 本机终端 WS 服务回环地址（M2，见 ADR-066）：
+	// terminalWSAddr 本机终端 WS 服务回环地址（M2）：
 	// TerminalSession 据此回环拨自身 WS 终端服务桥接会话。由 SetTerminalWSAddr 注入。
 	terminalWSAddr string
 
-	// decompiler 解析/缓存 CFR 反编译器 jar（见 ADR-018）。
+	// decompiler 解析/缓存 CFR 反编译器 jar。
 	// 为 nil 表示本节点未启用反编译能力，DecompileClass 返回降级错误。由 SetDecompiler 注入。
 	decompiler *decompiler.Provider
 	// pluginEventMu 保护 pluginEventSubs，StreamPluginEvents 订阅/取消订阅时加锁。
@@ -120,20 +120,20 @@ type Server struct {
 	// execPath 覆盖自更新待替换的可执行文件路径；空时用 os.Executable()。
 	// 由 SetExecutablePath 注入（测试用，避免替换真二进制）。
 	execPath string
-	// httpClient 出站 client（经进程级代理ADR-037）：Worker 升级二进制下载经此 client。
+	// httpClient 出站 client（经进程级代理）：Worker 升级二进制下载经此 client。
 	// 由 SetHTTPClient 注入；为 nil 时回退 http.DefaultClient（向后兼容）。
 	httpClient *http.Client
-	// httpProvider 运行时出站持有者（ADR-043）：非 nil 时每次取当前 client，
+	// httpProvider 运行时出站持有者：非 nil 时每次取当前 client，
 	// 使 CP 经心跳下发的代理改动即时生效。优先于 httpClient。
 	httpProvider func() *http.Client
-	// 全文搜索索引（见 ADR-017）。每实例一份 *search.Index，懒创建。
+	// 全文搜索索引。每实例一份 *search.Index，懒创建。
 	// 索引落数据根 var/index/<instance-uuid>/，是 Worker 本地派生资产，不进 CP DB。
 	// searchIgnore 为用户配置追加的忽略 glob（worker.yml search.ignore），叠加内置默认集。
 	searchMu      sync.Mutex
 	searchIndexes map[string]*search.Index
 	searchIgnore  []string
 
-	// tasks 运行中长任务内存登记表（见 ADR-040）。
+	// tasks 运行中长任务内存登记表。
 	// InstallJDK 异步执行时经此表更新进度/日志；心跳侧读 Snapshot 随心跳上报给 CP。
 	// 非 nil（NewServer 初始化）。
 	tasks *taskreg.Registry
@@ -189,13 +189,13 @@ func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Col
 	return s
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理ADR-037）：Worker 升级二进制下载经此 client。
+// SetHTTPClient 注入出站 client（经进程级代理）：Worker 升级二进制下载经此 client。
 // 由 main 装配；不调用则回退 http.DefaultClient（向后兼容，测试不受影响）。
 func (s *Server) SetHTTPClient(c *http.Client) {
 	s.httpClient = c
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次下载取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者：每次下载取当前 client，
 // 使 CP 经心跳下发的代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
 func (s *Server) SetHTTPClientProvider(p func() *http.Client) {
 	s.httpProvider = p
@@ -269,9 +269,9 @@ func (s *Server) EmitOutput(instanceUUID, stream, data string) {
 	})
 }
 
-// CreateInstance 创建实例（FR-499）。
+// CreateInstance 创建实例。
 // CP 下发的 WorkDir 按数据根相对存储（系统分配的 var/servers/<slug>-<shortid>），
-// 此处解析为本节点绝对路径并确保目录存在。参见 ADR-010。
+// 此处解析为本节点绝对路径并确保目录存在。
 //
 // 它是「登记不能被长周期锁拖死」这个事故面的**唯一可观测点**：
 // 呼叫方（CP）关心的就是「从我发出到拿回响应花了多久」。
@@ -287,7 +287,7 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 	// 超阈时用 Warn，正常用 Debug：这条日志每次建实例都会打，
 	// 但只有慢的那些值得在默认日志等级下看见。
 	//
-	// 阈值 100ms 的由来：FR-499 的生产复验里登记 1.246ms 返回，
+	// 阈值 100ms 的由来：生产复验里登记 1.246ms 返回，
 	// 整轮采集墙钟 11.95s 时也不受影响。100ms 是「已经慢了但还没到事故」的量级，
 	// 用它做告警线可以把「开始不对」和「真出事」分开。
 	const slowRegisterThreshold = 100 * time.Millisecond
@@ -295,7 +295,7 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 	if elapsed >= slowRegisterThreshold {
 		logFn = slog.Warn
 	}
-	logFn("实例登记完成（FR-499 端到端耗时）",
+	logFn("实例登记完成（端到端耗时）",
 		"instanceUUID", req.InstanceUuid,
 		"created", created,
 		"elapsedMs", float64(elapsed.Microseconds())/1000.0,
@@ -309,10 +309,10 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 }
 
 // registerInstanceFromProto 把 CP 下发的实例规格填入进程管理器（不启动进程）。
-// 解析相对 WorkDir 为本节点绝对路径并建目录（ADR-010），调 manager.Create 注册为 STOPPED，
-// docker 实例补记镜像/端口/限额（启动时随 spec 定型，ADR-019）。
+// 解析相对 WorkDir 为本节点绝对路径并建目录，调 manager.Create 注册为 STOPPED，
+// docker 实例补记镜像/端口/限额（启动时随 spec 定型）。
 // 返回 created：true=本次新登记，false=实例已存在（已刷新随启动定型的超时与 docker 配置）。
-// CreateInstance（CP 建实例/启动前幂等重注册）与 ResyncInstances（重连重推，见 ADR-050）共用此逻辑。
+// CreateInstance（CP 建实例/启动前幂等重注册）与 ResyncInstances（重连重推）共用此逻辑。
 func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) (created bool, err error) {
 	workDir := req.WorkDir
 	if s.root != nil && workDir != "" {
@@ -361,7 +361,7 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 		}
 		return false, cerr
 	}
-	// docker 模式：把镜像、端口映射与资源限额存到实例记账，启动时随 spec 定型（ADR-019）。
+	// docker 模式：把镜像、端口映射与资源限额存到实例记账，启动时随 spec 定型。
 	if req.ProcessType == string(process.ProcessTypeDocker) {
 		s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings), req.CpuLimit, req.MemLimitMb, req.DiskLimitMb)
 	}
@@ -371,7 +371,7 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 	return true, nil
 }
 
-// ResyncInstances Worker 重连/重注册后接收 CP 重推的整节点实例规格，填充内存注册表（见 ADR-050）。
+// ResyncInstances Worker 重连/重注册后接收 CP 重推的整节点实例规格，填充内存注册表。
 // 「只补不覆盖」运行态与目录：已在表者复用幂等注册补完整启动规格（当前控制通道不中断），
 // 不在表者按 STOPPED 登记且不启动进程——只让停机实例可被文件/配置/归档 op 定位工作目录，
 // 绝不擅自拉起。修 bug #2（重启后停机实例 op 报「实例不存在」）。
@@ -831,7 +831,7 @@ func (s *Server) ListJDKs(ctx context.Context, req *workerpb.ListJDKsRequest) (*
 
 // InstallJDK 下载并安装指定 JDK。
 //
-// 当 req.TaskId 非空时走**异步**路径（见 ADR-040）：登记内存任务表为 running、
+// 当 req.TaskId 非空时走**异步**路径：登记内存任务表为 running、
 // 启动后台 goroutine 执行下载解压（经进度回调更新任务表），RPC **立即返回** task_id，
 // 不再阻塞最长 20min；进度/日志/终态经心跳上报给 CP，CP 据终态落 NodeJDK + 发站内信。
 // 当 req.TaskId 为空时回退**同步**路径（向后兼容旧 CP）。
@@ -900,7 +900,7 @@ func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest
 	}, nil
 }
 
-// jdkResult 是 jdk_install 任务成功时写入 TaskSnapshot.result 的 JSON 结构（见 ADR-040）。
+// jdkResult 是 jdk_install 任务成功时写入 TaskSnapshot.result 的 JSON 结构。
 // CP 收到终态 succeeded 时反序列化它落一条 model.NodeJDK。字段与 workerpb.JDKInfo 一一对应。
 type jdkResult struct {
 	Vendor       string `json:"vendor"`
@@ -1015,7 +1015,7 @@ func (s *Server) StreamInstanceEvents(req *workerpb.StreamInstanceEventsRequest,
 // === Bot 操作 ===
 //
 // Worker 侧 Bot 由 bot.Manager spawn 的 Node 子进程（bot-worker）经 stdin/stdout IPC 管理，
-// 一个 bot-worker 进程承载本节点全部 Bot。参见 ADR-006。
+// 一个 bot-worker 进程承载本节点全部 Bot。
 // botMgr 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误而非 panic。
 // Bot 状态（connecting/connected/disconnected）由 CP 经 ListBots 拉取回填（懒拉取，见 BotService.refreshStatus）。
 

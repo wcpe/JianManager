@@ -1,9 +1,9 @@
 /** 
- * 实例库拖拽的纯逻辑（跨实例超级工作台 / 复用 ADR-034 可组合卡片工作区）。
+ * 实例库拖拽的纯逻辑（跨实例超级工作台 / 复用可组合卡片工作区）。
  *
  * 实例库面板用 HTML5 原生 DnD 把「实例 / 单功能 / 多选实例」拖到画布。本模块只做
  * **拖拽载荷的序列化/解析**与**载荷 → 卡片**的纯转换（不依赖 React / DOM），便于 vitest 覆盖，
- * 承 ADR-034「状态外提 + 纯数据」决策。放置/落位的 DOM 交互在 `InstanceLibrary` 组件里。
+ * 承「状态外提 + 纯数据」决策。放置/落位的 DOM 交互在 `InstanceLibrary` 组件里。
  */
 
 import { defaultOpsPreset, makeCard, type PlacedCard } from '@/lib/console/workspace-preset'

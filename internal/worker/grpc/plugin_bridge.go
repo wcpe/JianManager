@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 插件桥 gRPC 侧（ServerProbe 反向 WS ↔ Worker见 ADR-016）。
+// 插件桥 gRPC 侧（ServerProbe 反向 WS ↔ Worker）。
 //
 // 数据流：探针 →(WS) PluginBridgeServer →(SetPluginBridge 注入的事件回调) EmitPluginEvent
 //        → 扇出到所有 StreamPluginEvents 订阅者（CP）。
@@ -192,7 +192,7 @@ func truncateForLog(s string, maxRunes int) string {
 // 探针与 Worker 同机回环、命令为本地 Bukkit API 调用，5s 足够；放大会拖慢跨多后端聚合。
 const pluginCommandTimeout = 5 * time.Second
 
-// SendPluginCommand CP 经 Worker 向探针下发治理/查询指令（见 ADR-016）。
+// SendPluginCommand CP 经 Worker 向探针下发治理/查询指令。
 //
 // wait=true：同步等待探针执行回执 command_result（踢/封/解封/白名单/在线列表），把成功/输出/错误返回；
 // wait=false：即发即忘（仅校验已下发）。实例无活动探针会话时返回 success=false 且 error 说明未连接，
@@ -232,7 +232,7 @@ func (s *Server) SendPluginCommand(_ context.Context, req *workerpb.SendPluginCo
 	}, nil
 }
 
-// pluginActionQueryState 是向探针请求全量服务器状态的治理动作（见 ADR-016）。
+// pluginActionQueryState 是向探针请求全量服务器状态的治理动作。
 // 探针侧 BukkitBridgeCommandHandler 收到该 action 时采集全状态并把 JSON 放入 command_result.output。
 const pluginActionQueryState = "query_state"
 
@@ -286,7 +286,7 @@ func pluginCommandFrame(cmd *workerpb.PluginCommand) map[string]interface{} {
 	frame["reason"] = cmd.Reason
 	frame["args"] = cmd.Args
 	frame["requestId"] = cmd.RequestId
-	// JBIS 业务命令（ADR-027）：domain 非空即业务帧，探针 BusinessHost 按 domain 路由到 Provider；
+	// JBIS 业务命令：domain 非空即业务帧，探针 BusinessHost 按 domain 路由到 Provider；
 	// payloadJson 承载结构化业务参数。仅非空时附带，治理命令帧保持原样不变。
 	if cmd.Domain != "" {
 		frame["domain"] = cmd.Domain

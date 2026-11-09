@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 就地导入后的自动收养（ADR-069 补充）。
+// 就地导入后的自动收养。
 //
 // ## 为什么要在导入里自动做，而不是让运维再去点“接管”
 // 就地导入的定义就是「这个目录里已经有一份服，我现在要纳管它」。既然如此，

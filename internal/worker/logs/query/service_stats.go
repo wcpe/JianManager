@@ -53,7 +53,7 @@ func (s *Service) Stats(ctx context.Context, req QueryRequest, groupBy []string)
 	}
 
 	limit := req.Budget.EffectiveLimit()
-	_ = limit // stats 合并点数上限由后续 FR 冻结；foundation 仍受 fanout/bytes 约束
+	_ = limit // stats 合并点数上限由后续规格冻结；foundation 仍受 fanout/bytes 约束
 	fanoutLimit := req.Budget.MaxFanout
 	var points []StatsPoint
 

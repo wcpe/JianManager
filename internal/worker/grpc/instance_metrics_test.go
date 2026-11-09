@@ -23,12 +23,12 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-const fr343HelperModeEnv = "JM_FR343_HELPER_MODE"
-const fr343HelperJavaEnv = "JM_FR343_HELPER_JAVA"
+const metricsHelperModeEnv = "JM_METRICS_HELPER_MODE"
+const metricsHelperJavaEnv = "JM_METRICS_HELPER_JAVA"
 
-// TestFR343MetricsHelperProcess 为指标契约测试提供可识别为 java 的长运行进程与 wrapper→shell→java 进程树。
-func TestFR343MetricsHelperProcess(t *testing.T) {
-	switch os.Getenv(fr343HelperModeEnv) {
+// TestMetricsHelperProcess 为指标契约测试提供可识别为 java 的长运行进程与 wrapper→shell→java 进程树。
+func TestMetricsHelperProcess(t *testing.T) {
+	switch os.Getenv(metricsHelperModeEnv) {
 	case "java":
 		deadline := time.Now().Add(20 * time.Second)
 		var counter uint64
@@ -40,8 +40,8 @@ func TestFR343MetricsHelperProcess(t *testing.T) {
 		}
 		os.Exit(0)
 	case "wrapper":
-		cmd := helperShellCommand(os.Getenv(fr343HelperJavaEnv))
-		cmd.Env = append(os.Environ(), fr343HelperModeEnv+"=java")
+		cmd := helperShellCommand(os.Getenv(metricsHelperJavaEnv))
+		cmd.Env = append(os.Environ(), metricsHelperModeEnv+"=java")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -52,7 +52,7 @@ func TestFR343MetricsHelperProcess(t *testing.T) {
 }
 
 func TestGetInstanceMetrics_RunningWithoutProbeUsesSystemMetrics(t *testing.T) {
-	srv, mgr, uuid := startFR343RunningInstance(t)
+	srv, mgr, uuid := startMetricsRunningInstance(t)
 
 	var resp *workerpb.GetInstanceMetricsResponse
 	require.Eventually(t, func() bool {
@@ -71,11 +71,11 @@ func TestGetInstanceMetrics_RunningWithoutProbeUsesSystemMetrics(t *testing.T) {
 	assert.Greater(t, resp.CpuPercent, float64(0), "无探针时应返回游戏进程 CPU")
 	assert.Greater(t, resp.UptimeSeconds, float64(0), "无探针时应返回游戏进程运行时长")
 
-	cleanupFR343Instance(mgr, uuid)
+	cleanupMetricsInstance(mgr, uuid)
 }
 
 func TestGetInstanceResourceSnapshot_AggregatesRootAndDescendants(t *testing.T) {
-	srv, _, uuid := startFR343RunningInstance(t)
+	srv, _, uuid := startMetricsRunningInstance(t)
 
 	var response *workerpb.GetInstanceResourceSnapshotResponse
 	require.Eventually(t, func() bool {
@@ -91,8 +91,8 @@ func TestGetInstanceResourceSnapshot_AggregatesRootAndDescendants(t *testing.T) 
 
 func TestCompleteProcessTree_IncludesDescendants(t *testing.T) {
 	javaPath := copyTestExecutableAsJava(t)
-	cmd := exec.Command(os.Args[0], "-test.run=^TestFR343MetricsHelperProcess$")
-	cmd.Env = append(os.Environ(), fr343HelperModeEnv+"=wrapper", fr343HelperJavaEnv+"="+javaPath)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMetricsHelperProcess$")
+	cmd.Env = append(os.Environ(), metricsHelperModeEnv+"=wrapper", metricsHelperJavaEnv+"="+javaPath)
 	require.NoError(t, cmd.Start())
 	var processes []*psproc.Process
 	defer func() {
@@ -117,9 +117,9 @@ func TestCompleteProcessTree_IncludesDescendants(t *testing.T) {
 
 func TestGetInstanceResourceSnapshot_StoppedDoesNotFabricateMetrics(t *testing.T) {
 	mgr := process.NewManager(t.TempDir())
-	const uuid = "fr399-stopped"
+	const uuid = "metrics-stopped"
 	require.NoError(t, mgr.Create(uuid, "停止实例", "unused", "", t.TempDir(), nil, false, process.ProcessTypeDirect, "", "", 0, 0))
-	srv := NewServer(mgr, "node-fr399", nil, nil, nil)
+	srv := NewServer(mgr, "node-metrics", nil, nil, nil)
 
 	response, err := srv.GetInstanceResourceSnapshot(context.Background(), &workerpb.GetInstanceResourceSnapshotRequest{InstanceUuid: uuid})
 	require.NoError(t, err)
@@ -149,7 +149,7 @@ serverprobe_uptime_seconds 777
 	_, err = fmt.Sscanf(portText, "%d", &port)
 	require.NoError(t, err)
 
-	srv, mgr, uuid := startFR343RunningInstance(t)
+	srv, mgr, uuid := startMetricsRunningInstance(t)
 	resp, err := srv.GetInstanceMetrics(context.Background(), &workerpb.GetInstanceMetricsRequest{InstanceUuid: uuid, ProbePort: int32(port)})
 	require.NoError(t, err)
 
@@ -163,7 +163,7 @@ serverprobe_uptime_seconds 777
 	assert.InDelta(t, 12.5, resp.CpuPercent, 0.01)
 	assert.InDelta(t, 777, resp.UptimeSeconds, 0.01)
 
-	cleanupFR343Instance(mgr, uuid)
+	cleanupMetricsInstance(mgr, uuid)
 }
 
 func TestGetInstanceMetrics_StoppedDoesNotFabricateMetrics(t *testing.T) {
@@ -180,9 +180,9 @@ func TestGetInstanceMetrics_StoppedDoesNotFabricateMetrics(t *testing.T) {
 	require.NoError(t, err)
 
 	mgr := process.NewManager(t.TempDir())
-	const uuid = "fr343-stopped"
+	const uuid = "metrics-stopped"
 	require.NoError(t, mgr.Create(uuid, "停止实例", "unused", "", t.TempDir(), nil, false, process.ProcessTypeDirect, "", "", port, 0))
-	srv := NewServer(mgr, "node-fr343", nil, nil, nil)
+	srv := NewServer(mgr, "node-metrics", nil, nil, nil)
 
 	resp, err := srv.GetInstanceMetrics(context.Background(), &workerpb.GetInstanceMetricsRequest{InstanceUuid: uuid, ProbePort: int32(port)})
 	require.NoError(t, err)
@@ -197,8 +197,8 @@ func TestGetInstanceMetrics_StoppedDoesNotFabricateMetrics(t *testing.T) {
 
 func TestResolveGameProc_WrapperShellJava(t *testing.T) {
 	javaPath := copyTestExecutableAsJava(t)
-	cmd := exec.Command(os.Args[0], "-test.run=^TestFR343MetricsHelperProcess$")
-	cmd.Env = append(os.Environ(), fr343HelperModeEnv+"=wrapper", fr343HelperJavaEnv+"="+javaPath)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMetricsHelperProcess$")
+	cmd.Env = append(os.Environ(), metricsHelperModeEnv+"=wrapper", metricsHelperJavaEnv+"="+javaPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	require.NoError(t, cmd.Start())
@@ -221,12 +221,12 @@ func TestResolveGameProc_WrapperShellJava(t *testing.T) {
 	assert.NotEqual(t, int32(cmd.Process.Pid), javaProc.Pid, "应越过 wrapper 与 shell 选中 java 后代")
 }
 
-func startFR343RunningInstance(t *testing.T) (*Server, *process.Manager, string) {
+func startMetricsRunningInstance(t *testing.T) (*Server, *process.Manager, string) {
 	t.Helper()
 	javaPath := copyTestExecutableAsJava(t)
 	mgr := process.NewManager(t.TempDir())
 	mgr.SetMemGuard(process.MemGuardConfig{Disabled: true})
-	uuid := "fr343-running-" + strings.ReplaceAll(t.Name(), "/", "-")
+	uuid := "metrics-running-" + strings.ReplaceAll(t.Name(), "/", "-")
 	require.NoError(t, mgr.Create(
 		uuid,
 		"运行实例",
@@ -234,8 +234,8 @@ func startFR343RunningInstance(t *testing.T) (*Server, *process.Manager, string)
 		"",
 		t.TempDir(),
 		map[string]string{
-			fr343HelperModeEnv: "wrapper",
-			fr343HelperJavaEnv: javaPath,
+			metricsHelperModeEnv: "wrapper",
+			metricsHelperJavaEnv: javaPath,
 		},
 		false,
 		process.ProcessTypeDirect,
@@ -245,11 +245,11 @@ func startFR343RunningInstance(t *testing.T) (*Server, *process.Manager, string)
 		0,
 	))
 	require.NoError(t, mgr.Start(uuid))
-	t.Cleanup(func() { cleanupFR343Instance(mgr, uuid) })
-	return NewServer(mgr, "node-fr343", nil, nil, nil), mgr, uuid
+	t.Cleanup(func() { cleanupMetricsInstance(mgr, uuid) })
+	return NewServer(mgr, "node-metrics", nil, nil, nil), mgr, uuid
 }
 
-func cleanupFR343Instance(mgr *process.Manager, uuid string) {
+func cleanupMetricsInstance(mgr *process.Manager, uuid string) {
 	pid := mgr.GetInstancePID(uuid)
 	if pid > 0 {
 		if game := resolveGameProc(context.Background(), int32(pid)); game != nil {
@@ -281,9 +281,9 @@ func copyTestExecutableAsJava(t *testing.T) string {
 
 func helperInvocation(javaPath string) string {
 	if runtime.GOOS == "windows" {
-		return fmt.Sprintf(`%s -test.run=^TestFR343MetricsHelperProcess$`, javaPath)
+		return fmt.Sprintf(`%s -test.run=^TestMetricsHelperProcess$`, javaPath)
 	}
-	return fmt.Sprintf("'%s' -test.run=^TestFR343MetricsHelperProcess$", strings.ReplaceAll(javaPath, "'", `'\"'\"'`))
+	return fmt.Sprintf("'%s' -test.run=^TestMetricsHelperProcess$", strings.ReplaceAll(javaPath, "'", `'\"'\"'`))
 }
 
 func helperShellCommand(javaPath string) *exec.Cmd {

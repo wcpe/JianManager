@@ -31,7 +31,7 @@ type RegistrationSyncer interface {
 	SyncProxy(proxyID uint) error
 }
 
-// RegistrationService 管理 proxy↔backend 的 M:N 注册关系（ADR-007）。
+// RegistrationService 管理 proxy↔backend 的 M:N 注册关系。
 type RegistrationService struct {
 	db     *gorm.DB
 	syncer RegistrationSyncer

@@ -10,16 +10,16 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
-// fr471StateProvider 是只提供实例快照的最小桩。
-type fr471StateProvider struct{ states []process.InstanceSnapshot }
+// adoptStateProvider 是只提供实例快照的最小桩。
+type adoptStateProvider struct{ states []process.InstanceSnapshot }
 
-func (p fr471StateProvider) GetAllInstanceStates() []process.InstanceSnapshot { return p.states }
+func (p adoptStateProvider) GetAllInstanceStates() []process.InstanceSnapshot { return p.states }
 
 // TestBuildHeartbeatRequest_CarriesForeignRuntime：孤儿扫描观测到的运行态漂移
 // （实例目录下的外来活进程）必须经心跳上报的 foreign_pid/foreign_cmdline 传给 CP——
 // 否则 CP 的 runtime_drift_* 永远是 0，面板无从提示接管。
 func TestBuildHeartbeatRequest_CarriesForeignRuntime(t *testing.T) {
-	h := New("127.0.0.1:1", "node-fr471", "secret", time.Minute, fr471StateProvider{
+	h := New("127.0.0.1:1", "node-adopt", "secret", time.Minute, adoptStateProvider{
 		states: []process.InstanceSnapshot{
 			{UUID: "drift", State: "STOPPED", ForeignPID: 4321, ForeignCmdline: "java -jar server.jar"},
 			{UUID: "clean", State: "RUNNING", PID: 111},

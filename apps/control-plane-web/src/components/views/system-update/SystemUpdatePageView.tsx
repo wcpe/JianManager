@@ -857,7 +857,7 @@ export function SystemUpdateRolloutPanel({ rollout }: SystemUpdateRolloutPanelPr
 }
 
 /** 
- * 受控边界（ADR-103 a 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界：**不取数、不发请求、不弹 toast**。
  * - 三份查询的结果与错误态经 props 注入（容器调 `useSelfUpdateCheck` / `useRollout` / `useWorkerAssets`）；
  *   错误文案由容器从 axios 错误里取后端 message 后注入，故视图只认「有没有错误」。
  * - 八个写动作（检查更新、CP 升级/回滚、节点升级/回滚、全网升级、预缓存、复制回执）一律以回调上报，
@@ -920,7 +920,7 @@ export interface SystemUpdatePageViewProps {
 }
 
 /** 
- * 面板自更新页（见 ADR-020）。
+ * 面板自更新页。
  * 平台管理员可检查更新（CP 自身 + 各节点版本对比）、CP 自更新、单节点升级、全网逐节点编排。
  * 入口在侧栏「设置」组，仅平台管理员可见；容器侧角色兜底，后端 RBAC 同样强制。
  * 升级为危险操作（二进制热替换 + 平滑重启），统一走 DangerConfirm + scope=platform 二次确认。

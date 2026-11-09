@@ -30,17 +30,17 @@ import type { WrapWidthSpec } from '@/lib/console/console-wrap'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 
 /** 
- * 控制台输出区（spec §2.1；ADR-086）：**只读** DOM 虚拟列表。
+ * 控制台输出区（spec §2.1）：**只读** DOM 虚拟列表。
  *
  * 弃 xterm 的直接动因是 canvas 上没有行节点——按级别过滤、行级悬停复制、
  * 异常堆栈折叠、行级高亮（418）在 canvas 上一条都做不到。代价是滚动性能、
- * 宽字符、跨行选区要自己保证（ADR-086 代价 2/3）。
+ * 宽字符、跨行选区要自己保证。
  *
  * 只渲染可视窗口 + 上下各 12 行 overscan；行高固定以简化定位（`seq → 下标 → offsetTop`）。
  *
  *在此之上加两件事（spec §3）：
  * - **锚点选区**：跨行选区只记 `seq` 区间、文本从行缓冲取，规避「拖出视口即断」
- *   （屏幕外的行根本没有 DOM 节点，见 ADR-086 代价 2）；同一行内不接管，交给原生字符级选区
+ *   （屏幕外的行根本没有 DOM 节点）；同一行内不接管，交给原生字符级选区
  * - **堆栈块折叠**：异常头 + 其全部帧折叠成一行摘要，避免一个 NPE 把有用日志挤出整屏
  */
 
@@ -761,7 +761,7 @@ export function ConsoleOutputView({
       } else {
         selection.extendTo(seq)
       }
-      // 抑制原生跨行选区：它在虚拟列表下必然断裂（ADR-086 代价 2）。
+      // 抑制原生跨行选区：它在虚拟列表下必然断裂。
       preventDefault()
 
       const rect = el.getBoundingClientRect()

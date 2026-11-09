@@ -3,7 +3,7 @@ package top.wcpe.mc.jm.updater.wedge;
 import java.util.Locale;
 
 /**
- * 玩家面向提示文案 i18n（契约 FR-089「玩家面向提示文案 i18n」）。
+ * 玩家面向提示文案 i18n。
  *
  * <p>按 {@code user.language} 选中/英（其余回退英文）。楔子保持零依赖，故用内联表而非
  * ResourceBundle 文件（避免打包资源路径在 javaagent 下的不确定性）。

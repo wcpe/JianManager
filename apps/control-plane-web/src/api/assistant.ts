@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 
- * AI 助手配置 API（见 ADR-105）。
+ * AI 助手配置 API。
  *
  * 两条边界写在这里，不在视图里重复：
  * - 可用模型摘要（`/assistant/models`）对所有登录用户开放，只含协议与能力，

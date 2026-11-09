@@ -11,7 +11,7 @@ import { useBlockClientDistIP, useClientDistSecurityEvents, useSetClientDistChan
 import { useSecurityQuery } from './security-shared'
 
 /** 
- * 安全侧「异常请求分析」Tab（ADR-088）。
+ * 安全侧「异常请求分析」Tab。
  * 由旧 `ProtectionCenterPage.tsx` 内联实现原样迁出，行为不变。
  *
  * 展示层已回迁应用侧（`SecurityEventsView` / `SecurityEventRowView`），此处提供取数、

@@ -37,7 +37,7 @@ var (
 	ErrCoreVersionNotFound = errors.New("updater-core 版本不存在")
 )
 
-// EmbeddedCore 描述 CP 内嵌的默认 updater-core（见 ADR-045 改写）。
+// EmbeddedCore 描述 CP 内嵌的默认 updater-core。
 // 由装配处（main.go）从 embed.UpdaterCoreJar() 计算一次后注入：sha256/size + 单调整数版本。
 // 内嵌 core 随 CP 走、运营不管理；CP 自更新后内嵌 jar 即新版、本结构随之刷新。
 type EmbeddedCore struct {
@@ -51,7 +51,7 @@ type EmbeddedCore struct {
 	Codec string
 }
 
-// NewEmbeddedCoreFromJar 由内嵌 updater-core jar 字节 + 版本字符串构造 EmbeddedCore（见 ADR-045 改写）。
+// NewEmbeddedCoreFromJar 由内嵌 updater-core jar 字节 + 版本字符串构造 EmbeddedCore。
 //   - jar 为 nil/空（未经 make embed-client-updater 注入）：返回 nil（调用方据此省略 agent.core，优雅降级）；
 //   - versionStr 非整数：回退版本号 1（保证 agent.core.version 为合法单调整数，不因配置失误产出坏 manifest）。
 //
@@ -87,10 +87,10 @@ type ClientVersionService struct {
 	db      *gorm.DB
 	assets  *AssetService
 	channel *ClientChannelService
-	// embeddedCore CP 内嵌的默认 updater-core（见 ADR-045 改写）。非 nil 时 BuildManifest
+	// embeddedCore CP 内嵌的默认 updater-core。非 nil 时 BuildManifest
 	// 用它自动产出 agent.core（取代运营手填/pin）；nil（无内嵌 jar）时省略 agent.core（不破088）。
 	embeddedCore *EmbeddedCore
-	// storageChannels 制品存储渠道服务（见 ADR-073）：注入后 s3 制品的读取
+	// storageChannels 制品存储渠道服务：注入后 s3 制品的读取
 	// （预览/代理下载/补丁物化）与 302 预签名经渠道 BlobStore；不注入 = 纯 local（既有测试零改动）。
 	storageChannels *ArtifactStorageChannelService
 	// patchBudget 发布时构建增量 patch 的总时长预算；<=0 用 patchBuildDefaultBudget。测试可注入。
@@ -105,20 +105,20 @@ func NewClientVersionService(db *gorm.DB, assets *AssetService, channel *ClientC
 // SetPatchBudget 覆盖发布 patch 构建总预算（测试/调优用；<=0 回落默认）。
 func (s *ClientVersionService) SetPatchBudget(d time.Duration) { s.patchBudget = d }
 
-// SetEmbeddedCore 注入 CP 内嵌的默认 updater-core 信息（见 ADR-045 改写）。
+// SetEmbeddedCore 注入 CP 内嵌的默认 updater-core 信息。
 // 注入后 BuildManifest 的 agent.core 由内嵌 core 自动驱动（version + 三平台同制品）；不注入则省略 agent.core。
 // 经 setter 注入以保持构造签名稳定（既有装配/测试零改动）。
 func (s *ClientVersionService) SetEmbeddedCore(ec *EmbeddedCore) {
 	s.embeddedCore = ec
 }
 
-// SetStorageChannels 注入制品存储渠道服务（见 ADR-073）：s3 制品的读路径与预签名
+// SetStorageChannels 注入制品存储渠道服务：s3 制品的读路径与预签名
 // 经渠道 BlobStore 路由。由 main 装配；不调用则所有制品按 local 语义读取（历史行为）。
 func (s *ClientVersionService) SetStorageChannels(ch *ArtifactStorageChannelService) {
 	s.storageChannels = ch
 }
 
-// PresignArtifactURL 为 s3 制品现算预签名下载 URL（302 分发见 ADR-073 决策 1）。
+// PresignArtifactURL 为 s3 制品现算预签名下载 URL（302 分发）。
 // TTL 取制品所属渠道配置。渠道服务未注入/渠道缺失/凭证解密失败均报错（调用方回 503）。
 func (s *ClientVersionService) PresignArtifactURL(asset *model.Asset) (string, error) {
 	if s.storageChannels == nil {
@@ -671,20 +671,20 @@ func (s *ClientVersionService) BuildManifest(channelID string) (*SignedManifest,
 	if err != nil {
 		return nil, err
 	}
-	// agent.core 由 CP 内嵌默认 updater-core 自动驱动（见 ADR-045 改写）：覆盖快照中的手填透传值。
+	// agent.core 由 CP 内嵌默认 updater-core 自动驱动：覆盖快照中的手填透传值。
 	// 无内嵌 jar（embeddedCore 未注入）时省略 agent.core，沿用快照（兼容088）。
 	s.applyEmbeddedCore(manifest)
 	return manifest, nil
 }
 
-// embeddedCorePlatforms manifest agent.core.platforms 须填的平台键集合（contract §2、ADR-021）。
-// ADR-021「一份 jar 三平台通用」——内嵌一份 core jar，fan-out 填这三键（同制品）。
+// embeddedCorePlatforms manifest agent.core.platforms 须填的平台键集合（contract §2）。
+// 「一份 jar 三平台通用」——内嵌一份 core jar，fan-out 填这三键（同制品）。
 // 客户端 Platform.tag() 取 windows/macos/linux 之一；other 平台无键、不自更新（沿用）。
 var embeddedCorePlatforms = []string{"windows", "macos", "linux"}
 
-// applyEmbeddedCore 用 CP 内嵌的默认 updater-core 自动产出 manifest 的 agent.core（见 ADR-045 改写）。
+// applyEmbeddedCore 用 CP 内嵌的默认 updater-core 自动产出 manifest 的 agent.core。
 // embeddedCore 未注入（无内嵌 jar）时不动 agent.core——省略而非置空（保留快照、不破088）。
-// agent.wedge 不受影响（楔子冻结、信息性，随快照透传）。一份内嵌 jar fan-out 填三平台键（ADR-021）。
+// agent.wedge 不受影响（楔子冻结、信息性，随快照透传）。一份内嵌 jar fan-out 填三平台键。
 func (s *ClientVersionService) applyEmbeddedCore(manifest *SignedManifest) {
 	if s.embeddedCore == nil {
 		return
@@ -796,7 +796,7 @@ func (s *ClientVersionService) GetVersionDetail(channelID string, version int) (
 	}, nil
 }
 
-// Rollback 运营回滚：取历史版本 sourceVersion 的内容，**以更高版本号重发为新 latest**（ADR-022 §3、contract §3）。
+// Rollback 运营回滚：取历史版本 sourceVersion 的内容，**以更高版本号重发为新 latest**（contract §3）。
 // 不下发更低版本号——保持 version 单调，客户端按防降级正常前进、不被拒。复用 PublishVersion 完成校验/单调递增/切指针。
 // 频道不存在返回 ErrChannelNotFound；源版本不存在返回 ErrVersionNotFound。
 func (s *ClientVersionService) Rollback(channelID string, sourceVersion int, createdBy uint, note string) (*model.ClientVersion, error) {
@@ -937,7 +937,7 @@ type ArtifactTextPreview struct {
 // ReadArtifactText 读取 client-file 制品内容用于**管理面**文本预览。
 //
 // 为什么需要本方法：玩家消费端点 GET /client-artifacts/:sha256 走拉取密钥（X-Client-Key）鉴权，
-// 与运营浏览器 JWT 入口物理隔离（ADR-022/023）——管理台浏览器无拉取密钥、不能复用该端点取内容预览。
+// 与运营浏览器 JWT 入口物理隔离——管理台浏览器无拉取密钥、不能复用该端点取内容预览。
 // 故补一个 JWT 平台管理员可用的**只读**文本读取路径，仅服务发布页/版本详情的内容预览。
 //
 // 降级口径（适配器/前端只消费结果，关注点分离）：

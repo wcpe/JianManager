@@ -25,7 +25,7 @@ var (
 
 // StorageService 是「平台存储资源管理器」的只读浏览 + 受控清理服务。
 //
-// 它对 CP 侧数据根（ADR-010 的 FHS 布局）提供：
+// 它对 CP 侧数据根（FHS 布局）提供：
 //   - 各 FHS 子目录的占用统计（大小 / 文件数）+ 用途标注；
 //   - 数据根内任意目录的只读列举（路径越界守卫，绝不逃出根）；
 //
@@ -98,7 +98,7 @@ type layoutEntry struct {
 	label string
 }
 
-// fhsLayout 是概览展示的 FHS 子目录（与 ADR-010 / dataroot.layoutDirs 对齐）。
+// fhsLayout 是概览展示的 FHS 子目录（dataroot.layoutDirs 对齐）。
 // 顺序固定，便于 UI 与测试确定；cache 标注为可清理。
 var fhsLayout = []layoutEntry{
 	{"bin", "bin"},

@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import api from '@/api/client'
 
 /** 
- * 实例配置源明面化（ADR-092）。
+ * 实例配置源明面化。
  *
  * 每个受管配置项（启动参数 `startup.*` + `server.properties` 关键项 `props.*`）显式声明来源：
  * - `inline`：平台持有该值，可编辑、可版本化（写回真源）。
@@ -14,7 +14,7 @@ import api from '@/api/client'
  */
 
 /** 
- * 配置源契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
+ * 配置源契约已回迁应用侧，双侧共用；对外保留原导出名，调用点无需改动。
  */
 export type { ConfigSourceKind, ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-explorer/config-surface'
 import type { ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-explorer/config-surface'

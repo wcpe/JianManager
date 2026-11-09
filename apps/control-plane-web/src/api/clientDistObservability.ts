@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 
- * 客户端分发观测契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
+ * 客户端分发观测契约已回迁应用侧，双侧共用；对外保留原导出名，调用点无需改动。
  */
 export type { ObservabilitySeriesPoint } from '@/lib/client-dist/client-dist-observability-contracts'
 import type { ObservabilitySeriesPoint } from '@/lib/client-dist/client-dist-observability-contracts'
@@ -24,9 +24,9 @@ export interface ObservabilitySummary {
   failStaticRate: number
   rollbackRate: number
   /** 
-   * 活跃客户端（machineId 去重，不可信仅近似，ADR-023）。
+   * 活跃客户端（machineId 去重，不可信仅近似）。
    * activeMachinesExact=true：区间在明细保留窗(14d)内，精确区间级独立数；
-   * =false：区间超窗，各桶人次求和的近似上界（ADR-049 §4）。
+   * =false：区间超窗，各桶人次求和的近似上界。
    */
   activeMachines: number
   activeMachinesExact: boolean
@@ -63,7 +63,7 @@ export interface ObservabilityCompare {
   activeMachines: number
 }
 
-/** 客户端分发观测视图（见 ADR-049）。channelId 省略=跨频道总。 */
+/** 客户端分发观测视图。channelId 省略=跨频道总。 */
 export interface ClientDistObservability {
   channelId: string
   from: string

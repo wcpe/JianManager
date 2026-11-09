@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 端口分配范围。MC 默认 server-port=25565。RCON 已退役（见 ADR-016）：
+// 端口分配范围。MC 默认 server-port=25565。RCON 已退役：
 // 不再分配 rcon 端口；治理改走 ServerProbe 探针。共用同一个「已占用」集合，保证同节点上任一 TCP 端口号唯一。
 const (
 	serverPortBase = 25565

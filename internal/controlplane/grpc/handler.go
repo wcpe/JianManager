@@ -25,11 +25,11 @@ import (
 // 与 internal/worker/heartbeat 中的常量保持一致。
 const nodeSecretHeader = "node-secret"
 
-// enrollTokenHeader 注册请求中携带 enrollment token 的 gRPC metadata header 名（见 ADR-020）。
+// enrollTokenHeader 注册请求中携带 enrollment token 的 gRPC metadata header 名。
 // 与 internal/worker/register 中的常量保持一致。token 经 metadata 传递、不改 proto。
 const enrollTokenHeader = "enroll-token"
 
-// nodeUUIDHeader 注册请求中携带本地持久化 node_uuid 的 gRPC metadata header 名（见 ADR-039）。
+// nodeUUIDHeader 注册请求中携带本地持久化 node_uuid 的 gRPC metadata header 名。
 // 与 internal/worker/register 中的常量保持一致。升级后的 Worker 重注册时经 metadata 出示
 // node_uuid + node_secret 证明身份，CP 据此按 UUID（而非可重复的 name）匹配既有节点，
 // 杜绝「另一台机器用同名注册覆写旧节点身份」的 BUG-A。uuid 经 metadata 传递、不改 proto。
@@ -42,7 +42,7 @@ type MetricIngester interface {
 	IngestHeartbeat(req *workerpb.HeartbeatRequest) error
 }
 
-// TaskIngester 把心跳负载里的运行中任务快照汇聚落库 + 终态副作用（见 ADR-040）。
+// TaskIngester 把心跳负载里的运行中任务快照汇聚落库 + 终态副作用。
 // 同 MetricIngester 以接口声明、由 service.TaskService 实现，避免 grpc→service 反向依赖。
 type TaskIngester interface {
 	IngestSnapshots(nodeUUID string, snaps []*workerpb.TaskSnapshot) error
@@ -50,7 +50,7 @@ type TaskIngester interface {
 	PendingCancelTaskIDsByNodeUUID(nodeUUID string) []string
 }
 
-// EnrollmentValidator 校验并消费 enrollment token（见 ADR-020）。
+// EnrollmentValidator 校验并消费 enrollment token。
 // 在 grpc 包内以接口声明、由 service.EnrollTokenService 实现，避免 grpc→service 反向依赖。
 // ConsumeForNewNode 仅当 token 当前有效（未消费/未吊销/未过期）时原子消费、返回 nil；
 // 否则返回非 nil（注册据此拒绝新节点）。
@@ -64,7 +64,7 @@ type EnrollmentValidator interface {
 	ValidateOnly(plaintext string) bool
 }
 
-// NodeProxyResolver 计算某节点的期望出站代理 + generation，供心跳响应下发（见 ADR-043）。
+// NodeProxyResolver 计算某节点的期望出站代理 + generation，供心跳响应下发。
 // 同 MetricIngester 以接口声明、由 service.NodeProxyService 实现，避免 grpc→service 反向依赖。
 // 返回 url/noProxy 为期望代理（url 空=期望直连），generation 为其哈希（Worker 据此判定是否重建）。
 type NodeProxyResolver interface {
@@ -199,19 +199,19 @@ func (h *ControlPlaneHandler) SetMetricIngester(m MetricIngester) {
 	h.metrics = m
 }
 
-// SetTaskIngester 注入任务进度入库器（见 ADR-040）；不注入则心跳不处理任务快照。
+// SetTaskIngester 注入任务进度入库器；不注入则心跳不处理任务快照。
 func (h *ControlPlaneHandler) SetTaskIngester(t TaskIngester) {
 	h.tasks = t
 }
 
-// SetEnrollmentValidator 注入 enrollment token 校验器（见 ADR-020）。
+// SetEnrollmentValidator 注入 enrollment token 校验器。
 // 注入后：新节点（name 未命中）注册必须携带有效 enrollment token；
 // 不注入则退化为行为（任何 name 均可自助注册），保证开发环境与既有部署零配置可用。
 func (h *ControlPlaneHandler) SetEnrollmentValidator(v EnrollmentValidator) {
 	h.enroll = v
 }
 
-// SetNodeProxyResolver 注入节点期望代理解析器（见 ADR-043）。
+// SetNodeProxyResolver 注入节点期望代理解析器。
 // 注入后每次心跳响应携带该节点期望代理（url/no_proxy/generation），Worker 据 generation
 // 变化运行时重建出站 client；不注入则心跳响应不带代理（退化为 Worker 仅用本地 yaml/env，向后兼容）。
 func (h *ControlPlaneHandler) SetNodeProxyResolver(r NodeProxyResolver) {
@@ -251,7 +251,7 @@ func (h *ControlPlaneHandler) SetOrphanRuntimeIngester(o OrphanRuntimeIngester) 
 	h.orphans = o
 }
 
-// SetWSTokenSecret 注入 CP↔Worker WS 令牌密钥（见 ADR-061）。
+// SetWSTokenSecret 注入 CP↔Worker WS 令牌密钥。
 // 注入后注册响应（首注册/重注册）与每拍心跳响应均携带该密钥，Worker 持久化并热应用到
 // 终端/插件桥校验；不注入（零值）则响应不携带，Worker 回退本地 jwt_secret（向后兼容）。
 func (h *ControlPlaneHandler) SetWSTokenSecret(s string) {
@@ -338,7 +338,7 @@ func (h *ControlPlaneHandler) reregisterExisting(node *model.Node, req *workerpb
 	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret, WsTokenSecret: h.wsTokenSecret}, nil
 }
 
-// createNewNode 创建全新节点：凭有效 enrollment token 准入（见 ADR-020），
+// createNewNode 创建全新节点：凭有效 enrollment token 准入，
 // 换发全新 UUID/secret。未注入校验器（开发/既有部署零配置）则退化为自助注册。
 func (h *ControlPlaneHandler) createNewNode(ctx context.Context, req *workerpb.RegisterRequest) (*workerpb.RegisterResponse, error) {
 	newUUID := uuid.New().String()
@@ -397,12 +397,12 @@ func enrollTokenFromContext(ctx context.Context) string {
 	return metadataValue(ctx, enrollTokenHeader)
 }
 
-// nodeUUIDFromContext 从 gRPC metadata 取 Worker 出示的 node_uuid（ADR-039）；缺失返回空串。
+// nodeUUIDFromContext 从 gRPC metadata 取 Worker 出示的 node_uuid；缺失返回空串。
 func nodeUUIDFromContext(ctx context.Context) string {
 	return metadataValue(ctx, nodeUUIDHeader)
 }
 
-// nodeSecretFromContext 从 gRPC metadata 取 Worker 出示的 node_secret（ADR-039）；缺失返回空串。
+// nodeSecretFromContext 从 gRPC metadata 取 Worker 出示的 node_secret；缺失返回空串。
 func nodeSecretFromContext(ctx context.Context) string {
 	return metadataValue(ctx, nodeSecretHeader)
 }
@@ -543,7 +543,7 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			}
 		}
 
-		// 心跳负载里的运行中任务快照汇聚落库 + 终态副作用（落 NodeJDK / 发站内信见 ADR-040）。
+		// 心跳负载里的运行中任务快照汇聚落库 + 终态副作用（落 NodeJDK / 发站内信）。
 		// 失败不影响心跳本身，仅记录告警。
 		if h.tasks != nil && len(req.Tasks) > 0 {
 			if err := h.tasks.IngestSnapshots(req.NodeUuid, req.Tasks); err != nil {
@@ -551,10 +551,10 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			}
 		}
 
-		// 返回响应；携带该节点期望出站代理供 Worker 运行时应用（见 ADR-043）。
+		// 返回响应；携带该节点期望出站代理供 Worker 运行时应用。
 		// generation 变化时 Worker 才重建出站 client（避免每拍重建）；重连/重启天然由后续心跳重发。
 		resp := &workerpb.HeartbeatResponse{Timestamp: time.Now().Unix()}
-		// WS 令牌密钥每拍携带（见 ADR-061）：Worker 比对变化才热应用 + 持久化，
+		// WS 令牌密钥每拍携带：Worker 比对变化才热应用 + 持久化，
 		// 仅能到达本处的流已完成 node_secret 鉴权，密钥可以安全下发。
 		resp.WsTokenSecret = h.wsTokenSecret
 		if h.proxy != nil {

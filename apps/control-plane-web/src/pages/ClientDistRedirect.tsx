@@ -5,7 +5,7 @@ import type { OpsSource } from '@/lib/client-dist/client-dist-ops-tab'
 
 /** 
  * 旧分发路由（`/client-dist-security` · `/client-dist-monitor`）→ `/client-dist-ops`
- * 的参数翻译重定向（ADR-088）。
+ * 的参数翻译重定向。
  *
  * - 读原始 `tab` → {@link normalizeOpsTab} 归一化为新 7 Tab（+ 派生 `seg`/`type`）。
  * - 用 `buildClientDistHref` **原样透传**冻结 query（`channelId`/`ip`/`machineId`/

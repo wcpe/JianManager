@@ -14,26 +14,26 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 )
 
-// 本文件是 ADR-098 §5「实例本地 gz 长期吸存」在**真实生产数据**上的验收用例。
+// 本文件是「实例本地 gz 长期吸存」在**真实生产数据**上的验收用例。
 //
 // 它补充的是 log_instance_gz_adopt_test.go 覆盖不到的那一层：那边用 t.TempDir()
-// 造三五个假 .gz 验语义，这边用现场 `$JM_FR501_ADOPT_SERVERS` 下 19 个实例、上千个
-// 真实 .gz 验**规模与副作用**——尤其是 ADR §5 第 4 条（本地 gz 一律不动）在真文件上
+// 造三五个假 .gz 验语义，这边用现场 `$JM_ADOPT_SERVERS` 下 19 个实例、上千个
+// 真实 .gz 验**规模与副作用**——尤其是规格 §5 第 4 条（本地 gz 一律不动）在真文件上
 // 是否成立，以及第二轮是否真的全部幂等跳过。
 //
 // 门控（缺任一即 skip，不影响常规 CI）：
 //
-//	JM_FR501_ADOPT_SERVERS  实例根目录（如 /srv/game/instances）
-//	JM_FR501_ADOPT_ARCHIVE  归档目的地根目录（必须可写；用例只写这个目录）
+//	JM_ADOPT_SERVERS  实例根目录（如 /srv/game/instances）
+//	JM_ADOPT_ARCHIVE  归档目的地根目录（必须可写；用例只写这个目录）
 //
 // 为什么必须门控而不是默认跑：它会真的读 1157 个生产文件、真的往归档目录写 6.8MB 副本，
 // 属于「现场取证」而非「单元回归」。默认跳过，CI 不受影响。
 
-// fr501AdoptDirs 扫描实例根目录下的 logs/ 子目录，构造 uuid→work_dir 映射。
+// adoptLogDirs 扫描实例根目录下的 logs/ 子目录，构造 uuid→work_dir 映射。
 //
 // 与生产 newInstanceGzAdopter 的 instanceDirs 同形态：真实实现从 process.Manager 取
 // WorkDir，这里从磁盘布局取——两者产出的都是「uuid → 含 logs/ 的工作目录」。
-func fr501AdoptDirs(root string) (map[string]string, error) {
+func adoptLogDirs(root string) (map[string]string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
@@ -54,11 +54,11 @@ func fr501AdoptDirs(root string) (map[string]string, error) {
 	return out, nil
 }
 
-// fr501CountLocalGz 统计实例根下所有 logs/*.gz 的数量与总字节，并给出「清单指纹」。
+// countLocalGz 统计实例根下所有 logs/*.gz 的数量与总字节，并给出「清单指纹」。
 //
 // 指纹含 path + mtime + size：只比数量会漏掉「删一个、加一个」这种掉包，
-// 而 ADR §5 第 4 条要求的是**这些文件原样还在**。
-func fr501CountLocalGz(t *testing.T, root string) (count int, bytes int64, fingerprint string) {
+// 而规格 §5 第 4 条要求的是**这些文件原样还在**。
+func countLocalGz(t *testing.T, root string) (count int, bytes int64, fingerprint string) {
 	t.Helper()
 	var lines []string
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
@@ -77,7 +77,7 @@ func fr501CountLocalGz(t *testing.T, root string) (count int, bytes int64, finge
 		}
 		count++
 		bytes += info.Size()
-		lines = append(lines, p+"|"+info.ModTime().UTC().Format(time.RFC3339Nano)+"|"+fr501Itoa(info.Size()))
+		lines = append(lines, p+"|"+info.ModTime().UTC().Format(time.RFC3339Nano)+"|"+itoa64(info.Size()))
 		return nil
 	})
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func fr501CountLocalGz(t *testing.T, root string) (count int, bytes int64, finge
 	return count, bytes, strings.Join(lines, "\n")
 }
 
-func fr501Itoa(v int64) string {
+func itoa64(v int64) string {
 	if v == 0 {
 		return "0"
 	}
@@ -108,23 +108,23 @@ func fr501Itoa(v int64) string {
 //
 //	第一轮：全部首登记（registered == scanned、failed == 0、localDeleted == 0）
 //	第二轮：全部幂等跳过（registered == 0、alreadyRegistered == scanned）
-//	两轮之间与之后：本地 .gz 的数量、字节、清单指纹**完全不变**（ADR §5 第 4 条）
+//	两轮之间与之后：本地 .gz 的数量、字节、清单指纹**完全不变**（规格 §5 第 4 条）
 //	归档侧：每个文件都能在 archive 里查到（raw/instance-gz/<name> 形态）
 func TestE2E_InstanceGzAdoptOnRealProductionData(t *testing.T) {
-	serversRoot := os.Getenv("JM_FR501_ADOPT_SERVERS")
-	archiveRoot := os.Getenv("JM_FR501_ADOPT_ARCHIVE")
+	serversRoot := os.Getenv("JM_ADOPT_SERVERS")
+	archiveRoot := os.Getenv("JM_ADOPT_ARCHIVE")
 	if serversRoot == "" || archiveRoot == "" {
-		t.Skip("未设置 JM_FR501_ADOPT_SERVERS / JM_FR501_ADOPT_ARCHIVE，跳过真实生产数据用例")
+		t.Skip("未设置 JM_ADOPT_SERVERS / JM_ADOPT_ARCHIVE，跳过真实生产数据用例")
 	}
 	require.NoError(t, os.MkdirAll(archiveRoot, 0o755))
 
-	dirs, err := fr501AdoptDirs(serversRoot)
+	dirs, err := adoptLogDirs(serversRoot)
 	require.NoError(t, err)
 	require.NotEmpty(t, dirs, "实例根 %s 下没找到任何带 logs/ 的实例目录", serversRoot)
 	t.Logf("扫描到 %d 个实例目录（%s）", len(dirs), serversRoot)
 
-	// —— 前置：记录本地 .gz 基线（ADR §5 第 4 条的对照面）——
-	beforeCount, beforeBytes, beforeFp := fr501CountLocalGz(t, serversRoot)
+	// —— 前置：记录本地 .gz 基线（规格 §5 第 4 条的对照面）——
+	beforeCount, beforeBytes, beforeFp := countLocalGz(t, serversRoot)
 	t.Logf("吸存前：本地 .gz 数量=%d 字节=%d", beforeCount, beforeBytes)
 	require.Positive(t, beforeCount, "前置条件：真实数据里应有 .gz（否则本用例什么都没验证）")
 
@@ -147,10 +147,10 @@ func TestE2E_InstanceGzAdoptOnRealProductionData(t *testing.T) {
 	require.Equal(t, stats1.Scanned, stats1.Registered, "第一轮应全部首登记")
 	require.Equal(t, 0, stats1.AlreadyRegistered, "第一轮不该有幂等命中（归档目录是全新的）")
 	require.Equal(t, 0, stats1.Failed, "第一轮不该有失败")
-	require.Equal(t, 0, stats1.LocalDeleted, "ADR §5 第 4 条：平台不删实例本地 gz")
+	require.Equal(t, 0, stats1.LocalDeleted, "规格 §5 第 4 条：平台不删实例本地 gz")
 
 	// —— 现场证据①：本地 .gz 一个没动 ——
-	midCount, midBytes, midFp := fr501CountLocalGz(t, serversRoot)
+	midCount, midBytes, midFp := countLocalGz(t, serversRoot)
 	require.Equal(t, beforeCount, midCount, "吸存后本地 .gz 数量必须不变")
 	require.Equal(t, beforeBytes, midBytes, "吸存后本地 .gz 总字节必须不变")
 	require.Equal(t, beforeFp, midFp, "吸存后本地 .gz 清单指纹必须不变（路径/mtime/size 全部一致）")
@@ -202,7 +202,7 @@ func TestE2E_InstanceGzAdoptOnRealProductionData(t *testing.T) {
 	require.Equal(t, 0, stats2.LocalDeleted)
 
 	// —— 第二轮后：本地仍然一个没动 ——
-	afterCount, afterBytes, afterFp := fr501CountLocalGz(t, serversRoot)
+	afterCount, afterBytes, afterFp := countLocalGz(t, serversRoot)
 	require.Equal(t, beforeCount, afterCount)
 	require.Equal(t, beforeBytes, afterBytes)
 	require.Equal(t, beforeFp, afterFp, "两轮吸存后本地 .gz 清单必须与基线逐字节一致")

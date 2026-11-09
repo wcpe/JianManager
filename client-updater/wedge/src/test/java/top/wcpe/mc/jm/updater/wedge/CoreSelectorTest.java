@@ -16,10 +16,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * core 自更新选择状态机（FR-091，wedge 侧）。CoreSelector 仅判 jar 存在性 + 读写 state.properties，
+ * core 自更新选择状态机（wedge 侧）。CoreSelector 仅判 jar 存在性 + 读写 state.properties，
  * 故用占位文件模拟已暂存的 core jar，覆盖 promote/rollback/trial/selected/null/手动回退/看门狗。
  *
- * <p>FR-258 起：不再有 bundledJar，本地无 core 时 select 返回 null。
+ * <p>不再有 bundledJar，本地无 core 时 select 返回 null。
  */
 class CoreSelectorTest {
 
@@ -110,7 +110,7 @@ class CoreSelectorTest {
         Properties rb = readState(coreDir);
         assertNull(rb.getProperty("pendingSha"), "回退后弃 pending");
         assertEquals("6", rb.getProperty("failedVersion"),
-                "回退应记失败版本，供楔子跳过重暂存同一坏 core（防 boot-loop，FR-091）");
+                "回退应记失败版本，供楔子跳过重暂存同一坏 core（防 boot-loop）");
     }
 
     @Test
@@ -182,7 +182,7 @@ class CoreSelectorTest {
         assertTrue(flag.exists(), "存活到 boot-confirm 时限应建 pending.confirmed 标志");
     }
 
-    // ---- FR-258 新增：setPending / readSummary / retainLatestJars ----
+    // ---- 新增：setPending / readSummary / retainLatestJars ----
 
     @Test
     void setPendingWritesStateForTrial(@TempDir Path tmp) throws Exception {

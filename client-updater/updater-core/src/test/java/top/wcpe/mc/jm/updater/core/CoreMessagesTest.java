@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** core 进度文案 i18n（FR-099）：中/英选择 + 回退 + 数字/时长格式稳定。 */
+/** core 进度文案 i18n：中/英选择 + 回退 + 数字/时长格式稳定。 */
 class CoreMessagesTest {
 
     @Test

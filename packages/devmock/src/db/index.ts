@@ -1,7 +1,7 @@
 import { createCollection, type Collection, type Entity } from './collection'
 
 /** 
- * 惰性 collection 注册表（ADR-047 决策 5）。
+ * 惰性 collection 注册表。
  * 域簇在各自 handler 模块顶层 `const users = db<User>('users', seedUsers)` 声明并读写自己的集合，
  * 不改本中心文件、不改中心类型 —— 12 路并行加文件即生效、零冲突。
  */

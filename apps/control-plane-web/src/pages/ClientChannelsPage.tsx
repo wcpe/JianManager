@@ -31,7 +31,7 @@ const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?
 type WorkbenchTab = 'keys' | 'versions' | 'core' | 'stats' | 'guide'
 
 /** 
- * 客户端分发管理页（187，见 ADR-022）。
+ * 客户端分发管理页（187）。
  * 运营域入口（由「系统·平台与维护」迁入，路由 /client-channels 不变）。
  * 频道（每服一个）+ 拉取密钥（落库只存哈希、明文一次性返回）；首次使用以空状态引导卡 +
  * 工作台就绪度步骤器降低门槛。仅平台管理员可用（后端 RBAC 强制）。

@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ClientDistEvent 客户端分发拉取/下载明细事件（见 ADR-023）。
+// ClientDistEvent 客户端分发拉取/下载明细事件。
 // **短保留 + 滚动清理**（数据量治理）；供按 IP/机器码/频道/版本/时间检索与近窗去重分布。
 // 机器码/IP 客户端可伪造、不可信，仅追踪统计。
 type ClientDistEvent struct {

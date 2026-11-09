@@ -15,7 +15,7 @@ test('超级工作台: 实例库 + 另存为预设 + 可组合画布', async ({ 
   await expect(page.getByText('实例库').first()).toBeVisible() // 跨实例实例库拖拽源
   await expect(page.getByRole('button', { name: '另存为预设' })).toBeVisible() // 预设持久化
   await expect(page.getByText(/拖实例加默认卡组.*拖功能加单卡/)).toBeVisible() // 卡片=实例×功能 拼合
-  await page.screenshot({ path: '../.tmp/acceptance/FR-167/single-machine-super.png', fullPage: false })
+  await page.screenshot({ path: '../.tmp/acceptance/super-workbench/single-machine-super.png', fullPage: false })
 })
 
 test('导播台: 轮播 + 场景切换 + 添加场景', async ({ page }) => {
@@ -26,7 +26,7 @@ test('导播台: 轮播 + 场景切换 + 添加场景', async ({ page }) => {
   await expect(page.getByRole('button', { name: '下一个场景' })).toBeVisible() // 瞬切
   await expect(page.getByRole('button', { name: '添加场景' })).toBeVisible()
   await expect(page.getByText(/先到超级工作台拼好布局.*另存为预设/)).toBeVisible() // 预设→场景工作流
-  await page.screenshot({ path: '../.tmp/acceptance/FR-168/single-machine-director.png', fullPage: false })
+  await page.screenshot({ path: '../.tmp/acceptance/director-canvas/single-machine-director.png', fullPage: false })
 })
 
 test('可组合卡片工作区: 功能卡在服务器控制台渲染', async ({ page }) => {

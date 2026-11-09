@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// LaunchSpec 是 MC 实例的结构化启动规格（ADR-008）。
+// LaunchSpec 是 MC 实例的结构化启动规格。
 // 由「绑定 JDK + JVM 参数（内存/GC）+ 核心 jar + 额外 args」派生 java 启动命令，
 // 取代用户手填的自由文本 start_command（根治 BUG-005 的引号/路径歧义）。
 type LaunchSpec struct {
@@ -23,7 +23,7 @@ type LaunchSpec struct {
 	//
 	// 为什么需要它：一键搭建为「结构化启动命令与构建文件名解耦」把核心统一落盘为
 	// server.jar（见 provisionCoreJar），jar 文件名因此**不再携带核心类型信息**；
-	// 而日志采集规则（FR-502）必须按核心类型选择物理路径。这里把核心类型独立记下来，
+	// 而日志采集规则必须按核心类型选择物理路径。这里把核心类型独立记下来，
 	// 使规则推导不再依赖 jar 名这一会丢失信息的字面量。
 	//
 	// 它不参与落盘文件名与启动命令的派生（deriveStartCommand 只读 CoreJar/JavaArgFiles），

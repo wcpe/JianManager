@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ConfigSourceKind 受管配置项来源（ADR-092）。
+// ConfigSourceKind 受管配置项来源。
 // 二态互斥、显式：一项同一时刻只能是内联值或文件引用，杜绝「平台改了却被文件覆盖」的静默冲突。
 type ConfigSourceKind string
 

@@ -85,7 +85,7 @@ func (i *Instance) KindOrInfer() InstanceKind {
 //     是 server_registrations 的合法两端。
 //   - 非群组服角色（universal/beacon）：受 JM 生命周期管理，但不参与群组拓扑。
 //
-// 详见 ADR-007。
+//。
 type InstanceRole string
 
 const (
@@ -199,18 +199,18 @@ type Instance struct {
 	// 仅经搭建入口创建的实例有值；手动/导入实例为空、不适用重建。
 	ProvisionSpec string `gorm:"type:text" json:"provisionSpec,omitempty"`
 	WorkDir       string `gorm:"type:varchar(512)" json:"workDir"`
-	// WorkDirInPlace 就地导入标记（见 ADR-069）：工作目录为托管区外的原始绝对路径
-	// （ADR-007 系统分配原则的唯一合法例外）。删除实例时 CP 据此指示 Worker 跳过目录删除，
+	// WorkDirInPlace 就地导入标记：工作目录为托管区外的原始绝对路径
+	// （系统分配原则的唯一合法例外）。删除实例时 CP 据此指示 Worker 跳过目录删除，
 	// 原目录永不清理（双保险之一，另一道是 Worker 托管区守卫）。
 	WorkDirInPlace bool   `gorm:"default:false" json:"workDirInPlace"`
 	EnvVars        string `gorm:"type:text" json:"envVars"` // JSON
-	// Image 是 docker 模式的容器镜像引用（如 itzg/minecraft-server:latest），仅 process_type=docker 使用（ADR-019）。
+	// Image 是 docker 模式的容器镜像引用（如 itzg/minecraft-server:latest），仅 process_type=docker 使用。
 	Image string `gorm:"type:varchar(256)" json:"image"`
 	// ContainerID 记录 docker 模式实例最近一次运行的容器 ID（排障/展示用，运行态由 Worker 持有）。
 	ContainerID string `gorm:"type:varchar(64)" json:"containerId"`
-	// CPULimit 是 docker 模式的 CPU 核数上限（如 1.5），启动时注入容器 cgroup；0=不限制（ADR-019）。
+	// CPULimit 是 docker 模式的 CPU 核数上限（如 1.5），启动时注入容器 cgroup；0=不限制。
 	CPULimit float64 `gorm:"default:0" json:"cpuLimit"`
-	// MemLimitMB 是 docker 模式的内存上限（MiB），启动时注入容器 cgroup；0=不限制（ADR-019）。
+	// MemLimitMB 是 docker 模式的内存上限（MiB），启动时注入容器 cgroup；0=不限制。
 	MemLimitMB int64 `gorm:"default:0" json:"memLimitMb"`
 	// DiskLimitMB 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入（依赖存储驱动）。
 	DiskLimitMB int64 `gorm:"default:0" json:"diskLimitMb"`
@@ -225,7 +225,7 @@ type Instance struct {
 	ThrottleMemLimitMB int64   `gorm:"default:0" json:"throttleMemLimitMb"`
 	AutoStart          bool    `gorm:"default:false" json:"autoStart"`
 	AutoRestart        bool    `gorm:"default:true" json:"autoRestart"`
-	// Deprecated: RCON 已退役（见 ADR-016）——治理改走 ServerProbe 探针。
+	// Deprecated: RCON 已退役——治理改走 ServerProbe 探针。
 	// 列保留仅为迁移安全（不破坏既有库与历史实例数据），新实例不再写入、读取方不再使用。
 	RCONPort     int    `gorm:"default:0" json:"rconPort"`
 	RCONPassword string `gorm:"type:varchar(128)" json:"-"`
@@ -284,7 +284,7 @@ type Instance struct {
 
 	Node Node `gorm:"foreignKey:NodeID" json:"node,omitempty"`
 
-	// Capabilities 实例能力画像（ADR-091）：按当前 (type, role) 现算，不落库、不缓存。
+	// Capabilities 实例能力画像：按当前 (type, role) 现算，不落库、不缓存。
 	// gorm:"-" 使其不参与持久化；仅详情/单查路径填充（列表不计），故对既有响应零影响。
 	Capabilities *InstanceCapabilityProfile `gorm:"-" json:"capabilities,omitempty"`
 }

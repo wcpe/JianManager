@@ -287,7 +287,7 @@ func TestOrphanScan_DockerLeftoverAuto(t *testing.T) {
 // TestOrphanScan_DockerLeftoverOwnershipN5：docker 归属复核不再是恒真的伪复核。
 //   - 带受管标签且标签实例与容器名一致 → 强归属（managed_label），可删；
 //   - 带受管标签但标签实例与容器名矛盾 → 归属不通过（label_mismatch），只告警不删；
-//   - 无标签（本 FR 之前的存量容器）→ 退化为容器名格式校验（name_format_only），仍可删但证据如实入审计。
+//   - 无标签（之前的存量容器）→ 退化为容器名格式校验（name_format_only），仍可删但证据如实入审计。
 func TestOrphanScan_DockerLeftoverOwnership(t *testing.T) {
 	s, _, audits := newTestScanner(t, t.TempDir(), OrphanPolicyAuto)
 	s.listContainers = func(context.Context) ([]ManagedContainer, error) {

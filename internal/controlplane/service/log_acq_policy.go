@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// nodeScopedSettingSuffix 是 Worker 级覆盖键的作用域后缀分隔符（FR-503）。
+// nodeScopedSettingSuffix 是 Worker 级覆盖键的作用域后缀分隔符。
 //
 // 键形态：`<平台键>@node:<nodeUUID>`。例如平台级 `log.acq.realtime_tail` 的
 // Worker 级覆盖写作 `log.acq.realtime_tail@node:20fd52ed-…`。
@@ -21,7 +21,7 @@ import (
 // 解析，无需建表与迁移。代价是键名略绕、且节点删除后需清理（见 spec §6）。
 const nodeScopedSettingSuffix = "@node:"
 
-// NodeScopedSettingKey 构造某节点的 Worker 级覆盖键（FR-503）。
+// NodeScopedSettingKey 构造某节点的 Worker 级覆盖键。
 //
 // nodeUUID 为空时返回平台级键本身（调用方无需分支）。
 func NodeScopedSettingKey(platformKey, nodeUUID string) string {
@@ -31,7 +31,7 @@ func NodeScopedSettingKey(platformKey, nodeUUID string) string {
 	return platformKey + nodeScopedSettingSuffix + nodeUUID
 }
 
-// LogAcqPolicy 返回指定节点当前生效的日志采集配置（FR-503），供心跳下发。
+// LogAcqPolicy 返回指定节点当前生效的日志采集配置，供心跳下发。
 //
 // 合并语义（高 → 低）：**Worker 级覆盖 > 平台级 > 内置默认**。
 // nodeUUID 为空表示只取平台级（供设置页展示平台默认）。
@@ -58,7 +58,7 @@ func (s *SettingsService) LogAcqPolicy(nodeUUID string) cpgrpc.LogAcqPolicySnaps
 	}
 }
 
-// logAcqMergedValue 是单个日志采集键在某作用域下的三层取值（FR-503）。
+// logAcqMergedValue 是单个日志采集键在某作用域下的三层取值。
 type logAcqMergedValue struct {
 	// Default 是 worker.yml 基线值。
 	Default string
@@ -153,10 +153,10 @@ func parsePathOverrides(raw string) map[string]string {
 	return m
 }
 
-// 编译期断言：SettingsService 满足 grpc 侧的日志采集策略解析接口（FR-503）。
+// 编译期断言：SettingsService 满足 grpc 侧的日志采集策略解析接口。
 var _ cpgrpc.LogAcqPolicyResolver = (*SettingsService)(nil)
 
-// —— 设置视图与覆盖写入（API 层用，FR-503 §3.3C）——
+// —— 设置视图与覆盖写入（API 层用）——
 
 // LogAcqSettingItem 是一项日志采集配置的三层取值，供前端对照展示与逐项恢复默认。
 type LogAcqSettingItem struct {
@@ -242,7 +242,7 @@ func (s *SettingsService) logAcqSettingsView(nodeUUID string) (LogAcqSettingsVie
 	return view, nil
 }
 
-// deleteNodeScopedSettings 删除某节点的全部 Worker 级覆盖键（FR-503）。
+// deleteNodeScopedSettings 删除某节点的全部 Worker 级覆盖键。
 //
 // 键形态 `<平台键>@node:<uuid>`（见 NodeScopedSettingKey），故按后缀匹配删除——
 // 后缀含完整 UUID，不会误伤其它节点的键（LIKE 通配符只出现在前缀侧的 `%`，

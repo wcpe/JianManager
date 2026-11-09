@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// TerminalProxyCodeWorkerTokenRejected 是「Worker 拒绝终端令牌」的诊断码（见 ADR-061）。
+// TerminalProxyCodeWorkerTokenRejected 是「Worker 拒绝终端令牌」的诊断码。
 // 前端据此展示「该节点 WS 令牌密钥与平台不一致」的定向诊断，而非裸「连接已断开」。
 const TerminalProxyCodeWorkerTokenRejected = "WORKER_TOKEN_REJECTED"
 
@@ -64,7 +64,7 @@ type TerminalProxy struct {
 	pingPeriod time.Duration
 	pongWait   time.Duration
 
-	// workerClients 按节点取 WorkerServiceClient（M2，见 ADR-066）。
+	// workerClients 按节点取 WorkerServiceClient（M2）。
 	// 由 ClientPool 适配注入；终端只经 gRPC 反向隧道桥接，无可用隧道即提示重试。
 	workerClients func(nodeUUID string) (workerpb.WorkerServiceClient, bool)
 }
@@ -181,7 +181,7 @@ func (p *TerminalProxy) bridgeViaGRPC(browserConn *websocket.Conn, worker worker
 		case codes.Unimplemented:
 			return false
 		case codes.PermissionDenied:
-			// 令牌被 Worker 拒绝：定向诊断在 gRPC 桥路同语义成立（见 ADR-061）。
+			// 令牌被 Worker 拒绝：定向诊断在 gRPC 桥路同语义成立。
 			slog.Error("Worker 拒绝终端令牌（疑似节点 WS 令牌密钥与平台不一致）",
 				"instanceUUID", instanceUUID, "detail", st.Message())
 			writeTerminalProxyState(browserConn, TerminalProxyCodeWorkerTokenRejected,

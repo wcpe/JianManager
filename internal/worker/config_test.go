@@ -94,7 +94,7 @@ func TestHealthScanConfig(t *testing.T) {
 	assert.False(t, HealthScanConfig{Disabled: true}.HealthPolicy().Enabled, "Disabled 应映射为 Enabled=false")
 }
 
-// TestLoad_Defaults 零配置（无文件、无 env）时加载合理默认值（见 ADR-020）。
+// TestLoad_Defaults 零配置（无文件、无 env）时加载合理默认值。
 func TestLoad_Defaults(t *testing.T) {
 	// 指向不存在的文件，强制走默认值（ReadInConfig 容错）。
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")

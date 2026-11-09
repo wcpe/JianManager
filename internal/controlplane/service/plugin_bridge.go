@@ -9,7 +9,7 @@ import (
 )
 
 // PluginBridgeScope 是插件桥 token 的 scope claim 值，Worker 握手时据此与终端 token 区分。
-// 与 internal/worker/ws.PluginBridgeScope 保持一致（见 ADR-016）。
+// 与 internal/worker/ws.PluginBridgeScope 保持一致。
 const PluginBridgeScope = "plugin-bridge"
 
 // pluginBridgeTokenTTL 插件桥 token 有效期。
@@ -22,7 +22,7 @@ const PluginBridgeScope = "plugin-bridge"
 const pluginBridgeTokenTTL = 87600 * time.Hour // 约 10 年，等效实例生命周期
 
 // PluginBridgeService 负责签发实例级插件桥连接 token，并生成探针 config.yml 的 bridge 段。
-// 类比 TerminalService 的一次性 token，但 scope=plugin-bridge、不区分 read/write（见 ADR-016）。
+// 类比 TerminalService 的一次性 token，但 scope=plugin-bridge、不区分 read/write。
 type PluginBridgeService struct {
 	jwtSecret string
 }
@@ -51,11 +51,11 @@ func (s *PluginBridgeService) IssueToken(instanceUUID string) (string, error) {
 }
 
 // BuildBridgeConfigBlock 生成探针 config.yml 的 bridge 段：worker WS 地址 + 实例级 token。
-// 探针读取此段后主动反向连入 ws://<host>:<wsPort>/ws/plugin-bridge?token=&instance=（见 ADR-016）。
+// 探针读取此段后主动反向连入 ws://<host>:<wsPort>/ws/plugin-bridge?token=&instance=。
 // token 为空（签发失败时调用方传空）则段内 enabled=false，探针不连，监控 /metrics 仍照常工作。
 func (s *PluginBridgeService) BuildBridgeConfigBlock(wsURL, instanceUUID, token string) string {
 	var b strings.Builder
-	b.WriteString("# 插件桥（ServerProbe 反向 WS ↔ Worker见 ADR-016）：探针启用后主动连入本机 Worker。\n")
+	b.WriteString("# 插件桥（ServerProbe 反向 WS ↔ Worker）：探针启用后主动连入本机 Worker。\n")
 	b.WriteString("# 由 JianManager 建服时自动写入；token 为实例级 JWT（scope=plugin-bridge），仅握手校验一次。\n")
 	b.WriteString("bridge:\n")
 	enabled := token != "" && wsURL != ""

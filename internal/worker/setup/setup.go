@@ -1,4 +1,4 @@
-// Package setup 实现 Worker「免配置自启 setup」（见 ADR-051）。
+// Package setup 实现 Worker「免配置自启 setup」。
 //
 // Worker 入口在加载配置前自检「是否已配置」（无 worker.yml/.yaml 且无 etc/node-identity.json）；
 // 未配置即调用本包：采集上线入参（有 TTY 交互逐项问、无 TTY 从命令行参数 + 环境变量读）→
@@ -71,7 +71,7 @@ type Options struct {
 	Registrar func(ctx context.Context, cfg register.Config) (*register.Result, error)
 }
 
-// Run 执行完整 setup 流程并返回转 run 所需的配置与身份（见 ADR-051）。
+// Run 执行完整 setup 流程并返回转 run 所需的配置与身份。
 //
 // configWorkDir 是写 worker.yml 的目标目录（通常为进程工作目录 "."）。
 func Run(ctx context.Context, configWorkDir string, opts Options) (*Result, error) {
@@ -126,7 +126,7 @@ func Run(ctx context.Context, configWorkDir string, opts Options) (*Result, erro
 		NodeUUID:   regResult.NodeUUID,
 		NodeSecret: regResult.NodeSecret,
 		NodeName:   in.NodeName,
-		// CP 下发的 WS 令牌密钥一并持久化（见 ADR-061）；旧 CP 为空则不写。
+		// CP 下发的 WS 令牌密钥一并持久化；旧 CP 为空则不写。
 		WSTokenSecret: regResult.WSTokenSecret,
 	}
 	if err := register.SaveIdentity(root.EtcDir(), identity); err != nil {

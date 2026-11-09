@@ -1,6 +1,6 @@
 // Package config 提供 Worker Node 的配置加载（worker.yml + 环境变量覆盖）。
 //
-// 配置真正落盘到 worker.yml 而非堆砌 JIANMANAGER_* 环境变量（见 ADR-020）；
+// 配置真正落盘到 worker.yml 而非堆砌 JIANMANAGER_* 环境变量；
 // 所有项有合理默认，零配置即可启动开发环境。环境变量以 JIANMANAGER_ 前缀按路径覆盖
 // （如 Control Plane gRPC 地址 → JIANMANAGER_CONTROL_PLANE_GRPC），与 Control Plane 配置惯例一致。
 package config
@@ -45,7 +45,7 @@ type Config struct {
 	NodeSecret   string   `mapstructure:"node_secret"`
 	WS           WSConfig `mapstructure:"ws"`
 	// DataDir 是项目自包含数据根（默认 ./data，可经 JIANMANAGER_DATA_DIR 覆盖）。
-	// JDK、服务器工作目录等运行态数据统一收口到此根。参见 ADR-010。
+	// JDK、服务器工作目录等运行态数据统一收口到此根。
 	DataDir string `mapstructure:"data_dir"`
 	// ServersDir 兼容旧配置：显式指定时覆盖数据根派生的 var/servers。
 	// 留空则由数据根派生为 <DataDir>/var/servers。
@@ -54,7 +54,7 @@ type Config struct {
 	Host string `mapstructure:"host"`
 	// JWTSecret 历史兼容字段；WS 令牌密钥只接受 CP 注册/心跳下发值。
 	JWTSecret string `mapstructure:"jwt_secret"`
-	// EnrollToken 一次性 enrollment token 明文（见 ADR-020）。
+	// EnrollToken 一次性 enrollment token 明文。
 	// 仅经环境变量/命令行传入、绝不写入 worker.yml（一次性凭据不留盘）；
 	// 首次注册（无本地身份文件）时携带，注册成功后即作废。
 	EnrollToken string `mapstructure:"enroll_token"`
@@ -86,11 +86,11 @@ type Config struct {
 	// LogRetention 保留策略（按级别/来源设保留期）与执行器。
 	LogRetention LogRetentionConfig `mapstructure:"log_retention"`
 	Decompiler   DecompilerConfig   `mapstructure:"decompiler"`
-	// Search 全文搜索索引配置（见 ADR-017）。
+	// Search 全文搜索索引配置。
 	Search SearchConfig `mapstructure:"search"`
 	// ArtifactCache 节点本地制品缓存配置：按 sha256 缓存下载过的核心 jar，建实例命中即秒拷。
 	ArtifactCache ArtifactCacheConfig `mapstructure:"artifact_cache"`
-	// Proxy 本节点出站代理配置（见 ADR-037）：所有出站下载（自更新/JDK/CFR）
+	// Proxy 本节点出站代理配置：所有出站下载（自更新/JDK/CFR）
 	// 经此代理。url 留空=直连（沿用环境变量代理）。各 Worker 在不同机器各配各的。
 	Proxy     httpclient.Config `mapstructure:"proxy"`
 	Heartbeat time.Duration     `mapstructure:"-"`
@@ -454,7 +454,7 @@ type MemoryGuardConfig struct {
 	Disabled bool `mapstructure:"disabled"`
 }
 
-// SearchConfig 全文搜索索引配置（见 ADR-017）。
+// SearchConfig 全文搜索索引配置。
 type SearchConfig struct {
 	// Ignore 追加到内置默认忽略集的 glob 规则（相对实例工作目录，/ 分隔）。
 	// 形如 logs/（目录前缀）、*.bak（basename glob）、vendor（路径段）。默认集已覆盖常见
@@ -469,7 +469,7 @@ type ArtifactCacheConfig struct {
 	MaxBytes int64 `mapstructure:"max_bytes"`
 }
 
-// DecompilerConfig 反编译能力配置（见 ADR-018）。
+// DecompilerConfig 反编译能力配置。
 type DecompilerConfig struct {
 	// CFRPath 显式 CFR 反编译器 jar 路径（最高优先级，可空）。
 	// 运维离线放置时直接指定；空则回退内嵌/数据根缓存/按需下载。
@@ -1753,14 +1753,14 @@ type LogArchiveConfig struct {
 	Prefix    string `mapstructure:"prefix"`
 	AccessKey string `mapstructure:"access_key"`
 	SecretKey string `mapstructure:"secret_key"`
-	// InstanceGzAdopt 是 ADR-098 §5「实例本地 logs/*.log.gz 归档吸存」的调度面。
+	// InstanceGzAdopt 是「实例本地 logs/*.log.gz 归档吸存」的调度面。
 	InstanceGzAdopt LogArchiveInstanceGzAdoptConfig `mapstructure:"instance_gz_adopt"`
 }
 
 // LogArchiveInstanceGzAdoptConfig 是实例 gz 吸存的开关与时刻。
 //
 // 默认**开**——这与删除类能力（默认全关）的口径刻意相反，理由不是标尺不一致：
-// 吸存只**增加**一份副本，不删任何东西（连实例本地的 .gz 也不动，见 ADR-098 §5 第 4 条）。
+// 吸存只**增加**一份副本，不删任何东西（连实例本地的 .gz 也不动）。
 // 它唯一的代价是归档盘占用，而那正是「吸存」这个动作的目的。
 // 反之若默认关，则默认部署下这条能力永远为零调用——正是此前它被登记为
 // 「骨架具备、生产零调用」的原因。
@@ -1774,7 +1774,7 @@ type LogArchiveInstanceGzAdoptConfig struct {
 	SweepAtHour int `mapstructure:"sweep_at_hour"`
 }
 
-// Load 从配置文件和环境变量加载 Worker 配置（见 ADR-020）。
+// Load 从配置文件和环境变量加载 Worker 配置。
 //
 // path 为空时在工作目录与 configs/ 下查找 worker.yml（均可选），找不到回退 worker.yaml（兼容）。
 // 所有项有合理默认，零配置即可启动；JIANMANAGER_ 前缀环境变量按路径覆盖配置文件值。
@@ -1885,7 +1885,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_archive.prefix", "logs")
 	v.SetDefault("log_archive.access_key", "")
 	v.SetDefault("log_archive.secret_key", "")
-	// 实例 gz 吸存（ADR-098 §5）：默认**开**——它只增加副本、不删任何东西。
+	// 实例 gz 吸存：默认**开**——它只增加副本、不删任何东西。
 	// 默认 4 点，与保留驱动器/归档对象回收（都是 3 点）错开，避开同一个 IO 高峰。
 	v.SetDefault("log_archive.instance_gz_adopt.enabled", true)
 	v.SetDefault("log_archive.instance_gz_adopt.sweep_at_hour", 4)
@@ -1924,7 +1924,7 @@ func Load(path string) (*Config, error) {
 	// 反编译：默认无显式 CFR 路径、允许按需下载（首次反编译时拉 CFR 落数据根缓存）。
 	v.SetDefault("decompiler.cfr_path", "")
 	v.SetDefault("decompiler.allow_download", true)
-	// 出站代理（见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
+	// 出站代理：默认空（直连/沿用环境变量代理），不破坏现状。
 	v.SetDefault("proxy.url", "")
 	v.SetDefault("proxy.no_proxy", "")
 	// 运行期周期孤儿扫描：默认启用、周期 60s、只告警（可配 auto 自动清理）。
@@ -2128,7 +2128,7 @@ func Load(path string) (*Config, error) {
 // FindConfigFile 在给定目录中按 .yml 优先、.yaml 兼容回退的顺序查找 <name>.<ext> 配置文件。
 // 返回首个存在的文件路径；都不存在时返回空串（交回 viper 的名字搜索 + 默认值，零配置仍可启动）。
 //
-// 导出以供 worker 入口的「未配置自检」复用（见 ADR-051）：自检需判断工作目录是否已有
+// 导出以供 worker 入口的「未配置自检」复用：自检需判断工作目录是否已有
 // worker.yml/.yaml 配置文件。
 func FindConfigFile(name string, dirs ...string) string {
 	for _, dir := range dirs {
@@ -2143,7 +2143,7 @@ func FindConfigFile(name string, dirs ...string) string {
 }
 
 // WorkerConfigExists 报告工作目录、可执行文件所在目录或 configs/ 下是否存在 worker 配置文件
-// （.yml 优先、.yaml 回退）。供 worker 入口未配置自检使用（见 ADR-051）。
+// （.yml 优先、.yaml 回退）。供 worker 入口未配置自检使用。
 // 纳入「exe 旁」搜索（FIX-3）：Windows 服务/从别处启动时 cwd 可能非安装目录，配置随二进制仍可被发现。
 func WorkerConfigExists() bool {
 	return FindConfigFile("worker", configSearchDirs()...) != ""

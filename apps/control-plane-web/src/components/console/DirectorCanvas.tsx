@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只注入卡壳（受控化）。
+// 视图已回迁应用侧（迁包已撤销）；本层只注入卡壳（受控化）。
 import { DirectorCanvas as DirectorCanvasView } from '@/components/views/console/DirectorCanvas'
 import type { PlacedCard } from '@/lib/console/workspace-preset'
 import WorkspaceCard from './WorkspaceCard'
@@ -11,7 +11,7 @@ interface DirectorCanvasProps {
 }
 
 /** 
- * 导播台单场景画布的接线层（ADR-035）。
+ * 导播台单场景画布的接线层。
  *
  * 画布布局与保活/节流策略已入包；卡壳 `WorkspaceCard`（含实例取数与 WS 保活）留应用侧，
  * 经 renderCard 注入。导播台不在卡级全屏/关卡（场景级切换），故传 no-op 满足卡壳接口。

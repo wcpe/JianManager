@@ -15,7 +15,7 @@ import (
 
 // PluginBridgeScope 是插件桥 token 要求的 scope claim 值。
 // CP 签发插件桥 token 时写入 scope=plugin-bridge，Worker 握手时据此与终端 token 区分，
-// 拒绝拿终端 token（无此 scope）冒连插件桥（见 ADR-016）。
+// 拒绝拿终端 token（无此 scope）冒连插件桥。
 const PluginBridgeScope = "plugin-bridge"
 
 // 插件桥心跳与超时参数。探针周期性发 ping，Worker 回 pong；
@@ -73,8 +73,8 @@ type PluginEvent struct {
 	FromServer string // cross_server：来源子服
 	ToServer   string // cross_server：目标子服
 	Raw        string // 透传原始消息载荷（下游按需解析）
-	// 以下为业务事件信封字段（ADR-027）：Worker 只透传不消费，监控/治理事件为空。
-	// ADR-106 起 JM 不做业务，CP 侧不再落库/聚合，这两字段仅为保通道契约而保留。
+	// 以下为业务事件信封字段：Worker 只透传不消费，监控/治理事件为空。
+	// JM 不做业务，CP 侧不再落库/聚合，这两字段仅为保通道契约而保留。
 	Domain   string // 业务域命名空间（取值由下游约定，JM 不定义也不校验；空/core 为非业务帧）
 	DedupKey string // 业务事件去重键（原样透传，幂等去重由下游业务台负责）
 }
@@ -91,8 +91,8 @@ type bridgeMessage struct {
 	Version  string          `json:"version,omitempty"`
 	Event    string          `json:"event,omitempty"` // type=event 时的事件子类型
 	Data     json.RawMessage `json:"data,omitempty"`  // 透传业务载荷
-	// domain 业务域命名空间（ADR-027）：空/core=监控/治理既有帧；其余取值由下游约定，
-	// Worker 只按前缀分流、不解释语义（ADR-106：JM 不理解任何业务语义）。
+	// domain 业务域命名空间：空/core=监控/治理既有帧；其余取值由下游约定，
+	// Worker 只按前缀分流、不解释语义（JM 不理解任何业务语义）。
 	Domain string `json:"domain,omitempty"`
 	// dedupKey 业务事件去重键：业务 event 帧携带，Worker 原样透传给 CP 与下游，本层不做去重。
 	DedupKey string `json:"dedupKey,omitempty"`
@@ -129,7 +129,7 @@ func parseBridgeEventData(data json.RawMessage) bridgeEventData {
 	return d
 }
 
-// CommandResult 是探针执行一条治理/查询指令后的回执（见 ADR-016）。
+// CommandResult 是探针执行一条治理/查询指令后的回执。
 // 由探针经 command_result 事件帧带回，Worker 据 request_id 路由给同步等待的调用方。
 type CommandResult struct {
 	RequestID string
@@ -205,11 +205,11 @@ func (s *PluginSession) deliverResult(r CommandResult) bool {
 }
 
 // PluginBridgeServer 是 ServerProbe 探针反向 WS 连入的服务端（端点 /ws/plugin-bridge）。
-// 维护「实例 UUID → 探针会话」表：同一实例同时仅一活动会话，新连顶替旧连（见 ADR-016）。
+// 维护「实例 UUID → 探针会话」表：同一实例同时仅一活动会话，新连顶替旧连。
 // token 校验复用 JIANMANAGER_JWT_SECRET，要求 scope=plugin-bridge 且 instanceId 与 query 一致。
 type PluginBridgeServer struct {
 	// jwtSecret 插件桥 token 校验密钥，secretMu 保护：CP 经注册/心跳下发新值时
-	// 由 SetJWTSecret 热更新（见 ADR-061），与握手校验读并发安全。
+	// 由 SetJWTSecret 热更新，与握手校验读并发安全。
 	jwtSecret string
 	secretMu  sync.RWMutex
 	upgrader  websocket.Upgrader
@@ -242,7 +242,7 @@ func NewPluginBridgeServer(jwtSecret string) *PluginBridgeServer {
 // SetEventHandler 注入事件回调，把 connected/disconnected/业务事件桥接到 gRPC StreamPluginEvents。
 func (s *PluginBridgeServer) SetEventHandler(h PluginEventHandler) { s.onEvent = h }
 
-// SetJWTSecret 热更新 token 校验密钥（见 ADR-061）：CP 经注册/心跳下发新密钥时调用。
+// SetJWTSecret 热更新 token 校验密钥：CP 经注册/心跳下发新密钥时调用。
 // 仅影响后续握手；已建立的探针会话不受影响（握手只校验一次）。
 func (s *PluginBridgeServer) SetJWTSecret(secret string) {
 	s.secretMu.Lock()

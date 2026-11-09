@@ -304,12 +304,12 @@ export interface MonitoringPageProps {
 /** 
  * 统一监控页（时序剖析增强）。在既有061 时序底座上加四个剖析维度：
  * 1. 关键指标概览——一屏看当前值 + sparkline 趋势缩略；
- * 2. 自定义聚合粒度 + 时间范围——页级 RangePicker + ResolutionPicker（auto/30s/5m/1h，ADR-013 三档）；
+ * 2. 自定义聚合粒度 + 时间范围——页级 RangePicker + ResolutionPicker（auto/30s/5m/1h 三档）；
  * 3. 多指标对比/叠加——勾选多条指标在同一图叠加对比；
  * 4. 下钻——平台→节点→实例→世界 逐级钻取（面包屑 + 各层下拉）。
- * 仅纯前端消费既有 /metrics/series、/metrics/overview，不改后端、不另立 ADR（沿用 ADR-013）。
+ * 仅纯前端消费既有 /metrics/series、/metrics/overview，不改后端、不另立 ADR。
  *
- * 受控视图（ADR-103 a 范式）：不取数——目标、范围、粒度、对比选中、序列与进程数据都由外壳注入。
+ * 受控视图：不取数——目标、范围、粒度、对比选中、序列与进程数据都由外壳注入。
  * 下钻面板、概览/对比、进程 TOP 与详情弹窗的呈现留在视图内。
  */
 export default function MonitoringPage(props: MonitoringPageProps) {

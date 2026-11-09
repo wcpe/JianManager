@@ -106,10 +106,10 @@ func TestUpdate_RoleChangeNormalizesTypeAndProbePort(t *testing.T) {
 
 	t.Run("不改 role/type 的普通更新不触碰 type/probe_port", func(t *testing.T) {
 		inst := seed(mcJava, backend, 29945)
-		name := "renamed-by-fr454"
+		name := "renamed-by-role-type"
 		got, err := svc.Update(inst.ID, UpdateInstanceFields{Name: &name})
 		require.NoError(t, err)
-		require.Equal(t, "renamed-by-fr454", got.Name)
+		require.Equal(t, "renamed-by-role-type", got.Name)
 		require.Equal(t, model.InstanceTypeMinecraftJava, got.Type)
 		require.Equal(t, 29945, got.ProbePort)
 	})

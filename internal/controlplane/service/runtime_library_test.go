@@ -70,9 +70,9 @@ type fixedSettings map[string]string
 
 func (m fixedSettings) EffectiveValue(key string) string { return m[key] }
 
-func newFR299DB(t *testing.T) *gorm.DB {
+func newRuntimeLibraryDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := "file:fr299_" + t.Name() + "?mode=memory&cache=shared"
+	dsn := "file:runtime-library_" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 
@@ -89,7 +89,7 @@ func newFR299DB(t *testing.T) *gorm.DB {
 
 // InstallAsync：建任务（kind=runtime_install）→ 下发携带 task_id 与归一 arch/镜像 → 返回 running。
 func TestRuntimeLibrary_InstallAsync(t *testing.T) {
-	db := newFR299DB(t)
+	db := newRuntimeLibraryDB(t)
 	pool := cpgrpc.NewClientPool()
 	node := &model.Node{UUID: "u-rt", Name: "n", Host: "h", GRPCPort: 1, WSPort: 2, Secret: "s"}
 	require.NoError(t, db.Create(node).Error)
@@ -125,7 +125,7 @@ func TestRuntimeLibrary_InstallAsync(t *testing.T) {
 
 // InstallAsync 拒绝集：未知类型 / 未知 arch / 非正 major / 节点离线，均不建悬挂任务。
 func TestRuntimeLibrary_InstallAsync_Rejections(t *testing.T) {
-	db := newFR299DB(t)
+	db := newRuntimeLibraryDB(t)
 	pool := cpgrpc.NewClientPool()
 	node := &model.Node{UUID: "u-rt2", Name: "n", Host: "h", GRPCPort: 1, WSPort: 2, Secret: "s"}
 	require.NoError(t, db.Create(node).Error)
@@ -153,7 +153,7 @@ func TestRuntimeLibrary_InstallAsync_Rejections(t *testing.T) {
 
 // runtime_install 成功终态：落一条 NodeRuntime（managed=true）+ 发成功站内信。
 func TestTaskService_Ingest_RuntimeSuccess_PersistsRuntime(t *testing.T) {
-	db := newFR299DB(t)
+	db := newRuntimeLibraryDB(t)
 	svc := NewTaskService(db)
 	svc.SetNotificationService(NewNotificationService(db))
 
@@ -193,7 +193,7 @@ func TestTaskService_Ingest_RuntimeSuccess_PersistsRuntime(t *testing.T) {
 
 // runtime_install 失败终态：不落 NodeRuntime，发失败站内信。
 func TestTaskService_Ingest_RuntimeFailure_NoPersist(t *testing.T) {
-	db := newFR299DB(t)
+	db := newRuntimeLibraryDB(t)
 	svc := NewTaskService(db)
 	svc.SetNotificationService(NewNotificationService(db))
 
@@ -219,7 +219,7 @@ func TestTaskService_Ingest_RuntimeFailure_NoPersist(t *testing.T) {
 
 // Delete 托管 nodejs：先经 Worker RemoveRuntime 删托管目录，成功后删记录（语义对齐 JDK）。
 func TestRuntimeLibrary_DeleteManaged_RemovesWorkerFiles(t *testing.T) {
-	db := newFR299DB(t)
+	db := newRuntimeLibraryDB(t)
 	pool := cpgrpc.NewClientPool()
 	node := &model.Node{UUID: "u-rt5", Name: "n", Host: "h", GRPCPort: 1, WSPort: 2, Secret: "s"}
 	require.NoError(t, db.Create(node).Error)
@@ -242,7 +242,7 @@ func TestRuntimeLibrary_DeleteManaged_RemovesWorkerFiles(t *testing.T) {
 
 // Delete 托管 nodejs：Worker 拒绝删除时保留记录并返回错误（不产出「记录没了文件还在」）。
 func TestRuntimeLibrary_DeleteManaged_WorkerRejectKeepsRecord(t *testing.T) {
-	db := newFR299DB(t)
+	db := newRuntimeLibraryDB(t)
 	pool := cpgrpc.NewClientPool()
 	node := &model.Node{UUID: "u-rt6", Name: "n", Host: "h", GRPCPort: 1, WSPort: 2, Secret: "s"}
 	require.NoError(t, db.Create(node).Error)
@@ -261,7 +261,7 @@ func TestRuntimeLibrary_DeleteManaged_WorkerRejectKeepsRecord(t *testing.T) {
 
 // Delete 外部登记 nodejs：不下发 Worker、只删记录（用户自管文件绝不动）。
 func TestRuntimeLibrary_DeleteExternal_RecordOnly(t *testing.T) {
-	db := newFR299DB(t)
+	db := newRuntimeLibraryDB(t)
 	pool := cpgrpc.NewClientPool()
 	node := &model.Node{UUID: "u-rt7", Name: "n", Host: "h", GRPCPort: 1, WSPort: 2, Secret: "s"}
 	require.NoError(t, db.Create(node).Error)

@@ -3,15 +3,15 @@ import { createLogLineParser, type LogLine, type LogStream } from './console-log
 /** 
  * 控制台行环形缓冲（spec §2.1）。
  *
- * 取代 xterm 内部 buffer 成为「常驻缓冲」的载体（ADR-086）：会话保活语义不变——
+ * 取代 xterm 内部 buffer 成为「常驻缓冲」的载体：会话保活语义不变——
  * 缓冲挂在 {@link import('./terminal-session-manager').TerminalSessionManager} 的会话上，
- * 渲染层卸载只解绑订阅，缓冲与 WS 都不动（ADR-067）。
+ * 渲染层卸载只解绑订阅，缓冲与 WS 都不动。
  */
 
 /** 缓冲上限（spec §2.1）。超出丢最旧，更早历史由从数据库游标分页取回。 */
 export const CONSOLE_BUFFER_LIMIT = 5000
 
-/** 按 `\r\n` / `\n` / 裸 `\r` 断行。裸 `\r` 断成多行而非原地覆盖，见 ADR-086 代价 5。 */
+/** 按 `\r\n` / `\n` / 裸 `\r` 断行。裸 `\r` 断成多行而非原地覆盖。 */
 const LINE_BREAK = /\r\n|\n|\r/
 
 export class ConsoleLineBuffer {

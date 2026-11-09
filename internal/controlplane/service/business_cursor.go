@@ -12,19 +12,19 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 业务事件位点账本的查询与保留（ADR-107 §3 / §5）。
+// 业务事件位点账本的查询与保留。
 //
 // 边界（一眼可见，改代码前先读）：
 //   - 本服务**只读位点**，从不返回 payload——表里没有 payload 列，这里也不制造它；
 //   - 不计算「缺失区间」：JM 不知道业务台收到了什么，缺口只能由业务台拿自己的已收位点做差集
-//     （ADR-107 §3 的理由段落，不要"优化"成 JM 单方算差集）；
+//     （理由段落，不要"优化"成 JM 单方算差集）；
 //   - 裁剪是**定期巡检**，不是「每次查询顺手删」——后者会把读请求变成写放大。
 const (
-	// BusinessCursorQueryDefaultLimit 缺口查询默认条数（ADR-107 §3）。
+	// BusinessCursorQueryDefaultLimit 缺口查询默认条数。
 	BusinessCursorQueryDefaultLimit = 1000
-	// BusinessCursorQueryMaxLimit 缺口查询条数上限（ADR-107 §3）。
+	// BusinessCursorQueryMaxLimit 缺口查询条数上限。
 	BusinessCursorQueryMaxLimit = 5000
-	// BusinessCursorRetentionDays 位点账本默认保留天数（ADR-107 §5）。
+	// BusinessCursorRetentionDays 位点账本默认保留天数。
 	BusinessCursorRetentionDays = 7
 	// businessCursorRetentionTick 裁剪巡检周期。位点是低频运维数据，
 	// 每小时巡检一次即可；保留期以「天」计，没有更细的必要。
@@ -68,7 +68,7 @@ type BusinessCursorQuery struct {
 	Limit int
 }
 
-// BusinessCursorService 位点账本的读侧与保留期裁剪（ADR-107）。
+// BusinessCursorService 位点账本的读侧与保留期裁剪。
 type BusinessCursorService struct {
 	db *gorm.DB
 	// retentionDays 保留天数（来自 CP 配置 business_cursor.retention_days）；<=0 走默认 7 天。
@@ -97,7 +97,7 @@ func NormalizeBusinessCursorLimit(limit int) int {
 
 // Query 返回该 (实例, 域) 区间内**存在过的位点**，按探针 seq 升序。
 //
-// 无数据返回**空切片**而非错误：ADR-107 §3 明确「无数据返回空数组（不是 404）」，
+// 无数据返回**空切片**而非错误：明确「无数据返回空数组（不是 404）」，
 // 因为「区间内没有位点」本身就是一条有效答案（说明这段时间该实例没产生该域事件，
 // 或位点已被保留期裁掉——两种都让业务台更保守地对账，不该被当成故障）。
 func (s *BusinessCursorService) Query(q BusinessCursorQuery) ([]BusinessCursorItem, error) {

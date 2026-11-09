@@ -1017,7 +1017,7 @@ func writeProbeDependency(resp *http.Response, target string) error {
 }
 
 // downloadFile 流式下载 url 到 destPath，边写边算 sha256，返回字节数与 hex 小写摘要。
-// client 经进程级出站代理（ADR-037）；为 nil 时回退一个 15min 超时的默认 client。
+// client 经进程级出站代理；为 nil 时回退一个 15min 超时的默认 client。
 func downloadFile(ctx context.Context, client *http.Client, url, destPath string) (int64, string, error) {
 	if strings.TrimSpace(url) == "" {
 		return 0, "", fmt.Errorf("下载地址为空")

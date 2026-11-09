@@ -13,7 +13,7 @@ import type { ClientRuntimeOverview, RuntimeUpdateSeriesPoint } from '@/lib/clie
 import type { DistBucket } from '@/lib/overview/platform-stats'
 
 /** 
- * 页面 B「客户端分发运维」共享展示件与格式化（ADR-088）。
+ * 页面 B「客户端分发运维」共享展示件与格式化。
  * 由旧监控页（`ClientDistMonitoringPage.tsx`）迁移而来，供
  * `OpsStatisticsTab` / `OpsRealtimeTab` / `OpsClientsTab` 复用；文案沿用既有 `clientDistOps.*` 键。
  */

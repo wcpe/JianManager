@@ -18,9 +18,9 @@ type ClientDistGuardChecker interface {
 	MarkConcurrency()
 }
 
-// ClientDistGuard 面向玩家分发端点的 L7 防护中间件（见 ADR-023）：
+// ClientDistGuard 面向玩家分发端点的 L7 防护中间件：
 // ① IP 黑白名单（命中拒 → 403）② per-IP 令牌桶限流（超频 → 429）③ 全局并发信号量（满 → 429）。
-// 限流以 **IP 为主键**（机器码不可信，ADR-023）；命中拦截累加计数器（可观测、不写库）。
+// 限流以 **IP 为主键**（机器码不可信）；命中拦截累加计数器（可观测、不写库）。
 // L3/L4 容量型 DDoS 不在此（靠 CDN/云清洗）。
 func ClientDistGuard(guard ClientDistGuardChecker, ratePerSecond, burst, maxConcurrent int) gin.HandlerFunc {
 	limiter := NewRateLimiter(ratePerSecond, burst)

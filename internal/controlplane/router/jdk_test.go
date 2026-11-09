@@ -20,24 +20,24 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-type fakeFR033RouterJDKWorker struct {
+type fakeRouteJDKWorker struct {
 	workerpb.WorkerServiceClient
 	installReq *workerpb.InstallJDKRequest
 }
 
-func (f *fakeFR033RouterJDKWorker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
+func (f *fakeRouteJDKWorker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
 	return &workerpb.ListJDKsResponse{}, nil
 }
 
-func (f *fakeFR033RouterJDKWorker) InstallJDK(_ context.Context, req *workerpb.InstallJDKRequest, _ ...grpc.CallOption) (*workerpb.InstallJDKResponse, error) {
+func (f *fakeRouteJDKWorker) InstallJDK(_ context.Context, req *workerpb.InstallJDKRequest, _ ...grpc.CallOption) (*workerpb.InstallJDKResponse, error) {
 	f.installReq = req
 	return &workerpb.InstallJDKResponse{Success: true, TaskId: req.TaskId}, nil
 }
 
-func setupFR033Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
+func setupJDKRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-fr033", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
+	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-jdk", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
@@ -69,14 +69,14 @@ func setupFR033Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.E
 	return Setup(svcs, jwtCfg.Secret)
 }
 
-func TestFR033JDKResourceRoutes(t *testing.T) {
+func TestJDKResourceRoutes(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	r := setupFR033Router(t, db, pool)
+	r := setupJDKRouter(t, db, pool)
 	adminToken := getAdminToken(t, r)
-	memberToken := getMemberToken(t, r, "member-fr033", "password123")
+	memberToken := getMemberToken(t, r, "member-jdk", "password123")
 	node := createTestNode(t, db)
-	fake := &fakeFR033RouterJDKWorker{}
+	fake := &fakeRouteJDKWorker{}
 	pool.SetWorkerClientForTest(node.UUID, fake)
 
 	forbidden := makeRequest(r, http.MethodGet, fmt.Sprintf("/api/v1/nodes/%d/jdks", node.ID), nil, memberToken)
@@ -101,7 +101,7 @@ func TestFR033JDKResourceRoutes(t *testing.T) {
 
 	inUse := &model.NodeJDK{NodeID: node.ID, Vendor: "Temurin", MajorVersion: 17, Version: "17.0.12+7", Arch: "x64", Path: "/opt/jdks/temurin-17"}
 	require.NoError(t, db.Create(inUse).Error)
-	inst := &model.Instance{NodeID: node.ID, Name: "fr033-bound-instance", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDaemon, Status: model.InstanceStatusStopped, JDKID: inUse.ID}
+	inst := &model.Instance{NodeID: node.ID, Name: "jdk-bound-instance", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDaemon, Status: model.InstanceStatusStopped, JDKID: inUse.ID}
 	require.NoError(t, db.Create(inst).Error)
 	blockedDelete := makeRequest(r, http.MethodDelete, fmt.Sprintf("/api/v1/nodes/%d/jdks/%d", node.ID, inUse.ID), nil, adminToken)
 	require.Equal(t, http.StatusConflict, blockedDelete.Code)

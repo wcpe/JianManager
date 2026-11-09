@@ -13,7 +13,7 @@ import (
 )
 
 // 全局包可视化管理：List/Remove 代理 Worker 同步 RPC，Install 走任务中心异步
-// （复用ADR-040 的 jdk_install 范式）。PM 一律取节点已配置偏好（落库值），
+// （复用 jdk_install 范式）。PM 一律取节点已配置偏好（落库值），
 // 不由调用方指定——单一真相源，避免面板与节点偏好漂移。
 
 // GlobalPackageView 已装全局包视图。

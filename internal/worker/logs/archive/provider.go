@@ -13,7 +13,7 @@ import (
 // Provider 归档对象存储抽象。
 //
 // LocalArchive 为 Worker 本地目录实现；S3/MinIO 为同接口 stub（foundation 单测
-// 使用内存后端，不要求真实对象存储）。生产接线属于后续 FR，不得在本包内发明
+// 使用内存后端，不要求真实对象存储）。生产接线属于后续事项，不得在本包内发明
 // 未登记的网络协议或凭证模型。
 type Provider interface {
 	// Kind 标识实现：local / s3 / minio。
@@ -156,7 +156,7 @@ const (
 // ObjectStore S3/MinIO 同接口 stub。
 //
 // foundation 阶段后端为进程内 map，保证单测不依赖真实 S3/MinIO；
-// 生产客户端（凭证、分片上传、重试策略）在后续 FR 接线，不得在此臆造协议细节。
+// 生产客户端（凭证、分片上传、重试策略）留待后续接线，不得在此臆造协议细节。
 type ObjectStore struct {
 	kind   string
 	bucket string

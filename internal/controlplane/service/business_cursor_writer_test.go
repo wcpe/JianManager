@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// ADR-107 业务事件位点账本测试。
+// 业务事件位点账本测试。
 //
 // 守四件事（对应 ADR 的三条硬约束）：
 //  1. 批量策略：满批即写、定时也写，不是逐条 INSERT；
@@ -215,7 +215,7 @@ func TestBusinessStreamService_DeliveryNotBlockedBySlowWriter(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
-		t.Fatal("写入器不可用时事件投递被阻塞——ADR-107 明确禁止")
+		t.Fatal("写入器不可用时事件投递被阻塞——明确禁止")
 	}
 
 	// 事件一条不少地下发了（received 计数与缓冲位点都在推进）。
@@ -256,7 +256,7 @@ func TestBusinessStreamService_RecordsCursor(t *testing.T) {
 	require.Equal(t, "d-1", row.DedupKey)
 	require.EqualValues(t, 1024, row.Seq, "探针 per-domain seq 必须从原始帧信封取出")
 	require.EqualValues(t, 1730000001, row.OccurredAt)
-	// ADR-107 红线：绝不含 payload。表结构层面就无法存（无该列）。
+	// 红线：绝不含 payload。表结构层面就无法存（无该列）。
 	require.False(t, db.Migrator().HasColumn(&model.BusinessEventCursor{}, "payload"),
 		"位点账本绝不能有 payload 列")
 }

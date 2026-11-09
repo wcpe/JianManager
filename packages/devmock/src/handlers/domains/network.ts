@@ -39,7 +39,7 @@ interface NetworkRow {
 }
 
 /** 
- * 假后端注册行（ADR-007 的 server_registrations，M:N）：
+ * 假后端注册行（server_registrations，M:N）：
  * proxyId×backendId 为联合身份；去规范化内嵌 backend 概要（贴合 Registration.backend），
  * 一个 backend 可被多个 proxy 注册 → 多行单后端，体现 M:N。
  */

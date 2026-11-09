@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// PlayerEvent 是推送给前端（SSE）的一条玩家/探针事件（见 ADR-016）。
+// PlayerEvent 是推送给前端（SSE）的一条玩家/探针事件。
 // 由 Worker 经 gRPC StreamPluginEvents 上报的 workerpb.PluginEvent 翻译而来，
 // 并按需补充实例 DB ID 与名称（前端按实例/群组订阅、展示所在子服）。
 type PlayerEvent struct {
@@ -112,7 +112,7 @@ func (r *playerRoster) snapshot(instanceUUID string) []rosterPlayer {
 
 // PlayerEventService 订阅所有 Worker 的插件事件流（StreamPluginEvents），维护实时在线名册，
 // 并把玩家事件扇出给前端 SSE 客户端。与 EventService（实例状态/输出流）刻意分开：
-// 二者消费方、过滤维度、订阅生命周期均不同（见 ADR-016）。
+// 二者消费方、过滤维度、订阅生命周期均不同。
 type PlayerEventService struct {
 	pool   *cpgrpc.ClientPool
 	db     *gorm.DB
@@ -274,7 +274,7 @@ func (s *PlayerEventService) streamFromWorker(nodeUUID string, client *cpgrpc.Cl
 				break
 			}
 			// 带业务域（domain 非空）的事件不在本服务内做业务处理：JM 不做任何业务语义
-			// （ADR-106）。它们只走纯透传通道：写内存环形缓冲 + 扇出给 SSE 订阅者，
+			//。它们只走纯透传通道：写内存环形缓冲 + 扇出给 SSE 订阅者，
 			// 不落库、不聚合、也不演进在线名册。
 			if evt.Domain != "" {
 				s.businessStream.Ingest(nodeUUID, evt)

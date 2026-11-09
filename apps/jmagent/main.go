@@ -1,6 +1,6 @@
-// Command jmagent 是 JianManager 的 Agent 管理 CLI（见 ADR-076）。
+// Command jmagent 是 JianManager 的 Agent 管理 CLI。
 //
-// 与 jmctl（ADR-041 本机紧急直连 daemon）严格区分：本工具仅经 Control Plane HTTPS +
+// 与 jmctl（本机紧急直连 daemon）严格区分：本工具仅经 Control Plane HTTPS +
 // Agent Token（Bearer jmat_*）调用暴露的 Agent 运维 API，不链 gRPC / 数据库 /
 // Worker / daemon socket。Token 仅来自 --token 或环境变量 JM_AGENT_TOKEN，永不落盘。
 //
@@ -35,7 +35,7 @@ func usage() {
 	if name == "jmagent" {
 		aliasNote = "短别名: jm（与 jmagent 同一程序）"
 	}
-	fmt.Fprintf(os.Stderr, `%s — JianManager Agent 管理 CLI（经 CP HTTPS + Agent Token，见ADR-076）
+	fmt.Fprintf(os.Stderr, `%s — JianManager Agent 管理 CLI（经 CP HTTPS + Agent Token）
 %s
 
 用法:

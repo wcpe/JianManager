@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 
 /** 
- * 导播台渲染节流上下文（ADR-035）。
+ * 导播台渲染节流上下文。
  *
  * 导播台把多个场景（预设）的卡**同时挂载**以保活 WS（瞬切零延迟），但只有 **active** 场景全速渲染；
  * 预热但非激活的场景**降频 / 暂停渲染**（终端 xterm 停 render 但 WS 继续收数据进缓冲，切回一次性 flush）。

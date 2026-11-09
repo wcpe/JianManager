@@ -28,7 +28,7 @@ func newResyncTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// TestBuildCreateInstanceRequest 验证实例模型→Worker 规格的翻译（ADR-050 重推与单实例补注册共用）：
+// TestBuildCreateInstanceRequest 验证实例模型→Worker 规格的翻译（重推与单实例补注册共用）：
 // EnvVars JSON 解出、绑定 JDK 路径解析、按角色派生优雅停止命令、基础字段透传。
 func TestBuildCreateInstanceRequest(t *testing.T) {
 	db := newResyncTestDB(t)

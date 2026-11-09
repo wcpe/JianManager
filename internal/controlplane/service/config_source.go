@@ -121,7 +121,7 @@ type previewResult struct {
 // 旧实例登记表为空时：startup.command 视作 inline（取 Instance.StartCommand），关键 props 视作文件隐含，
 // 保证平滑过渡、不报错。file 项的 effectiveValue 为解析预览（只读）。
 //
-// 能力画像过滤（验收 #8 / ADR-091）：startup.* 与 props.* 均为 MC 语义配置项，仅对具备
+// 能力画像过滤（验收 #8）：startup.* 与 props.* 均为 MC 语义配置项，仅对具备
 // MC 配置语义的实例（minecraft_java 且非配套服务角色）呈现；generic / beacon 返回空清单，
 // 使其走各自画像，不出现 MC 专有配置项。
 func (s *ConfigSourceService) Surface(instanceID uint) ([]SurfaceItem, error) {
@@ -551,7 +551,7 @@ func isManagedItemKey(key string) bool {
 	return false
 }
 
-// mcSemanticConfigSurface 判定实例是否具备 MC 配置语义（验收 #8 / ADR-091 能力画像）。
+// mcSemanticConfigSurface 判定实例是否具备 MC 配置语义（验收 #8 /能力画像）。
 // 语义对齐能力画像的 `MCSemantics`：仅「运行 Minecraft 服务端（server.properties）」的实例
 // 呈现 startup.* / props.* 受管项。明文排除：
 //   - proxy：BungeeCord/Waterfall/Velocity 使用 config.yml，无 server.properties 语义（W6 画像 MCSemantics=false）；

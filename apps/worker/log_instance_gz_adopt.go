@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
-// 本文件是 ADR-098 §5「实例本地 logs/*.log.gz 归档吸存」的生产接线。
+// 本文件是「实例本地 logs/*.log.gz 归档吸存」的生产接线。
 //
 // 规格原文（那四条不是建议，是约束）：
 //  1. 以**文件身份**、**原样（压缩态）**吸存到冷层；
@@ -24,7 +24,7 @@ import (
 //  4. **本地 gz 一律不动**：不在 Worker 侧删除或搬走实例本地的 .gz。
 //
 // 为什么第 4 条关键：这些 .gz 是轮转后的原始证据，也是用户明确要求保留的最后备份。
-// 任何「吸存成功后删本地」的优化都越过了本 ADR 的边界，即便它看上去很省空间。
+// 任何「吸存成功后删本地」的优化都越过了本规格的边界，即便它看上去很省空间。
 //
 // 去重靠 `Registry.RegisterRaw` 自带的 object_id（content sha256 + size）幂等：
 // 同一份字节第二次登记会命中 `AlreadyRegistered` 而不写第二份对象。
@@ -144,7 +144,7 @@ func (a *instanceGzAdopter) adoptFile(ctx context.Context, uuid, logsDir, name s
 	if err != nil {
 		return false, fmt.Errorf("吸存 %s 失败: %w", path, err)
 	}
-	// 文件保持不动（ADR-098 §5 第 4 条）。这里显式不调用任何删除/移动。
+	// 文件保持不动。这里显式不调用任何删除/移动。
 	return result != nil && !result.AlreadyRegistered, nil
 }
 

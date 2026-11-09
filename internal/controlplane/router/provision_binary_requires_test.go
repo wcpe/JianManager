@@ -31,7 +31,7 @@ import (
 
 // binaryRouteWorker 在既有假 Worker 上补 FetchBinary：binary 路径只用到 CreateInstance + FetchBinary。
 type binaryRouteWorker struct {
-	fakeFR034RouteWorker
+	fakeProvisionRouteWorker
 	fetchMu  sync.Mutex
 	fetchReq *workerpb.FetchBinaryRequest
 }
@@ -63,12 +63,12 @@ func (s *routeBinaryStream) Recv() (*workerpb.FetchBinaryProgress, error) {
 	return &workerpb.FetchBinaryProgress{Done: true, Success: true, Size: 1 << 20}, nil
 }
 
-// setupFR441Router 在本文件的测试里自建路由：与用例共用大部分装配，
+// setupProvisionBinaryRouter 在本文件的测试里自建路由：与用例共用大部分装配，
 // 差别只在**注入任务中心**——binary 是强制异步的，未接线任务中心时会被明确拒绝
-// （见 TestFR441BinaryRequiresTaskService），故端到端用例必须先接线。
-func setupFR441Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
+// （见 TestBinaryRequiresTaskService），故端到端用例必须先接线。
+func setupProvisionBinaryRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	t.Helper()
-	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-fr441", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
+	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-provision-binary", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
@@ -96,12 +96,12 @@ func setupFR441Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.E
 	}, jwtCfg.Secret)
 }
 
-// TestFR441BinaryRequiresTaskService 未接线任务中心时明确拒绝（强制异步，不降级为同步）。
-func TestFR441BinaryRequiresTaskService(t *testing.T) {
+// TestBinaryRequiresTaskService 未接线任务中心时明确拒绝（强制异步，不降级为同步）。
+func TestBinaryRequiresTaskService(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
 	// 这里刻意用的装配（未接任务中心）。
-	r := setupFR034Router(t, db, pool, service.NewCoreService())
+	r := setupProvisionRouter(t, db, pool, service.NewCoreService())
 	adminToken := getAdminToken(t, r)
 	node := createTestNode(t, db)
 	pool.SetWorkerClientForTest(node.UUID, &binaryRouteWorker{})
@@ -127,11 +127,11 @@ func absTestPath(elems ...string) string {
 	return filepath.Join(append([]string{root}, elems...)...)
 }
 
-// TestFR441ProvisionRequestValidation 参数校验与 MC 路径回归保护。
-func TestFR441ProvisionRequestValidation(t *testing.T) {
+// TestProvisionRequestValidation 参数校验与 MC 路径回归保护。
+func TestProvisionRequestValidation(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	r := setupFR441Router(t, db, pool)
+	r := setupProvisionBinaryRouter(t, db, pool)
 	adminToken := getAdminToken(t, r)
 	node := createTestNode(t, db)
 	pool.SetWorkerClientForTest(node.UUID, &binaryRouteWorker{})
@@ -189,19 +189,19 @@ func TestFR441ProvisionRequestValidation(t *testing.T) {
 	})
 }
 
-// TestFR441BinaryProvisionRouteEndToEnd 端到端（真库 + 假 Worker）：走 binary 分支建实例、
+// TestBinaryProvisionRouteEndToEnd 端到端（真库 + 假 Worker）：走 binary 分支建实例、
 // 任务终态成功、实例为 generic/universal/未绑 JDK、启动命令由文件名派生（验收项 4/7/8）。
-func TestFR441BinaryProvisionRouteEndToEnd(t *testing.T) {
+func TestBinaryProvisionRouteEndToEnd(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	r := setupFR441Router(t, db, pool)
+	r := setupProvisionBinaryRouter(t, db, pool)
 	adminToken := getAdminToken(t, r)
 	node := createTestNode(t, db)
 	worker := &binaryRouteWorker{}
 	pool.SetWorkerClientForTest(node.UUID, worker)
 
 	resp := makeRequest(r, http.MethodPost, "/api/v1/instances/provision/server", map[string]any{
-		"nodeId": node.ID, "name": "fr441-beacon", "coreType": "binary",
+		"nodeId": node.ID, "name": "provision-binary-beacon", "coreType": "binary",
 		"binarySource": map[string]any{
 			"kind": "url", "url": "https://example.com/beacon", "filename": "beacon-1.1.0-linux-amd64",
 		},
@@ -240,11 +240,11 @@ func TestFR441BinaryProvisionRouteEndToEnd(t *testing.T) {
 	require.Equal(t, "https://example.com/beacon", req.DownloadUrl)
 }
 
-// TestFR441BinaryNodeFileDefaultClosed 未配置放行根时 node_file 一律拒绝（默认安全的关闭态）。
-func TestFR441BinaryNodeFileDefaultClosed(t *testing.T) {
+// TestBinaryNodeFileDefaultClosed 未配置放行根时 node_file 一律拒绝（默认安全的关闭态）。
+func TestBinaryNodeFileDefaultClosed(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	r := setupFR441Router(t, db, pool)
+	r := setupProvisionBinaryRouter(t, db, pool)
 	adminToken := getAdminToken(t, r)
 	node := createTestNode(t, db)
 	pool.SetWorkerClientForTest(node.UUID, &binaryRouteWorker{})

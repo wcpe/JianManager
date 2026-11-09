@@ -4,7 +4,7 @@ import { useUpdateInstance } from '@/api/instances'
 import EditInstanceLimitsDialogView from '@/components/views/instances/EditInstanceLimitsDialog'
 
 /** 
- * 实例资源限额编辑器的应用接线层（ADR-103 b 范式）。
+ * 实例资源限额编辑器的应用接线层。
  *
  * 编辑器本体是受控视图（见 components/views）；本层只做持久化与提示。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。
@@ -20,7 +20,7 @@ export default function EditInstanceLimitsDialog({
 }: {
   instanceId: number
   instanceName: string
-  /** 实例启动方式；仅 docker 模式资源限额生效（ADR-019）。 */
+  /** 实例启动方式；仅 docker 模式资源限额生效。 */
   processType: string
   /** 当前 CPU 核数上限（0=不限制）。 */
   cpuLimit: number

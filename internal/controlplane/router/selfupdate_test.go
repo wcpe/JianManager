@@ -181,7 +181,7 @@ func TestSelfUpdate_UpgradeNode_FailureAudited(t *testing.T) {
 	}
 }
 
-// TestSanitizeWorkerAssetToken 错误摘要中的下载凭据（token=…）统一脱敏（ADR-059）。
+// TestSanitizeWorkerAssetToken 错误摘要中的下载凭据（token=…）统一脱敏。
 func TestSanitizeWorkerAssetToken(t *testing.T) {
 	in := `节点升级失败: Get "http://cp/worker-assets/1.0.0/windows/amd64/worker?token=eyJhbGciOiJ9": dial tcp: connection refused`
 	got := sanitizeWorkerAssetToken(in)

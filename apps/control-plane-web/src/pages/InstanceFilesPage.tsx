@@ -8,7 +8,7 @@ import { PageShell } from '@jianmanager/ui/components/layout'
 
 /** 
  * 实例文件深链页：`/instances/:id/files?path=&file=&mode=`。
- * 独立于控制台页签，便于浏览器新标签并排；不并入 ADR-067 热缓存 key。
+ * 独立于控制台页签，便于浏览器新标签并排；不并入控制台热缓存 key。
  */
 export default function InstanceFilesPage() {
   const { id } = useParams<{ id: string }>()

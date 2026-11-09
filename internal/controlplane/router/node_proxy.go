@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// NodeProxyHandler 节点级出站代理路由（见 ADR-043）。
+// NodeProxyHandler 节点级出站代理路由。
 // 仅平台管理员可达；设置写审计。生效经心跳下发到 Worker（运行时重建出站 client）。
 type NodeProxyHandler struct {
 	svc   *service.NodeProxyService
@@ -77,7 +77,7 @@ func (h *NodeProxyHandler) Update(c *gin.Context) {
 		}
 		return
 	}
-	// 审计（敏感 URL 不入审计明文，仅记录 mode；详见 ADR-043 脱敏要求）。
+	// 审计（敏感 URL 不入审计明文，仅记录 mode；脱敏要求）。
 	h.recordAudit(c, "node.proxy.set", c.Param("id"), map[string]any{"nodeId": id, "mode": node.ProxyMode})
 
 	// 回视图（脱敏）。设置后节点离线时前端据 view.online 标注「待下发」（下次心跳生效）。

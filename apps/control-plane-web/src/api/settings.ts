@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 
- * 单个平台配置项（ADR-015）。
+ * 单个平台配置项。
  * 敏感项的 value 已由后端脱敏，不含明文。
  */
 export interface SettingItem {

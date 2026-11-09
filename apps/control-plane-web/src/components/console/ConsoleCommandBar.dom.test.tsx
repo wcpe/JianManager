@@ -11,7 +11,7 @@ import type { ConsoleHistoryState } from '@/lib/console/console-history'
 /** 
  * 命令栏智能输入：历史持久化 / `^R` 模糊搜索 / 候选式 Tab 补全 / 多行粘贴保护。
  *
- *把 Tab 补全随旧 xterm 输入路径删掉了（ADR-086「已知回退」），这些用例是补回后的锁。
+ *把 Tab 补全随旧 xterm 输入路径删掉了（「已知回退」），这些用例是补回后的锁。
  */
 
 const LABEL = '控制台命令输入'
@@ -35,7 +35,7 @@ const historyList = () => screen.queryByRole('listbox', { name: '历史命令匹
 
 /** 
  * 回溯控制器 stub：本文件只借视图当「按实例持久化历史」的宿主，不触达 DB 分页取数
- * （受控视图 ADR-103：控制器由应用侧接线层注入）。
+ * （受控视图：控制器由应用侧接线层注入）。
  */
 function historyBacktrack(): ConsoleHistoryState {
   return {

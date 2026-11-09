@@ -174,7 +174,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     void trackDynamicImport(
       trackDynamicImport(loadPermissionsModule(), (m) => m.usePermissionsStore.getState().reset()),
     )
-    // 登出即整体释放全部终端会话（296，ADR-067）：连接常驻管理器不随组件卸载断开，
+    // 登出即整体释放全部终端会话（296）：连接常驻管理器不随组件卸载断开，
     // 必须在此统一 dispose 防孤儿 WS。动态 import 避免把会话管理器卷进首屏 chunk。
     void trackDynamicImport(
       trackDynamicImport(loadTerminalSessionManager(), (m) => m.terminalSessionManager.disposeAll()),

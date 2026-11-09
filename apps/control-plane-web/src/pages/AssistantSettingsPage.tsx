@@ -70,7 +70,7 @@ function probeHint(code: string | undefined, t: (key: string, fallback: string) 
 }
 
 /** 
- * AI 助手配置页容器（见 ADR-105）。
+ * AI 助手配置页容器。
  *
  * 取数、mutation 与 toast 都在这里；视图不 import 任何 API 模块。
  * 管理面的真实门禁在服务端（IsPlatformAdmin），此处的角色判定只用来决定

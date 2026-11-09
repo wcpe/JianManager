@@ -12,10 +12,10 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 )
 
-// 本文件钉住 ADR-098 §5 的四条硬约束。
+// 本文件钉住四条硬约束。
 //
 // 四条里最容易在「优化」时被悄悄突破的是第 4 条（本地 gz 一律不动）：
-// 吸存成功后删本地看上去很省空间，但那越过了 ADR 的边界——
+// 吸存成功后删本地看上去很省空间，但那越过了本规格的边界——
 // 这些 .gz 是轮转后的原始证据、用户明确要留的最后备份。
 // 所以这里把它写成可执行断言，而不是只写在注释里。
 
@@ -141,7 +141,7 @@ func TestInstanceGzAdoptDoesNotTouchLocalFiles(t *testing.T) {
 	}
 
 	after, err := os.Stat(src)
-	require.NoError(t, err, "本地 .gz 必须仍然存在（ADR-098 §5 第 4 条）")
+	require.NoError(t, err, "本地 .gz 必须仍然存在（第 4 条）")
 	require.Equal(t, before.Size(), after.Size(), "本地 .gz 大小不得变化")
 	require.True(t, before.ModTime().Equal(after.ModTime()), "本地 .gz mtime 不得被改（否则会被当成新文件）")
 }

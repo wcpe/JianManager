@@ -22,7 +22,7 @@ describe('ConsoleLineBuffer 分行', () => {
     expect(buffer.snapshot()[0].seq).toBe(previewSeq)
   })
 
-  it('\\r\\n 与裸 \\r 都断行（ADR-086 代价 5：不做原地覆盖）', () => {
+  it('\\r\\n 与裸 \\r 都断行（不做原地覆盖）', () => {
     const buffer = new ConsoleLineBuffer()
     buffer.appendChunk('a\r\nb\rc\n', 'stdout')
     expect(bodies(buffer)).toEqual(['a', 'b', 'c'])

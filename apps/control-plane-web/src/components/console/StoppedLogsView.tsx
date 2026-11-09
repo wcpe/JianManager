@@ -6,7 +6,7 @@ import { useLogsFederation } from '@/api/logFederation'
 import type { LogEntry } from '@/lib/console/console-log-types'
 
 /**
- * 停机日志回放的应用接线层（ADR-103）。
+ * 停机日志回放的应用接线层。
  *
  * 视图本体是受控视图（见 components/views）；本层取数、把复制回执接回 toast，
  * 并注入「完整历史」的路由链接。对外 props 与原实现一致，调用点零改动。

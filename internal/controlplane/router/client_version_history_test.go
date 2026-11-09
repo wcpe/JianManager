@@ -100,7 +100,7 @@ func TestClientDist_VersionHistory_ListAndDetail(t *testing.T) {
 }
 
 // TestClientDist_Rollback_RepublishesOldContentAsHigherVersion 回滚 = 以更高版本号重发旧内容为 latest，
-// 客户端按单调版本正常前进、不被防降级拒绝（ADR-022 §3 / contract §3）。
+// 客户端按单调版本正常前进、不被防降级拒绝（contract §3）。
 func TestClientDist_Rollback_RepublishesOldContentAsHigherVersion(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)
@@ -162,7 +162,7 @@ func TestClientDist_Rollback_NotFound(t *testing.T) {
 }
 
 // TestClientDist_VersionAdminEndpoints_RejectPullKey 历史/详情/回滚是 admin JWT 端点：
-// 拉取密钥（半公开）不得越权访问（关键安全分组，ADR-022 §4 / contract §4）。
+// 拉取密钥（半公开）不得越权访问（关键安全分组，/ contract §4）。
 func TestClientDist_VersionAdminEndpoints_RejectPullKey(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)

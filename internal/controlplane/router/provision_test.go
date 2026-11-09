@@ -23,7 +23,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-type fakeFR034RouteWorker struct {
+type fakeProvisionRouteWorker struct {
 	workerpb.WorkerServiceClient
 	// 323：provision 异步化后 DownloadCore/WriteConfig 在后台 goroutine 调用，
 	// 测试主协程需并发读——加锁保证 race 安全（go test -race）。
@@ -32,18 +32,18 @@ type fakeFR034RouteWorker struct {
 	configs  map[string]string
 }
 
-func (f *fakeFR034RouteWorker) CreateInstance(context.Context, *workerpb.CreateInstanceRequest, ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
+func (f *fakeProvisionRouteWorker) CreateInstance(context.Context, *workerpb.CreateInstanceRequest, ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
-func (f *fakeFR034RouteWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
+func (f *fakeProvisionRouteWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
 	f.mu.Lock()
 	f.download = req
 	f.mu.Unlock()
 	return &workerpb.DownloadCoreResponse{Success: true, Size: 42}, nil
 }
 
-func (f *fakeFR034RouteWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
+func (f *fakeProvisionRouteWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.configs == nil {
@@ -54,25 +54,25 @@ func (f *fakeFR034RouteWorker) WriteConfig(_ context.Context, req *workerpb.Writ
 }
 
 // downloadReq / configOf 加锁读后台写入的字段（测试断言用）。
-func (f *fakeFR034RouteWorker) downloadReq() *workerpb.DownloadCoreRequest {
+func (f *fakeProvisionRouteWorker) downloadReq() *workerpb.DownloadCoreRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.download
 }
 
-func (f *fakeFR034RouteWorker) configOf(path string) string {
+func (f *fakeProvisionRouteWorker) configOf(path string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.configs[path]
 }
 
-func (f *fakeFR034RouteWorker) DeployServerProbe(context.Context, *workerpb.DeployServerProbeRequest, ...grpc.CallOption) (*workerpb.DeployServerProbeResponse, error) {
+func (f *fakeProvisionRouteWorker) DeployServerProbe(context.Context, *workerpb.DeployServerProbeRequest, ...grpc.CallOption) (*workerpb.DeployServerProbeResponse, error) {
 	return &workerpb.DeployServerProbeResponse{Success: true}, nil
 }
 
-type fakeFR034CoreTransport struct{}
+type fakeProvisionCoreTransport struct{}
 
-func (fakeFR034CoreTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (fakeProvisionCoreTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	body := ""
 	switch req.URL.Path {
 	case "/v3/projects/paper":
@@ -87,10 +87,10 @@ func (fakeFR034CoreTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
 }
 
-func setupFR034Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, core *service.CoreService) *gin.Engine {
+func setupProvisionRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, core *service.CoreService) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-fr034", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
+	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-provision", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
@@ -116,16 +116,16 @@ func setupFR034Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, core *
 	return Setup(svcs, jwtCfg.Secret)
 }
 
-func TestFR034ProvisionRoutes(t *testing.T) {
+func TestProvisionRoutes(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
 	core := service.NewCoreService()
-	core.SetHTTPClient(&http.Client{Transport: fakeFR034CoreTransport{}})
-	r := setupFR034Router(t, db, pool, core)
+	core.SetHTTPClient(&http.Client{Transport: fakeProvisionCoreTransport{}})
+	r := setupProvisionRouter(t, db, pool, core)
 	adminToken := getAdminToken(t, r)
-	memberToken := getMemberToken(t, r, "member-fr034", "password123")
+	memberToken := getMemberToken(t, r, "member-provision", "password123")
 	node := createTestNode(t, db)
-	worker := &fakeFR034RouteWorker{}
+	worker := &fakeProvisionRouteWorker{}
 	pool.SetWorkerClientForTest(node.UUID, worker)
 	jdk := &model.NodeJDK{NodeID: node.ID, Vendor: "Temurin", MajorVersion: 21, Version: "21.0.4+9", Arch: "x64", Path: "/opt/jdks/temurin-21"}
 	require.NoError(t, db.Create(jdk).Error)
@@ -142,7 +142,7 @@ func TestFR034ProvisionRoutes(t *testing.T) {
 	require.Equal(t, "paper-1.21.1-196.jar", parseJSON(t, resolveResp)["filename"])
 
 	createResp := makeRequest(r, http.MethodPost, "/api/v1/instances/provision/bukkit", map[string]any{
-		"nodeId": node.ID, "name": "fr034-route-lobby", "coreType": "paper", "mcVersion": "1.21.1", "jdkId": jdk.ID, "memoryMb": 2048, "onlineMode": false,
+		"nodeId": node.ID, "name": "provision-route-lobby", "coreType": "paper", "mcVersion": "1.21.1", "jdkId": jdk.ID, "memoryMb": 2048, "onlineMode": false,
 	}, adminToken)
 	require.Equal(t, http.StatusCreated, createResp.Code, createResp.Body.String())
 	// 323：provision 异步化，响应 {instance, taskId}；下载/写配置在后台任务推进。
@@ -152,7 +152,7 @@ func TestFR034ProvisionRoutes(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(createResp.Body.Bytes(), &wrapper))
 	inst := wrapper.Instance
-	// 本测试未接线 TaskService（走同步回退，taskId 空）——异步任务机制由 provision_fr319_test 覆盖；
+	// 本测试未接线 TaskService（走同步回退，taskId 空）——异步任务机制由 provision_provision_server_test 覆盖；
 	// 此处只验核心解析→下载→写配置流。
 	require.Equal(t, model.InstanceRoleBackend, inst.Role)
 	require.Equal(t, model.InstanceTypeMinecraftJava, inst.Type)

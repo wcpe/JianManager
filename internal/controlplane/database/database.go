@@ -130,7 +130,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.User{},
 		&model.UserInvitation{},
 		&model.AuthSetupLock{},
-		// 权限树（ADR-089）：角色模板 + 节点 + 用户绑定 + 覆盖
+		// 权限树：角色模板 + 节点 + 用户绑定 + 覆盖
 		&model.RoleTemplate{},
 		&model.RolePermission{},
 		&model.UserRoleBinding{},
@@ -152,9 +152,9 @@ func AutoMigrate(db *gorm.DB) error {
 		// 主机级观测快照：分挂载点磁盘与整机 top-N 进程，均为多值维度。
 		&model.HostMountSnapshot{},
 		&model.HostProcessSnapshot{},
-		// Agent 专用令牌（见 ADR-076）：与人类 JWT 分离，scope + 写白名单。
+		// Agent 专用令牌：与人类 JWT 分离，scope + 写白名单。
 		&model.AgentToken{},
-		// Agent 调用流水（见 ADR-076）：读+写 Ops 与日后 MCP tool。
+		// Agent 调用流水：读+写 Ops 与日后 MCP tool。
 		&model.AgentCallLog{},
 		&model.AgentTransferTicket{},
 		&model.Instance{},
@@ -162,7 +162,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.LogCutoverState{},
 		&model.LogCutoverWorker{},
 		&model.GroupInstance{},
-		// 实例组织分组树（见 ADR-033）：自引用邻接表 + 实例 M:N，
+		// 实例组织分组树：自引用邻接表 + 实例 M:N，
 		// 与用户组 / 网络群组正交，仅供组织归类，不承载 RBAC / 部署语义。
 		&model.InstanceGroupNode{},
 		&model.InstanceGroupMember{},
@@ -172,7 +172,7 @@ func AutoMigrate(db *gorm.DB) error {
 		// 崩溃趋势汇总：按 (实例, 天, 根因, 指纹) 计数，独立于 K=5 滚动裁剪，
 		// 使「连崩 >5 次」「同类聚合」等趋势不被快照裁剪抹掉。
 		&model.InstanceCrashStat{},
-		// 业务事件位点账本（ADR-107）：只存投递元数据（streamSeq/seq/dedupKey），**无 payload**，
+		// 业务事件位点账本：只存投递元数据（streamSeq/seq/dedupKey），**无 payload**，
 		// 让业务台能精确定位缺口并只对受影响的实例/域拉快照。默认保留 7 天，定期巡检裁剪。
 		&model.BusinessEventCursor{},
 		// 实例二进制版本绑定：记录实例当前/上一版本制品，使重建冻结版本、
@@ -232,7 +232,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ArtifactPackage{},
 		&model.ArtifactSource{},
 		&model.ArtifactVersion{},
-		// 制品存储渠道（见 ADR-073）：client-file 制品外置对象存储的渠道配置，
+		// 制品存储渠道：client-file 制品外置对象存储的渠道配置，
 		// 内置「本机存储」行由 service EnsureBuiltin 幂等 seed。
 		&model.ArtifactStorageChannel{},
 		// 制品存量迁移：迁移任务登记与实时计数 + 逐条失败明细。
@@ -248,7 +248,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.MetricRollup5m{},
 		&model.MetricRollup1h{},
 		&model.PlatformSetting{},
-		// AI 助手配置底座（见 ADR-105）：供应商、模型与单行全局设置。
+		// AI 助手配置底座：供应商、模型与单行全局设置。
 		// 与 PlatformSetting 的字符串键覆盖层分开——这三张表有唯一约束、默认模型指针
 		// 与乐观并发版本，塞进标量键会把约束全让给应用层自己守。
 		&model.AssistantProvider{},
@@ -275,7 +275,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ClientChannel{},
 		&model.ClientPullKey{},
 		&model.ClientVersion{},
-		// 原 updater-core 集中版本注册表（client_core_versions）已随反转废弃（见 ADR-045 改写）：
+		// 原 updater-core 集中版本注册表（client_core_versions）已随反转废弃：
 		// updater-core 改由 CP 内嵌默认版本自动驱动 manifest agent.core，运营不再管理。AutoMigrate 不删表，
 		// 存量库的旧表留着无害、不再写入；模型已移除，故此处不再 AutoMigrate 该表。
 		&model.ClientMachine{},
@@ -292,13 +292,13 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ClientProtectionAction{},
 		&model.ClientSecurityGroup{},
 		&model.ClientSecurityCounter{},
-		// 客户端分发观测时序快照（见 ADR-049）：离线把 events/telemetry 卷积为
+		// 客户端分发观测时序快照：离线把 events/telemetry 卷积为
 		// 按频道×小时桶的观测快照，供观测·分发监控页跨频道/平台时序，与写时聚合解耦。
 		&model.ClientDistSnapshot{},
 		// JBIS 业务事件汇聚三表（business_events / economy_balance_mirrors /
-		// economy_ledger_entries）已随退役（ADR-106），不再 AutoMigrate。
+		// economy_ledger_entries）已随退役，不再 AutoMigrate。
 		// AutoMigrate 不删表，存量库由 migrateRetireBusinessTables 显式 DROP。
-		// 全局任务中心 + 站内信（见 ADR-040）：长任务（Task）+ 滚动日志（TaskLog）+
+		// 全局任务中心 + 站内信：长任务（Task）+ 滚动日志（TaskLog）+
 		// 站内信（Notification）；任务进度经心跳上报、CP 汇聚 upsert，终态发站内信。
 		&model.Task{},
 		&model.TaskLog{},
@@ -310,7 +310,7 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 
-	// 节点名活跃唯一约束（见 ADR-039，修复 BUG-A）：先对存量重名活跃节点去重，再建部分唯一索引。
+	// 节点名活跃唯一约束（修复 BUG-A）：先对存量重名活跃节点去重，再建部分唯一索引。
 	// 必须在 AutoMigrate 建表后执行（依赖 nodes 表与 deleted_at 列存在）。
 	if err := migrateNodeNameUnique(db); err != nil {
 		return err
@@ -337,7 +337,7 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := migrateApprovalPendingUniqueIndex(db); err != nil {
 		return err
 	}
-	// ADR-106：V1 业务镜像表退役，直接删表（用户明确决策，不备份）。
+	// V1 业务镜像表退役，直接删表（用户明确决策，不备份）。
 	if err := migrateRetireBusinessTables(db); err != nil {
 		return err
 	}
@@ -493,7 +493,7 @@ func backfillBotDesiredStateGORM(db *gorm.DB, activeStatuses []model.BotStatus) 
 // nodeNameUniqueIndexName 节点名活跃唯一索引名（仅约束 deleted_at IS NULL 的活跃行）。
 const nodeNameUniqueIndexName = "uniq_nodes_name_active"
 
-// migrateNodeNameUnique 为 nodes.name 建立「活跃行唯一」约束（见 ADR-039 §3）。
+// migrateNodeNameUnique 为 nodes.name 建立「活跃行唯一」约束。
 //
 // 用部分唯一索引（WHERE deleted_at IS NULL）而非普通唯一索引：身份由 UUID 锚定，name 为可变标签，
 // 软删除节点应能释放其名供新节点复用（支撑坏节点修复后重新 enroll）。普通唯一索引会让已软删的
@@ -518,7 +518,7 @@ func migrateNodeNameUnique(db *gorm.DB) error {
 	return nil
 }
 
-// dedupeActiveNodeNames 为存量重名活跃节点去重（见 ADR-039 §修复）：同名活跃行保留最近心跳者，
+// dedupeActiveNodeNames 为存量重名活跃节点去重：同名活跃行保留最近心跳者，
 // 其余追加 "-dup-<id>" 后缀，避免历史重名阻断部分唯一索引创建。返回去重过程中的错误。
 func dedupeActiveNodeNames(db *gorm.DB) error {
 	type dupName struct {
@@ -630,10 +630,10 @@ func migrateProcessMetricPIDColumn(db *gorm.DB) error {
 	return nil
 }
 
-// migrateRetireBusinessTables 删除 V1 业务镜像三表（见 ADR-106）。
+// migrateRetireBusinessTables 删除 V1 业务镜像三表。
 //
 // 背景：JM 第五期 JBIS 业务对接把经济/背包的业务语义收进了平台（业务事件 envelope、
-// 经济余额镜像、经济流水审计）。ADR-106 决定 JM 不做任何业务，业务数据由下游业务台持有，
+// 经济余额镜像、经济流水审计）。决定 JM 不做任何业务，业务数据由下游业务台持有，
 // 平台只保留纯透传通道。故三表整体退役。
 //
 // 数据处置：**直接删表，不备份**（用户明确决策，V1 业务数据属早期实验性质、无生产依赖）。
@@ -641,7 +641,7 @@ func migrateProcessMetricPIDColumn(db *gorm.DB) error {
 // ⚠️ **不可逆**：执行后数据不可恢复，且**降级回旧版本也拿不回这三张表**
 // （回滚脚本只切换版本目录，不重建 schema）。因此：
 //   - 升级前如需留底，必须由运维自己导出（平台不做备份）；
-//   - 回滚到 ADR-106 之前的版本只恢复代码，不恢复数据；
+//   - 回滚到之前的版本只恢复代码，不恢复数据；
 //   - 任何误删都只能从外部备份恢复。
 //
 // 幂等：DROP TABLE IF EXISTS，重复执行无副作用；新库本就没有这三张表，空跑。
@@ -654,7 +654,7 @@ func migrateRetireBusinessTables(db *gorm.DB) error {
 	} {
 		// 只在真存在时记日志：新库里"空跑"不需要噪音，但真删了什么是必须留痕的。
 		if db.Migrator().HasTable(table) {
-			slog.Warn("ADR-106 退役：即将永久删除业务表（不可逆，不备份）",
+			slog.Warn("退役：即将永久删除业务表（不可逆，不备份）",
 				"table", table, "note", "降级回旧版本不会重建该表")
 		}
 		if err := db.Exec("DROP TABLE IF EXISTS " + table).Error; err != nil {

@@ -93,7 +93,7 @@ function RequirePlatformAdmin({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 /** 
- * 运维控制台右侧工作区（ADR-009）。
+ * 运维控制台右侧工作区。
  * 打开服务器时默认渲染固定分区的服务器统一控制台；可组合卡片画布保留为高级拼屏能力。
  * 否则按路由渲染对应页面，既有页面不变。同一时刻仅一个打开的服务器上下文。
  * 跨实例超级工作台走 `/super`，全幅渲染（自带左侧实例库 + 画布，无统一内边距）。
@@ -147,7 +147,7 @@ export default function Workspace() {
   // 路由过渡容器 key 仅按 pathname——同页仅 query 变化（如发布向导 ?step= 步骤切换、列表筛选、
   // tab 切换）不得 remount 路由子树，否则会清空页内本地状态（如发布向导本地暂存的 drafts）。
   // 页面级切换（pathname 变）仍会换 key 重放进场动画。
-  // `/instances/:id` 归并为固定 key（ADR-067）：实例间切换不 remount 路由子树，
+  // `/instances/:id` 归并为固定 key：实例间切换不 remount 路由子树，
   // 由跨服热缓存宿主（InstanceConsoleCache）在子树内做 LRU 保活与瞬切。
   const routeKey = isInstanceRoute ? 'instances-console' : location.pathname
 
@@ -288,7 +288,7 @@ export default function Workspace() {
                 路由侧只要求登录；无读权限时后端 403，页面呈现为空并透出错误。 */}
             <Route path="approvals" element={<ApprovalsPage />} />
             <Route path="mcp-activity" element={<RequirePlatformAdmin><McpActivityPage /></RequirePlatformAdmin>} />
-            {/* 端点无状态化（ADR-096）后会话维度视图已无数据源，旧链接重定向到按 Token 聚合的活动视图。 */}
+            {/* 端点无状态化后会话维度视图已无数据源，旧链接重定向到按 Token 聚合的活动视图。 */}
             <Route path="mcp-sessions" element={<Navigate to="/mcp-activity" replace />} />
             <Route path="agent-call-logs" element={<RequirePlatformAdmin><AgentCallLogsPage /></RequirePlatformAdmin>} />
             <Route path="licenses" element={<RequirePlatformAdmin><LicensesPage /></RequirePlatformAdmin>} />

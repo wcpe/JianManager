@@ -61,7 +61,7 @@ func realRun(ctx context.Context, name string, args, env []string, onLine func(s
 	return out.Bytes(), cmd.Wait()
 }
 
-// GlobalDir 返回节点级受控包项目根（见 ADR-072）。
+// GlobalDir 返回节点级受控包项目根。
 func (m *Manager) GlobalDir() string { return filepath.Join(m.runtimesRoot, "global") }
 
 var managedNPMOverrides = map[string]map[string]string{

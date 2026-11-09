@@ -19,7 +19,7 @@ func TestBuildCreateInstanceRequest_ProbePortByApplicability(t *testing.T) {
 	t.Cleanup(svc.Shutdown)
 	// buildCreateInstanceRequest 会解析实例所属节点的 UUID 作为日志 holder 身份
 	// （log_source_generation 含 worker uuid）；生产路径上游必然已有该节点，故此处补建夹具。
-	node := &model.Node{Name: "fr454-probe-node", Host: "127.0.0.1", GRPCPort: 9100, WSPort: 9101, Secret: "s", Status: model.NodeStatusOnline}
+	node := &model.Node{Name: "probe-node-probe-node", Host: "127.0.0.1", GRPCPort: 9100, WSPort: 9101, Secret: "s", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 
 	cases := []struct {
@@ -87,8 +87,8 @@ func TestBuildCreateInstanceRequest_ProbePortByApplicability(t *testing.T) {
 // TestCreate_ProbePortZeroedForNonApplicable：手工 API 建实例不得把非 0 ProbePort 直落库；
 // 且 role=beacon 的 type 与搭建路径同口径归一为 generic（否则手工 API 可持续制造 type 脏值）。
 func TestCreate_ProbePortZeroedForNonApplicable(t *testing.T) {
-	db := newFR032ServiceTestDB(t)
-	node := &model.Node{Name: "fr454-node", Host: "127.0.0.1", GRPCPort: 9100, WSPort: 9101, Secret: "s", Status: model.NodeStatusOnline}
+	db := newNetworkResourceTestDB(t)
+	node := &model.Node{Name: "probe-node-node", Host: "127.0.0.1", GRPCPort: 9100, WSPort: 9101, Secret: "s", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 	svc := NewInstanceService(db, nil, cpgrpc.NewClientPool())
 
@@ -109,7 +109,7 @@ func TestCreate_ProbePortZeroedForNonApplicable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			inst, err := svc.Create(CreateInstanceRequest{
 				NodeID:       node.ID,
-				Name:         "fr454-" + tc.name,
+				Name:         "probe-node-" + tc.name,
 				Type:         tc.typ,
 				Role:         tc.role,
 				ProcessType:  model.ProcessTypeDirect,

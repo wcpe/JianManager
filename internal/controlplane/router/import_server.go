@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ImportServerHandler 导入现有服务器（见 ADR-069）：探测 + 导入两端点。
+// ImportServerHandler 导入现有服务器：探测 + 导入两端点。
 // 注册在平台管理员路由组下；两操作均写审计（instance.import.inspect / instance.import）。
 type ImportServerHandler struct {
 	svc   *service.ImportServerService

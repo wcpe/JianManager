@@ -26,7 +26,7 @@ func (f *fakeLifecycleWorker) PreflightStartInstance(ctx context.Context, in *wo
 
 func (f *fakeLifecycleWorker) CreateInstance(ctx context.Context, in *workerpb.CreateInstanceRequest, opts ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
 	// 幂等成功语义与真实 Worker 一致（已注册实例重注册也返回成功）：预检链路把「重注册失败」
-	// 升格为预检失败（ADR-050）后，零值响应（Success=false）会被误判为真实失败而 422。
+	// 升格为预检失败后，零值响应（Success=false）会被误判为真实失败而 422。
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 

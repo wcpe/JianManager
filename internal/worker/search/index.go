@@ -1,10 +1,10 @@
-// Package search 实现 Worker 本地持久全文索引（见 ADR-017）。
+// Package search 实现 Worker 本地持久全文索引。
 //
-// 每个实例一份倒排索引，落进节点数据根的 var/index/<instance-uuid>/（ADR-010）。
+// 每个实例一份倒排索引，落进节点数据根的 var/index/<instance-uuid>/。
 // 索引是 Worker 私有派生资产，绝不进 Control Plane 数据库（架构不变量）：
 // CP 仅经 gRPC SearchFiles 拿查询结果，不持有索引本身。
 //
-// 设计取舍（见 ADR-017）：在树内零依赖最小倒排索引——token → 文件集合，
+// 设计取舍：在树内零依赖最小倒排索引——token → 文件集合，
 // 配合「文件 → 指纹(size+mtime)」表做增量；查询时倒排取候选文件，再在候选内
 // 精确扫描提取行号与片段。不引入 bleve（依赖树过重）或 SQLite FTS5（纯 Go 驱动需 cgo）。
 package search
@@ -71,7 +71,7 @@ func SetBuildStartHookForTest(fn func()) func() {
 
 // Index 是单实例的全文索引。并发安全（自带锁，构建/增量/查询串行化到该实例）。
 //
-// 首建后台化（见 ADR-024）：ready/building 为进程内就绪态（不落盘，Worker 重启归零）；
+// 首建后台化：ready/building 为进程内就绪态（不落盘，Worker 重启归零）；
 // builtCh 在首建完成（成功或失败）时关闭，供有界等待者唤醒。building 经 CAS 保证单飞构建。
 type Index struct {
 	mu       sync.Mutex
@@ -112,12 +112,12 @@ func NewIndex(indexRoot, instanceUUID string, extraIgnore []string) *Index {
 	}
 }
 
-// Ready 报告索引是否已完成至少一次构建（可信查询）。进程内状态，Worker 重启归零（ADR-024）。
+// Ready 报告索引是否已完成至少一次构建（可信查询）。进程内状态，Worker 重启归零。
 func (ix *Index) Ready() bool { return ix.ready.Load() }
 
 // EnsureBuilding 若索引未就绪且无构建在途，则启动一次后台全量构建（CAS 单飞，非阻塞）。
 // 构建复用落盘索引做增量追平（非从零）；完成（成功或失败）都置 ready=true 并关闭 builtCh，
-// 避免失败时每次查询重新构建导致「索引中」死循环（自愈交由后续同步增量 Update，见 ADR-024 §3）。
+// 避免失败时每次查询重新构建导致「索引中」死循环（自愈交由后续同步增量 Update）。
 func (ix *Index) EnsureBuilding(workDir string) {
 	if ix.ready.Load() {
 		return
@@ -140,7 +140,7 @@ func (ix *Index) EnsureBuilding(workDir string) {
 
 // WaitReady 至多等待 d 让首建完成；返回是否已就绪。
 // 小目录构建在预算内完成 → 返回 true（调用方本次即可同步查询，不退化）；
-// 大目录预算内未完成 → 返回 false（调用方返回 indexing=true）。见 ADR-024 §2。
+// 大目录预算内未完成 → 返回 false（调用方返回 indexing=true）。
 func (ix *Index) WaitReady(d time.Duration) bool {
 	if ix.ready.Load() {
 		return true
@@ -202,7 +202,7 @@ func (ix *Index) save() error {
 	return nil
 }
 
-// Update 扫描工作目录并增量更新索引（见 ADR-017）。
+// Update 扫描工作目录并增量更新索引。
 //
 // 遍历当前文件，按指纹(size+mtime)与索引内记录比对：
 //   - 新增/变化文件：重新索引（读内容切词，更新倒排）。

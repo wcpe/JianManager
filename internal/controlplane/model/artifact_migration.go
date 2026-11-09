@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ArtifactMigration 一次制品存量迁移任务的登记与实时计数（底座见 ADR-073）。
+// ArtifactMigration 一次制品存量迁移任务的登记与实时计数（底座）。
 // task_id 1:1 关联 tasks 行（kind=artifact_migrate）。计数独立成行而非塞 Task.Result/Detail：
 // 失败任务无 result、Detail 被阶段文本覆写，独立行保证「总数/已迁/失败/跳过」随迁移逐条
 // 持久推进，前端渠道页可精确展示。

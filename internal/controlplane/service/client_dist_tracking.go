@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ClientDistTrackingService 客户端分发拉取/下载追踪（见 ADR-023）。
+// ClientDistTrackingService 客户端分发拉取/下载追踪。
 //
 // 数据量治理：明细 `client_dist_event` 短保留 + 后台滚动清理；写时增量 upsert 聚合 `client_dist_daily` 长保留。
 // 写入弱一致 best-effort——失败仅返回错误供调用方忽略，**绝不阻断玩家拉取**。

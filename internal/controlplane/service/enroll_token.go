@@ -32,7 +32,7 @@ const defaultEnrollTTLMinutes = 30
 // maxEnrollTTLMinutes enrollment token 有效期上限（分钟，1 天）。
 const maxEnrollTTLMinutes = 1440
 
-// EnrollTokenService 节点 enrollment token 管理（见 ADR-020）。
+// EnrollTokenService 节点 enrollment token 管理。
 //
 // token 落库只存 SHA-256 哈希，明文仅签发时一次性返回、不可二次读取。
 // 校验消费（ConsumeForNewNode）由 gRPC Register 在「新节点首次落库」时调用，

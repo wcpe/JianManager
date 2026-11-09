@@ -299,7 +299,7 @@ export function memberHealth(members: { status: string }[]): MemberHealth {
 
 // ─────────────────────────── 分组分层 ───────────────────────────
 
-/** 拓扑分组入参：一个 network 的成员归属（软标签非独占，ADR-007）。 */
+/** 拓扑分组入参：一个 network 的成员归属（软标签非独占）。 */
 export interface TopoGroupBrief {
   id: number
   name: string

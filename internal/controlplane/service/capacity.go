@@ -312,7 +312,7 @@ func (s *MetricService) forecastPoints(q ForecastQuery, usedKey string, from, to
 	for _, sr := range keep {
 		for _, p := range sr.Points {
 			if p.Avg == nil {
-				continue // 缺测为断点，不补假值（ADR-013）
+				continue // 缺测为断点，不补假值
 			}
 			k := p.TS.UnixNano()
 			if _, seen := byTS[k]; seen {

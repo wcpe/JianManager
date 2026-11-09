@@ -214,8 +214,8 @@ func TestInstanceRolling_ScopeIsolation(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
-// createInstanceGroupNodeViaAPI 经平台管理员 API 建「组织树分组」（ADR-033），返回分组 ID。
-// 注意：这是配置基线 group: scope 唯一的 id 空间，与用户组（ADR-004）/网络群组（ADR-007）正交。
+// createInstanceGroupNodeViaAPI 经平台管理员 API 建「组织树分组」，返回分组 ID。
+// 注意：这是配置基线 group: scope 唯一的 id 空间，与用户组/网络群组正交。
 func createInstanceGroupNodeViaAPI(t *testing.T, r *gin.Engine, adminToken, name string) uint {
 	t.Helper()
 	w := makeRequest(r, http.MethodPost, "/api/v1/instance-groups", map[string]any{"name": name}, adminToken)
@@ -223,8 +223,8 @@ func createInstanceGroupNodeViaAPI(t *testing.T, r *gin.Engine, adminToken, name
 	return uint(parseJSON(t, w)["id"].(float64))
 }
 
-// makeInstanceInGroups 直接插入实例并同时挂到用户组（ADR-004，决定 RBAC 可见性）与
-// 组织树分组（ADR-033，决定 group: scope 解析），两套 id 空间互不影响。
+// makeInstanceInGroups 直接插入实例并同时挂到用户组（决定 RBAC 可见性）与
+// 组织树分组（决定 group: scope 解析），两套 id 空间互不影响。
 func makeInstanceInGroups(t *testing.T, db *gorm.DB, nodeID, userGroupID, orgGroupID uint, name string, status model.InstanceStatus) uint {
 	t.Helper()
 	id := makeInstanceInGroup(t, db, nodeID, userGroupID, name, status)
@@ -236,7 +236,7 @@ func makeInstanceInGroups(t *testing.T, db *gorm.DB, nodeID, userGroupID, orgGro
 
 // TestConfigBaseline_ScopeIsolation 覆盖越权修复：非管理员 list/get/drift/converge 受 scope 过滤。
 //
-// 关键：`group:<id>` 的 id 是组织树分组（ADR-033 InstanceGroupNode），不是用户组（ADR-004 GroupInstance）。
+// 关键：`group:<id>` 的 id 是组织树分组（InstanceGroupNode），不是用户组（GroupInstance）。
 // 旧版本用「用户组 id」当 scope，实际解析为组织树中不存在的节点（空集），使隔离断言以空集空转通过。
 // 本用例改为构造真实的组织树分组，并显式断言 scope 真的解析到目标实例（非空、且是预期那一台）。
 func TestConfigBaseline_ScopeIsolation(t *testing.T) {
@@ -250,7 +250,7 @@ func TestConfigBaseline_ScopeIsolation(t *testing.T) {
 	orgB := createInstanceGroupNodeViaAPI(t, r, adminTok, "blB-org")
 	orgA := createInstanceGroupNodeViaAPI(t, r, adminTok, "blA-org")
 
-	// 用户组（ADR-004）：alice 仅属 A 组，决定她的可访问实例集合。
+	// 用户组：alice 仅属 A 组，决定她的可访问实例集合。
 	groupA := createGroupViaAPI(t, r, adminTok, "blA")
 	groupB := createGroupViaAPI(t, r, adminTok, "blB")
 	aliceTok := getMemberToken(t, r, "alice", "password123")

@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-// ADR-107 位点账本的配置加载测试。
+// 位点账本的配置加载测试。
 //
 // 守两件事：
 //  1. **示例配置里的键名真的能被读到**——`configs/control-plane.yml` 的 `business_cursor` 段
 //     若与 mapstructure tag 漂移（改了一个字却没改另一个），零配置部署就会静默走默认值，
 //     运维以为调了 retention 其实没生效；
-//  2. 零配置时走 ADR-107 的默认值（保留 7 天 / 队列 10000 / 批量 500 / 开启）。
+//  2. 零配置时走默认值（保留 7 天 / 队列 10000 / 批量 500 / 开启）。
 
 // writeTempConfig 把给定内容写入临时 control-plane.yml 并返回路径。
 func writeTempConfig(t *testing.T, content []byte) string {
@@ -40,7 +40,7 @@ func TestBusinessCursorConfig_SampleYAML(t *testing.T) {
 	}
 }
 
-// TestBusinessCursorConfig_Defaults 零配置走 ADR-107 默认值。
+// TestBusinessCursorConfig_Defaults 零配置走默认值。
 func TestBusinessCursorConfig_Defaults(t *testing.T) {
 	cfg, err := Load(writeTempConfig(t, []byte("server:\n  port: 8080\n")))
 	if err != nil {
@@ -48,16 +48,16 @@ func TestBusinessCursorConfig_Defaults(t *testing.T) {
 	}
 	got := cfg.BusinessCursor
 	if !got.Enabled {
-		t.Error("位点账本默认必须开启（ADR-107 §2）")
+		t.Error("位点账本默认必须开启")
 	}
 	if got.RetentionDays != 7 {
-		t.Errorf("保留天数默认必须是 7 天（ADR-107 §5），实得 %d", got.RetentionDays)
+		t.Errorf("保留天数默认必须是 7 天，实得 %d", got.RetentionDays)
 	}
 	if got.QueueSize != 10000 {
-		t.Errorf("队列容量默认必须是 10000（ADR-107 §2），实得 %d", got.QueueSize)
+		t.Errorf("队列容量默认必须是 10000，实得 %d", got.QueueSize)
 	}
 	if got.BatchSize != 500 {
-		t.Errorf("批量条数默认必须是 500（ADR-107 §2），实得 %d", got.BatchSize)
+		t.Errorf("批量条数默认必须是 500，实得 %d", got.BatchSize)
 	}
 }
 

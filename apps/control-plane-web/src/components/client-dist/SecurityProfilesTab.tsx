@@ -6,7 +6,7 @@ import { useClientDistSecurityProfile, useClientDistSecurityProfiles } from '@/a
 import { useSecurityQuery } from './security-shared'
 
 /** 
- * 安全侧「客户端画像」Tab + 详情弹窗（ADR-088）。
+ * 安全侧「客户端画像」Tab + 详情弹窗。
  * 由旧 `ProtectionCenterPage.tsx` 内联实现原样迁出，行为不变。
  *
  * 展示层已回迁应用侧（`SecurityProfilesTabView`），此处只保留取数与查询读写：

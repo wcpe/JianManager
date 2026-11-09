@@ -19,7 +19,7 @@ interface Transport {
     byte[] fetchArtifact(String artifactSha256) throws IOException;
 
     /**
-     * 带下载进度回调的制品拉取（FR-099）。{@code onBytes} 按读入的每个分块字节数回调（可空）。
+     * 带下载进度回调的制品拉取。{@code onBytes} 按读入的每个分块字节数回调（可空）。
      * 默认实现不流式（一次性读完后报总量），生产 {@link HttpTransport} 重写为分块流式上报。
      */
     default byte[] fetchArtifact(String artifactSha256, LongConsumer onBytes) throws IOException {
@@ -31,22 +31,22 @@ interface Transport {
     }
 
     /**
-     * 流式拉取制品（FR-257）：返回 InputStream 供调用方边读边写盘（64KB 缓冲），不再全量读进 byte[]。
+     * 流式拉取制品：返回 InputStream 供调用方边读边写盘（64KB 缓冲），不再全量读进 byte[]。
      * {@code offset>0} 时以 {@code Range: bytes=<offset>-} 从断点续传（HTTP 206）。
      * 调用方负责关闭返回的 InputStream（HttpTransport 实现会在 close 时断开底层连接）。
      * 进度上报由调用方在读取循环中按分块字节数回调 {@link ProgressReporter#sink()}。
      */
     InputStream fetchArtifactStream(String artifactSha256, long offset) throws IOException;
 
-    /** 上报遥测（FR-094，契约 §4.3）。**best-effort**：端点不可达/非 202 静默忽略，绝不抛逃逸。 */
+    /** 上报遥测（契约 §4.3）。**best-effort**：端点不可达/非 202 静默忽略，绝不抛逃逸。 */
     void postTelemetry(String jsonBody);
 
-    /** 上报启动运行态心跳（FR-265）。诊断遥测关闭时不调用；失败绝不影响更新/游戏。 */
+    /** 上报启动运行态心跳。诊断遥测关闭时不调用；失败绝不影响更新/游戏。 */
     default void postRuntimeHeartbeat(String jsonBody) {
         // 旧测试替身可不实现；生产 HttpTransport 会发送真实心跳。
     }
 
-    /** 上报启动安全画像（FR-264）。必要安全日志，不受诊断遥测开关影响。 */
+    /** 上报启动安全画像。必要安全日志，不受诊断遥测开关影响。 */
     default void postSecurityHello(String jsonBody) throws IOException {
         // 旧测试替身可不实现；生产 HttpTransport 会发送真实 hello。
     }

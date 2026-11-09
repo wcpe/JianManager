@@ -861,12 +861,12 @@ describe('LogsPage × logs-federation', () => {
 	})
 
 	/**
-	 * 回归（2026-10-19，补 M-1 缺口）：FR-345 深链的 instanceId 必须一路带到联邦请求。
+	 * 回归（2026-10-19，补 M-1 缺口）：深链的 instanceId 必须一路带到联邦请求。
 	 *
 	 * 深链（如从实例详情跳「该实例日志」）依赖 URL 上的 instanceId；若它在中途被丢掉，
 	 * 用户会看到全平台日志而不是该实例的日志——错误不报、数据看似正常，最难发现。
 	 */
-	it('⑰ FR-345 深链 instanceId 传递到联邦请求，且切换级别后仍保留', async () => {
+	it('⑰ 深链 instanceId 传递到联邦请求，且切换级别后仍保留', async () => {
 		loginMockUser()
 		const seen: URLSearchParams[] = []
 		server.use(

@@ -82,7 +82,7 @@ const (
 // Wrapper 是 daemon wrapper 子进程的运行体。
 // 它作为 Java 进程的父进程，负责：启动/重启 Java、监听 socket、
 // 与 Worker 双向帧通信（转发 stdio + 接收控制命令）、维护 PID 文件。
-// 参见 ADR-003: 守护进程 Wrapper 模式。
+// 守护进程 Wrapper 模式。
 type Wrapper struct {
 	cfg     WrapperConfig
 	pidFile *PIDFile

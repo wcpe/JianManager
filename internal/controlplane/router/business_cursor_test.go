@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ADR-107 §3 缺口查询端点测试。
+// 缺口查询端点测试。
 //
 // 契约要点（逐条断言）：参数缺失 400、区间过滤、seq 升序、limit 默认/上限、
 // **无数据返回空数组**（不是 404、不是 null）、响应里只有位点没有 payload。

@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Wedge.runUpdate 端到端测试（FR-258 gradle-wrapper 模式）。
+ * Wedge.runUpdate 端到端测试（gradle-wrapper 模式）。
  *
  * <p>用 {@link HttpServer} 模拟 CP 端点，编译假 Core.jar，验证：
  * 首次启动拉取 core / 版本升级 / 版本相等 / CP 不可达用本地 / CP 不可达无本地 fail-open。

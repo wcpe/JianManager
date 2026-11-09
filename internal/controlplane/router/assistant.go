@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// AssistantHandler AI 助手配置路由处理器（见 ADR-105）。
+// AssistantHandler AI 助手配置路由处理器。
 //
 // 分两层：普通用户只读可用模型摘要；管理子域做供应商/模型 CRUD。
 // 管理面授权用显式 IsPlatformAdmin——既有 requireNodes helper 的实际语义是
@@ -49,7 +49,7 @@ func (h *AssistantHandler) auditModel(c *gin.Context, action, targetID string, d
 		marshalAuditDetail(detail), c.ClientIP(), true, "")
 }
 
-// requireAssistantAdmin AI 管理面的平台管理员门禁（见 ADR-105）。
+// requireAssistantAdmin AI 管理面的平台管理员门禁。
 //
 // **不复用 node.go 的 requirePlatformAdmin**：那个函数的名字与实际语义不符——
 // 它要求的是 `node.manage` 权限节点，任何被授予该节点的自定义角色都能通过，

@@ -16,7 +16,7 @@ import (
 // ErrDockerUnavailable 表示目标节点未安装/未运行 Docker 守护进程。
 var ErrDockerUnavailable = errors.New("目标节点 Docker 不可用")
 
-// DockerImageService 经 gRPC 委托目标节点 Worker 管理本机 Docker 镜像（见 ADR-019）。
+// DockerImageService 经 gRPC 委托目标节点 Worker 管理本机 Docker 镜像。
 // CP 不直连 Docker，所有镜像操作（列出/拉取/删除）经 Worker 中转，守架构边界。
 type DockerImageService struct {
 	db   *gorm.DB

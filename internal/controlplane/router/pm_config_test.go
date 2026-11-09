@@ -56,8 +56,8 @@ func setupPMRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engi
 	return Setup(svcs, jwtCfg.Secret)
 }
 
-// TestFR306PMConfigSetGet 保存 PM 偏好+registry → 下发 Worker → 落库 → 回读脱敏。
-func TestFR306PMConfigSetGet(t *testing.T) {
+// TestPMConfigSetGet 保存 PM 偏好+registry → 下发 Worker → 落库 → 回读脱敏。
+func TestPMConfigSetGet(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
 	r := setupPMRouter(t, db, pool)
@@ -114,8 +114,8 @@ func TestFR306PMConfigSetGet(t *testing.T) {
 	require.Contains(t, get.Body.String(), "corepackAvailable")
 }
 
-// TestFR306MaskedTokenPreserved 回传掩码 token 不清空源凭据（同 proxy.url 保存语义）。
-func TestFR306MaskedTokenPreserved(t *testing.T) {
+// TestMaskedTokenPreserved 回传掩码 token 不清空源凭据（同 proxy.url 保存语义）。
+func TestMaskedTokenPreserved(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
 	r := setupPMRouter(t, db, pool)

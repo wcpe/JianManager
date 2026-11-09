@@ -12,7 +12,7 @@ import type {
 } from '@jianmanager/devmock/contracts'
 
 /** 
- * 制品存储渠道域 mock handler（见 ADR-073）。
+ * 制品存储渠道域 mock handler。
  * 覆盖 web/src/api/artifactStorages.ts 的全部 endpoint：列表 / 创建 / 编辑 / 删除守卫
  * （内置不可删不可编辑、活跃不可删）/ 设活跃（先清后设恰一条）/ 候选与已存连通测试。
  * seed 两条：内置 local 活跃 + s3 示例（spec §3.7）。

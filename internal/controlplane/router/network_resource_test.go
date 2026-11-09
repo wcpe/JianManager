@@ -17,10 +17,10 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-func setupFR032Router(t *testing.T, db *gorm.DB) *gin.Engine {
+func setupNetworkResourceRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-fr032", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
+	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-network-resource", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	pool := cpgrpc.NewClientPool()
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
@@ -46,7 +46,7 @@ func setupFR032Router(t *testing.T, db *gorm.DB) *gin.Engine {
 	return Setup(svcs, jwtCfg.Secret)
 }
 
-func createFR032Instance(t *testing.T, db *gorm.DB, nodeID uint, name string, role model.InstanceRole, serverPort int) *model.Instance {
+func createNetworkResourceInstance(t *testing.T, db *gorm.DB, nodeID uint, name string, role model.InstanceRole, serverPort int) *model.Instance {
 	t.Helper()
 	inst := &model.Instance{
 		NodeID:       nodeID,
@@ -64,22 +64,22 @@ func createFR032Instance(t *testing.T, db *gorm.DB, nodeID uint, name string, ro
 	return inst
 }
 
-func TestFR032NetworkResourceRoutes(t *testing.T) {
+func TestNetworkResourceRoutes(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupFR032Router(t, db)
+	r := setupNetworkResourceRouter(t, db)
 	adminToken := getAdminToken(t, r)
-	memberToken := getMemberToken(t, r, "member-fr032", "password123")
+	memberToken := getMemberToken(t, r, "member-network-resource", "password123")
 
 	forbidden := makeRequest(r, http.MethodGet, "/api/v1/networks", nil, memberToken)
 	require.Equal(t, http.StatusForbidden, forbidden.Code)
 
 	nodeA := createTestNode(t, db)
-	nodeB := createTestNodeWithSuffix(t, db, "fr032-other-node")
-	proxyA := createFR032Instance(t, db, nodeA.ID, "survival-proxy", model.InstanceRoleProxy, 25565)
-	proxyB := createFR032Instance(t, db, nodeB.ID, "creative-proxy", model.InstanceRoleProxy, 25565)
-	backendA := createFR032Instance(t, db, nodeA.ID, "Survival Lobby", model.InstanceRoleBackend, 25566)
-	backendB := createFR032Instance(t, db, nodeA.ID, "survival-world", model.InstanceRoleBackend, 25567)
-	_ = createFR032Instance(t, db, nodeB.ID, "other-node-backend", model.InstanceRoleBackend, 25566)
+	nodeB := createTestNodeWithSuffix(t, db, "network-resource-other-node")
+	proxyA := createNetworkResourceInstance(t, db, nodeA.ID, "survival-proxy", model.InstanceRoleProxy, 25565)
+	proxyB := createNetworkResourceInstance(t, db, nodeB.ID, "creative-proxy", model.InstanceRoleProxy, 25565)
+	backendA := createNetworkResourceInstance(t, db, nodeA.ID, "Survival Lobby", model.InstanceRoleBackend, 25566)
+	backendB := createNetworkResourceInstance(t, db, nodeA.ID, "survival-world", model.InstanceRoleBackend, 25567)
+	_ = createNetworkResourceInstance(t, db, nodeB.ID, "other-node-backend", model.InstanceRoleBackend, 25566)
 
 	portsResp := makeRequest(r, http.MethodGet, fmt.Sprintf("/api/v1/nodes/%d/ports", nodeA.ID), nil, adminToken)
 	require.Equal(t, http.StatusOK, portsResp.Code, portsResp.Body.String())

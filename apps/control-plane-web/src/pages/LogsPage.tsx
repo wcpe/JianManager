@@ -189,12 +189,12 @@ function bucketFloor(ms: number): number {
 }
 
 /**
- * 日志中心（FR-049 查看 / FR-050 检索 / FR-150 增强 + FR-482 覆盖/失败态接线）。
+ * 日志中心（查看 / 检索 / 增强 + 覆盖/失败态接线）。
  * 套「流水检索」范式：强筛选（级别 pill + 来源/节点/实例/时间范围 + 关键字）→ 时间线行（虚拟滚动）；
  * 「实时跟随」开关锁定首页并按间隔轮询（tail）；导出可选范围（当前页/全部匹配/时间段）。
  * 级别用 StatusBadge 着色，token 驱动，与告警页语义统一。
  *
- * FR-482 接线（最小改动）：
+ * 联邦覆盖接线（最小改动）：
  * - 可选联邦 API（`/logs/federation`）经 `useLogsFederation` 探测；不可用时**不回退**经典表
  *   （用户裁定：「没有就是没有」，以免把平台/历史日志读成该视图的日志），只出横幅指明去看
  *   Legacy 只读入口。详见下方 `classicAuthoritative` 一段。
@@ -224,7 +224,7 @@ export default function LogsPage() {
   const [source, setSource] = useState('')
   const [level, setLevel] = useState('')
   const [nodeId, setNodeId] = useState<number | null>(null)
-  // 深链预筛选（FR-345）：从 URL ?instanceId= 初始化实例筛选（如从终端「查看完整历史」进入）。
+  // 深链预筛选：从 URL ?instanceId= 初始化实例筛选（如从终端「查看完整历史」进入）。
   const [instanceId, setInstanceId] = useState<number | null>(() => {
     const q = searchParams.get('instanceId')
     const n = q ? Number(q) : NaN
@@ -249,7 +249,7 @@ export default function LogsPage() {
     setPage(1)
     setFederationCursors({})
   }
-  // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（FR-480 online_only）。
+  // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（online_only）。
   const [onlineOnly, setOnlineOnly] = useState(false)
   const [follow, setFollow] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -258,7 +258,7 @@ export default function LogsPage() {
   useEffect(() => () => exportRequest.current?.abort(), [])
   /**
    * 时间窗锚点：非跟随态下冻结，避免每次渲染 `new Date()` 使 useLogs /
-   * useLogsFederation 的 queryKey 每毫秒变化导致请求风暴（FR-482 接线后暴露）。
+   * useLogsFederation 的 queryKey 每毫秒变化导致请求风暴（接线后暴露）。
    * 跟随态在渲染时取当前时间，配合 refetchInterval 滚动时间窗。
    */
   // 仅显式切换范围/跟随时更新锚点，首屏不再由 effect 生成近重复查询。
@@ -286,7 +286,7 @@ export default function LogsPage() {
 
   // 平台视图读进程日志文件尾部；联邦数据覆盖节点/实例日志。
   const federationEnabled = view !== 'platform'
-  // FR-482：可选联邦覆盖探测。与 useLogs 同筛选参数；API 404 → degraded legacy。
+  // 可选联邦覆盖探测。与 useLogs 同筛选参数；API 404 → degraded legacy。
 	const federationParams: Record<string, unknown> = {
 		...params,
 		limit: PAGE_SIZE,
@@ -608,7 +608,7 @@ export default function LogsPage() {
     || keyword.trim() !== debouncedKeyword
     || (federationEnabled ? federationQuery.isFetching || federationQuery.isPlaceholderData || federationQuery.isError
       : true)
-	// federated 探测（FR-482）未落地前，items 可能暂时为空——此时不得判为「空结果」，
+	// federated 探测未落地前，items 可能暂时为空——此时不得判为「空结果」，
 	// 否则会先闪 empty-state（且 404 降级期间显示非成功空态），把尚未就绪误报成失败。
 	// 故把「联邦探测未完成」并入 loading：只有探测结束、数据源确定后才允许判空。
 	//
@@ -621,7 +621,7 @@ export default function LogsPage() {
 		? !!data
 		// 联邦视图下「有数据」= 有联邦结果（含限流时保留的上一份行）。
 		: !!federation
-	// 空结果语义：失败/partial 不得呈「暂无日志」空成功（FR-482）。
+	// 空结果语义：失败/partial 不得呈「暂无日志」空成功。
 	// 查询服务未启用（降级）亦然：经典路径可能确实没有行，但引擎侧数据从未被查询，
 	// 此时宣称「暂无日志」是假成功，必须保留非成功空态。
 	// 限流（rate_limited）同样是失败态：emptySuccessAllowed 由 classified 判为 false。
@@ -692,7 +692,7 @@ export default function LogsPage() {
   }
 
   /**
-   * 失败态可操作引导（FR-482 §3.1）：把 helper 给出的 actionKey 落成真实动作。
+   * 失败态可操作引导：把 helper 给出的 actionKey 落成真实动作。
    * openNodes/startRehydrate → 节点页（受管运行时/归档管理入口）；reopenView → 重开固定视图；
    * requestOnline → 显式「仅查在线节点」；contactAdmin → 提示联系管理员。
    */
@@ -1039,7 +1039,7 @@ export default function LogsPage() {
 		</div>
 	  )}
 
-      {/* FR-482 覆盖/失败态横幅：partial/offline/failed 不得当空成功。 */}
+      {/* 覆盖/失败态横幅：partial/offline/failed 不得当空成功。 */}
       {federation && (
         <CoverageBanner
           federation={federation}
@@ -1102,7 +1102,7 @@ export default function LogsPage() {
 }
 
 /**
- * 覆盖/失败态横幅（FR-482）：消费 foundation 的 classify → toCoverageBannerProps。
+ * 覆盖/失败态横幅：消费 foundation 的 classify → toCoverageBannerProps。
  * visible=false 时不渲染；tone 驱动 token 配色；导出被阻断时展示原因。
  */
 function CoverageBanner({
@@ -1342,7 +1342,7 @@ function LogTimeline({
   filterKey: string
   /** 查询尚未完成：此时不判空态，避免把「未就绪」误报为空结果。 */
   loading?: boolean
-  /** FR-482：false 时禁止把空列表呈成「无日志」成功空态。 */
+  /** false 时禁止把空列表呈成「无日志」成功空态。 */
   emptySuccessAllowed?: boolean
 }) {
   const { t } = useTranslation()

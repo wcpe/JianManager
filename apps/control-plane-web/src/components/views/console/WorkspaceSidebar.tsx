@@ -36,7 +36,7 @@ import { isDeepLink } from '@/lib/hooks/use-workspace-navigation'
  * （原型要修的正是这一点），新侧栏把四个工作区各装**自己的**入口，只做两件事：
  * 定位资源（节点 / 群组 / 收藏）+ 少数几个高频目的地，其余入口走 ⌘K 命令面板。
  *
- * 【ADR-103 后的分工】纯展示的侧栏骨架（外壳 / 底栏 / 行）由 `@jianmanager/ui` 的
+ * 【回迁后的分工】纯展示的侧栏骨架（外壳 / 底栏 / 行）由 `@jianmanager/ui` 的
  * `components/nav` 提供；本文件只留**业务**：工作区解析、权限裁剪、分组树、计数取数、
  * 路由激活判定与链接渲染。判据是 props 类型——通用件只接字符串/数字/布尔/回调/节点，
  * 一旦需要 `WorkspaceDef` / `NavEntry` / 实例数这类业务类型，就必须留在这一侧。
@@ -61,7 +61,7 @@ function currentPatternOf(pathname: string): string | null {
   return resolveWorkspacePath(pathname)?.pattern ?? null
 }
 
-/** 侧栏资源数据源（ADR-103：应用侧取数后注入；字段为组件所需投影）。 */
+/** 侧栏资源数据源（应用侧取数后注入；字段为组件所需投影）。 */
 export interface WorkspaceSidebarData {
   /** 实例聚合权威总数（`/instances` 计数，与页眉同源）。 */
   instanceTotal?: number
@@ -115,7 +115,7 @@ export interface WorkspaceSidebarProps {
 
 /** 
  * 控制台侧栏（阶段 6）：`ConsoleSidebar` 的接替者。受控视图——数据与路由一律由
- * props 注入，本文件不触达 api / store / 路由（ADR-103）。
+ * props 注入，本文件不触达 api / store / 路由。
  *
  * 【折叠动画：宽度过渡只由侧栏自己承担】旧外壳把宽度过渡放在内层 `jm-sidebar-drawer`、
  * 再给内容区加 `clip-path` + `translate3d` 补偿，靠「JS 320ms 定时器 + CSS 320ms 过渡」

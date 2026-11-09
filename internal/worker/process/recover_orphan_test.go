@@ -37,7 +37,7 @@ func writeOrphanPIDRecord(t *testing.T, dir, uuid string) string {
 
 // 启动期接管扫描的行为，经修订为**非破坏**：
 //
-//   - wrapper 存活但 reconnect 拨不通 → 有界重试（期间保留 PID 文件）；耗尽后按 ADR-093 只告警不杀；
+//   - wrapper 存活但 reconnect 拨不通 → 有界重试（期间保留 PID 文件）；耗尽后只告警不杀；
 //   - wrapper 已死、Java 仍活 → **不再强杀**（真机事故 2026-09-23：一条陈旧 PID 记录一次打断 54 台在跑农场）；
 //     改为只观测 + 保留 PID 文件，落审计 `orphan.startup_detected_not_reaped`，
 //     交由周期孤儿扫描（默认 warn）与漂移/接管流程处置。
@@ -80,7 +80,7 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			wantRegistered: true,
 		},
 		{
-			name:           "重试耗尽但 wrapper 仍存活→按 ADR-093 只告警不杀",
+			name:           "重试耗尽但 wrapper 仍存活→只告警不杀",
 			succeedOnDial:  0,
 			wantRecovered:  0,
 			wantDials:      1 + len(DefaultRecoverRetryBackoff),
@@ -387,7 +387,7 @@ func newOrphanReapFixture(t *testing.T, uuid string) (*Manager, string, *daemon.
 //
 // 直接打处置原语 reapOrphanWrapper——它是「接管兜底」与「周期扫描 auto 档」共用的**唯一**强杀入口。
 // 传入「接管重试耗尽」而非 errOrphanedWrapperGone、且 wrapper 仍存活：即旧行为最危险的形态
-// ——wrapper 与 Java 都健康、只是 socket 一时拨不通的运行中服务器。ADR-093 决策 1 判其为
+// ——wrapper 与 Java 都健康、只是 socket 一时拨不通的运行中服务器。归属复核判其为
 // 「确属本实例、仅瞬时不可达，不是孤儿」→ 只告警 + 落审计、保留 PID 文件、**一个进程都不杀**。
 //
 // 转红方式（改回旧行为）：删掉函数开头那道「wrapper 仍存活即返回」的判定，让重试耗尽直接落到

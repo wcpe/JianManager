@@ -116,7 +116,7 @@ describe('InstanceConsoleCache 跨服热缓存', () => {
     await user.click(screen.getByRole('button', { name: 'open-1' }))
     expect(wsSockets).toHaveLength(3)
     expect(wsSockets.every((s) => !s.closedByClient)).toBe(true)
-    // 起实例控制台走 DOM 输出区（ADR-086），常驻缓冲是行缓冲而非 xterm buffer。
+    // 起实例控制台走 DOM 输出区，常驻缓冲是行缓冲而非 xterm buffer。
     // 原「3 个 xterm 未被销毁」的断言：xterm 渲染壳已全站下线（已无 xterm 对象可断言），
     // 保活语义落在下面的更强证据上——三个会话与其缓冲逐一存活。
     expect([1, 10, 11].map((id) => terminalSessionManager.hasSession(id))).toEqual([true, true, true])
@@ -161,7 +161,7 @@ describe('InstanceConsoleCache 跨服热缓存', () => {
 
     await waitFor(() => {
       expect(wsSockets[0].closedByClient).toBe(true)
-      // 原 xterm dispose 断言改为「权威缓冲整体丢弃」——ADR-086 后行缓冲才是被淘汰的那份状态。
+      // 原 xterm dispose 断言改为「权威缓冲整体丢弃」——行缓冲才是被淘汰的那份状态。
       expect(terminalSessionManager.getLines(LRU_TAIL_ID)).toEqual([])
       expect(screen.queryByText('doomed-buffer')).not.toBeInTheDocument()
       expect(screen.queryByText('survival-1')).not.toBeInTheDocument()

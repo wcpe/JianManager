@@ -17,7 +17,7 @@ const ResponsiveGrid = WidthProvider(GridLayout)
 const EMPTY_CARDS: PlacedCard[] = []
 
 /** 
- * 跨实例超级工作台页面（复用 ADR-034 可组合卡片工作区）。
+ * 跨实例超级工作台页面（复用可组合卡片工作区）。
  *
  * 左 = 可收起「实例库」拖拽源；右 = 跨实例画布（卡片携 instanceId，可并存多实例卡，如监看墙）。
  * 复用的卡壳 {@link WorkspaceCard}、网格、惰性挂载（未在画布的卡不建 WS）、预设机制；
@@ -106,7 +106,7 @@ export function SuperWorkbenchPage({
   const [dropActive, setDropActive] = useState(false)
   const dragDepth = useRef(0)
 
-  // 画布状态与全部动作由 props 注入（ADR-103）：本视图不触达 store。
+  // 画布状态与全部动作由 props 注入：本视图不触达 store。
 
   // 首次进入：惰性以空画布初始化。
   useEffect(() => {
@@ -242,7 +242,7 @@ export function SuperWorkbenchPage({
         </div>
       </div>
 
-      {/* 专注终端（ADR-087 沉浸台）：从工作台画布进入的纯终端全屏模式；退出回本页。
+      {/* 专注终端（沉浸台）：从工作台画布进入的纯终端全屏模式；退出回本页。
           pane 渲染与会话保活由应用侧接线层负责（注入 renderFocusTerminals）。 */}
       {focusInstanceId != null &&
         renderFocusTerminals({ initialInstanceId: focusInstanceId, onExit: () => setFocusInstanceId(null) })}

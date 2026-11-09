@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 探针在线更新（409，见 ADR-016）：把 CP 已缓存版本的下载引用经已有 gRPC
+// 探针在线更新：把 CP 已缓存版本的下载引用经已有 gRPC
 // DeployServerProbe 推到实例 plugins 目录。jar 是 JVM 已加载的 class 来源，热替换不生效，
 // 故语义为「已就位，下次重启生效」；可选 restart=true 推送后重启使其立即生效。
 

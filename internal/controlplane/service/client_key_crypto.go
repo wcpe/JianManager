@@ -13,9 +13,9 @@ import (
 	"strings"
 )
 
-// 拉取密钥可逆加密（见 ADR-044）。
+// 拉取密钥可逆加密。
 //
-// 拉取密钥半公开（随整包分发必泄露、非信任根，ADR-022 决策①），其鉴权仍只用 KeyHash 比对，
+// 拉取密钥半公开（随整包分发必泄露、非信任根，决策①），其鉴权仍只用 KeyHash 比对，
 // 行为不变；另存一份 AES-256-GCM 可逆加密副本（KeyEnc）供平台管理员事后查看明文 + 复制，
 // 与其「半公开、非信任根」的真实信任级一致（防投毒全靠 manifest 签名，本能力不触碰签名信任根）。
 //
@@ -25,7 +25,7 @@ import (
 //     rename），跨重启用同一密钥——零配置即可用、密钥始终可查看（同构签名密钥先例）；
 //   - dev_mode 未注入：回退内置 dev 密钥（源码公开，仅零配置开发用）。
 //
-// 自动生成/读取失败时返回错误给装配层记录真实原因，装配层再优雅降级（不崩，密钥不可查看但其余功能正常，与 ADR-038 降级哲学一致）；
+// 自动生成/读取失败时返回错误给装配层记录真实原因，装配层再优雅降级（不崩，密钥不可查看但其余功能正常，降级哲学一致）；
 // 注入了非法 env 密钥仍快失败（配错即让运维修正）。
 
 // keyEncSecretLen 对称加密密钥字节数（AES-256 → 32 字节）。
@@ -57,13 +57,13 @@ var (
 	chmodKeyFile = func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) }
 )
 
-// KeyEncryptor 拉取密钥的 AES-256-GCM 可逆加密器（见 ADR-044）。
+// KeyEncryptor 拉取密钥的 AES-256-GCM 可逆加密器。
 // nil 值表示「未配置加密」：Encrypt 返回空串（调用方据此不写 KeyEnc），Decrypt 返回 ErrKeyEncNotConfigured。
 type KeyEncryptor struct {
 	gcm cipher.AEAD
 }
 
-// ResolveKeyEncryptor 按三轨裁决拉取密钥加密器来源（见 ADR-044，优雅降级）。
+// ResolveKeyEncryptor 按三轨裁决拉取密钥加密器来源（优雅降级）。
 //
 //   - env 注入（secretB64 非空）：解析为 32 字节 AES 密钥构造加密器；非法即 ErrInvalidKeyEncSecret
 //     （配错快失败，让运维即时修正）。source=KeyEncSourceEnv，不生成/不持久化。

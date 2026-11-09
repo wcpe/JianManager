@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 import { readFileSync } from 'node:fs'
 
-// （见 ADR-064/065）：版本唯一真源 = internal/version/version.go。
+// 版本唯一真源 = internal/version/version.go。
 // 构建期（dev 与 build 同路径）解析注入 __APP_VERSION__，package.json 不再承载
 // 版本语义（冻结 0.0.0）——bump 真源一处，前端展示 / Go /version / 产物路径三者一致。
 const versionGo = readFileSync(path.resolve(__dirname, '../../internal/version/version.go'), 'utf8')
@@ -108,7 +108,7 @@ export default defineConfig(({ mode }) => {
       },
     },
   },
-  // vitest 双 project（ADR-047 决策 4）：node 跑纯逻辑单测（保留现状），
+  // vitest 双 project：node 跑纯逻辑单测（保留现状），
   // dom 跑 jsdom + testing-library 的组件 / 页面强断言（*.dom.test.tsx）。互不污染。
   test: {
     /** 

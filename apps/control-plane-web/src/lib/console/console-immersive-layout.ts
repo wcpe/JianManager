@@ -7,7 +7,7 @@
 
 export type PaneSplitDirection = 'horizontal' | 'vertical'
 
-/** 分割点占比下限：再小的一面就读不了日志了（ADR-087 可用性兜底）。 */
+/** 分割点占比下限：再小的一面就读不了日志了（可用性兜底）。 */
 export const MIN_RATIO = 0.2
 /** 分割点占比上限。 */
 export const MAX_RATIO = 0.8

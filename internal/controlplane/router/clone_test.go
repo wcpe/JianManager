@@ -19,17 +19,17 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-type fakeFR036RouteWorker struct {
+type fakeCloneRouteWorker struct {
 	workerpb.WorkerServiceClient
 	clone   *workerpb.CloneWorkDirRequest
 	configs map[string]map[string]string
 }
 
-func (f *fakeFR036RouteWorker) CreateInstance(context.Context, *workerpb.CreateInstanceRequest, ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
+func (f *fakeCloneRouteWorker) CreateInstance(context.Context, *workerpb.CreateInstanceRequest, ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
-func (f *fakeFR036RouteWorker) CloneWorkDir(_ context.Context, req *workerpb.CloneWorkDirRequest, _ ...grpc.CallOption) (*workerpb.CloneWorkDirResponse, error) {
+func (f *fakeCloneRouteWorker) CloneWorkDir(_ context.Context, req *workerpb.CloneWorkDirRequest, _ ...grpc.CallOption) (*workerpb.CloneWorkDirResponse, error) {
 	f.clone = req
 	if f.configs == nil {
 		f.configs = make(map[string]map[string]string)
@@ -43,14 +43,14 @@ func (f *fakeFR036RouteWorker) CloneWorkDir(_ context.Context, req *workerpb.Clo
 	return &workerpb.CloneWorkDirResponse{Success: true, CopiedFiles: 2, CopiedBytes: 64}, nil
 }
 
-func (f *fakeFR036RouteWorker) ReadConfig(_ context.Context, req *workerpb.ReadConfigRequest, _ ...grpc.CallOption) (*workerpb.ReadConfigResponse, error) {
+func (f *fakeCloneRouteWorker) ReadConfig(_ context.Context, req *workerpb.ReadConfigRequest, _ ...grpc.CallOption) (*workerpb.ReadConfigResponse, error) {
 	if f.configs == nil || f.configs[req.InstanceUuid] == nil {
 		return &workerpb.ReadConfigResponse{Path: req.Path, Content: ""}, nil
 	}
 	return &workerpb.ReadConfigResponse{Path: req.Path, Content: f.configs[req.InstanceUuid][req.Path]}, nil
 }
 
-func (f *fakeFR036RouteWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
+func (f *fakeCloneRouteWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
 	if f.configs == nil {
 		f.configs = make(map[string]map[string]string)
 	}
@@ -61,10 +61,10 @@ func (f *fakeFR036RouteWorker) WriteConfig(_ context.Context, req *workerpb.Writ
 	return &workerpb.WriteConfigResponse{Success: true}, nil
 }
 
-func setupFR036Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
+func setupCloneRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-fr036", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
+	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-clone", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
@@ -91,14 +91,14 @@ func setupFR036Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.E
 	return Setup(svcs, jwtCfg.Secret)
 }
 
-func TestFR036CloneRoutes(t *testing.T) {
+func TestCloneRoutes(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	r := setupFR036Router(t, db, pool)
+	r := setupCloneRouter(t, db, pool)
 	adminToken := getAdminToken(t, r)
-	memberToken := getMemberToken(t, r, "member-fr036", "password123")
+	memberToken := getMemberToken(t, r, "member-clone", "password123")
 	node := createTestNode(t, db)
-	worker := &fakeFR036RouteWorker{configs: make(map[string]map[string]string)}
+	worker := &fakeCloneRouteWorker{configs: make(map[string]map[string]string)}
 	pool.SetWorkerClientForTest(node.UUID, worker)
 
 	src := &model.Instance{NodeID: node.ID, Name: "lobby", Type: model.InstanceTypeMinecraftJava, Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDaemon, Status: model.InstanceStatusStopped, StartCommand: "java -jar server.jar nogui", ServerPort: 25565, QueryPort: 25565}

@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// 节点出站代理模式（见 ADR-043）。
+// 节点出站代理模式。
 const (
 	// NodeProxyModeInherit 用平台全局默认代理（settings DB > control-plane.yml > env）。
 	NodeProxyModeInherit = "inherit"
@@ -19,7 +19,7 @@ const (
 	NodeProxyModeCustom = "custom"
 )
 
-// NodeProxyService 管控节点级出站代理（见 ADR-043）。
+// NodeProxyService 管控节点级出站代理。
 //
 // 真相源 = CP DB（nodes.proxy_*）。CP 据「节点 custom ? 节点值 : 全局默认」算每节点期望代理，
 // 经心跳响应下发给 Worker，Worker 运行时重建出站 client。全局默认取自 settings（注入闭包），
@@ -94,7 +94,7 @@ func (s *NodeProxyService) UpdateNodeProxy(nodeID uint, mode, url, noProxy strin
 		if url == "" {
 			return nil, fmt.Errorf("%w: 自定义代理须填写地址（否则请选继承全局）", ErrSettingValueInvalid)
 		}
-		// 复用 httpclient 的 URL/scheme 校验，非法即拒、不静默直连（ADR-043）。
+		// 复用 httpclient 的 URL/scheme 校验，非法即拒、不静默直连。
 		if _, err := httpclient.New(httpclient.Config{URL: url}); err != nil {
 			return nil, fmt.Errorf("%w: 代理地址非法（%v）", ErrSettingValueInvalid, err)
 		}

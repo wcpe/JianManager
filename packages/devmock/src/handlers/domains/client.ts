@@ -643,7 +643,7 @@ function aggregateSeries(series: ReturnType<typeof buildHourlySeries>, exact: bo
     failStaticRate: denom > 0 ? updateFailStatic / denom : 0,
     rollbackRate: denom > 0 ? updateRolledBack / denom : 0,
     activeMachines: Math.max(0, ...series.map((p) => p.activeMachines), 0),
-    // 426：窗口落在 14 天明细保留窗内=精确去重；超出=小时桶近似（与真后端 ADR-049 语义一致）。
+    // 426：窗口落在 14 天明细保留窗内=精确去重；超出=小时桶近似（与真后端语义一致）。
     activeMachinesExact: exact,
   }
 }
@@ -1822,7 +1822,7 @@ export const handlers = [
     })
   }),
 
-  // jm-updater.json 一键生成（见 ADR-053起 core 改楔子自动拉取，去 signPublicKey/coreJar）。
+  // jm-updater.json 一键生成（core 改楔子自动拉取，去 signPublicKey/coreJar）。
   domainRoute('get', '/client-channels/:channelId/updater-config', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1901,7 +1901,7 @@ export const handlers = [
     })
   }),
 
-  // ── 平台设置（ADR-015）────────────────────────────────────────────
+  // ── 平台设置 ─────────────────────────────────────────────────────────────
   // 读取平台配置全量视图（仅平台管理员；mock 仅按 requireAuth 放行）。
   domainRoute('get', '/settings', (info) => {
     const denied = requireAuth(info)
@@ -2055,7 +2055,7 @@ db<SettingsRow>('settings', () => [
   // MC 直探超时：同 graceful_stop.timeout 的 Go duration；Worker 侧生效（经心跳下发）。
   { id: 8, key: 'direct_probe.slp_timeout', value: '3s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
   { id: 9, key: 'direct_probe.query_timeout', value: '3s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
-  // 日志采集（FR-503）：平台默认值，经心跳下发 Worker（Worker 侧生效，非 CP 内即时生效）。
+  // 日志采集：平台默认值，经心跳下发 Worker（Worker 侧生效，非 CP 内即时生效）。
   // 后端默认：规则引擎与实时采集开、gz 导入与定时扫描关、路径覆盖为空（见 DefaultAcqPolicy）。
   { id: 10, key: 'log.acq.rules_enabled', value: 'true', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
   { id: 11, key: 'log.acq.realtime_tail', value: 'true', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },

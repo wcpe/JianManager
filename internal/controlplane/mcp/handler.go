@@ -17,7 +17,7 @@ import (
 
 // Handler MCP 传输适配（Streamable HTTP + SSE 兼容）与 JSON-RPC 分发。
 //
-// 协议会话已随 ADR-096 移除：Streamable HTTP 路径完全无状态——不读也不写
+// 协议会话已随移除：Streamable HTTP 路径完全无状态——不读也不写
 // Mcp-Session-Id，每请求独立处理，授权一律取 middleware.AgentAuth 当次重建的
 // principal（无初始化快照，Token 吊销/降权即时生效）。
 type Handler struct {
@@ -54,7 +54,7 @@ func (h *Handler) RegisterActivityRoutes(rg *gin.RouterGroup) {
 
 // writeConnGone 回应「客户端持有的 SSE 连接已不存在」。
 //
-// SSE 兼容路径的连接是**传输连接**（ADR-096 决策 5），不是协议会话：id 无效即
+// SSE 兼容路径的连接是**传输连接**，不是协议会话：id 无效即
 // 404（MCP SSE 传输要求无法识别的 session id 回 404），客户端须重新连 `/sse`
 // 取新 endpoint。Streamable HTTP 路径不再有此类响应（无状态）。
 func writeConnGone(c *gin.Context) {
@@ -68,7 +68,7 @@ func writeConnGone(c *gin.Context) {
 
 // HandleStreamablePOST POST /api/v1/mcp — 每个 JSON-RPC 请求独立处理。
 //
-// 无状态语义（ADR-096）：`initialize` 只回 initializeResult()，不建会话也不下发
+// 无状态语义：`initialize` 只回 initializeResult()，不建会话也不下发
 // Mcp-Session-Id；携带陈旧/陌生 session 头一律忽略（不拒绝）。此后每次调用都用
 // 本请求重建的 principal 授权。
 func (h *Handler) HandleStreamablePOST(c *gin.Context) {
@@ -120,7 +120,7 @@ func (h *Handler) HandleStreamableGET(c *gin.Context) {
 
 // HandleStreamableDELETE DELETE /api/v1/mcp — 405：无状态端点无会话可终止。
 //
-// Streamable HTTP 规范允许客户端用 DELETE 主动结束会话；本端点在 ADR-096 后
+// Streamable HTTP 规范允许客户端用 DELETE 主动结束会话；本端点在后
 // 每次请求独立处理，没有会话可供终止，故按规范建议回 405（而非落到 NoRoute
 // 的通用 404——那会让客户端误判为「路径写错了」而反复重试）。
 func (h *Handler) HandleStreamableDELETE(c *gin.Context) {
@@ -299,7 +299,7 @@ const (
 
 // ListActivity GET /api/v1/agent/mcp/activity?window=24h
 //
-// 按 Token 聚合窗口内的 MCP 活动（ADR-096 决策 6）：进程内会话列表在 CP 重启后
+// 按 Token 聚合窗口内的 MCP 活动：进程内会话列表在 CP 重启后
 // 即为空，只反映「当前连着谁」；调用流水聚合反映实际行为历史，跨重启连续。
 func (h *Handler) ListActivity(c *gin.Context) {
 	if h.callLog == nil {
@@ -358,7 +358,7 @@ func (h *Handler) ListActivity(c *gin.Context) {
 // dispatch 处理一条 JSON-RPC 请求。
 //
 // transport 仅用于流水标注（streamable_http 无状态请求 / sse 回推请求）；
-// 授权取入参 p（每请求重建的 principal，见 ADR-096 决策 2）。
+// 授权取入参 p（每请求重建的 principal）。
 // ctx 由传输层传入并透传给工具执行，两条路径的取消源不同：
 // Streamable HTTP 用请求 ctx（无连接可绑，请求一断就没有结果接收方）；
 // SSE 用连接 ctx（结果要回推到 /sse 那条流上，连接才是边界，见 HandleSSEMessage）。
@@ -388,7 +388,7 @@ func (h *Handler) dispatch(c *gin.Context, ctx context.Context, p *service.Agent
 		if notification {
 			return RPCResponse{}
 		}
-		// 无会话可终止（ADR-096）：仅确认收到。
+		// 无会话可终止：仅确认收到。
 		return newResult(req.ID, map[string]any{})
 	default:
 		if notification {

@@ -5,7 +5,7 @@ import (
 	"sort"
 )
 
-// Agent 策略版本与 V2 能力常量（ADR-080）。
+// Agent 策略版本与 V2 能力常量。
 const (
 	AgentPolicyVersionV1 = 1
 	AgentPolicyVersionV2 = 2
@@ -166,9 +166,9 @@ var agentActionCatalog = map[string]AgentActionDescriptor{
 	},
 }
 
-// fr396DomainActions 是节点/实例扩展 action，经 init 注入 catalog，
+// capabilityDomainActions 是节点/实例扩展 action，经 init 注入 catalog，
 // 保持 map 字面量本体不被并行分支争用（与398 的追加风格一致）。
-var fr396DomainActions = []AgentActionDescriptor{
+var capabilityDomainActions = []AgentActionDescriptor{
 	{Action: AgentActionNodeGet, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
 	{Action: AgentActionNodeGetMetrics, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
 	{Action: AgentActionNodeCheckDocker, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
@@ -212,7 +212,7 @@ var fr396DomainActions = []AgentActionDescriptor{
 }
 
 func init() {
-	for _, d := range fr396DomainActions {
+	for _, d := range capabilityDomainActions {
 		agentActionCatalog[d.Action] = d
 	}
 }
@@ -241,7 +241,7 @@ func init() {
 	}
 }
 
-// beaconDomainActions 是 Beacon 拓扑拉取（见 ADR-090）的 MCP 专属 action。
+// beaconDomainActions 是 Beacon 拓扑拉取的 MCP 专属 action。
 // 权限面与实例分组一致（读 instance.read、写 instance.write）：拉取改的是分组树与实例标签
 // （归属类信息），不是实例内容，故不占用 configure/content 等更细能力。
 // 刻意不标 destructive——拉取是幂等对账（重复拉取不产生重复分组、不删本地数据），
@@ -258,60 +258,60 @@ func init() {
 	}
 }
 
-// fr470DomainActions 是崩溃诊断增强的 MCP 专属 action：崩溃趋势读。
+// crashTrendDomainActions 是崩溃诊断增强的 MCP 专属 action：崩溃趋势读。
 // 与既有 instance_list_crash_snapshots 同权限面（observability.read）——趋势是观测聚合，
 // 不改实例，故只读。V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /crash-trend 路由）。
-var fr470DomainActions = []AgentActionDescriptor{
+var crashTrendDomainActions = []AgentActionDescriptor{
 	{Action: AgentActionInstanceCrashTrend, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
 }
 
 func init() {
-	for _, d := range fr470DomainActions {
+	for _, d := range crashTrendDomainActions {
 		agentActionCatalog[d.Action] = d
 	}
 }
 
-// fr468DomainActions 是二进制/Beacon 版本管理的 MCP 专属 action。
+// versionDomainActions 是二进制/Beacon 版本管理的 MCP 专属 action。
 // 读走 instance.read；升级/回滚改的是实例的二进制版本（影响可执行内容），
 // 故走 instance.write（比 destructive 轻——不回数据、删文件，且可一级回滚）。
 // V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /binary-version 三端点）。
-var fr468DomainActions = []AgentActionDescriptor{
+var versionDomainActions = []AgentActionDescriptor{
 	{Action: AgentActionInstanceBinaryVersionGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
 	{Action: AgentActionInstanceBinaryUpgrade, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	{Action: AgentActionInstanceBinaryRollback, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 }
 
 func init() {
-	for _, d := range fr468DomainActions {
+	for _, d := range versionDomainActions {
 		agentActionCatalog[d.Action] = d
 	}
 }
 
-// fr467DomainActions 是运行期配额强制的 MCP 专属 action：配额与实时用量读。
+// quotaDomainActions 是运行期配额强制的 MCP 专属 action：配额与实时用量读。
 // V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /instances/:id/quota）。
-var fr467DomainActions = []AgentActionDescriptor{
+var quotaDomainActions = []AgentActionDescriptor{
 	{Action: AgentActionInstanceQuotaStatus, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
 }
 
 func init() {
-	for _, d := range fr467DomainActions {
+	for _, d := range quotaDomainActions {
 		agentActionCatalog[d.Action] = d
 	}
 }
 
-// fr466DomainActions 是实例整机快照的 MCP 专属 action。
+// snapshotDomainActions 是实例整机快照的 MCP 专属 action。
 // 列表走 instance.read；创建快照与一键回滚走 instance.write——回滚会覆盖工作目录，
 // 但它是**可再回滚**的（强制 pre_rollback 快照），故不落 destructive；
 // 真正的破坏性动作（删除快照）暂不通过 MCP 暴露。
 // V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /instances/:id/snapshots 等）。
-var fr466DomainActions = []AgentActionDescriptor{
+var snapshotDomainActions = []AgentActionDescriptor{
 	{Action: AgentActionInstanceSnapshotList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
 	{Action: AgentActionInstanceSnapshotCreate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	{Action: AgentActionInstanceSnapshotRollback, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 }
 
 func init() {
-	for _, d := range fr466DomainActions {
+	for _, d := range snapshotDomainActions {
 		agentActionCatalog[d.Action] = d
 	}
 }
@@ -326,7 +326,7 @@ var botDomainActions = []AgentActionDescriptor{
 	{Action: AgentActionBotSendCommand, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationWrite},
 	{Action: AgentActionBotDelete, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationDestructive},
 
-	// 模板不绑定实例：ResourceType=none，仅由 capability 把关（ADR-080 附注：持 bot.load 管理全部模板）。
+	// 模板不绑定实例：ResourceType=none，仅由 capability 把关（附注：持 bot.load 管理全部模板）。
 	{Action: AgentActionLoadTestTemplateList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
 	{Action: AgentActionLoadTestTemplateGet, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
 	{Action: AgentActionLoadTestTemplateCreate, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceNone, Operation: AgentOperationWrite},

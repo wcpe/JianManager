@@ -142,7 +142,7 @@ func (p *ProxyService) prepareProxy(ctx context.Context, req ProvisionProxyReque
 //
 // 代理与后端子服共用「核心统一落盘为 server.jar」的约定（provisionCoreJar），
 // 代价是 jar 文件名不再携带核心类型；故这里把已解析出的代理核心类型显式写进 CoreKind，
-// 供日志采集规则推导使用（FR-502）——否则平台自己搭建/重建的代理恒得 bukkit 规则，
+// 供日志采集规则推导使用——否则平台自己搭建/重建的代理恒得 bukkit 规则，
 // BungeeCord 的 `proxy.log.0`（工作目录根）永远采不到，即本项要修的生产缺陷静默复现。
 func launchSpecForProxy(req ProvisionProxyRequest, core *CoreInfo) LaunchSpec {
 	return LaunchSpec{
@@ -261,7 +261,7 @@ func (p *ProxyService) RebuildProxy(ctx context.Context, instanceID uint, create
 		return "", err
 	}
 	secret := inst.ForwardingSecret // 复用已存 secret，避免与后端注册配置的 secret 失配
-	// 重建重新解析了核心，顺带为「本字段引入之前创建的实例」补上核心类型（FR-502）：
+	// 重建重新解析了核心，顺带为「本字段引入之前创建的实例」补上核心类型：
 	// 否则重建后的代理仍按 bukkit 规则采集。补写失败不阻断重建（回退 jar 名匹配）。
 	if backfillErr := backfillLaunchSpecCoreKind(p.db, &inst, core); backfillErr != nil {
 		slog.Warn("重建时补写核心类型失败（日志采集规则将回退按 jar 名匹配）",

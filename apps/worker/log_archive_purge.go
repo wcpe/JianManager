@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 )
 
-// 本文件是「归档对象自身的回收」（FR-501 最后一块）的生产适配层。
+// 本文件是「归档对象自身的回收」（最后一块）的生产适配层。
 //
 // 与 log_retention.go 同一分工：判定与次序的语义全在 retention/catalog 包里并被回归覆盖，
 // 这里只做三件搬运——把 Catalog 的归档证据映射成 retention 的候选、把归档 Provider
@@ -155,7 +155,7 @@ func parseArchiveObjectPrefix(prefix string) (archive.PartitionKey, error) {
 // archiveProviderObjectStore 把归档 Provider 接成对象层删除出口。
 //
 // 只支持 local：`archive.RemoteS3Provider` 虽已存在但**未接线**（缺凭证/重试模型，
-// 属后续 FR），这里如实拒绝而不是拿内存 stub 冒充对象存储——那会让「已清除」
+// 属后续接线项），这里如实拒绝而不是拿内存 stub 冒充对象存储——那会让「已清除」
 // 这条遥测在一个根本没连上桶的进程里成立。
 type archiveProviderObjectStore struct {
 	provider archive.Provider

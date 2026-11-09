@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ServerRegistration 表示一个后端子服注册进一个代理（proxy↔backend 的 M:N，ADR-007）。
+// ServerRegistration 表示一个后端子服注册进一个代理（proxy↔backend 的 M:N）。
 // 每条注册携带「代理内本地属性」：在该代理 servers{} 中的 alias、try/优先级、forced-host、restricted。
 // 同一 backend 可注册进多个 proxy；同一代理内 alias 唯一。
 //

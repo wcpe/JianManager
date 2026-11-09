@@ -1,6 +1,6 @@
 package service
 
-// M2（见 ADR-066）终端 gRPC 桥路测试：
+// M2终端 gRPC 桥路测试：
 // 浏览器 WS → CP 代理（bridgeViaGRPC）→ bufconn 真 gRPC → 真 worker TerminalSession
 // → 回环拨真 workerws.TerminalServer——全真链路，不 mock 会话层。
 

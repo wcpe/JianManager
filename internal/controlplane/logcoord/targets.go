@@ -261,7 +261,7 @@ func normalizeCoverageReason(reason string) string {
 		"TRUNCATED", "OFFLINE", "ARCHIVE_MISSING", "GAP", "VIEW_STALE",
 		"DUPLICATE_UNRESOLVED", "PERMISSION_REVOKED", "CANCELLED", "BUDGET_EXCEEDED",
 		"EXPORT_INCOMPLETE", "RECOVERY_REQUIRED", "TARGET_NO_DATA",
-		// ARCHIVE_PURGED（FR-501 归档对象回收）：**不能**像 ARCHIVE_NOT_RESTORED 那样
+		// ARCHIVE_PURGED（归档对象回收）：**不能**像 ARCHIVE_NOT_RESTORED 那样
 		// 归一成 ARCHIVE_MISSING。两者对用户的含义相反——MISSING 是「去恢复一下」，
 		// PURGED 是「已按保留期删除、恢复不了」。归一到一起等于把平台的保留动作
 		// 谎报成一次故障，用户会反复点恢复、反复得到第二条错误。

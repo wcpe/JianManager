@@ -80,7 +80,7 @@ export default defineConfig([
       //  弃用 shadcn Card 松散用法：阻断业务代码新引入，统一走 Panel / StatCard。
       // @/ 路径为 app 内部语义，故留 app 层不入共享包。
       //
-      // 【card 的阻断已移除】原规则拦的是 `@/components/ui/card`——那是 ADR-103 回迁前的
+      // 【card 的阻断已移除】原规则拦的是 `@/components/ui/card`——那是回迁前的
       //  应用内旧路径，如今已不存在。`Card` 本身在包内恢复启用（的弃用撤销，
       // 理由见 packages/ui/src/components/card.tsx 文件头）：它是「最小白盒」，
       // 而 Panel（三段式）与 StatCard（KPI）都不具备该形态，弃用只会让裸容器需求散落成手写样式。

@@ -50,7 +50,7 @@ export function useDeleteJDK(nodeId: number) {
   })
 }
 
-/** POST /nodes/:id/jdks/install 的 202 响应（见 ADR-040）：异步任务受理，回执 taskId。 */
+/** POST /nodes/:id/jdks/install 的 202 响应：异步任务受理，回执 taskId。 */
 export interface InstallJDKAccepted {
   taskId: string
 }

@@ -28,7 +28,7 @@ func (f *cacheHitProvisionWorker) DownloadCore(_ context.Context, in *workerpb.D
 // ② worker 回 cache_hit 时任务 stage 轨迹出现「缓存命中」文案（与「下载」区分）。
 func TestProvisionServerAsync_CacheHitStage(t *testing.T) {
 	worker := &cacheHitProvisionWorker{}
-	svc, taskSvc, node, done := newFR319Harness(t, worker)
+	svc, taskSvc, node, done := newProvisionServerHarness(t, worker)
 	defer done()
 
 	_, taskID, err := svc.ProvisionServerAsync(context.Background(), ProvisionServerRequest{
@@ -53,7 +53,7 @@ func TestProvisionServerAsync_CacheHitStage(t *testing.T) {
 // TestProvisionServerAsync_DownloadStage 未命中链路（对照）：worker 未回 cache_hit 时
 // stage 轨迹是「下载核心…下载完成」，不得出现「缓存命中」。
 func TestProvisionServerAsync_DownloadStage(t *testing.T) {
-	svc, taskSvc, node, done := newFR319Harness(t, &fakeProvisionWorker{})
+	svc, taskSvc, node, done := newProvisionServerHarness(t, &fakeProvisionWorker{})
 	defer done()
 
 	_, taskID, err := svc.ProvisionServerAsync(context.Background(), ProvisionServerRequest{

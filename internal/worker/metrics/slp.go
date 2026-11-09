@@ -18,7 +18,7 @@ import (
 // SLP 是 MC 协议内建能力：任何在跑的 Java 版服务端（含 BungeeCord/Velocity 代理）
 // 无需任何配置即支持，是「保底可见」的关键来源。它取 MOTD / 版本 / 在线人数 /
 // 最大人数 / favicon；players.sample 弱信息仅作「可能在线」参考（可被插件伪造/截断），
-// 实名名单只认 Query（见 ADR-092）。
+// 实名名单只认 Query。
 type SLPSnapshot struct {
 	Motd          string   // description 扁平化 + 剥离颜色码后的纯文本
 	Version       string   // version.name，如 "1.20.4"

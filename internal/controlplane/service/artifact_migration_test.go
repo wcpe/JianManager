@@ -233,7 +233,7 @@ func TestArtifactMigration_LocalToS3_MigratesAllAndDeletesSource(t *testing.T) {
 		require.Equal(t, model.AssetBackendS3, got.StorageBackend)
 		require.Equal(t, target.ID, got.StorageChannelID)
 		require.Equal(t, model.AssetStorageExternal, got.StorageState)
-		require.Equal(t, a.RelPath, got.RelPath, "RelPath 跨后端不变（ADR-073）")
+		require.Equal(t, a.RelPath, got.RelPath, "RelPath 跨后端不变")
 		require.Equal(t, payloads[i], fake.objects[objectKey(a.RelPath)], "对象内容一致")
 		_, serr := os.Stat(h.root.Abs(a.RelPath))
 		require.True(t, os.IsNotExist(serr), "本地源文件已删")

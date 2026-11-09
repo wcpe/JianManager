@@ -4,7 +4,7 @@
  * 管理 Bot 生命周期。
  *
  * 架构：Worker Node → (exec + IPC) → Bot Worker (Node.js)
- * 遵循 ADR-006: Bot 必须通过 Node.js 子进程 + stdin/stdout IPC。
+ * 遵循 Bot 必须通过 Node.js 子进程 + stdin/stdout IPC。
  */
 
 package bot

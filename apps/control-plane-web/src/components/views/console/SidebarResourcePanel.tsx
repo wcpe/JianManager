@@ -9,11 +9,11 @@
  * 取数边界（性能判据）：列表是**有界窗口**（接线层 pageSize 上限 + 服务端 `q` 搜索），
  * 不是千级全量列举；截断时给出明确提示（护栏要求）。收藏/最近沿用既有 store（240）。
  *
- * 受控边界（ADR-103）：数据（instances/nodes/query）由接线层注入；本地交互状态（分组方式/筛选）
+ * 受控边界：数据（instances/nodes/query）由接线层注入；本地交互状态（分组方式/筛选）
  * 自持；偏好写入经 `lib/console/*`（localStorage 外部 store，无请求、无路由）。
  *
  * 【510】本地自定义分组（原 `custom` 模式，存 localStorage）已删除：换机即失且与后端
- * 分组树（`instance_group_nodes`，ADR-033）语义重复。分组归属一律以后端分组树为准。
+ * 分组树（`instance_group_nodes`）语义重复。分组归属一律以后端分组树为准。
  */
  import { useMemo, useState } from 'react'
  import { memo } from 'react'
@@ -329,7 +329,7 @@ export function SidebarResourcePanel({
    * 而该 hook 单次只取前 50 个目标（batch 端点硬上限）——于是第 51 台以后的服务器**永远没有
    * 指标**，滚动到那里只看到空白；同时那 50 个目标里还有大量行根本不在视口内，纯属浪费请求。
    *
-   * 【现在】面板就是这张虚拟表的拥有者（ADR-103 b：窗口归属虚拟表），按 `range` 切片后
+   * 【现在】面板就是这张虚拟表的拥有者（b：窗口归属虚拟表），按 `range` 切片后
    * 只把**看得见的那 20 来台**交给同一个 hook。目标数从「固定 50」降到「可视行数」，
    * 且滚到哪取到哪，滚动时由 hook 内已有的 300ms 防抖 + `keepPreviousData` 兜住。
    */

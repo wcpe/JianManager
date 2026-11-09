@@ -24,7 +24,7 @@ var ErrTaskNotFound = errors.New("任务不存在")
 // ErrTaskAlreadyTerminal 任务已终态，无法强制停止。
 var ErrTaskAlreadyTerminal = errors.New("任务已结束，无法停止")
 
-// TaskService 全局任务中心服务（见 ADR-040）。
+// TaskService 全局任务中心服务。
 // 负责：建任务（被 JDKService 等长任务发起方调用）、按归属列任务/查任务+日志、
 // 以及把 Worker 经心跳上报的任务快照汇聚落库（IngestSnapshots）+ 终态副作用。
 type TaskService struct {
@@ -336,7 +336,7 @@ func (s *TaskService) PendingCancelTaskIDsByNodeUUID(nodeUUID string) []string {
 	return ids
 }
 
-// IngestSnapshots 把 Worker 经心跳上报的任务快照汇聚落库（见 ADR-040）。
+// IngestSnapshots 把 Worker 经心跳上报的任务快照汇聚落库。
 // 对每条快照：按 task_id upsert Task（更新 state/progress/error/result）+ 幂等追加日志；
 // 并在任务**首次**从非终态跃迁为终态时触发副作用（落 NodeJDK / 发站内信）。
 // 失败不影响心跳本身，仅记录告警。Worker 心跳侧不会上报未经 CP 建过的任务（task_id 由 CP 下发），
@@ -397,7 +397,7 @@ func (s *TaskService) IngestSnapshots(nodeUUID string, snaps []*workerpb.TaskSna
 	return nil
 }
 
-// finalizeTerminal 执行任务终态副作用（见 ADR-040）。
+// finalizeTerminal 执行任务终态副作用。
 // 调用方须保证「首次进入终态」（用 DB 旧 state 非终态判定），本方法不再去重。
 //   - jdk_install 成功：解析 result→落 model.NodeJDK + 发成功站内信；
 //   - 失败：发失败站内信。
@@ -507,7 +507,7 @@ func (s *TaskService) persistRuntimeFromTask(t *model.Task) {
 	}
 }
 
-// appendLogs 幂等追加日志行（见 ADR-040）。
+// appendLogs 幂等追加日志行。
 // 每行编码为 "<绝对序号>\t<正文>"（Worker 侧赋予的全局单调序号）；CP 解析出绝对序号后
 // 按 (task_id, seq) 唯一约束 ON CONFLICT DO NOTHING 入库——心跳「最近 N 行」窗口跨周期重叠时，
 // 重叠行因绝对序号相同被天然去重，既不丢行也不重复。无法解析序号的行（异常）跳过。

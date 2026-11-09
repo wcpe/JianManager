@@ -12,19 +12,19 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-type fakeFR036CloneWorker struct {
+type fakeCloneWorkerCore struct {
 	workerpb.WorkerServiceClient
 	created []*workerpb.CreateInstanceRequest
 	clone   *workerpb.CloneWorkDirRequest
 	configs map[string]map[string]string
 }
 
-func (f *fakeFR036CloneWorker) CreateInstance(_ context.Context, req *workerpb.CreateInstanceRequest, _ ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
+func (f *fakeCloneWorkerCore) CreateInstance(_ context.Context, req *workerpb.CreateInstanceRequest, _ ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
 	f.created = append(f.created, req)
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
-func (f *fakeFR036CloneWorker) CloneWorkDir(_ context.Context, req *workerpb.CloneWorkDirRequest, _ ...grpc.CallOption) (*workerpb.CloneWorkDirResponse, error) {
+func (f *fakeCloneWorkerCore) CloneWorkDir(_ context.Context, req *workerpb.CloneWorkDirRequest, _ ...grpc.CallOption) (*workerpb.CloneWorkDirResponse, error) {
 	f.clone = req
 	if f.configs == nil {
 		f.configs = make(map[string]map[string]string)
@@ -38,14 +38,14 @@ func (f *fakeFR036CloneWorker) CloneWorkDir(_ context.Context, req *workerpb.Clo
 	return &workerpb.CloneWorkDirResponse{Success: true, CopiedFiles: 3, CopiedBytes: 128, Skipped: []string{"logs"}}, nil
 }
 
-func (f *fakeFR036CloneWorker) ReadConfig(_ context.Context, req *workerpb.ReadConfigRequest, _ ...grpc.CallOption) (*workerpb.ReadConfigResponse, error) {
+func (f *fakeCloneWorkerCore) ReadConfig(_ context.Context, req *workerpb.ReadConfigRequest, _ ...grpc.CallOption) (*workerpb.ReadConfigResponse, error) {
 	if f.configs == nil || f.configs[req.InstanceUuid] == nil {
 		return &workerpb.ReadConfigResponse{Path: req.Path, Content: ""}, nil
 	}
 	return &workerpb.ReadConfigResponse{Path: req.Path, Content: f.configs[req.InstanceUuid][req.Path]}, nil
 }
 
-func (f *fakeFR036CloneWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
+func (f *fakeCloneWorkerCore) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
 	if f.configs == nil {
 		f.configs = make(map[string]map[string]string)
 	}
@@ -56,26 +56,26 @@ func (f *fakeFR036CloneWorker) WriteConfig(_ context.Context, req *workerpb.Writ
 	return &workerpb.WriteConfigResponse{Success: true}, nil
 }
 
-type fakeFR036Syncer struct{ proxyIDs []uint }
+type fakeCloneSyncer struct{ proxyIDs []uint }
 
-func (f *fakeFR036Syncer) SyncProxy(proxyID uint) error {
+func (f *fakeCloneSyncer) SyncProxy(proxyID uint) error {
 	f.proxyIDs = append(f.proxyIDs, proxyID)
 	return nil
 }
 
-func TestFR036CloneCreatesIndependentBackendAndFixesConfig(t *testing.T) {
+func TestCloneCreatesIndependentBackendAndFixesConfig(t *testing.T) {
 	db := newCloneTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NodeJDK{}))
 	pool := cpgrpc.NewClientPool()
-	worker := &fakeFR036CloneWorker{configs: make(map[string]map[string]string)}
+	worker := &fakeCloneWorkerCore{configs: make(map[string]map[string]string)}
 	instSvc := NewInstanceService(db, nil, pool)
 	t.Cleanup(instSvc.Shutdown)
 	regSvc := NewRegistrationService(db)
-	syncer := &fakeFR036Syncer{}
+	syncer := &fakeCloneSyncer{}
 	regSvc.SetSyncer(syncer)
 	svc := NewCloneService(db, pool, instSvc, regSvc)
 
-	node := &model.Node{UUID: "fr036-node", Name: "fr036-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
+	node := &model.Node{UUID: "clone-node", Name: "clone-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 	jdk := &model.NodeJDK{NodeID: node.ID, Vendor: "Temurin", MajorVersion: 21, Version: "21.0.4+9", Arch: "x64", Path: "/opt/jdks/temurin-21"}
 	require.NoError(t, db.Create(jdk).Error)

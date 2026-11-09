@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ProbeUpdateHandler 探针在线更新路由处理器（409，见 ADR-083）。
+// ProbeUpdateHandler 探针在线更新路由处理器。
 // 复用已有 gRPC DeployServerProbe 下发 CP-local jar 引用，下次重启生效；可选「推送并重启」立即生效。
 type ProbeUpdateHandler struct {
 	updateSvc   *service.ProbeUpdateService

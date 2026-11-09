@@ -1,5 +1,5 @@
 /**
- * 日志中心纯函数助手（FR-150）。
+ * 日志中心纯函数助手。
  * 级别配色归一、时间范围预设、导出范围裁剪、虚拟滚动窗口计算——抽为纯函数便于 vitest 覆盖，
  * UI 组件只做渲染与状态编排。
  */
@@ -16,7 +16,7 @@ import type { LogQueryParams } from '@/api/logs'
 export const LOG_VIEWS = ['platform', 'node_instance', 'all'] as const
 
 /**
- * 日志级别 → 状态等级（FR-150）。
+ * 日志级别 → 状态等级。
  * 经 StatusBadge 着色，使日志与告警页语义统一：error=danger、warn=warning、info=info、debug=neutral。
  * 着色全部走 `--status-*` token，不硬编码品牌色。
  */
@@ -105,7 +105,7 @@ export function logScopeKey(params: LogQueryScope): string {
   return JSON.stringify(normalizeLogScope(params))
 }
 
-/** 导出范围：当前页 / 全部匹配 / 时间段（FR-150 导出范围可选）。 */
+/** 导出范围：当前页 / 全部匹配 / 时间段（导出范围可选）。 */
 export type LogExportScope = 'currentPage' | 'allMatched' | 'range'
 
 /** 虚拟滚动窗口计算入参。 */
@@ -133,7 +133,7 @@ export interface VirtualWindow {
 }
 
 /**
- * 计算固定行高列表的可见窗口（FR-150 虚拟滚动）。
+ * 计算固定行高列表的可见窗口（虚拟滚动）。
  * 只渲染视口附近 overscan 圈内的行，其余以上下 spacer 占位，使千行级日志不一次性入 DOM。
  * 防御 rowHeight ≤ 0（退化为全量）与空列表。
  */

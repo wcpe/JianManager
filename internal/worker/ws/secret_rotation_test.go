@@ -1,4 +1,3 @@
-// （见 ADR-061）：终端/插件桥校验密钥热更新（SetJWTSecret）对握手的即时影响。
 package ws
 
 import (

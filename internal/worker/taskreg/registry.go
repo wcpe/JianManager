@@ -1,4 +1,4 @@
-// Package taskreg 提供 Worker 侧「运行中长任务内存登记表」（见 ADR-040）。
+// Package taskreg 提供 Worker 侧「运行中长任务内存登记表」。
 //
 // 长任务（如 JDK 安装）启动即返回 task_id 后，后台 goroutine 经本登记表持续更新进度/日志；
 // 心跳每周期把表内任务快照随心跳上报给 CP。任务进入终态（succeeded/failed）并被心跳上报后
@@ -19,7 +19,7 @@ import (
 const recentLogCap = 50
 
 // logSeqSep 心跳上报日志行时「绝对序号」与「正文」之间的分隔符。
-// CP 据此把序号从行里解析出来，按 task_id + 绝对序号幂等追加（重叠窗口不重复入库，见 ADR-040）。
+// CP 据此把序号从行里解析出来，按 task_id + 绝对序号幂等追加（重叠窗口不重复入库）。
 // 用制表符（日志正文出现概率低）。
 const logSeqSep = "\t"
 

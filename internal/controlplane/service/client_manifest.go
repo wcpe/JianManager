@@ -7,7 +7,7 @@ import (
 // 客户端分发 manifest 的类型与 JSON 序列化（简化后）。
 //
 // 起 manifest 不再携带 Ed25519 签名段（信任模型改为 HTTPS + 拉取密钥鉴权，
-// 见 docs/specs/updater-arch-simplification/spec.md §2 A，推翻 ADR-022/053）。
+// 见 docs/specs/updater-arch-simplification/spec.md §2 A，推翻）。
 // 客户端 updater-core 拉到 manifest 直接用，不再验签。
 //
 // MarshalJSON 仍走 manifestToTree 单一真源：保证全平台文件 platform 输出为 JSON null

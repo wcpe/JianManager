@@ -42,10 +42,10 @@ type Manager struct {
 	rootDir    string // 托管根目录（默认 <serversDir>/jdks）
 	managed    map[string]Info
 	systemDirs []string // 可选系统 JDK 探测路径
-	// httpClient JDK 归档/元数据下载所用出站 client（经进程级代理ADR-037）。
+	// httpClient JDK 归档/元数据下载所用出站 client（经进程级代理）。
 	// 为 nil 时 download 路径回退一个 15min 超时的默认 client（向后兼容）。
 	httpClient *http.Client
-	// httpProvider 运行时出站持有者（ADR-043）：非 nil 时每次下载取当前 client，
+	// httpProvider 运行时出站持有者：非 nil 时每次下载取当前 client，
 	// 使 CP 经心跳下发的代理改动即时生效。优先于 httpClient。
 	httpProvider func() *http.Client
 }
@@ -61,7 +61,7 @@ func NewManager(rootDir string, systemDirs []string) *Manager {
 	}
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理ADR-037）：JDK 下载经此 client。
+// SetHTTPClient 注入出站 client（经进程级代理）：JDK 下载经此 client。
 // 由 main 装配；不调用则下载路径回退裸默认 client（向后兼容）。
 // 下载不设「总超时」上限，卡死由 stall 看门狗判定（FIX-4）；注入 client 若设了 Timeout 会被克隆去掉。
 func (m *Manager) SetHTTPClient(c *http.Client) {
@@ -70,7 +70,7 @@ func (m *Manager) SetHTTPClient(c *http.Client) {
 	m.httpClient = c
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次下载取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者：每次下载取当前 client，
 // 使 CP 经心跳下发的代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
 func (m *Manager) SetHTTPClientProvider(p func() *http.Client) {
 	m.mu.Lock()
@@ -163,7 +163,7 @@ func (m *Manager) List() ([]Info, error) {
 	return out, nil
 }
 
-// Progress 报告安装进度的回调（见 ADR-040）。
+// Progress 报告安装进度的回调。
 // percent 为 0~100 的下载百分比（无 Content-Length 时可能停在某值，由 line 补充阶段说明）；
 // line 为可选的人类可读日志行（空表示仅更新百分比）。回调内不得长时间阻塞。
 type Progress func(percent int, line string)
@@ -174,7 +174,7 @@ func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase
 }
 
 // InstallWithProgress 下载并安装指定 JDK 到 installDir（默认 <rootDir>/<vendor>-<major>），
-// 期间经 progress 回调上报下载百分比与阶段日志（任务中心，见 ADR-040；progress 可为 nil）。
+// 期间经 progress 回调上报下载百分比与阶段日志（任务中心，progress 可为 nil）。
 // vendor/major/arch 必填；version 可选（非空时经 foojay 按具体版本解析）；
 // mirrorBase 非空时作下载基址（CP 从平台设置下发，使镜像源真生效），为空回退本地 env/默认源。
 // 下载完成后自动 detect。

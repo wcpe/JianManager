@@ -17,7 +17,7 @@ import (
 
 // directStrategy 直接子进程启动方式。
 // Worker 作为游戏服进程的父进程，Worker 退出时游戏服随之退出。
-// 适用于开发/测试，或不需要进程隔离的场景。与 ADR-003 的 daemon 方式互补。
+// 适用于开发/测试，或不需要进程隔离的场景。与 daemon 方式互补。
 type directStrategy struct {
 	mu    sync.Mutex
 	spec  CommandSpec

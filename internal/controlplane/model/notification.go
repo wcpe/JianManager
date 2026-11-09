@@ -16,7 +16,7 @@ const (
 	NotificationLevelError NotificationLevel = "error"
 )
 
-// Notification 站内信。一条投递给某用户的消息，可关联到产生它的任务（见 ADR-040）。
+// Notification 站内信。一条投递给某用户的消息，可关联到产生它的任务。
 type Notification struct {
 	ID     uint              `gorm:"primaryKey" json:"id"`
 	UserID uint              `gorm:"index;not null" json:"userId"` // 收件人

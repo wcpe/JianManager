@@ -88,7 +88,7 @@ func interceptApproval(
 	// 申请人：优先取 principal 自带的“代表哪个用户”（助手委托身份），
 	// 其次才回退到 Token 归属（Agent Token 场景）。
 	//
-	// 【为何不能只靠 TokenID】助手派生的 principal 没有 Token（ADR-105 不为人类用户签发
+	// 【为何不能只靠 TokenID】助手派生的 principal 没有 Token（不为人类用户签发
 	// jmat_），TokenID 恒为 0 → tokenOwnerUserID 直接返回 0 → 票据 applicant_user_id=0。
 	// 后果不是“显示不好看”，而是实质错误：
 	//   ① 幂等部分唯一索引含 applicant_user_id，于是**不同用户**经助手触发的

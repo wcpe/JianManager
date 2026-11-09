@@ -8,7 +8,7 @@ import (
 )
 
 // BotExecutorResolver 统一解析 Bot 的实际执行节点。
-// 参见 ADR-074：ExecutorNodeID 非空时必须优先于目标实例所属节点。
+// ExecutorNodeID 非空时必须优先于目标实例所属节点。
 type BotExecutorResolver struct {
 	db *gorm.DB
 }

@@ -9,7 +9,7 @@ import {
 } from '@jianmanager/devmock/capability-profile'
 
 /** 
- *ADR-091：能力画像有三份登记（后端 `service/capability_profile.go`、前端
+ *能力画像有三份登记（后端 `service/capability_profile.go`、前端
  * `lib/capabilities.ts`、devmock `capability-profile.ts`）。本契约测试逐画像枚举比对
  * devmock ↔ 前端，防止任一真源漂移导致「假后端」与前端对同一 (type, role) 给出不同 Tab 集。
  *

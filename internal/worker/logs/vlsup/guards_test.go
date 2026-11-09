@@ -21,7 +21,7 @@ func TestSupervisorGuards(t *testing.T) {
 	require.Error(t, VerifyAsset(exe, "deadbeef"))
 
 	// ② 只允许本机回环：外网地址必须拒绝构造。
-	//    这条是 ADR-094 的硬约束——VL 只监听 localhost，不能被跨机访问。
+	// 这条是硬约束——VL 只监听 localhost，不能被跨机访问。
 	_, err := NewClient(ClientOptions{BaseURL: "http://example.com:9428", Username: "u", Password: "p"})
 	require.Error(t, err)
 

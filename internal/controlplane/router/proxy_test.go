@@ -22,30 +22,30 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-type fakeFR035RouteWorker struct {
+type fakeProxyRouteWorker struct {
 	workerpb.WorkerServiceClient
 	mu       sync.Mutex
 	download *workerpb.DownloadCoreRequest
 	configs  map[string]map[string]string
 }
 
-func (f *fakeFR035RouteWorker) CreateInstance(context.Context, *workerpb.CreateInstanceRequest, ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
+func (f *fakeProxyRouteWorker) CreateInstance(context.Context, *workerpb.CreateInstanceRequest, ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
 // 搭建前的规格对账使用既有 RPC，夹具必须显式实现，不能落入嵌入的空客户端。
-func (f *fakeFR035RouteWorker) ResyncInstances(_ context.Context, req *workerpb.ResyncInstancesRequest, _ ...grpc.CallOption) (*workerpb.ResyncInstancesResponse, error) {
+func (f *fakeProxyRouteWorker) ResyncInstances(_ context.Context, req *workerpb.ResyncInstancesRequest, _ ...grpc.CallOption) (*workerpb.ResyncInstancesResponse, error) {
 	return &workerpb.ResyncInstancesResponse{Registered: int32(len(req.Instances))}, nil
 }
 
-func (f *fakeFR035RouteWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
+func (f *fakeProxyRouteWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
 	f.mu.Lock()
 	f.download = req
 	f.mu.Unlock()
 	return &workerpb.DownloadCoreResponse{Success: true, Size: 42}, nil
 }
 
-func (f *fakeFR035RouteWorker) ReadConfig(_ context.Context, req *workerpb.ReadConfigRequest, _ ...grpc.CallOption) (*workerpb.ReadConfigResponse, error) {
+func (f *fakeProxyRouteWorker) ReadConfig(_ context.Context, req *workerpb.ReadConfigRequest, _ ...grpc.CallOption) (*workerpb.ReadConfigResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.configs == nil || f.configs[req.InstanceUuid] == nil {
@@ -54,7 +54,7 @@ func (f *fakeFR035RouteWorker) ReadConfig(_ context.Context, req *workerpb.ReadC
 	return &workerpb.ReadConfigResponse{Path: req.Path, Content: f.configs[req.InstanceUuid][req.Path]}, nil
 }
 
-func (f *fakeFR035RouteWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
+func (f *fakeProxyRouteWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.configs == nil {
@@ -67,7 +67,7 @@ func (f *fakeFR035RouteWorker) WriteConfig(_ context.Context, req *workerpb.Writ
 	return &workerpb.WriteConfigResponse{Success: true}, nil
 }
 
-func (f *fakeFR035RouteWorker) snapshot(instanceUUID string) (*workerpb.DownloadCoreRequest, map[string]string) {
+func (f *fakeProxyRouteWorker) snapshot(instanceUUID string) (*workerpb.DownloadCoreRequest, map[string]string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	configs := make(map[string]string)
@@ -77,9 +77,9 @@ func (f *fakeFR035RouteWorker) snapshot(instanceUUID string) (*workerpb.Download
 	return f.download, configs
 }
 
-type fakeFR035RouteCoreTransport struct{}
+type fakeProxyRouteCoreTransport struct{}
 
-func (fakeFR035RouteCoreTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (fakeProxyRouteCoreTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	body := ""
 	switch req.URL.Path {
 	case "/v3/projects/velocity":
@@ -94,10 +94,10 @@ func (fakeFR035RouteCoreTransport) RoundTrip(req *http.Request) (*http.Response,
 	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
 }
 
-func setupFR035Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, core *service.CoreService) *gin.Engine {
+func setupProxyRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, core *service.CoreService) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-fr035", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
+	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-proxy", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
@@ -129,16 +129,16 @@ func setupFR035Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, core *
 	return Setup(svcs, jwtCfg.Secret)
 }
 
-func TestFR035ProvisionProxyRoutes(t *testing.T) {
+func TestProvisionProxyRoutes(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
 	core := service.NewCoreService()
-	core.SetHTTPClient(&http.Client{Transport: fakeFR035RouteCoreTransport{}})
-	r := setupFR035Router(t, db, pool, core)
+	core.SetHTTPClient(&http.Client{Transport: fakeProxyRouteCoreTransport{}})
+	r := setupProxyRouter(t, db, pool, core)
 	adminToken := getAdminToken(t, r)
-	memberToken := getMemberToken(t, r, "member-fr035", "password123")
+	memberToken := getMemberToken(t, r, "member-proxy", "password123")
 	node := createTestNode(t, db)
-	worker := &fakeFR035RouteWorker{}
+	worker := &fakeProxyRouteWorker{}
 	pool.SetWorkerClientForTest(node.UUID, worker)
 	jdk := &model.NodeJDK{NodeID: node.ID, Vendor: "Temurin", MajorVersion: 21, Version: "21.0.4+9", Arch: "x64", Path: "/opt/jdks/temurin-21"}
 	require.NoError(t, db.Create(jdk).Error)
@@ -153,7 +153,7 @@ func TestFR035ProvisionProxyRoutes(t *testing.T) {
 	require.Equal(t, []any{"3.3.0-SNAPSHOT", "3.2.0-SNAPSHOT"}, parseJSON(t, versionsResp)["versions"])
 
 	createResp := makeRequest(r, http.MethodPost, "/api/v1/instances/provision/proxy", map[string]any{
-		"nodeId": node.ID, "name": "fr035-route-velocity", "proxyType": "velocity", "version": "3.3.0-SNAPSHOT", "jdkId": jdk.ID, "memoryMb": 1024, "onlineMode": false,
+		"nodeId": node.ID, "name": "proxy-route-velocity", "proxyType": "velocity", "version": "3.3.0-SNAPSHOT", "jdkId": jdk.ID, "memoryMb": 1024, "onlineMode": false,
 		"backendRegistrations": []map[string]any{{"backendId": backend.ID, "alias": "lobby", "priority": 0, "forcedHost": "play.example.com"}},
 	}, adminToken)
 	require.Equal(t, http.StatusCreated, createResp.Code, createResp.Body.String())

@@ -4,7 +4,7 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 /** 
  * 终端实时流仿真。
  * token handler 走 HTTP（node 测试可验）；WS 伪交互仅并入浏览器 mock 模式（browser.ts）——
- * jsdom 下 WebSocket 不稳，按 ADR-047/spec §6 退路：终端交互真机验收，jsdom 只测 token handler。
+ * jsdom 下 WebSocket 不稳，按 spec §6 退路：终端交互真机验收，jsdom 只测 token handler。
  */
 const MOCK_TERMINAL_URL = 'ws://localhost/_mock/terminal'
 

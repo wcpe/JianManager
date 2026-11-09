@@ -381,7 +381,7 @@ func TestS3Store_RealMinIO(t *testing.T) {
 	if sk == "" {
 		sk = "minioadmin"
 	}
-	store, err := NewS3(S3Config{Endpoint: endpoint, Bucket: bucket, Region: "us-east-1", Prefix: "fr347-test", AccessKey: ak, SecretKey: sk, UseSSL: false})
+	store, err := NewS3(S3Config{Endpoint: endpoint, Bucket: bucket, Region: "us-east-1", Prefix: "log-retention-test", AccessKey: ak, SecretKey: sk, UseSSL: false})
 	require.NoError(t, err)
 	ctx := context.Background()
 

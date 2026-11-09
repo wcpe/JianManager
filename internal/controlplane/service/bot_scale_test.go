@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-type fakeFR038BotWorker struct {
+type fakeBotScaleWorker struct {
 	workerpb.WorkerServiceClient
 	listed             int
 	setBehaviorCalls   []*workerpb.SetBotBehaviorRequest
@@ -25,7 +25,7 @@ type fakeFR038BotWorker struct {
 	setBehaviorSuccess bool
 }
 
-func (w *fakeFR038BotWorker) ListBots(context.Context, *workerpb.ListBotsRequest, ...grpcapi.CallOption) (*workerpb.ListBotsResponse, error) {
+func (w *fakeBotScaleWorker) ListBots(context.Context, *workerpb.ListBotsRequest, ...grpcapi.CallOption) (*workerpb.ListBotsResponse, error) {
 	w.listed++
 	if w.listBotsResponse != nil {
 		return w.listBotsResponse, nil
@@ -33,7 +33,7 @@ func (w *fakeFR038BotWorker) ListBots(context.Context, *workerpb.ListBotsRequest
 	return &workerpb.ListBotsResponse{}, nil
 }
 
-func (w *fakeFR038BotWorker) SetBotBehavior(_ context.Context, req *workerpb.SetBotBehaviorRequest, _ ...grpcapi.CallOption) (*workerpb.SetBotBehaviorResponse, error) {
+func (w *fakeBotScaleWorker) SetBotBehavior(_ context.Context, req *workerpb.SetBotBehaviorRequest, _ ...grpcapi.CallOption) (*workerpb.SetBotBehaviorResponse, error) {
 	w.setBehaviorCalls = append(w.setBehaviorCalls, req)
 	if !w.setBehaviorSuccess {
 		return &workerpb.SetBotBehaviorResponse{Success: false, Error: "切换失败"}, nil
@@ -41,22 +41,22 @@ func (w *fakeFR038BotWorker) SetBotBehavior(_ context.Context, req *workerpb.Set
 	return &workerpb.SetBotBehaviorResponse{Success: true}, nil
 }
 
-func (w *fakeFR038BotWorker) SendBotCommand(_ context.Context, req *workerpb.SendBotCommandRequest, _ ...grpcapi.CallOption) (*workerpb.SendBotCommandResponse, error) {
+func (w *fakeBotScaleWorker) SendBotCommand(_ context.Context, req *workerpb.SendBotCommandRequest, _ ...grpcapi.CallOption) (*workerpb.SendBotCommandResponse, error) {
 	w.commandCalls = append(w.commandCalls, req)
 	return &workerpb.SendBotCommandResponse{Success: true}, nil
 }
 
-func (w *fakeFR038BotWorker) CreateBot(_ context.Context, req *workerpb.CreateBotRequest, _ ...grpcapi.CallOption) (*workerpb.CreateBotResponse, error) {
+func (w *fakeBotScaleWorker) CreateBot(_ context.Context, req *workerpb.CreateBotRequest, _ ...grpcapi.CallOption) (*workerpb.CreateBotResponse, error) {
 	w.createBotCalls = append(w.createBotCalls, req)
 	return &workerpb.CreateBotResponse{Success: true, Status: "connecting"}, nil
 }
 
-func (w *fakeFR038BotWorker) DeleteBot(_ context.Context, req *workerpb.DeleteBotRequest, _ ...grpcapi.CallOption) (*workerpb.DeleteBotResponse, error) {
+func (w *fakeBotScaleWorker) DeleteBot(_ context.Context, req *workerpb.DeleteBotRequest, _ ...grpcapi.CallOption) (*workerpb.DeleteBotResponse, error) {
 	w.deleteBotCalls = append(w.deleteBotCalls, req)
 	return &workerpb.DeleteBotResponse{Success: true}, nil
 }
 
-func newFR038BotScaleDB(t *testing.T) *gorm.DB {
+func newBotScaleDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
@@ -70,14 +70,14 @@ func newFR038BotScaleDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func createFR038Node(t *testing.T, db *gorm.DB, name, uuid string) model.Node {
+func createBotScaleNode(t *testing.T, db *gorm.DB, name, uuid string) model.Node {
 	t.Helper()
 	node := model.Node{Name: name, UUID: uuid, Host: "127.0.0.1", GRPCPort: 9100, WSPort: 9200, Secret: "secret", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(&node).Error)
 	return node
 }
 
-func createFR038Instance(t *testing.T, db *gorm.DB, nodeID uint, name string, port int) model.Instance {
+func createBotScaleInstance(t *testing.T, db *gorm.DB, nodeID uint, name string, port int) model.Instance {
 	t.Helper()
 	inst := model.Instance{
 		NodeID:       nodeID,
@@ -94,25 +94,25 @@ func createFR038Instance(t *testing.T, db *gorm.DB, nodeID uint, name string, po
 	return inst
 }
 
-func createFR038Bot(t *testing.T, db *gorm.DB, instanceID uint, name string, status model.BotStatus, behavior string) model.Bot {
+func createBotScaleBot(t *testing.T, db *gorm.DB, instanceID uint, name string, status model.BotStatus, behavior string) model.Bot {
 	t.Helper()
 	bot := model.Bot{InstanceID: instanceID, Name: name, Status: status, Behavior: behavior, Config: `{"auth":"offline"}`}
 	require.NoError(t, db.Create(&bot).Error)
 	return bot
 }
 
-func TestFR038BotScaleServiceListSummaryAndWorkerRefresh(t *testing.T) {
-	db := newFR038BotScaleDB(t)
+func TestBotScaleServiceListSummaryAndWorkerRefresh(t *testing.T) {
+	db := newBotScaleDB(t)
 	pool := cpgrpc.NewClientPool()
 	svc := NewBotService(db, pool)
-	nodeA := createFR038Node(t, db, "节点A", "node-a")
-	nodeB := createFR038Node(t, db, "节点B", "node-b")
-	instA := createFR038Instance(t, db, nodeA.ID, "生存服", 25565)
-	instB := createFR038Instance(t, db, nodeB.ID, "空岛服", 25566)
-	botA := createFR038Bot(t, db, instA.ID, "GuardBot", model.BotStatusConnecting, "guard")
-	createFR038Bot(t, db, instB.ID, "PatrolBot", model.BotStatusError, "patrol")
+	nodeA := createBotScaleNode(t, db, "节点A", "node-a")
+	nodeB := createBotScaleNode(t, db, "节点B", "node-b")
+	instA := createBotScaleInstance(t, db, nodeA.ID, "生存服", 25565)
+	instB := createBotScaleInstance(t, db, nodeB.ID, "空岛服", 25566)
+	botA := createBotScaleBot(t, db, instA.ID, "GuardBot", model.BotStatusConnecting, "guard")
+	createBotScaleBot(t, db, instB.ID, "PatrolBot", model.BotStatusError, "patrol")
 
-	worker := &fakeFR038BotWorker{setBehaviorSuccess: true, listBotsResponse: &workerpb.ListBotsResponse{Bots: []*workerpb.BotInfo{{BotUuid: botA.UUID, Status: "connected"}}}}
+	worker := &fakeBotScaleWorker{setBehaviorSuccess: true, listBotsResponse: &workerpb.ListBotsResponse{Bots: []*workerpb.BotInfo{{BotUuid: botA.UUID, Status: "connected"}}}}
 	pool.SetWorkerClientForTest(nodeA.UUID, worker)
 
 	query := BotListQuery{Filter: BotFilter{NodeID: &nodeA.ID}, Page: 0, PageSize: 200}
@@ -135,17 +135,17 @@ func TestFR038BotScaleServiceListSummaryAndWorkerRefresh(t *testing.T) {
 	require.Equal(t, int64(1), summary.Groups[0].Online)
 }
 
-func TestFR038BotScaleBatchDelegatesAndSkipsOutOfScope(t *testing.T) {
-	db := newFR038BotScaleDB(t)
+func TestBotScaleBatchDelegatesAndSkipsOutOfScope(t *testing.T) {
+	db := newBotScaleDB(t)
 	pool := cpgrpc.NewClientPool()
 	svc := NewBotService(db, pool)
-	nodeA := createFR038Node(t, db, "节点A", "node-a")
-	nodeB := createFR038Node(t, db, "节点B", "node-b")
-	instA := createFR038Instance(t, db, nodeA.ID, "生存服", 25565)
-	instB := createFR038Instance(t, db, nodeB.ID, "空岛服", 25566)
-	botA := createFR038Bot(t, db, instA.ID, "GuardBot", model.BotStatusConnected, "idle")
-	botB := createFR038Bot(t, db, instB.ID, "PatrolBot", model.BotStatusConnected, "idle")
-	worker := &fakeFR038BotWorker{setBehaviorSuccess: true}
+	nodeA := createBotScaleNode(t, db, "节点A", "node-a")
+	nodeB := createBotScaleNode(t, db, "节点B", "node-b")
+	instA := createBotScaleInstance(t, db, nodeA.ID, "生存服", 25565)
+	instB := createBotScaleInstance(t, db, nodeB.ID, "空岛服", 25566)
+	botA := createBotScaleBot(t, db, instA.ID, "GuardBot", model.BotStatusConnected, "idle")
+	botB := createBotScaleBot(t, db, instB.ID, "PatrolBot", model.BotStatusConnected, "idle")
+	worker := &fakeBotScaleWorker{setBehaviorSuccess: true}
 	pool.SetWorkerClientForTest(nodeA.UUID, worker)
 
 	res, err := svc.Batch(BotBatchRequest{
@@ -173,18 +173,18 @@ func TestFR038BotScaleBatchDelegatesAndSkipsOutOfScope(t *testing.T) {
 }
 
 func TestBotServiceUpdateBehaviorSeparatesFleetLedger(t *testing.T) {
-	db := newFR038BotScaleDB(t)
+	db := newBotScaleDB(t)
 	pool := cpgrpc.NewClientPool()
 	svc := NewBotService(db, pool)
-	node := createFR038Node(t, db, "节点A", "node-a")
-	instance := createFR038Instance(t, db, node.ID, "生存服", 25565)
-	legacy := createFR038Bot(t, db, instance.ID, "legacy", model.BotStatusConnected, "idle")
-	fleetBatch := createFR038Bot(t, db, instance.ID, "fleet-batch", model.BotStatusConnected, "idle")
-	fleetSession := createFR038Bot(t, db, instance.ID, "fleet-session", model.BotStatusConnected, "idle")
+	node := createBotScaleNode(t, db, "节点A", "node-a")
+	instance := createBotScaleInstance(t, db, node.ID, "生存服", 25565)
+	legacy := createBotScaleBot(t, db, instance.ID, "legacy", model.BotStatusConnected, "idle")
+	fleetBatch := createBotScaleBot(t, db, instance.ID, "fleet-batch", model.BotStatusConnected, "idle")
+	fleetSession := createBotScaleBot(t, db, instance.ID, "fleet-session", model.BotStatusConnected, "idle")
 	loadBatchID, stressSessionID := uint(11), uint(12)
 	require.NoError(t, db.Model(&fleetBatch).Update("load_batch_id", loadBatchID).Error)
 	require.NoError(t, db.Model(&fleetSession).Update("stress_session_id", stressSessionID).Error)
-	worker := &fakeFR038BotWorker{setBehaviorSuccess: true}
+	worker := &fakeBotScaleWorker{setBehaviorSuccess: true}
 	pool.SetWorkerClientForTest(node.UUID, worker)
 
 	for _, botID := range []uint{fleetBatch.ID, fleetSession.ID} {
@@ -210,13 +210,13 @@ func TestBotServiceUpdateBehaviorSeparatesFleetLedger(t *testing.T) {
 }
 
 func TestBotServiceUpdateBehaviorWorkerFailureKeepsLedger(t *testing.T) {
-	db := newFR038BotScaleDB(t)
+	db := newBotScaleDB(t)
 	pool := cpgrpc.NewClientPool()
 	svc := NewBotService(db, pool)
-	node := createFR038Node(t, db, "节点A", "node-a")
-	instance := createFR038Instance(t, db, node.ID, "生存服", 25565)
-	bot := createFR038Bot(t, db, instance.ID, "legacy", model.BotStatusConnected, "idle")
-	worker := &fakeFR038BotWorker{setBehaviorSuccess: false}
+	node := createBotScaleNode(t, db, "节点A", "node-a")
+	instance := createBotScaleInstance(t, db, node.ID, "生存服", 25565)
+	bot := createBotScaleBot(t, db, instance.ID, "legacy", model.BotStatusConnected, "idle")
+	worker := &fakeBotScaleWorker{setBehaviorSuccess: false}
 	pool.SetWorkerClientForTest(node.UUID, worker)
 
 	require.Error(t, svc.UpdateBehavior(bot.ID, "follow"))
@@ -226,18 +226,18 @@ func TestBotServiceUpdateBehaviorWorkerFailureKeepsLedger(t *testing.T) {
 }
 
 func TestBotServiceBatchSetBehaviorSeparatesFleetLedger(t *testing.T) {
-	db := newFR038BotScaleDB(t)
+	db := newBotScaleDB(t)
 	pool := cpgrpc.NewClientPool()
 	svc := NewBotService(db, pool)
-	node := createFR038Node(t, db, "节点A", "node-a")
-	instance := createFR038Instance(t, db, node.ID, "生存服", 25565)
-	legacy := createFR038Bot(t, db, instance.ID, "legacy", model.BotStatusConnected, "idle")
-	fleetBatch := createFR038Bot(t, db, instance.ID, "fleet-batch", model.BotStatusConnected, "idle")
-	fleetSession := createFR038Bot(t, db, instance.ID, "fleet-session", model.BotStatusConnected, "idle")
+	node := createBotScaleNode(t, db, "节点A", "node-a")
+	instance := createBotScaleInstance(t, db, node.ID, "生存服", 25565)
+	legacy := createBotScaleBot(t, db, instance.ID, "legacy", model.BotStatusConnected, "idle")
+	fleetBatch := createBotScaleBot(t, db, instance.ID, "fleet-batch", model.BotStatusConnected, "idle")
+	fleetSession := createBotScaleBot(t, db, instance.ID, "fleet-session", model.BotStatusConnected, "idle")
 	loadBatchID, stressSessionID := uint(11), uint(12)
 	require.NoError(t, db.Model(&fleetBatch).Update("load_batch_id", loadBatchID).Error)
 	require.NoError(t, db.Model(&fleetSession).Update("stress_session_id", stressSessionID).Error)
-	worker := &fakeFR038BotWorker{setBehaviorSuccess: true}
+	worker := &fakeBotScaleWorker{setBehaviorSuccess: true}
 	pool.SetWorkerClientForTest(node.UUID, worker)
 
 	result, err := svc.Batch(BotBatchRequest{
@@ -265,13 +265,13 @@ func TestBotServiceBatchSetBehaviorSeparatesFleetLedger(t *testing.T) {
 }
 
 func TestBotServiceBatchSetBehaviorWorkerFailureKeepsLedger(t *testing.T) {
-	db := newFR038BotScaleDB(t)
+	db := newBotScaleDB(t)
 	pool := cpgrpc.NewClientPool()
 	svc := NewBotService(db, pool)
-	node := createFR038Node(t, db, "节点A", "node-a")
-	instance := createFR038Instance(t, db, node.ID, "生存服", 25565)
-	bot := createFR038Bot(t, db, instance.ID, "legacy", model.BotStatusConnected, "idle")
-	pool.SetWorkerClientForTest(node.UUID, &fakeFR038BotWorker{setBehaviorSuccess: false})
+	node := createBotScaleNode(t, db, "节点A", "node-a")
+	instance := createBotScaleInstance(t, db, node.ID, "生存服", 25565)
+	bot := createBotScaleBot(t, db, instance.ID, "legacy", model.BotStatusConnected, "idle")
+	pool.SetWorkerClientForTest(node.UUID, &fakeBotScaleWorker{setBehaviorSuccess: false})
 
 	result, err := svc.Batch(BotBatchRequest{Action: BotBatchSetBehavior, IDs: []uint{bot.ID}, Behavior: "guard"}, nil, false)
 	require.NoError(t, err)

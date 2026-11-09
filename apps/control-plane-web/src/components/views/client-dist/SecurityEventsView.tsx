@@ -8,7 +8,7 @@ import type { ClientDistQuery } from '@/lib/client-dist/client-dist-query'
 import { EmptyState } from '@/components/views/client-dist/security-format'
 
 /** 
- * 安全侧「异常请求分析」Tab 的展示层（ADR-088）。
+ * 安全侧「异常请求分析」Tab 的展示层。
  * 取数（`useClientDistSecurityEvents`）、查询读写（`useSecurityQuery`）与行组件
  * （含处置动作 mutation）均由应用侧容器提供。
  */

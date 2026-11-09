@@ -9,7 +9,7 @@ import (
 	"github.com/docker/docker/client"
 )
 
-// ImageSummary 是 Worker 本机一个 Docker 镜像的精简描述（ADR-019）。
+// ImageSummary 是 Worker 本机一个 Docker 镜像的精简描述。
 type ImageSummary struct {
 	ID        string
 	Tags      []string

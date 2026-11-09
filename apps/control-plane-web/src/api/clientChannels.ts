@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import type { ClientChannel, ClientPullKey, ClientChannelDetail, ClientKeyWithSecret } from '@/lib/client-dist/client-channel-types'
 
-// 实现已回迁应用侧（迁包已撤销，见 ADR-103），此处保留 re-export 维持既有导入路径。
+// 实现已回迁应用侧（迁包已撤销），此处保留 re-export 维持既有导入路径。
 export type { ClientChannel, ClientPullKey, ClientChannelDetail, ClientKeyWithSecret }
 
 
@@ -117,7 +117,7 @@ export function useRevokeClientKey() {
 }
 
 /** 
- * 查看拉取密钥明文（见 ADR-044）。仅平台管理员；后端有 KeyEnc 时解密返明文。
+ * 查看拉取密钥明文。仅平台管理员；后端有 KeyEnc 时解密返明文。
  * 无 KeyEnc（存量老密钥/创建时未配加密）→ 404 KEY_NOT_REVEALABLE，调用方据此提示不可找回。
  */
 export function useRevealClientKey() {

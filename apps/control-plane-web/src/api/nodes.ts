@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-// 节点实体类型已回迁应用侧（迁包已撤销，见 ADR-103）；此处转出，调用点零改动。
+// 节点实体类型已回迁应用侧（迁包已撤销）；此处转出，调用点零改动。
 import type { NodeInfo } from '@/lib/nodes/node-types'
 export type { NodeInfo } from '@/lib/nodes/node-types'
 import type { ArchivedNode } from '@/lib/nodes/node-types'
@@ -203,7 +203,7 @@ export function usePurgeArchivedNode() {
   })
 }
 
-/** 节点出站代理视图（见 ADR-043）。含凭据的 URL 已由后端脱敏。 */
+/** 节点出站代理视图。含凭据的 URL 已由后端脱敏。 */
 export interface NodeProxyView {
   /** inherit=继承全局默认 / custom=自定义。 */
   mode: 'inherit' | 'custom'

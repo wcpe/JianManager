@@ -10,7 +10,7 @@ import (
 )
 
 // TestLogAcqPolicyDefaults 验证未配置任何键时，日志采集策略回退到与
-// worker.yml 基线一致的安全默认（FR-503）。
+// worker.yml 基线一致的安全默认。
 //
 // 语义要点：规则引擎默认开、实时采集默认开、gz 导入**总开关默认开**、
 // 定时扫描周期默认空（二者组合 ⇒ 默认行为仍是不扫描）、路径覆盖为空。
@@ -18,7 +18,7 @@ func TestLogAcqPolicyDefaults(t *testing.T) {
 	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
 
 	p := svc.LogAcqPolicy("")
-	require.True(t, p.RulesEnabled, "规则引擎默认开启（与 FR-502 落地后行为一致）")
+	require.True(t, p.RulesEnabled, "规则引擎默认开启（落地后行为一致）")
 	require.True(t, p.RealtimeTail, "实时采集默认开启（应急开关默认不生效）")
 	// 总开关默认开 + 周期默认空 ⇒ 默认仍是「不扫描」；总开关开着才能让
 	// worker.yml 的 log_ingest.archive_scan_interval 基线回落可达（否则既有部署升级后静默失去定时扫描）。
@@ -44,7 +44,7 @@ func TestLogAcqPolicyPlatformLevel(t *testing.T) {
 	require.Equal(t, "30s", p.GzScanInterval.String())
 }
 
-// TestLogAcqPolicyWorkerOverrideWins 验证 Worker 级覆盖优先于平台级（FR-503 的两层语义）。
+// TestLogAcqPolicyWorkerOverrideWins 验证 Worker 级覆盖优先于平台级（两层语义）。
 //
 // 这是本项的核心契约：同一键在两处都有值时，Worker 级必须胜出；
 // 未被 Worker 覆盖的键仍继承平台级。
@@ -85,7 +85,7 @@ func TestLogAcqPolicyIsolatedBetweenWorkers(t *testing.T) {
 	require.True(t, svc.LogAcqPolicy("node-c").RealtimeTail)
 }
 
-// TestLogAcqPolicyPathOverridesJSON 验证路径覆盖映射的解析（FR-502 §3.4）。
+// TestLogAcqPolicyPathOverridesJSON 验证路径覆盖映射的解析。
 func TestLogAcqPolicyPathOverridesJSON(t *testing.T) {
 	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
 
@@ -157,7 +157,7 @@ func TestLogAcqPolicyPathOverridesInvalidJSONIsSafe(t *testing.T) {
 	require.True(t, p.RealtimeTail)
 }
 
-// TestLogAcqPolicyWorkerScopeWhitelist 验证节点级覆盖键的白名单边界（FR-503）。
+// TestLogAcqPolicyWorkerScopeWhitelist 验证节点级覆盖键的白名单边界。
 //
 // 只对「确有节点级消费方」的键开放节点级覆盖，即日志采集的 5 个键（它们经
 // LogAcqPolicy(nodeUUID) 按节点合并后下发，节点级覆盖真会生效）。
@@ -216,7 +216,7 @@ func TestLogAcqPolicyWorkerScopeWhitelist(t *testing.T) {
 }
 
 // TestLogAcqPolicyNodeEmptyOverrideIsExplicitDisable 验证「节点级空串覆盖」与「未覆盖」
-// 是两种不同状态：空串是**显式声明**，不会回落继承平台值（FR-503）。
+// 是两种不同状态：空串是**显式声明**，不会回落继承平台值。
 //
 // **2026-10-20 审查修正语义**：空串对 gz_scan_interval 的含义是「本节点不指定周期，
 // 交由该节点 worker.yml 基线决定」，**不是**「关闭定时扫描」。原用例名与断言把它写成

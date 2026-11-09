@@ -13,7 +13,7 @@ import (
 // QuerySnapshot 是 Minecraft Query（GameSpy4/UT3）Full Stat 的解析结果。
 //
 // Query 面向 query.port 的 UDP，需 enable-query=true；它提供 SLP 给不了的
-// **实名玩家名单**、插件列表与地图名，是玩家名单的唯一可信来源（见 ADR-092）。
+// **实名玩家名单**、插件列表与地图名，是玩家名单的唯一可信来源。
 // 前置条件不满足（未开 query / 端口封闭）时表现为 UDP 无响应，属「不可用」而非错误。
 type QuerySnapshot struct {
 	Motd          string

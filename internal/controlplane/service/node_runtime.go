@@ -111,7 +111,7 @@ func (s *NodeRuntimeService) ListArtifactCache(nodeID uint) (*ArtifactCacheView,
 			CachedAt:   it.CachedAt,
 			LastUsedAt: it.LastUsedAt,
 		}
-		// name/version 缺失：用 CP 全局制品库（asset 表）按 sha256 补全（ADR-011）。
+		// name/version 缺失：用 CP 全局制品库（asset 表）按 sha256 补全。
 		if item.Name == "" || item.Version == "" {
 			s.enrichFromAsset(&item)
 		}

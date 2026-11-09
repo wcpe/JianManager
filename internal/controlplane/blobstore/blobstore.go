@@ -1,11 +1,11 @@
-// Package blobstore 提供制品库 blob 的存储后端抽象（见 ADR-073）。
+// Package blobstore 提供制品库 blob 的存储后端抽象。
 //
 // 存储键 = CAS 相对路径 var/artifacts/<type>/<sha256 前 2 位>/<sha256><ext>
 // （与 model.Asset.RelPath 同值）；S3 适配器在键前再挂渠道 Prefix。
 // 本地适配器封装既有 CAS 落盘行为（零变化）；S3 适配器纯标准库 SigV4 +
 // path-style 寻址（不引入 SDK），并支持 query 参数预签名短时效下载 URL。
 //
-// 依赖方向（ADR-073 决策 3）：CP 侧独立实现，不 import internal/worker/storage
+// 依赖方向：CP 侧独立实现，不 import internal/worker/storage
 // （进程边界语义）；SigV4 正确性以 AWS 官方签名向量对拍。
 package blobstore
 
@@ -41,7 +41,7 @@ type ObjectInfo struct {
 	ModTime time.Time
 }
 
-// Store 制品 blob 存储后端（见 ADR-073）。
+// Store 制品 blob 存储后端。
 //
 // 写入口用 PutFile（收已写完的本地临时文件）而非泛化 Put(io.Reader)：
 // Ingest 恒先落临时文件边写边算 hash，local 适配器得以用与主线逐字节相同的

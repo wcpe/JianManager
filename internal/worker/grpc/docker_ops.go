@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// Docker 镜像管理 RPC（见 ADR-019）。
+// Docker 镜像管理 RPC。
 // Worker 经本机 Docker Engine API 管镜像；CP 不直连 Docker，所有镜像操作经此委托。
 // Docker 守护进程不可达时返回明确错误（不影响 direct/daemon 模式）。
 

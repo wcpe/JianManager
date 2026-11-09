@@ -1,7 +1,7 @@
 package database
 
 /*
- * ADR-106 业务表退役 —— 重启循环验证。
+ * 业务表退役 —— 重启循环验证。
  *
  * 【为何不能只有单轮用例】
  * 既有 business_retirement_test.go 在**同一个连接**上连跑两次 AutoMigrate，

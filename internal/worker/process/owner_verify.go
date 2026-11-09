@@ -100,7 +100,7 @@ func DefaultVerifyProcessOwnership(pid int, instanceUUID, workDir string, expect
 // （典型：管理员在同一目录里手工拉起的脚本、备份进程、tail 之类）即可凭 cwd 单特征通过宽口径复核，
 // 进而被误收养、被迁进实例 cgroup，并在其后的 Stop / Kill 中被误杀——这正是本函数要闭合的误收养风险。
 //
-// wrapper 分支额外要求 argv 形如 `<worker 二进制> daemon`，与 ADR-093 决策 1 及
+// wrapper 分支额外要求 argv 形如 `<worker 二进制> daemon`，这与
 // docs/specs/auto-adopt-orphans/spec.md §2.1 的口径一致（wrapper 必须「argv 形如 daemon **且** 环境
 // 携带实例 UUID」）。真实 wrapper 的 argv 只有 `<worker> daemon`、UUID 仅在 env，故该分支事实上只有
 // 「argv 为 daemon + 环境携带 UUID」一条通过路径，单凭 argv 不判真（argv 对任何实例的 wrapper 都相同）。
@@ -174,7 +174,7 @@ func DefaultVerifyAdoptOwnership(pid int, instanceUUID, workDir string, expectWr
 // `OTHER=<uuid>-older`、`X=abc<uuid>` 一律不通过。
 //
 // 影响面：本函数同时被 DefaultVerifyProcessOwnership 的 wrapper 分支使用，故强杀路径的 wrapper 归属
-// 判定一并收紧。方向与 ADR-093 一致——收窄只会「少杀」，不会「误杀」。
+// 判定一并收紧。方向与归属复核口径一致——收窄只会「少杀」，不会「误杀」。
 func processEnvMatchesInstance(pid int, instanceUUID string) bool {
 	if instanceUUID == "" {
 		return false

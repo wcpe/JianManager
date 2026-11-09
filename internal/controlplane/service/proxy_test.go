@@ -20,31 +20,31 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-type fakeFR035ProxyWorker struct {
+type fakeProxyWorkerCore struct {
 	workerpb.WorkerServiceClient
 	created  *workerpb.CreateInstanceRequest
 	download *workerpb.DownloadCoreRequest
 	configs  map[string]map[string]string
 }
 
-func (f *fakeFR035ProxyWorker) CreateInstance(_ context.Context, req *workerpb.CreateInstanceRequest, _ ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
+func (f *fakeProxyWorkerCore) CreateInstance(_ context.Context, req *workerpb.CreateInstanceRequest, _ ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
 	f.created = req
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
-func (f *fakeFR035ProxyWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
+func (f *fakeProxyWorkerCore) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
 	f.download = req
 	return &workerpb.DownloadCoreResponse{Success: true, Size: 12345}, nil
 }
 
-func (f *fakeFR035ProxyWorker) ReadConfig(_ context.Context, req *workerpb.ReadConfigRequest, _ ...grpc.CallOption) (*workerpb.ReadConfigResponse, error) {
+func (f *fakeProxyWorkerCore) ReadConfig(_ context.Context, req *workerpb.ReadConfigRequest, _ ...grpc.CallOption) (*workerpb.ReadConfigResponse, error) {
 	if f.configs == nil || f.configs[req.InstanceUuid] == nil {
 		return &workerpb.ReadConfigResponse{Path: req.Path, Content: ""}, nil
 	}
 	return &workerpb.ReadConfigResponse{Path: req.Path, Content: f.configs[req.InstanceUuid][req.Path]}, nil
 }
 
-func (f *fakeFR035ProxyWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
+func (f *fakeProxyWorkerCore) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
 	if f.configs == nil {
 		f.configs = make(map[string]map[string]string)
 	}
@@ -58,17 +58,17 @@ func (f *fakeFR035ProxyWorker) WriteConfig(_ context.Context, req *workerpb.Writ
 // ResyncInstances 支撑「创建后即时注册」钩子：幂等空实现并按条数回报 registered，
 // 生产路径的语义（真 Worker 的 ResyncInstances）不受影响；缺此方法会让嵌入空接口的
 // 测试替身在钩子调用处直接 nil 解引用 panic。
-func (f *fakeFR035ProxyWorker) ResyncInstances(_ context.Context, req *workerpb.ResyncInstancesRequest, _ ...grpc.CallOption) (*workerpb.ResyncInstancesResponse, error) {
+func (f *fakeProxyWorkerCore) ResyncInstances(_ context.Context, req *workerpb.ResyncInstancesRequest, _ ...grpc.CallOption) (*workerpb.ResyncInstancesResponse, error) {
 	return &workerpb.ResyncInstancesResponse{Registered: int32(len(req.GetInstances()))}, nil
 }
 
-type blockingFR035ProxyWorker struct {
-	fakeFR035ProxyWorker
+type blockingProxyWorker struct {
+	fakeProxyWorkerCore
 	started chan struct{}
 	release chan struct{}
 }
 
-func (f *blockingFR035ProxyWorker) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
+func (f *blockingProxyWorker) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
 	f.download = req
 	close(f.started)
 	select {
@@ -79,18 +79,18 @@ func (f *blockingFR035ProxyWorker) DownloadCore(ctx context.Context, req *worker
 	}
 }
 
-type failingFR035ProxyWorker struct {
-	fakeFR035ProxyWorker
+type failingProxyWorker struct {
+	fakeProxyWorkerCore
 	removed   chan *workerpb.RemoveInstanceRequest
 	removeErr string
 }
 
-func (f *failingFR035ProxyWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
+func (f *failingProxyWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
 	f.download = req
 	return &workerpb.DownloadCoreResponse{Success: false, Error: "代理核心下载中断"}, nil
 }
 
-func (f *failingFR035ProxyWorker) RemoveInstance(_ context.Context, req *workerpb.RemoveInstanceRequest, _ ...grpc.CallOption) (*workerpb.RemoveInstanceResponse, error) {
+func (f *failingProxyWorker) RemoveInstance(_ context.Context, req *workerpb.RemoveInstanceRequest, _ ...grpc.CallOption) (*workerpb.RemoveInstanceResponse, error) {
 	f.removed <- req
 	if f.removeErr != "" {
 		return &workerpb.RemoveInstanceResponse{Success: false, Error: f.removeErr}, nil
@@ -98,31 +98,31 @@ func (f *failingFR035ProxyWorker) RemoveInstance(_ context.Context, req *workerp
 	return &workerpb.RemoveInstanceResponse{Success: true}, nil
 }
 
-func newAsyncFR035ProxyService(t *testing.T, worker workerpb.WorkerServiceClient) (*ProxyService, *TaskService, *model.Node, func()) {
+func newAsyncProxyService(t *testing.T, worker workerpb.WorkerServiceClient) (*ProxyService, *TaskService, *model.Node, func()) {
 	t.Helper()
 	db := newJDKTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.ServerRegistration{}, &model.Task{}, &model.TaskLog{}, &model.Notification{}))
 	pool := cpgrpc.NewClientPool()
 	core := NewCoreService()
-	core.base = fakeFR035PaperCoreRepo(t)
+	core.base = fakeProxyPaperCoreRepo(t)
 	instanceSvc := NewInstanceService(db, NewGroupService(db), pool)
 	regSvc := NewRegistrationService(db)
 	proxySvc := NewProxyService(db, pool, instanceSvc, core, regSvc)
 	regSvc.SetSyncer(proxySvc)
 	taskSvc := NewTaskService(db)
 	proxySvc.SetTaskService(taskSvc)
-	node := &model.Node{UUID: "fr035-async-node-" + t.Name(), Name: "fr035-async-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
+	node := &model.Node{UUID: "proxy-async-node-" + t.Name(), Name: "proxy-async-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 	pool.SetWorkerClientForTest(node.UUID, worker)
 	return proxySvc, taskSvc, node, instanceSvc.Shutdown
 }
 
 func TestProvisionProxyAsync_DetachesFromRequestContext(t *testing.T) {
-	worker := &blockingFR035ProxyWorker{
+	worker := &blockingProxyWorker{
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	proxySvc, taskSvc, node, done := newAsyncFR035ProxyService(t, worker)
+	proxySvc, taskSvc, node, done := newAsyncProxyService(t, worker)
 	defer done()
 
 	requestCtx, cancelRequest := context.WithCancel(context.Background())
@@ -172,8 +172,8 @@ func TestProvisionProxyAsync_DetachesFromRequestContext(t *testing.T) {
 
 // 阶段二：代理搭建失败 → 损毁态（不再删实例/不再调 RemoveInstance），保留 ProvisionSpec 供重建。
 func TestProvisionProxyAsync_FailureMarksDamaged(t *testing.T) {
-	worker := &failingFR035ProxyWorker{removed: make(chan *workerpb.RemoveInstanceRequest, 1)}
-	proxySvc, taskSvc, node, done := newAsyncFR035ProxyService(t, worker)
+	worker := &failingProxyWorker{removed: make(chan *workerpb.RemoveInstanceRequest, 1)}
+	proxySvc, taskSvc, node, done := newAsyncProxyService(t, worker)
 	defer done()
 
 	result, err := proxySvc.ProvisionProxyAsync(context.Background(), ProvisionProxyRequest{
@@ -201,7 +201,7 @@ func TestProvisionProxyAsync_FailureMarksDamaged(t *testing.T) {
 
 // 阶段二：代理重建守卫——非损毁 / 损毁但无参数 分别拒绝。
 func TestRebuildProxy_Guards(t *testing.T) {
-	proxySvc, _, node, done := newAsyncFR035ProxyService(t, &fakeFR035ProxyWorker{})
+	proxySvc, _, node, done := newAsyncProxyService(t, &fakeProxyWorkerCore{})
 	defer done()
 
 	stopped := &model.Instance{NodeID: node.ID, Name: "p-stopped", Type: model.InstanceTypeMinecraftJava, Role: model.InstanceRoleProxy, ProcessType: model.ProcessTypeDaemon, StartCommand: "x", Status: model.InstanceStatusStopped}
@@ -219,8 +219,8 @@ func TestRebuildProxy_Guards(t *testing.T) {
 
 // 阶段二：损毁代理换好 worker 后重建 → 复用参数 + forwarding_secret 重跑成功 → STOPPED。
 func TestRebuildProxy_Succeeds(t *testing.T) {
-	worker := &failingFR035ProxyWorker{removed: make(chan *workerpb.RemoveInstanceRequest, 1)}
-	proxySvc, taskSvc, node, done := newAsyncFR035ProxyService(t, worker)
+	worker := &failingProxyWorker{removed: make(chan *workerpb.RemoveInstanceRequest, 1)}
+	proxySvc, taskSvc, node, done := newAsyncProxyService(t, worker)
 	defer done()
 
 	// 先用下载失败 worker 造损毁。
@@ -234,7 +234,7 @@ func TestRebuildProxy_Succeeds(t *testing.T) {
 	require.Equal(t, model.InstanceStatusDamaged, dmg.Status)
 
 	// 换成功 worker → 重建复用已存参数 + forwarding_secret。
-	success := &blockingFR035ProxyWorker{started: make(chan struct{}), release: make(chan struct{})}
+	success := &blockingProxyWorker{started: make(chan struct{}), release: make(chan struct{})}
 	close(success.release)
 	proxySvc.pool.SetWorkerClientForTest(node.UUID, success)
 	rbTaskID, err := proxySvc.RebuildProxy(context.Background(), result.Instance.ID, 1)
@@ -247,13 +247,13 @@ func TestRebuildProxy_Succeeds(t *testing.T) {
 	require.Empty(t, rebuilt.StatusReason, "重建成功应清空原因")
 }
 
-func TestFR035ProvisionProxyCreatesVelocityAndSyncsBackend(t *testing.T) {
+func TestProvisionProxyCreatesVelocityAndSyncsBackend(t *testing.T) {
 	db := newJDKTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.ServerRegistration{}))
 	pool := cpgrpc.NewClientPool()
-	worker := &fakeFR035ProxyWorker{}
+	worker := &fakeProxyWorkerCore{}
 	core := NewCoreService()
-	core.base = fakeFR035PaperCoreRepo(t)
+	core.base = fakeProxyPaperCoreRepo(t)
 	groupSvc := NewGroupService(db)
 	instanceSvc := NewInstanceService(db, groupSvc, pool)
 	t.Cleanup(instanceSvc.Shutdown)
@@ -261,7 +261,7 @@ func TestFR035ProvisionProxyCreatesVelocityAndSyncsBackend(t *testing.T) {
 	proxySvc := NewProxyService(db, pool, instanceSvc, core, regSvc)
 	regSvc.SetSyncer(proxySvc)
 
-	node := &model.Node{UUID: "fr035-node", Name: "fr035-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
+	node := &model.Node{UUID: "proxy-node", Name: "proxy-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 	jdk := &model.NodeJDK{NodeID: node.ID, Vendor: "Temurin", MajorVersion: 21, Version: "21.0.4+9", Arch: "x64", Path: "/opt/jdks/temurin-21"}
 	require.NoError(t, db.Create(jdk).Error)
@@ -273,7 +273,7 @@ func TestFR035ProvisionProxyCreatesVelocityAndSyncsBackend(t *testing.T) {
 	priority := 0
 	result, err := proxySvc.ProvisionProxy(context.Background(), ProvisionProxyRequest{
 		NodeID:     node.ID,
-		Name:       "fr035-velocity",
+		Name:       "proxy-velocity",
 		ProxyType:  "velocity",
 		Version:    "3.3.0-SNAPSHOT",
 		JDKID:      jdk.ID,
@@ -299,7 +299,7 @@ func TestFR035ProvisionProxyCreatesVelocityAndSyncsBackend(t *testing.T) {
 	require.Equal(t, model.InstanceStatusStopped, inst.Status)
 	require.False(t, inst.ProxyOnlineMode)
 	require.Equal(t, 25565, inst.ServerPort)
-	require.True(t, strings.HasPrefix(inst.WorkDir, "var/servers/fr035-velocity-"), inst.WorkDir)
+	require.True(t, strings.HasPrefix(inst.WorkDir, "var/servers/proxy-velocity-"), inst.WorkDir)
 	require.Equal(t, "java -Xms1024M -Xmx1024M -XX:+UseG1GC -jar server.jar", inst.StartCommand)
 
 	require.NotNil(t, worker.created)
@@ -333,7 +333,7 @@ func TestFR035ProvisionProxyCreatesVelocityAndSyncsBackend(t *testing.T) {
 	require.Equal(t, result.ForwardingSecret, vel["secret"])
 }
 
-func fakeFR035PaperCoreRepo(t *testing.T) string {
+func fakeProxyPaperCoreRepo(t *testing.T) string {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/velocity/versions/3.3.0-SNAPSHOT/builds" {

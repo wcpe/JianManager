@@ -5,7 +5,7 @@ import { activateScene as machineActivate, addScene as machineAdd, clampLimit, c
 import type { DirectorState } from '@/lib/director/director'
 
 /** 
- * 工作区导播台状态（ADR-035）。
+ * 工作区导播台状态。
  *
  * 导播台在多个**场景**间瞬切（OBS 式）。一个场景 = 一份命名的画布快照（卡片携 instanceId，
  * 复用跨实例预设结构），用户从既有用户预设导入为场景。导播台维护：

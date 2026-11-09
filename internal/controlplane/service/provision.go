@@ -27,7 +27,7 @@ type ProvisionService struct {
 	pool     *cpgrpc.ClientPool
 	instance *InstanceService
 	core     *CoreService
-	// bridge 用于建服时签发实例级插件桥 token 并写入探针 config（见 ADR-016）。
+	// bridge 用于建服时签发实例级插件桥 token 并写入探针 config。
 	// 为 nil 时探针 config 不含 bridge 段（探针只跑 /metrics，不连反向 WS）。
 	bridge *PluginBridgeService
 	// artifacts 是版本化制品库；非 nil 时建服只下发 CP 本地下载引用，不再传 jar 字节。
@@ -143,7 +143,7 @@ func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionSer
 		return nil, err
 	}
 
-	// 创建实例：系统分配工作目录 + 结构化启动 + 绑定 JDK + 端口；daemon 启动不杀服（ADR-003）。
+	// 创建实例：系统分配工作目录 + 结构化启动 + 绑定 JDK + 端口；daemon 启动不杀服。
 	// Create 内部会派生 java 启动命令并把实例注册到 Worker（创建工作目录）。
 	inst, err := p.createProvisionInstance(req, core)
 	if err != nil {
@@ -370,7 +370,7 @@ func coreKindOf(core *CoreInfo) string {
 // backfillLaunchSpecCoreKind 把已解析出的核心类型补写进实例的 launch_spec。
 //
 // 为什么需要：一键搭建统一把核心落盘为 `server.jar`（见 provisionCoreJar），
-// jar 名不再携带核心类型，故日志采集规则推导改读 launch_spec.coreKind（FR-502）。
+// jar 名不再携带核心类型，故日志采集规则推导改读 launch_spec.coreKind。
 // 本字段引入之前创建的实例没有它；重建会重新解析核心，正是补齐信息的天然时机——
 // 否则重建后的代理仍按 bukkit 规则采集，即本项要修的生产缺陷静默复现。
 //
@@ -619,7 +619,7 @@ func stringOr(v, fallback string) string {
 
 // buildServerProbeConfig 生成实例的 ServerProbe config.yml：仅本机开启 /metrics 端点于分配的
 // probe 端口，token 留空依赖本机 IP 白名单（探针与 Worker 同机，Worker 抓 localhost）。
-// bridgeBlock 为插件桥配置段（见 ADR-016）；为空时 config 不含 bridge 段（探针只跑 /metrics）。
+// bridgeBlock 为插件桥配置段；为空时 config 不含 bridge 段（探针只跑 /metrics）。
 func buildServerProbeConfig(probePort int, bridgeBlock string) string {
 	var b strings.Builder
 	b.WriteString("# 本文件由 JianManager 建服时自动生成：开启 ServerProbe /metrics 供 Worker 抓取。\n")
@@ -672,7 +672,7 @@ func (p *ProvisionService) bridgeConfigBlock(instanceUUID string, wsPort int) st
 }
 
 // buildServerProperties 生成基础 server.properties：分配的 server-port、按 onlineMode 设正版校验
-// （代理转发场景传 false）与 query。RCON 已退役（见 ADR-016）：治理改走 ServerProbe 探针，
+// （代理转发场景传 false）与 query。RCON 已退役：治理改走 ServerProbe 探针，
 // 不再开启 rcon，去除额外暴露面。
 func buildServerProperties(serverPort, queryPort int, onlineMode bool) string {
 	var b strings.Builder

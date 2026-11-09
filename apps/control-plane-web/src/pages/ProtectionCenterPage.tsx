@@ -62,7 +62,7 @@ function SegSwitcher({
 }
 
 /** 
- * 页面 B「客户端分发运维」外壳（ADR-088）。
+ * 页面 B「客户端分发运维」外壳。
  * 7 Tab（总览/统计/实时监控/全量日志/机器·客户端/画像/处置）；旧安全页 8 Tab 收敛进其中 4 个（`seg` 分档）。
  * `data-page="client-dist-ops"`；查询级 `enabled: isPlatformAdmin` 纵深防御（路由守卫见 Workspace）。
  *

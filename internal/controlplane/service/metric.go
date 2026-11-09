@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 留存与档位常量（ADR-013：分级降采样）。
+// 留存与档位常量（分级降采样）。
 const (
 	metricRawRetention = 48 * time.Hour
 	metric5mRetention  = 30 * 24 * time.Hour
@@ -65,7 +65,7 @@ type Series struct {
 	Points    []SeriesPoint `json:"points"`
 }
 
-// MetricService 时序指标存储与查询（ADR-013：CP 端分级降采样）。
+// MetricService 时序指标存储与查询（CP 端分级降采样）。
 type MetricService struct {
 	db *gorm.DB
 
@@ -275,7 +275,7 @@ func (s *MetricService) Ingest(samples []Sample) error {
 
 // IngestHeartbeat 把一次心跳负载落库为时序样本：节点 CPU/内存/磁盘/网络速率 +
 // 每实例 ServerProbe 富指标（含分世界）。网络速率据相邻心跳累计字节差推导（首拍与计数器
-// 回绕时不出速率样本）。探针不可用的实例写 NULL 断点，缺测不补假值（ADR-013）。
+// 回绕时不出速率样本）。探针不可用的实例写 NULL 断点，缺测不补假值。
 // 实现 grpc.MetricIngester，由 CP 心跳处理器调用。
 func (s *MetricService) IngestHeartbeat(req *workerpb.HeartbeatRequest) error {
 	return s.ingestHeartbeatAt(req, time.Now().UTC())

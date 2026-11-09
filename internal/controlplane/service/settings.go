@@ -19,7 +19,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// 平台设置可写白名单键（ADR-015）。
+// 平台设置可写白名单键。
 // 只有这些键允许经 PUT /settings 落库覆盖，其余键一律拒绝。
 const (
 	// SettingKeyLogLevel CP 日志级别（debug|info|warn|error）。落库即时生效（slog LevelVar）。
@@ -98,7 +98,7 @@ const (
 	SettingKeySnapshotMaxTotalMB = "snapshot.max_total_mb"
 	// SettingKeyCrashStatRetentionDays 崩溃趋势统计保留天数（整数）。默认 90。
 	SettingKeyCrashStatRetentionDays = "crash.stat_retention_days"
-	// SettingKeyProxyURL CP 出站代理地址（network 类ADR-043）。敏感（脱敏展示）。
+	// SettingKeyProxyURL CP 出站代理地址（network 类）。敏感（脱敏展示）。
 	// 落库即重建 CP 出站持有者（优先级 DB > control-plane.yml > env）；同时作为各节点默认代理。
 	SettingKeyProxyURL = "proxy.url"
 	// SettingKeyProxyNoProxy CP/全局默认出站代理的免代理列表（逗号分隔，语义同 NO_PROXY）。
@@ -146,7 +146,7 @@ type SettingsReader interface {
 	EffectiveValue(key string) string
 }
 
-// SettingsService 平台配置服务（ADR-015）。
+// SettingsService 平台配置服务。
 //
 // 在 YAML+env 基线（cfg）之上叠加 platform_settings 的 DB 覆盖层，
 // 解析「有效配置」、按白名单读写、并对可即时生效项接到真实读取点。
@@ -169,7 +169,7 @@ func NewSettingsService(db *gorm.DB, cfg *config.Config) *SettingsService {
 	return s
 }
 
-// SetProxyRebuilder 注入 CP 出站持有者重建回调（见 ADR-043）。
+// SetProxyRebuilder 注入 CP 出站持有者重建回调。
 // 保存 proxy.url/proxy.no_proxy 后以「当前生效代理」（DB 覆盖 > yaml > env）回调之，
 // 令 CP 自身出站立即走新代理、免重启。不注入则代理覆盖仅落库、下次重启生效。
 func (s *SettingsService) SetProxyRebuilder(fn func(httpclient.Config)) {
@@ -205,7 +205,7 @@ func (s *SettingsService) applyDebugMode(on bool) {
 	}
 }
 
-// EffectiveProxy 返回 CP 当前生效的出站代理配置（见 ADR-043）。
+// EffectiveProxy 返回 CP 当前生效的出站代理配置。
 // 优先级：settings DB 覆盖（全局） > control-plane.yml proxy > 环境变量（空配回退）。
 // 同时作为各节点的「全局默认代理」（节点 inherit 时下发此值）。
 func (s *SettingsService) EffectiveProxy() httpclient.Config {
@@ -338,7 +338,7 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		s.editableItem(SettingKeySnapshotMaxTotalMB, s.defaultValue(SettingKeySnapshotMaxTotalMB), overrides, true),
 		// 崩溃趋势统计保留：日粒度统计表的清理窗口。
 		s.editableItem(SettingKeyCrashStatRetentionDays, s.defaultValue(SettingKeyCrashStatRetentionDays), overrides, true),
-		// 出站代理（network 类ADR-043）：保存即在 CP 内重建出站持有者（即时生效）。
+		// 出站代理（network 类）：保存即在 CP 内重建出站持有者（即时生效）。
 		// proxy.url 标 sensitive：含凭据时回显脱敏（仅展示 scheme://host:port），不外泄明文密码。
 		s.proxyURLItem(overrides),
 		s.editableItem(SettingKeyProxyNoProxy, s.defaultValue(SettingKeyProxyNoProxy), overrides, true),
@@ -365,7 +365,7 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		readOnlyItem("database.driver", s.cfg.Database.Driver, false),
 		readOnlyItem("database.dsn", maskDSN(s.cfg.Database.DSN), true),
 		readOnlyItem("jwt.secret", maskSecret(s.cfg.JWT.Secret), true),
-		// CP↔Worker WS 令牌密钥（见 ADR-061）：显式配置时掩码显示；未配置时展示来源
+		// CP↔Worker WS 令牌密钥：显式配置时掩码显示；未配置时展示来源
 		// （生产 autogen / dev 回退），不回显解析后的密钥值（避免把生成密钥带进设置响应）。
 		readOnlyItem("jwt.ws_secret", s.wsTokenSecretDisplay(), s.cfg.JWT.WSSecret != ""),
 		readOnlyItem("jwt.access_ttl", s.cfg.JWT.AccessTTL.String(), false),
@@ -846,7 +846,7 @@ func validateSettingValue(key, val string) error {
 		if err != nil || d <= 0 {
 			return fmt.Errorf("%w: MC 直探超时须为正的 Go duration（如 3s）", ErrSettingValueInvalid)
 		}
-		// 上界守护：直探超时是每实例每拍的最坏阻塞量，过大直接把心跳节拍拖垮（见 ADR-013 与
+		// 上界守护：直探超时是每实例每拍的最坏阻塞量，过大直接把心跳节拍拖垮（与
 		// 审计项 2 / 复审 NEW-ISSUE A）。上界由节拍护栏反推（directprobe.MaxTimeout），
 		// 超出拒绝而非静默截断，使「可配」与「护栏」始终自洽。
 		if d > maxDirectProbeTimeout {
@@ -1034,7 +1034,7 @@ func validateSettingValue(key, val string) error {
 		}
 	case SettingKeyProxyURL:
 		// 复用 httpclient 的 URL/scheme 校验：空=清除代理覆盖（合法，回退 yaml/env）；
-		// 非空但非法（不支持 scheme / 不可解析）则拒绝，不静默直连（ADR-043）。
+		// 非空但非法（不支持 scheme / 不可解析）则拒绝，不静默直连。
 		if val != "" {
 			if _, err := httpclient.New(httpclient.Config{URL: val}); err != nil {
 				return fmt.Errorf("%w: 代理地址非法（%v）", ErrSettingValueInvalid, err)
@@ -1090,7 +1090,7 @@ func validateSettingValue(key, val string) error {
 	return nil
 }
 
-// wsTokenSecretDisplay 生成 jwt.ws_secret 只读展示值（见 ADR-061）。
+// wsTokenSecretDisplay 生成 jwt.ws_secret 只读展示值。
 // 显式配置 → 掩码；未配置 → 按 dev_mode 推导来源描述（不回显 autogen 解析出的密钥值）。
 func (s *SettingsService) wsTokenSecretDisplay() string {
 	if s.cfg.JWT.WSSecret != "" {

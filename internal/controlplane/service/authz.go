@@ -38,7 +38,7 @@ const (
 	PermInstanceCreate  PermissionNode = "instance:create"
 	// PermInstanceBusinessWrite 业务高危写（改余额/改背包等 manifest readOnly=false 动作）。
 	// 与 instance:operate 同级（组管理员/组成员均可持有，具体实例由 CanAccessInstance 收敛）；
-	// 与只读/低危业务动作分离，挡越权高危写（见 ADR-029）。
+	// 与只读/低危业务动作分离，挡越权高危写。
 	PermInstanceBusinessWrite PermissionNode = "instance:business:write"
 
 	// 文件管理（按实例所属组隔离）
@@ -55,7 +55,7 @@ const (
 
 // UserAccess 当前用户的授权上下文，由 LoadUserAccess 构建。
 // 平台管理员的 IsPlatformAdmin 为 true，权限检查全部放行；
-// 其余用户 Nodes 为权限树有效集合（ADR-089）。
+// 其余用户 Nodes 为权限树有效集合。
 type UserAccess struct {
 	UserID           uint
 	Role             model.UserRole
@@ -69,8 +69,8 @@ type UserAccess struct {
 }
 
 // AuthzService 授权服务，负责加载用户授权上下文并执行权限判断。
-// 参见 ADR-004: 用户组替代多租户（基于用户组而非 tenant_id 做隔离）。
-// 权限树节点见 ADR-089。
+// 用户组替代多租户（基于用户组而非 tenant_id 做隔离）。
+// 权限树节点。
 type AuthzService struct {
 	db   *gorm.DB
 	perm *PermissionService
@@ -104,7 +104,7 @@ func (s *AuthzService) LoadUserAccess(userID uint) (*UserAccess, error) {
 		return nil, fmt.Errorf("加载权限节点失败: %w", err)
 	}
 
-	// ADR-089：role==10 **或** 绑定/映射 platform_admin 模板 均视为超级管理员短路。
+	// role==10 **或** 绑定/映射 platform_admin 模板 均视为超级管理员短路。
 	isSuper := user.Role == model.RolePlatformAdmin || roleKey == model.RoleKeyPlatformAdmin
 
 	access := &UserAccess{

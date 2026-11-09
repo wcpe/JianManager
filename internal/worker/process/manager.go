@@ -49,11 +49,11 @@ type Instance struct {
 	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发）。daemon 启动时
 	// 透传到 wrapper 做超时强杀兜底；0=未指定，wrapper 回退 env/默认。值在启动时随 spec 定型。
 	GracefulStopTimeoutSeconds int
-	// Image 是 docker 模式的容器镜像引用（ADR-019）；仅 docker 实例使用。
+	// Image 是 docker 模式的容器镜像引用；仅 docker 实例使用。
 	Image string
-	// PortMappings 是 docker 模式的容器端口↔宿主端口映射（ADR-019）；仅 docker 实例使用。
+	// PortMappings 是 docker 模式的容器端口↔宿主端口映射；仅 docker 实例使用。
 	PortMappings []PortMapping
-	// CPULimit / MemLimitMB / DiskLimitMB 是 docker 模式的资源限额（见 ADR-019）；
+	// CPULimit / MemLimitMB / DiskLimitMB 是 docker 模式的资源限额；
 	// 仅 docker 实例使用，值在 Start 时随 spec 定型。0=不限制；DiskLimitMB v1 仅记账不注入。
 	CPULimit    float64
 	MemLimitMB  int64
@@ -105,7 +105,7 @@ type CrashInfo struct {
 
 // Manager 进程管理器。
 // 它通过 IProcessCommand 策略接口支持多种启动方式（direct/daemon/docker），
-// 参见 ADR-003: 守护进程 Wrapper 模式。
+// 守护进程 Wrapper 模式。
 type Manager struct {
 	mu         sync.RWMutex
 	instances  map[string]*Instance
@@ -504,7 +504,7 @@ func (m *Manager) SetQueryPort(uuid string, port int) {
 	}
 }
 
-// SetDockerConfig 设置已登记实例的 docker 镜像、端口映射与资源限额（ADR-019）。
+// SetDockerConfig 设置已登记实例的 docker 镜像、端口映射与资源限额。
 // 由 CP 在创建/重注册 docker 实例时下发，使镜像/端口/限额对下一次启动生效（值在 Start 时随 spec 定型）。
 // 实例不存在则忽略（与 SetGracefulStopTimeout 容错风格一致，不阻塞启动路径）。
 func (m *Manager) SetDockerConfig(uuid, image string, mappings []PortMapping, cpuLimit float64, memLimitMB, diskLimitMB int64) {
@@ -1283,7 +1283,7 @@ func (m *Manager) removeLocked(uuid string, inst *Instance) error {
 
 // StopAll 停止所有运行中的实例。
 // direct 模式：终止游戏服进程（Worker 退出时一并清理）。
-// daemon 模式：仅断开与 wrapper 的连接，wrapper 继续托管游戏服（ADR-003 进程隔离目标）。
+// daemon 模式：仅断开与 wrapper 的连接，wrapper 继续托管游戏服（进程隔离目标）。
 func (m *Manager) StopAll() {
 	m.mu.RLock()
 	uuids := make([]string, 0)
@@ -1320,7 +1320,7 @@ func (m *Manager) StopAll() {
 // RecoverDaemonInstances 在 Worker 重启后扫描 PID 目录，恢复仍存活的 daemon wrapper 连接。
 // 对每个 PID 文件：wrapper pid 存活且 socket 可达则 reconnect 并登记实例为 RUNNING；
 // 否则删除 PID 文件与残留 socket（清理）。
-// 参见 ADR-003: 平台重启后通过 PID 文件重新连接已有 daemon。
+// 平台重启后通过 PID 文件重新连接已有 daemon。
 //
 // **两阶段执行（可用性缺陷修复）**：把旧实现的「初拨 + 就地 127s 递增重试」拆成
 //  1. **快速首拨**（本函数内同步）：每条记录只拨一次，可达者立刻登记 —— 与旧实现的首次拨号完全一致；

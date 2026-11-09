@@ -29,12 +29,12 @@ type topologyResp struct {
 	} `json:"networks"`
 }
 
-// TestFR335TopologyAggregate 验证聚合拓扑端点：鉴权收敛 + 一次返全量 proxy 注册 + network 成员归属。
-func TestFR335TopologyAggregate(t *testing.T) {
+// TestTopologyAggregate 验证聚合拓扑端点：鉴权收敛 + 一次返全量 proxy 注册 + network 成员归属。
+func TestTopologyAggregate(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupFR032Router(t, db)
+	r := setupNetworkResourceRouter(t, db)
 	adminToken := getAdminToken(t, r)
-	memberToken := getMemberToken(t, r, "member-fr335", "password123")
+	memberToken := getMemberToken(t, r, "member-topology", "password123")
 
 	// 鉴权：非平台管理员 403。
 	forbidden := makeRequest(r, http.MethodGet, "/api/v1/topology", nil, memberToken)
@@ -50,10 +50,10 @@ func TestFR335TopologyAggregate(t *testing.T) {
 
 	// 铺数据：2 proxy + 2 backend，proxyA 注册 lobby+world，proxyB 注册 lobby（M:N）。
 	node := createTestNode(t, db)
-	proxyA := createFR032Instance(t, db, node.ID, "survival-proxy", model.InstanceRoleProxy, 25565)
-	proxyB := createFR032Instance(t, db, node.ID, "creative-proxy", model.InstanceRoleProxy, 25568)
-	backendA := createFR032Instance(t, db, node.ID, "Survival Lobby", model.InstanceRoleBackend, 25566)
-	backendB := createFR032Instance(t, db, node.ID, "survival-world", model.InstanceRoleBackend, 25567)
+	proxyA := createNetworkResourceInstance(t, db, node.ID, "survival-proxy", model.InstanceRoleProxy, 25565)
+	proxyB := createNetworkResourceInstance(t, db, node.ID, "creative-proxy", model.InstanceRoleProxy, 25568)
+	backendA := createNetworkResourceInstance(t, db, node.ID, "Survival Lobby", model.InstanceRoleBackend, 25566)
+	backendB := createNetworkResourceInstance(t, db, node.ID, "survival-world", model.InstanceRoleBackend, 25567)
 
 	mkReg := func(proxyID, backendID uint, alias string, priority int) {
 		resp := makeRequest(r, http.MethodPost, fmt.Sprintf("/api/v1/proxies/%d/registrations", proxyID), map[string]any{

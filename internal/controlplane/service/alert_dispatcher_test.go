@@ -190,8 +190,8 @@ func TestDispatcher_NotifyRoutesToChannels(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
-// TestDispatcher_FR011WebhookFallback 验证未配 ChannelIDs 时回退到单 webhook 直发。
-func TestDispatcher_FR011WebhookFallback(t *testing.T) {
+// TestDispatcher_WebhookFallback 验证未配 ChannelIDs 时回退到单 webhook 直发。
+func TestDispatcher_WebhookFallback(t *testing.T) {
 	db := newAlertTestDB(t)
 	d := NewAlertDispatcher(db)
 
@@ -211,8 +211,8 @@ func TestDispatcher_FR011WebhookFallback(t *testing.T) {
 	assert.Equal(t, int64(1), atomic.LoadInt64(&hits))
 }
 
-// TestDispatcher_FR011WebhookFallbackRejectsPlaintext 存量明文 URL 不得继续用于外发。
-func TestDispatcher_FR011WebhookFallbackRejectsPlaintext(t *testing.T) {
+// TestDispatcher_WebhookFallbackRejectsPlaintext 存量明文 URL 不得继续用于外发。
+func TestDispatcher_WebhookFallbackRejectsPlaintext(t *testing.T) {
 	db := newAlertTestDB(t)
 	d := NewAlertDispatcher(db)
 

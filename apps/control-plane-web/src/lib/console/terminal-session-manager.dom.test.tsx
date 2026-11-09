@@ -79,7 +79,7 @@ async function flush() {
 describe('TerminalSessionManager 状态机（296后缓冲为行缓冲）', () => {
   let manager: TerminalSessionManager
 
-  /** 权威缓冲的整段文本（ADR-086：行缓冲取代 xterm buffer 成为唯一权威缓冲）。 */
+  /** 权威缓冲的整段文本（行缓冲取代 xterm buffer 成为唯一权威缓冲）。 */
   const bufferText = (instanceId: number) =>
     manager
       .getLines(instanceId)
@@ -114,7 +114,7 @@ describe('TerminalSessionManager 状态机（296后缓冲为行缓冲）', () =>
     expect(manager.getState(1)).toBe('connected')
   })
 
-  it('仅 acquire + 收流即落权威行缓冲，不需要任何渲染器（ADR-086）', async () => {
+  it('仅 acquire + 收流即落权威行缓冲，不需要任何渲染器', async () => {
     const fetchCreds = credsStub()
     manager.acquire(1, fetchCreds)
     await flush()
@@ -142,7 +142,7 @@ describe('TerminalSessionManager 状态机（296后缓冲为行缓冲）', () =>
     expect(bufferText(1)).toContain('kept-line')
   })
 
-  it('detach 只脱钩渲染层：WS 不断、缓冲不丢、状态不变（ADR-067 核心语义）', async () => {
+  it('detach 只脱钩渲染层：WS 不断、缓冲不丢、状态不变', async () => {
     const fetchCreds = credsStub()
     manager.acquire(1, fetchCreds)
     await flush()

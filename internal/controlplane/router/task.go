@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// TaskHandler 全局任务中心路由处理器（见 ADR-040）。
+// TaskHandler 全局任务中心路由处理器。
 type TaskHandler struct {
 	svc *service.TaskService
 }
@@ -108,7 +108,7 @@ func (h *TaskHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	tasks.POST("/:taskId/cancel", h.Cancel)
 }
 
-// NotificationHandler 站内信路由处理器（见 ADR-040）。
+// NotificationHandler 站内信路由处理器。
 type NotificationHandler struct {
 	svc *service.NotificationService
 }

@@ -46,7 +46,7 @@ func envOr(key, def string) string {
 // buildDownloadURL 根据 vendor/major/arch/平台返回归档下载 URL。
 // 下载基址优先用 mirrorBase（CP 从平台设置下发），其次 JIANMANAGER_JDK_<VENDOR>_BASE，
 // 最后回退官方源（Temurin 默认 Adoptium）；未支持的 vendor 返回明确错误，提示用 POST /jdks 手动登记。
-// client 用于 Zulu 这类需先查元数据 API 的来源（经进程级出站代理ADR-037）；
+// client 用于 Zulu 这类需先查元数据 API 的来源（经进程级出站代理）；
 // client 为 nil 时回退 http.DefaultClient。
 func buildDownloadURL(client *http.Client, vendor string, major int, arch, mirrorBase string) (string, error) {
 	switch strings.ToLower(vendor) {
@@ -88,7 +88,7 @@ func correttoURL(base string, major int, arch string) string {
 }
 
 // zuluURL queries the Azul metadata API for the latest Zulu JDK download URL.
-// client 经进程级出站代理（ADR-037）；为 nil 时回退 http.DefaultClient。
+// client 经进程级出站代理；为 nil 时回退 http.DefaultClient。
 func zuluURL(client *http.Client, base string, major int, arch string) (string, error) {
 	osName := "linux"
 	ext := "tar.gz"
@@ -124,7 +124,7 @@ func zuluURL(client *http.Client, base string, major int, arch string) (string, 
 }
 
 // downloadAndExtractWithProgress 下载归档到临时文件并解压到 destDir，期间经 report 回调
-// 上报下载百分比与阶段日志（见 ADR-040；report 可为 nil）。
+// 上报下载百分比与阶段日志（report 可为 nil）。
 // 有 Content-Length 时按字节计算 0~100 的真实百分比；无则停在 0、靠阶段日志补充。
 func downloadAndExtractWithProgress(ctx context.Context, client *http.Client, url, destDir string, report jdkProgress) error {
 	return downloadAndExtractStallParams(ctx, client, url, destDir, report, downloadStallTimeout, stallCheckInterval)

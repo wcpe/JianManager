@@ -9,10 +9,10 @@ import type { WorkspacePreset } from '@/lib/console/workspace-preset'
 import { DirectorSceneStrip } from '@/components/views/console/DirectorSceneStrip'
 
 /** 
- * 工作区导播台页面（ADR-035 / design §9）· 受控视图（ADR-103）。
+ * 工作区导播台页面（design §9）· 受控视图。
  *
  * OBS 式多场景瞬切：缩略图条选场景，点击 / 数字键 / 方向键**瞬切**，可定时轮播。
- * 核心是 ADR-035 的预热并发模型——
+ * 核心是预热并发模型——
  * - **预热场景的画布全部同时挂载**（故其卡的 WS 保活），但只有 active 场景全速渲染 + 可见；
  *   非激活场景由画布组件用 `content-visibility` + 终端暂停 buffer 降频/暂停重绘。
  * - **cold 场景不挂载**（无 WS）；切到才挂载并由状态机加入保活池（受并发上限 + LRU 约束）。

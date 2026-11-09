@@ -17,7 +17,7 @@ import (
 	workerstorage "github.com/wcpe/JianManager/internal/worker/storage"
 )
 
-// 本文件是 FR-501「归档对象支持 s3 目的地」的**真实对象存储**端到端回归。
+// 本文件是「归档对象支持 s3 目的地」的**真实对象存储**端到端回归。
 //
 // 与其他 purge 用例的分工：
 //   - log_archive_purge_test.go 用**本地目录**铺真件，钉住执行器与 Catalog 的次序；
@@ -32,36 +32,36 @@ import (
 //
 // 门控（缺任一即 skip，不影响常规 CI）：
 //
-//	JM_FR501_S3_ENDPOINT   形如 s3.allinmc.cn（不带 scheme；UseSSL 由方案决定）
-//	JM_FR501_S3_BUCKET     已存在的桶
-//	JM_FR501_S3_AK / SK    凭证
-//	JM_FR501_S3_PREFIX     专用前缀（默认 jm-fr501-e2e）；用例只在该前缀下读写
-//	JM_FR501_S3_USESSL     "1" 走 TLS（默认走明文，与现场同构）
+//	JM_LOG_RETENTION_S3_ENDPOINT   形如 s3.allinmc.cn（不带 scheme；UseSSL 由方案决定）
+//	JM_LOG_RETENTION_S3_BUCKET     已存在的桶
+//	JM_LOG_RETENTION_S3_AK / SK    凭证
+//	JM_LOG_RETENTION_S3_PREFIX     专用前缀（默认 jm-log-retention-e2e）；用例只在该前缀下读写
+//	JM_LOG_RETENTION_S3_USESSL     "1" 走 TLS（默认走明文，与现场同构）
 //
 // 用例结束（含失败）都会清空该前缀，避免污染桶里别的数据。
 
-// fr501S3Enabled 报告真实 S3 门控是否齐备。
-func fr501S3Enabled() (workerstorage.Config, bool) {
-	endpoint := os.Getenv("JM_FR501_S3_ENDPOINT")
-	ak := os.Getenv("JM_FR501_S3_AK")
-	sk := os.Getenv("JM_FR501_S3_SK")
-	bucket := os.Getenv("JM_FR501_S3_BUCKET")
+// s3Enabled 报告真实 S3 门控是否齐备。
+func s3Enabled() (workerstorage.Config, bool) {
+	endpoint := os.Getenv("JM_LOG_RETENTION_S3_ENDPOINT")
+	ak := os.Getenv("JM_LOG_RETENTION_S3_AK")
+	sk := os.Getenv("JM_LOG_RETENTION_S3_SK")
+	bucket := os.Getenv("JM_LOG_RETENTION_S3_BUCKET")
 	if endpoint == "" || ak == "" || sk == "" || bucket == "" {
 		return workerstorage.Config{}, false
 	}
-	prefix := os.Getenv("JM_FR501_S3_PREFIX")
+	prefix := os.Getenv("JM_LOG_RETENTION_S3_PREFIX")
 	if prefix == "" {
-		prefix = "jm-fr501-e2e"
+		prefix = "jm-log-retention-e2e"
 	}
 	return workerstorage.Config{
 		Type:      workerstorage.TypeS3,
 		Endpoint:  endpoint,
 		Bucket:    bucket,
-		Region:    envOrStr(os.Getenv("JM_FR501_S3_REGION"), "us-east-1"),
+		Region:    envOrStr(os.Getenv("JM_LOG_RETENTION_S3_REGION"), "us-east-1"),
 		Prefix:    prefix,
 		AccessKey: ak,
 		SecretKey: sk,
-		UseSSL:    os.Getenv("JM_FR501_S3_USESSL") == "1",
+		UseSSL:    os.Getenv("JM_LOG_RETENTION_S3_USESSL") == "1",
 	}, true
 }
 
@@ -72,11 +72,11 @@ func envOrStr(v, def string) string {
 	return v
 }
 
-// fr501S3Provider 走**生产装配路径**造 Provider：`newArchiveCopyProvider`。
+// s3Provider 走**生产装配路径**造 Provider：`newArchiveCopyProvider`。
 //
 // 不直接调 archive.NewRemoteS3Provider 的原因：本次改动的正是「装配处按配置分流」
 // 那一段（provider=local/s3/minio → Provider），绕过它就等于把被测代码绕过去了。
-func fr501S3Provider(t *testing.T, storeCfg workerstorage.Config) (archive.Provider, workercfg.LogRetentionArchiveCopyConfig) {
+func s3Provider(t *testing.T, storeCfg workerstorage.Config) (archive.Provider, workercfg.LogRetentionArchiveCopyConfig) {
 	t.Helper()
 	cfg := workercfg.LogRetentionArchiveCopyConfig{
 		Enabled:   true,
@@ -95,11 +95,11 @@ func fr501S3Provider(t *testing.T, storeCfg workerstorage.Config) (archive.Provi
 	return provider, cfg
 }
 
-// fr501S3Store 返回一个**独立于被测 archive.Provider** 的对象存储客户端。
+// s3Store 返回一个**独立于被测 archive.Provider** 的对象存储客户端。
 //
 // 用它来断言「桶上到底还剩什么」：调用 archive.Provider.List 断言「删干净了」会把
 // 被测实现自己当成唯一证人——同一条路径上写错两次也能对上。
-func fr501S3Store(t *testing.T, storeCfg workerstorage.Config) *workerstorage.S3ObjectStore {
+func s3Store(t *testing.T, storeCfg workerstorage.Config) *workerstorage.S3ObjectStore {
 	t.Helper()
 	objStore, err := workerstorage.NewS3ObjectStore(workerstorage.Config{
 		Type:      workerstorage.TypeS3,
@@ -114,10 +114,10 @@ func fr501S3Store(t *testing.T, storeCfg workerstorage.Config) *workerstorage.S3
 	return objStore
 }
 
-// fr501S3Cleanup 清空本次 prefix 下的所有对象（用例结束时调用，失败也要清）。
-func fr501S3Cleanup(t *testing.T, storeCfg workerstorage.Config) {
+// s3Cleanup 清空本次 prefix 下的所有对象（用例结束时调用，失败也要清）。
+func s3Cleanup(t *testing.T, storeCfg workerstorage.Config) {
 	t.Helper()
-	objStore := fr501S3Store(t, storeCfg)
+	objStore := s3Store(t, storeCfg)
 	prefix := storeCfg.Prefix + "/"
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -134,10 +134,10 @@ func fr501S3Cleanup(t *testing.T, storeCfg workerstorage.Config) {
 	t.Logf("清理：已删除 prefix %s 下 %d 个对象", prefix, len(keys))
 }
 
-// fr501S3ListPrefix 用独立客户端列出桶上实际存在的对象键（断言「真的删了」）。
-func fr501S3ListPrefix(t *testing.T, storeCfg workerstorage.Config) []string {
+// s3ListPrefix 用独立客户端列出桶上实际存在的对象键（断言「真的删了」）。
+func s3ListPrefix(t *testing.T, storeCfg workerstorage.Config) []string {
 	t.Helper()
-	objStore := fr501S3Store(t, storeCfg)
+	objStore := s3Store(t, storeCfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	keys, err := objStore.List(ctx, storeCfg.Prefix+"/")
@@ -145,18 +145,18 @@ func fr501S3ListPrefix(t *testing.T, storeCfg workerstorage.Config) []string {
 	return keys
 }
 
-// fr501S3Snapshot 造一个「冻结快照」目录：形态与 VL 日分区快照一致
+// s3Snapshot 造一个「冻结快照」目录：形态与 VL 日分区快照一致
 // （metadata.json + datadb/<part>，含子目录与空文件）。
 //
 // 为什么要真的走文件：导出侧的价值一半在「gzip 往返 + 逐文件回读校验」，
 // 用内存里的 []byte 直接灌进去就跳过了 walk/读盘这一段。
-func fr501S3Snapshot(t *testing.T) string {
+func s3Snapshot(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string][]byte{
 		"metadata.json":        []byte(`{"partition":"2026-09-01","rows":2}`),
 		"datadb/00000001":      []byte("2026-09-01T00:00:00Z INFO hello\n2026-09-01T00:00:01Z ERROR boom\n"),
-		"datadb/nested/000002": []byte("nested payload for fr501 s3 e2e\n"),
+		"datadb/nested/000002": []byte("nested payload for retention s3 e2e\n"),
 		"datadb/empty":         {},
 	}
 	for rel, data := range files {
@@ -177,13 +177,13 @@ func fr501S3Snapshot(t *testing.T) string {
 // 三闸全开（discard + sweep.vl_sweep + log_vl.delete_enabled）是删除的唯一合法前提，
 // 这里全开；若不全开则一个对象都不该删（另有用例钉住）。
 func TestE2E_S3_ArchiveObjectPurgeFullChain(t *testing.T) {
-	storeCfg, ok := fr501S3Enabled()
+	storeCfg, ok := s3Enabled()
 	if !ok {
-		t.Skip("未设置 JM_FR501_S3_* 门控，跳过真实 S3 端到端用例")
+		t.Skip("未设置 JM_LOG_RETENTION_S3_* 门控，跳过真实 S3 端到端用例")
 	}
-	provider, copyCfg := fr501S3Provider(t, storeCfg)
-	t.Cleanup(func() { fr501S3Cleanup(t, storeCfg) })
-	fr501S3Cleanup(t, storeCfg) // 起手先清，避免上一轮残留干扰读数
+	provider, copyCfg := s3Provider(t, storeCfg)
+	t.Cleanup(func() { s3Cleanup(t, storeCfg) })
+	s3Cleanup(t, storeCfg) // 起手先清，避免上一轮残留干扰读数
 
 	// —— 第 0 步：桶连通性（让「后面失败」与「一开始就没连上」能区分开）——
 	require.NoError(t, workerstorage.Probe(context.Background(), workerstorage.Config{
@@ -200,13 +200,13 @@ func TestE2E_S3_ArchiveObjectPurgeFullChain(t *testing.T) {
 	require.NoError(t, cat.Put(rec))
 	require.NoError(t, cat.FreezeDayForArchive(day, "archive:"+day), "导出前必须冻结物理日（导出器会校验）")
 
-	snapshotDir := fr501S3Snapshot(t)
+	snapshotDir := s3Snapshot(t)
 	exporter := archive.NewArchiveCopyExporter(cat, func(storageNamespace, utcDay string) (string, error) {
 		return snapshotDir, nil
 	}, provider)
 	fixedNow := time.Date(2026, 9, 2, 3, 0, 0, 0, time.UTC)
 	exporter.Now = func() time.Time { return fixedNow }
-	exporter.EngineVersion = "fr501-e2e"
+	exporter.EngineVersion = "log-retention-e2e"
 
 	sum, err := exporter.Export(context.Background(), cdKey.StorageNamespace, day)
 	require.NoError(t, err, "真实 S3 导出失败")
@@ -219,7 +219,7 @@ func TestE2E_S3_ArchiveObjectPurgeFullChain(t *testing.T) {
 	require.NotEmpty(t, sum.ManifestChecksum)
 
 	// 数据面①：桶上确实出现了对象，且形态是 <prefix>/<ns>/<day>/g1/raw/files/...
-	keysAfterExport := fr501S3ListPrefix(t, storeCfg)
+	keysAfterExport := s3ListPrefix(t, storeCfg)
 	require.NotEmpty(t, keysAfterExport)
 	wantPrefix := storeCfg.Prefix + "/" + cdKey.StorageNamespace + "/" + day + "/g1/"
 	for _, k := range keysAfterExport {
@@ -295,7 +295,7 @@ func TestE2E_S3_ArchiveObjectPurgeFullChain(t *testing.T) {
 	require.NoError(t, storeS3.RemoveArchivePartition(context.Background(), archive.KindS3, refs[0].ObjectPrefix),
 		"s3 没有目录骨架，RemoveArchivePartition 必须是幂等成功")
 	// 此时对象必须一个不少（上一步只清目录骨架，不删对象）。
-	require.Len(t, fr501S3ListPrefix(t, storeCfg), len(keysAfterExport), "RemoveArchivePartition 不得删除任何对象")
+	require.Len(t, s3ListPrefix(t, storeCfg), len(keysAfterExport), "RemoveArchivePartition 不得删除任何对象")
 
 	res, err := reclaimer.Step(context.Background(), now)
 	require.NoError(t, err)
@@ -311,7 +311,7 @@ func TestE2E_S3_ArchiveObjectPurgeFullChain(t *testing.T) {
 	require.Equal(t, len(keysAfterExport), res.Outcomes[0].Objects, "逐对象删除数必须等于导出对象数")
 
 	// 数据面③：桶上该分区真的空了（用独立实现的 List 断言，不看被测 Provider）。
-	left := fr501S3ListPrefix(t, storeCfg)
+	left := s3ListPrefix(t, storeCfg)
 	require.Empty(t, left, "桶上该前缀应被清空，实际残留 %v", left)
 
 	// 数据面④：被测 Provider 的 List 也返回空（分区级视图）。
@@ -347,13 +347,13 @@ func TestE2E_S3_ArchiveObjectPurgeFullChain(t *testing.T) {
 //
 // 没有这条用例，上面那条「删干净了」就可能是「不管闸门都删」——两者的观测读数完全相同。
 func TestE2E_S3_PurgeGatesClosedDeletesNothing(t *testing.T) {
-	storeCfg, ok := fr501S3Enabled()
+	storeCfg, ok := s3Enabled()
 	if !ok {
-		t.Skip("未设置 JM_FR501_S3_* 门控，跳过真实 S3 端到端用例")
+		t.Skip("未设置 JM_LOG_RETENTION_S3_* 门控，跳过真实 S3 端到端用例")
 	}
-	provider, _ := fr501S3Provider(t, storeCfg)
-	t.Cleanup(func() { fr501S3Cleanup(t, storeCfg) })
-	fr501S3Cleanup(t, storeCfg)
+	provider, _ := s3Provider(t, storeCfg)
+	t.Cleanup(func() { s3Cleanup(t, storeCfg) })
+	s3Cleanup(t, storeCfg)
 
 	cat := catalog.New(nil)
 	day := "2026-09-02"
@@ -363,7 +363,7 @@ func TestE2E_S3_PurgeGatesClosedDeletesNothing(t *testing.T) {
 	akey := archive.PartitionKey{StorageNamespace: cdKey.StorageNamespace, UTCDay: day, Generation: 1}
 	require.NoError(t, provider.Put(context.Background(), akey, "raw/files/a.gz", []byte("A")))
 	require.NoError(t, provider.Put(context.Background(), akey, "manifest.json", []byte("{}")))
-	before := fr501S3ListPrefix(t, storeCfg)
+	before := s3ListPrefix(t, storeCfg)
 	require.NotEmpty(t, before)
 
 	archivedAt := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
@@ -417,7 +417,7 @@ func TestE2E_S3_PurgeGatesClosedDeletesNothing(t *testing.T) {
 	require.Equal(t, 0, res.Listed, "闸门未全开时连枚举都不做（先判闸、后列举）")
 	require.Equal(t, 0, res.Purged, "三闸未全开时绝不能清除归档对象")
 
-	require.Equal(t, before, fr501S3ListPrefix(t, storeCfg), "三闸未全开时桶上对象必须原样保留")
+	require.Equal(t, before, s3ListPrefix(t, storeCfg), "三闸未全开时桶上对象必须原样保留")
 	after, _ := cat.Get(cdKey)
 	require.False(t, after.ArchiveEvidence.Purged, "三闸未全开时权威态不得变成已清除")
 	require.True(t, after.ArchiveEvidence.PurgeRequestedAt.IsZero(), "连「进行中」标记都不该落")
@@ -439,23 +439,23 @@ func TestE2E_S3_ArchiveProviderKindMismatchRefusesDelete(t *testing.T) {
 	require.Contains(t, err.Error(), "不一致")
 }
 
-// fr501BucketKeyPrefixProbe 确认 prefix 真的参与对象键（导出侧用 log_archive.prefix）。
+// bucketKeyPrefixProbe 确认 prefix 真的参与对象键（导出侧用 log_archive.prefix）。
 //
 // 单独一条小用例：prefix 若被丢弃，本次验证就会把对象写到桶根下的 ns/day/g1/…，
 // 与真实部署（prefix=logs 或自定义）不一致——那会让「已验证」与「上线后」不是同一件事。
 func TestE2E_S3_PrefixIsHonoredInObjectKeys(t *testing.T) {
-	storeCfg, ok := fr501S3Enabled()
+	storeCfg, ok := s3Enabled()
 	if !ok {
-		t.Skip("未设置 JM_FR501_S3_* 门控，跳过真实 S3 端到端用例")
+		t.Skip("未设置 JM_LOG_RETENTION_S3_* 门控，跳过真实 S3 端到端用例")
 	}
-	provider, _ := fr501S3Provider(t, storeCfg)
-	t.Cleanup(func() { fr501S3Cleanup(t, storeCfg) })
-	fr501S3Cleanup(t, storeCfg)
+	provider, _ := s3Provider(t, storeCfg)
+	t.Cleanup(func() { s3Cleanup(t, storeCfg) })
+	s3Cleanup(t, storeCfg)
 
 	akey := archive.PartitionKey{StorageNamespace: "inst:900", UTCDay: "2026-09-03", Generation: 1}
 	require.NoError(t, provider.Put(context.Background(), akey, "raw/files/probe.gz", []byte("P")))
 
-	keys := fr501S3ListPrefix(t, storeCfg)
+	keys := s3ListPrefix(t, storeCfg)
 	t.Logf("prefix=%s 下对象：%v", storeCfg.Prefix, keys)
 	require.Len(t, keys, 1)
 	require.True(t, len(keys[0]) > len(storeCfg.Prefix)+1 && keys[0][:len(storeCfg.Prefix)+1] == storeCfg.Prefix+"/",
@@ -470,5 +470,5 @@ func TestE2E_S3_PrefixIsHonoredInObjectKeys(t *testing.T) {
 	require.Empty(t, left)
 }
 
-// fr501FmtGuard 让 fmt 在调试改动里可用（避免为了打一行日志再改 import）。
+// fmtGuardPlaceholder 让 fmt 在调试改动里可用（避免为了打一行日志再改 import）。
 var _ = fmt.Sprintf

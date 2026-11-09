@@ -3,7 +3,7 @@
 // 设计目标（见 docs/specs/node-runtime-library/spec.md §3.2「Node 安装器」）：
 //   - InstallNodeJS 从 nodejs.org dist（镜像可配）解析该 major 最新版本并下载便携归档，
 //     解压到托管目录 <数据根>/opt/runtimes/nodejs-<major>；
-// 下载复用 jdk 包导出的 DownloadAndExtract 基建：同一出站 client 语义（ADR-043）、
+// 下载复用 jdk 包导出的 DownloadAndExtract 基建：同一出站 client 语义、
 //     停滞看门狗判卡死、网络失败可操作引导；
 // 残骸自愈：完成标记 = node 可执行文件（bin/node | node.exe），无标记的
 //     半截目录自动清除重装、有标记的完好目录拒绝覆盖；
@@ -48,7 +48,7 @@ type Progress = jdk.Progress
 type Manager struct {
 	mu      sync.Mutex
 	rootDir string
-	// httpClient / httpProvider 出站 client 注入语义同 jdk.Manager（ADR-043）：
+	// httpClient / httpProvider 出站 client 注入语义同 jdk.Manager：
 	// provider 优先（每次下载取当前，代理改动即时生效），皆空回退裸默认 client。
 	httpClient   *http.Client
 	httpProvider func() *http.Client
@@ -61,14 +61,14 @@ func NewManager(rootDir string) *Manager {
 	return &Manager{rootDir: rootDir}
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理ADR-037）。
+// SetHTTPClient 注入出站 client（经进程级代理）。
 func (m *Manager) SetHTTPClient(c *http.Client) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.httpClient = c
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次下载取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者：每次下载取当前 client，
 // 使 CP 经心跳下发的代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
 func (m *Manager) SetHTTPClientProvider(p func() *http.Client) {
 	m.mu.Lock()

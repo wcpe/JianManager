@@ -9,7 +9,7 @@ import api from '@/api/client'
  */
 
 /** 
- * 数据库浏览契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
+ * 数据库浏览契约已回迁应用侧，双侧共用；对外保留原导出名，调用点无需改动。
  */
 export type { DbTableInfo, DbColumn, DbRowsResult } from '@/lib/database/db-contracts'
 

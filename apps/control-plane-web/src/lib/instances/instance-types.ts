@@ -31,7 +31,7 @@ export interface InstanceInfo {
   workDir: string
   /** 就地导入标记：工作目录为托管区外原目录，删除实例不删原目录。 */
   workDirInPlace?: boolean
-  /** docker 模式的容器镜像引用（ADR-019）；非 docker 模式为空。 */
+  /** docker 模式的容器镜像引用；非 docker 模式为空。 */
   image?: string
   /** docker 模式 CPU 核数上限；0=不限制，仅 docker 模式生效。 */
   cpuLimit?: number
@@ -54,7 +54,7 @@ export interface InstanceInfo {
    */
   tags: string | string[] | null
   /** 
-   * 实例能力画像（ADR-091）：仅详情/单查响应携带（列表不计），前端据此显隐 Tab。
+   * 实例能力画像：仅详情/单查响应携带（列表不计），前端据此显隐 Tab。
    * 缺失时前端按 (type, role) 本地兜底（`lib/capabilities.ts`），故为可选。
    */
   capabilities?: InstanceCapabilityProfile | null

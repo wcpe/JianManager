@@ -1,12 +1,12 @@
 /** 
- * 机器级更新清单与钻取契约（ADR-103）。
+ * 机器级更新清单与钻取契约。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 
 /** 机器更新聚合项。
  *
  * 字段与后端 `service.ClientMachineSummary` 逐字对齐（CP 侧 SQL 聚合产出）。
- * machineId 已是哈希值（ADR-023），展示层无需再脱敏。
+ * machineId 已是哈希值，展示层无需再脱敏。
  */
 export interface ClientMachineSummary {
   machineId: string

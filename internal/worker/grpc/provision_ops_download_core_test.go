@@ -21,8 +21,8 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// newFR330Server 建一个带制品缓存的 worker gRPC server 测试基座，并注册一个实例。
-func newFR330Server(t *testing.T, instanceUUID, workDirName string) (*Server, string) {
+// newArtifactCacheServer 建一个带制品缓存的 worker gRPC server 测试基座，并注册一个实例。
+func newArtifactCacheServer(t *testing.T, instanceUUID, workDirName string) (*Server, string) {
 	t.Helper()
 	tmp := t.TempDir()
 	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
@@ -41,7 +41,7 @@ func newFR330Server(t *testing.T, instanceUUID, workDirName string) (*Server, st
 // 关掉下载源后再次请求同组合键，应命中缓存秒拷、完全不走网络，且响应带 cache_hit。
 func TestDownloadCore_CompositeKeyHitSkipsNetwork(t *testing.T) {
 	const uuid = "77777777-7777-7777-7777-777777777777"
-	srv, workDir := newFR330Server(t, uuid, "inst-ck")
+	srv, workDir := newArtifactCacheServer(t, uuid, "inst-ck")
 	ctx := context.Background()
 
 	jar := []byte("spongevanilla-core-jar-without-sha256")
@@ -79,7 +79,7 @@ func TestDownloadCore_CompositeKeyHitSkipsNetwork(t *testing.T) {
 // 不得参与组合键缓存：第二次请求仍走网络（latest 语义不可冻结）。
 func TestDownloadCore_IndeterminateKeyNotReusable(t *testing.T) {
 	const uuid = "78787878-7878-7878-7878-787878787878"
-	srv, workDir := newFR330Server(t, uuid, "inst-latest")
+	srv, workDir := newArtifactCacheServer(t, uuid, "inst-latest")
 	ctx := context.Background()
 
 	jar := []byte("bungeecord-latest-jar")
@@ -110,7 +110,7 @@ func TestDownloadCore_IndeterminateKeyNotReusable(t *testing.T) {
 // 不得把脏内容交付给实例——作废条目、回退远程下载，并用新下载内容重建缓存。
 func TestDownloadCore_CorruptCacheEntryRedownloads(t *testing.T) {
 	const uuid = "79797979-7979-7979-7979-797979797979"
-	srv, workDir := newFR330Server(t, uuid, "inst-corrupt")
+	srv, workDir := newArtifactCacheServer(t, uuid, "inst-corrupt")
 	ctx := context.Background()
 
 	jar := []byte("paper-core-jar-payload-for-corruption-test")

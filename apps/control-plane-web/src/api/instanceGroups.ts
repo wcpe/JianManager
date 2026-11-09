@@ -4,11 +4,11 @@ import api from '@/api/client'
 import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 
 /** 
- * 实例组织分组树节点（对应后端 service.InstanceGroupNodeViewADR-033）。
+ * 实例组织分组树节点（对应后端 service.InstanceGroupNodeView）。
  * 扁平节点列表，前端据 parentId 重建层级；instanceCount 为「子树聚合去重」实例数。
  * 与用户组（RBAC）、网络群组（部署）正交——纯组织归类。
  *
- * 契约已回迁应用侧（受控视图与纯逻辑共用，ADR-103）；此处原样再导出，调用点无需改动。
+ * 契约已回迁应用侧（受控视图与纯逻辑共用）；此处原样再导出，调用点无需改动。
  */
 export type { InstanceGroupNode } from '@/lib/instances/instance-group'
 

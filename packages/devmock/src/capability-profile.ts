@@ -1,5 +1,5 @@
 /** 
- * 实例能力画像（ADR-091）——devmock 侧真源。
+ * 实例能力画像——devmock 侧真源。
  *
  * 画像有三份登记（后端 `internal/controlplane/service/capability_profile.go` 注册表、
  * 前端 `apps/control-plane-web/src/lib/capabilities.ts` 兜底表、devmock 本模块）。三份必须

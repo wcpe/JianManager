@@ -29,7 +29,7 @@ import { applyCommonPrefix, applyCompletion, computeCompletion } from '@/lib/con
 import type { CompletionState } from '@/lib/console/console-completion'
 
 /** 
- * 控制台命令栏（spec §2.2智能输入；ADR-086）：原生 `<input>`。
+ * 控制台命令栏（spec §2.2智能输入）：原生 `<input>`。
  *
  * 之所以必须是原生控件：Worker 给的是 stdin 管道而不是 pty，旧实现只能在 xterm 的
  * `onData` 里手工重建行编辑器——逐字符回显、手工退格、手工 ↑↓——结果长着终端的样子
@@ -229,7 +229,7 @@ export function ConsoleCommandBar({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     // 输入法组合期间一律不拦截：组合中的 Enter 是「确认候选词」，抢走就会把拼音
-    // 当命令提交、并让候选框里的字重复回显——正是 ADR-086 要消灭的那类病。
+    // 当命令提交、并让候选框里的字重复回显——正是行缓冲方案要消灭的那类病。
     if (event.nativeEvent.isComposing) return
 
     const input = event.currentTarget
@@ -294,7 +294,7 @@ export function ConsoleCommandBar({
       return
     }
 
-    // readline 惯用键：ADR-086 点名这几个键「全部失效」是弃 xterm 输入的直接动因之一。
+    // readline 惯用键：旧 xterm 输入让这几个键「全部失效」，是弃它的直接动因之一。
     // Ctrl+A/E 覆盖浏览器的「全选/无动作」，取 readline 的行首/行尾语义。
     if (event.ctrlKey && !event.altKey && !event.metaKey) {
       const key = event.key.toLowerCase()

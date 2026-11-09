@@ -6,7 +6,7 @@ import { loginMockUser } from '@/test/auth'
 import ClientDistLogsTab from './ClientDistLogsTab'
 
 /** 
- * ClientDistLogsTab（ADR-088 去重合并）：单一入口按 `type` 双视图。
+ * ClientDistLogsTab（去重合并）：单一入口按 `type` 双视图。
  * - `type=request`（缺省）：加厚请求表 + 脱敏详情。
  * - `type=all`/其余 5 类：安全聚合多类型表（hello/risk/action/request/runtime/telemetry）。
  */

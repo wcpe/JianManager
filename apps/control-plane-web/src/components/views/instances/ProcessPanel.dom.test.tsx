@@ -6,7 +6,7 @@ import type { ReactNode } from 'react'
 import { ProcessPanel } from '@/components/views/instances/ProcessPanel'
 
 /** 
- *§2.3.1 进程指标面板 · 受控视图测（ADR-103 a 范式）。
+ *§2.3.1 进程指标面板 · 受控视图测。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。核心断言是**缺测不伪造**：
  * 探针不在时各项显「—」，绝不落 0 或 -1（三态语义）。
@@ -40,7 +40,7 @@ function statValue(label: string): string {
   return within(card as HTMLElement).getAllByText(/.+/).pop()!.textContent!.trim()
 }
 
-describe('ProcessPanel（ADR-103 a 范式）', () => {
+describe('ProcessPanel', () => {
   it('无指标时各项显「—」，不落 0 / -1 占位', () => {
     renderPanel(undefined)
     expect(statValue('CPU')).toBe('—')

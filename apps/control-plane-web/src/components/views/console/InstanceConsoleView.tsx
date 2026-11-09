@@ -43,12 +43,12 @@ import { ConsoleOutputView } from '@/components/views/console/ConsoleOutputView'
 import type { ConsoleOutputHandle } from '@/components/views/console/ConsoleOutputView'
 
 /** 
- * 实例控制台（ADR-086）：输出区（只读 DOM 虚拟列表）+ 命令栏（原生 input）。
+ * 实例控制台：输出区（只读 DOM 虚拟列表）+ 命令栏（原生 input）。
  *
  * 取代原 `components/Terminal.tsx` 的 xterm 渲染壳。输入路径整体废弃——
  * 不再监听 `onData`、不再手工回显/退格/↑↓ 历史（那套在 stdin 管道上假装 pty 的仿造品）。
  *
- * 会话保活语义不变（ADR-067）：WS 与行缓冲常驻 {@link terminalSessionManager}，
+ * 会话保活语义不变：WS 与行缓冲常驻 {@link terminalSessionManager}，
  * 本组件 mount 时 acquire + 订阅，卸载（含 `<Activity>` 隐藏）只退订，不断连、不丢缓冲。
  *
  * 本壳另承载两条依赖行模型的能力：
@@ -100,7 +100,7 @@ export interface InstanceConsoleViewProps {
   searchOpen?: boolean
   onSearchOpenChange?: (open: boolean) => void
   /** 
-   * 会话保活（ADR-067）：true=卸载（含 Activity 隐藏）只退订，
+   * 会话保活：true=卸载（含 Activity 隐藏）只退订，
    * 连接与缓冲由连接管理器常驻；false（默认）=独立表面语义，卸载即释放会话
    * （未被控制台热集 pin 时）。
    */
@@ -155,7 +155,7 @@ export function InstanceConsoleView({
   const lines = useSyncExternalStore(subscribe, getSnapshot)
   const droppedCount = terminalSessionManager.getDroppedCount(instanceId)
 
-  // 导播台节流（ADR-035）：非激活场景的 WS 保活但**暂停落行**，
+  // 导播台节流：非激活场景的 WS 保活但**暂停落行**，
   // 输出由管理器累积，切回激活时一次性 flush。无 Provider 时恒激活（167 不变）。
   const { active: directorActive } = useDirectorRender()
 
@@ -178,7 +178,7 @@ export function InstanceConsoleView({
    */
   const anchorSelectionRef = useRef('')
 
-  // ---- 会话订阅（ADR-067）----
+  // ---- 会话订阅----
   useEffect(() => {
     if (isLoading || !fetchToken) return
     terminalSessionManager.acquire(instanceId, fetchToken)
@@ -409,7 +409,7 @@ export function InstanceConsoleView({
 
   const copySelection = () => {
     // 两种选区并存：跨行走锚点选区（区间文本由输出区从行缓冲取，屏幕外的行
-    // 没有 DOM 节点故拿不到，见 ADR-086 代价 2），同一行内仍是原生字符级选区。
+    // 没有 DOM 节点故拿不到），同一行内仍是原生字符级选区。
     // 锚点选区一旦成立就会关掉原生选区，故它优先；为空时再退回读原生选区。
     void notifyCopy(anchorSelectionRef.current || (window.getSelection()?.toString() ?? ''))
   }

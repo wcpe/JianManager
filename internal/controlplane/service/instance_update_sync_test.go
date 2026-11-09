@@ -54,13 +54,13 @@ func newInstanceUpdateSyncDB(t *testing.T) *gorm.DB {
 // autoRestart 后，CP 必须把数据库中的最新完整规格幂等同步给当前在线 Worker。
 func TestInstanceUpdate_SyncsLaunchSpecToOnlineWorker(t *testing.T) {
 	db := newInstanceUpdateSyncDB(t)
-	node := &model.Node{UUID: "node-fr233-update", Name: "fr233-node", Host: "127.0.0.1", Status: model.NodeStatusOnline, OS: "linux"}
+	node := &model.Node{UUID: "node-instance-sync-update", Name: "instance-sync-node", Host: "127.0.0.1", Status: model.NodeStatusOnline, OS: "linux"}
 	require.NoError(t, db.Create(node).Error)
 	jdk := &model.NodeJDK{NodeID: node.ID, Vendor: "Temurin", MajorVersion: 21, Version: "21.0.4", Arch: "amd64", Path: "/opt/jdk-21"}
 	require.NoError(t, db.Create(jdk).Error)
 	inst := &model.Instance{
-		NodeID: node.ID, Name: "fr233", Type: model.InstanceTypeMinecraftJava,
-		ProcessType: model.ProcessTypeDaemon, StartCommand: "old-command", WorkDir: "var/servers/fr233",
+		NodeID: node.ID, Name: "instance-sync", Type: model.InstanceTypeMinecraftJava,
+		ProcessType: model.ProcessTypeDaemon, StartCommand: "old-command", WorkDir: "var/servers/instance-sync",
 		Status: model.InstanceStatusRunning,
 	}
 	require.NoError(t, db.Create(inst).Error)
@@ -98,10 +98,10 @@ func TestInstanceUpdate_SyncsLaunchSpecToOnlineWorker(t *testing.T) {
 // 避免 Worker 继续用缓存旧规格拉起实例，并把明确中文原因写入状态。
 func TestDelegateRestart_StopsWhenLaunchSpecRegistrationFails(t *testing.T) {
 	db := newInstanceUpdateSyncDB(t)
-	node := &model.Node{UUID: "node-fr233-restart-fail", Name: "fr233-fail", Host: "127.0.0.1", Status: model.NodeStatusOnline, OS: "linux"}
+	node := &model.Node{UUID: "node-instance-sync-restart-fail", Name: "instance-sync-fail", Host: "127.0.0.1", Status: model.NodeStatusOnline, OS: "linux"}
 	require.NoError(t, db.Create(node).Error)
-	inst := &model.Instance{NodeID: node.ID, Name: "fr233-fail", Type: model.InstanceTypeMinecraftJava,
-		ProcessType: model.ProcessTypeDaemon, StartCommand: "new-command", WorkDir: "var/servers/fr233-fail",
+	inst := &model.Instance{NodeID: node.ID, Name: "instance-sync-fail", Type: model.InstanceTypeMinecraftJava,
+		ProcessType: model.ProcessTypeDaemon, StartCommand: "new-command", WorkDir: "var/servers/instance-sync-fail",
 		Status: model.InstanceStatusStopping}
 	require.NoError(t, db.Create(inst).Error)
 

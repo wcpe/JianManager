@@ -7,14 +7,14 @@ import (
 	"time"
 )
 
-// startupPhase 是启动阶段计时里的一个可观测节点（FR-486）。
+// startupPhase 是启动阶段计时里的一个可观测节点。
 type startupPhase struct {
 	Name      string
 	Elapsed   time.Duration // 自启动起算的累计耗时
 	SinceLast time.Duration // 本阶段自身耗时
 }
 
-// startupTimer 记录 Worker 启动各阶段的耗时（FR-486）。
+// startupTimer 记录 Worker 启动各阶段的耗时。
 //
 // # 为什么需要它
 //
@@ -24,7 +24,7 @@ type startupPhase struct {
 //
 // # 与旧设计（已废）的区别
 //
-// FR-486 原本还包含「加载索引分段计时/流式加载优化」。索引库改 `:memory:`
+// 该目标原计划还包含「加载索引分段计时/流式加载优化」。索引库改 `:memory:`
 // 后重启就是空库，「加载索引」这个阶段不存在了，所以那部分已经删掉。
 // 现在计的是真实存在的阶段。
 //
@@ -61,7 +61,7 @@ func (t *startupTimer) Mark(name string) time.Duration {
 	return now.Sub(t.start)
 }
 
-// startupSlowThreshold 是「启动阶段超阈」的阈值（FR-486）。
+// startupSlowThreshold 是「启动阶段超阈」的阈值。
 //
 // 取值依据：生产实测本机冷启动约 3-8 秒（含 VL 资产校验）。
 // 取值 30s 是「已经慢了但还没到故障」的量级；
@@ -109,5 +109,5 @@ func (t *startupTimer) Report() {
 		"slowestMs", float64(slowest.SinceLast.Microseconds())/1000.0,
 	)
 
-	slog.Log(context.Background(), level, "Worker 启动分段耗时（FR-486）", attrs...)
+	slog.Log(context.Background(), level, "Worker 启动分段耗时", attrs...)
 }

@@ -13,7 +13,7 @@ import { fmtTime, levelVariant, SECURITY_EMPTY as EMPTY } from '@/components/vie
 export type EventRowConfirm = 'block-ip' | 'key-state' | 'channel-protection' | null
 
 /** 
- * 安全侧「异常请求」事件行的展示层（ADR-088）。
+ * 安全侧「异常请求」事件行的展示层。
  * 三类应用侧依赖经注入：日志深链（router Link）、三个处置动作（mutation 与提示）、
  * 以及确认弹窗本体（应用侧 DangerConfirm 包装层注入权限判定）。
  */

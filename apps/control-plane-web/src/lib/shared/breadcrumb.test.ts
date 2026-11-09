@@ -54,7 +54,7 @@ describe('breadcrumbTrail（六域）', () => {
     ])
   })
 
-  it('Agent 接入：MCP 活动归 agentAccess（ADR-096 由会话页改名）', () => {
+  it('Agent 接入：MCP 活动归 agentAccess（由会话页改名）', () => {
     expect(breadcrumbTrail('/mcp-activity')).toEqual([
       { labelKey: 'nav.agentAccess' },
       { labelKey: 'nav.mcpActivity' },

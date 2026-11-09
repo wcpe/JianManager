@@ -33,7 +33,7 @@ var (
 	ErrUpdateNoArtifact = errors.New("更新源无匹配本平台的制品")
 	// ErrUpdateAlreadyLatest 目标已是最新版本（无更高版本可升）。
 	ErrUpdateAlreadyLatest = errors.New("已是最新版本")
-	// ErrNoBackup 无可回滚的备份（CP/节点从未升级过，或备份缺失）。见 ADR-042。
+	// ErrNoBackup 无可回滚的备份（CP/节点从未升级过，或备份缺失）。
 	ErrNoBackup = selfupdate.ErrNoBackup
 )
 
@@ -68,7 +68,7 @@ type FeedArtifact struct {
 
 // SelfUpdateConfig 是注入自更新服务的更新源配置（对齐 config.UpdateConfig）。
 type SelfUpdateConfig struct {
-	// GitHubRepo owner/repo；非空即启用 GitHub Releases 源（见 ADR-036 §7）。
+	// GitHubRepo owner/repo；非空即启用 GitHub Releases 源。
 	GitHubRepo string
 	// Channel GitHub 源渠道：stable（取 /releases/latest）| prerelease（取 /releases/tags/latest）。空=stable。
 	Channel string
@@ -82,7 +82,7 @@ type SelfUpdateConfig struct {
 	AllowInsecure bool
 }
 
-// SelfUpdateService 面板自更新编排（见 ADR-020 §4）。
+// SelfUpdateService 面板自更新编排。
 // CP 统一编排：检查更新（CP + 各节点版本对比）、CP 自升级、经 gRPC 令 Worker 升级、全网逐节点编排。
 type SelfUpdateService struct {
 	db   *gorm.DB
@@ -92,10 +92,10 @@ type SelfUpdateService struct {
 	// 非空返回值优先于 cfg.GitHubToken 基线；使设置面板改令牌即时生效。由 main 注入。
 	githubTokenFunc func() string
 	root            *dataroot.Root
-	// httpClient 出站 client（经进程级代理ADR-037）：拉 feed 与 CP 自身二进制下载共用。
+	// httpClient 出站 client（经进程级代理）：拉 feed 与 CP 自身二进制下载共用。
 	// 为 nil 时回退 http.DefaultClient（向后兼容）。
 	httpClient *http.Client
-	// httpProvider 运行时出站持有者（ADR-043）：非 nil 时每次取当前 client，
+	// httpProvider 运行时出站持有者：非 nil 时每次取当前 client，
 	// 使设置面板改全局代理后立即生效。优先于 httpClient。
 	httpProvider func() *http.Client
 
@@ -114,7 +114,7 @@ type SelfUpdateService struct {
 	nodeUpgradeFn  func(nodeID uint, wantVersion string) (string, string, error) // 覆盖 rollout 内单节点升级
 	cpRollbackFn   func() (toVersion string, err error)                          // 覆盖 CP 自身回滚
 	nodeRollbackFn func(nodeID uint) (from, to string, err error)                // 覆盖单节点回滚
-	// 内嵌 Worker 资产源（ADR-062）；生产为 nil 走 cpembed 真实现。
+	// 内嵌 Worker 资产源；生产为 nil 走 cpembed 真实现。
 	embeddedWorkerManifestFn func() *cpembed.WorkerAssetManifest
 	embeddedWorkerBinaryFn   func(cpembed.WorkerAssetManifestEntry) []byte
 }
@@ -124,13 +124,13 @@ func NewSelfUpdateService(db *gorm.DB, pool *cpgrpc.ClientPool, cfg SelfUpdateCo
 	return &SelfUpdateService{db: db, pool: pool, cfg: cfg, root: root}
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理ADR-037），供拉 feed 与 CP 自身下载使用。
+// SetHTTPClient 注入出站 client（经进程级代理），供拉 feed 与 CP 自身下载使用。
 // 由 main 装配；不调用则回退 http.DefaultClient（向后兼容，测试不受影响）。
 func (s *SelfUpdateService) SetHTTPClient(c *http.Client) {
 	s.httpClient = c
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次拉 feed/下载取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者：每次拉 feed/下载取当前 client，
 // 使全局代理改动即时生效（CP「检查更新」立即走新代理）。优先于固定 client。
 func (s *SelfUpdateService) SetHTTPClientProvider(p func() *http.Client) {
 	s.httpProvider = p
@@ -170,7 +170,7 @@ func (s *SelfUpdateService) outboundClient() *http.Client {
 	return http.DefaultClient
 }
 
-// Configured 报告是否已配置更新源：github_repo 非空 或 feed_url 非空（见 ADR-036 §7）。
+// Configured 报告是否已配置更新源：github_repo 非空 或 feed_url 非空。
 func (s *SelfUpdateService) Configured() bool {
 	return strings.TrimSpace(s.cfg.GitHubRepo) != "" || strings.TrimSpace(s.cfg.FeedURL) != ""
 }
@@ -188,7 +188,7 @@ func (s *SelfUpdateService) sourceLabel() string {
 }
 
 // resolveRelease 取归一 *Feed：feedFetcher 桩优先 → github_repo→GitHub Releases API →
-// feed_url→原 feed JSON → 都空 ErrUpdateNotConfigured（见 ADR-036 §7）。
+// feed_url→原 feed JSON → 都空 ErrUpdateNotConfigured。
 // 替代既有 FetchFeed 作为「取 Feed」的统一入口；FetchFeed 保留为 feed_url 专用实现供回退调用。
 func (s *SelfUpdateService) resolveRelease(ctx context.Context) (*Feed, error) {
 	if s.feedFetcher != nil {
@@ -351,7 +351,7 @@ type ComponentStatus struct {
 	Arch              string `json:"arch"`
 	UpdateAvailable   bool   `json:"updateAvailable"`
 	ArtifactAvailable bool   `json:"artifactAvailable"`
-	// BackupVersion 升级前备份的版本（见 ADR-042）：CP 取自本地备份、节点取自 GetVersion 回报。
+	// BackupVersion 升级前备份的版本：CP 取自本地备份、节点取自 GetVersion 回报。
 	// 非空时前端可一键「回滚 v{BackupVersion}」；空表示无备份（回滚按钮禁用）。
 	BackupVersion string `json:"backupVersion,omitempty"`
 }

@@ -22,7 +22,7 @@ interface MockNode {
   wsPort: number
   status: number
   maintenance: boolean
-  /** 反向隧道已连（见 ADR-066）：在线节点 true=隧道下发，false=直拨回退。 */
+  /** 反向隧道已连：在线节点 true=隧道下发，false=直拨回退。 */
   tunnelConnected: boolean
   os: string
   arch: string

@@ -3,7 +3,7 @@ import api from '@/api/client'
 
 /** 
  * 某 Agent Token 在统计窗口内的 MCP 活动聚合（管理端）。
- * 端点已去会话化（ADR-096），视图不再有「会话」实体，只能按 Token 聚合。
+ * 端点已去会话化，视图不再有「会话」实体，只能按 Token 聚合。
  */
 export interface McpActivityItem {
   tokenId: number

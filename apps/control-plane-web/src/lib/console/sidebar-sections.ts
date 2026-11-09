@@ -4,8 +4,8 @@
  * 从 `SidebarResourcePanel.tsx` 抽出：该文件只应导出组件（`react-refresh/only-export-components`），
  * 而 `buildSections` 是需要被测试直接调用的纯函数，留在组件文件里会让 Fast Refresh 失效。
  *
- * 本地自定义分组（原 `custom` 模式）已删除：换机即失且与后端分组树（`instance_group_nodes`，
- * ADR-033）语义重复。此处的分组归属**只读不写**，一切组织归以分组树为准。
+ * 本地自定义分组（原 `custom` 模式）已删除：换机即失且与后端分组树（`instance_group_nodes`）
+ * 语义重复。此处的分组归属**只读不写**，一切组织归以分组树为准。
  */
 import { envOf, freeTagsOf } from '@/lib/instances/instance-grouping'
 import { statusDotKind } from '@/lib/instances/instance-status'

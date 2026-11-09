@@ -5,7 +5,7 @@ import InstanceConsoleCache from '@/components/console/InstanceConsoleCache'
 
 /** 
  * 服务器详情路由（`/instances/:id`）：单服默认入口为固定分区的服务器统一控制台。
- *（ADR-067）后由跨服热缓存宿主渲染——最近 ≤3 个服控制台整体保活，切换瞬时呈现；
+ *后由跨服热缓存宿主渲染——最近 ≤3 个服控制台整体保活，切换瞬时呈现；
  * 配合 Workspace 路由 key 归并，实例间切换不触发路由级 remount。
  *可组合画布仍保留在高级工作区/导播台路径，不再作为该深链的唯一渲染结果。
  */

@@ -5,12 +5,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 启动命令行采集（FR-426 增补）：updater 以 javaagent 跑在游戏 JVM 内，
+ * 启动命令行采集：updater 以 javaagent 跑在游戏 JVM 内，
  * {@code sun.java.command} 即「主类 + 完整启动参数」（如
  * {@code net.fabricmc.loader.impl.launch.knot.KnotClient --username Amazon2 --uuid … --accessToken …}）。
  *
  * <p>抽为纯静态函数便于单测（不依赖 JVM 真实属性）；调用方（{@link Core}）在运行时读真实值。
- * <p>脱敏：{@code --accessToken} 的值是账号凭据，入库前必须替换为 {@code ***}（FR-360 隐私口径）。
+ * <p>脱敏：{@code --accessToken} 的值是账号凭据，入库前必须替换为 {@code ***}（隐私口径）。
  */
 final class LaunchArgs {
 

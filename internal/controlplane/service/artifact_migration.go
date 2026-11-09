@@ -40,10 +40,10 @@ const (
 	artifactMigrationFailureListCap = 500
 )
 
-// ArtifactMigrationService 制品存量迁移服务（底座见 ADR-073）。
+// ArtifactMigrationService 制品存量迁移服务（底座）。
 //
 // 把全部 client-file 存量逐条搬到目标渠道：源读取（sha256 复核）→ 写入目标 →
-// **先改 Asset 记录 → 再删源**。位置由记录自述（ADR-073），迁一条改一条，随时中断
+// **先改 Asset 记录 → 再删源**。位置由记录自述，迁一条改一条，随时中断
 // 不破读取；重新发起同目标迁移 = 幂等续跑（已在目标的跳过）。执行体为 CP 后台
 // goroutine（沿形态，NodeID=0），进度/强停接入全局任务中心。
 type ArtifactMigrationService struct {

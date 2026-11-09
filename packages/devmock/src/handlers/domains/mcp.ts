@@ -3,7 +3,7 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
 
 /** 
- * MCP 活动域 mock（ADR-096 决策 6）：`GET /agent/mcp/activity`。
+ * MCP 活动域 mock：`GET /agent/mcp/activity`。
  *
  * 本 handler 的**重点不是「能返回 200」，而是复刻真后端的 window 校验语义**
  * （`internal/controlplane/mcp/handler.go` 的 `ListActivity` + `minActivityWindow`/`maxActivityWindow`）。

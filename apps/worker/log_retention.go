@@ -281,15 +281,15 @@ func deleteGateSummary(policy retention.Policy) string {
 	return "all-open（discard + sweep.vl_sweep + log_vl.delete_enabled）"
 }
 
-// newArchiveCopyProvider 按配置构造「导出归档」目的地（FR-501）。
+// newArchiveCopyProvider 按配置构造「导出归档」目的地。
 //
 // 为什么要抽成函数并返回 error 而不是就地 if 分支：三条目的地（local / s3 / minio）
 // 各有自己的前置条件，失败时必须能让装配层**单独降级**（不装导出器 ⇒ 计划阶段不产出
 // archive_copy ⇒ 到期分区继续落 blocked 保留原物），而不是让整个 Worker 启动失败。
 // 这个降级方向与 `main.go` 里既有的「开关开了但没目的地」那条分支完全一致。
 //
-// 为什么不复用 `log_archive.*` 的配置：FR-478 的 Deep Archive 是**查询面**的归档后端
-// （Rehydrate/查询路由用），FR-501 的导出归档是**保留面**的删除前承接物。两者可以指向
+// 为什么不复用 `log_archive.*` 的配置：Deep Archive 是**查询面**的归档后端
+// （Rehydrate/查询路由用），导出归档是**保留面**的删除前承接物。两者可以指向
 // 同一个桶（运维想共用时把键写成一样即可），但不应该隐式捆在一起——
 // 「给查询面开了深归档」不该顺带把「到期分区开始往外导出」也打开，反之亦然。
 //

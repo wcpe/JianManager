@@ -85,7 +85,7 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
  */
 
 /** 
- * 终端会话常驻单例管理器（ADR-067），在 beforeAll 里动态 import 缓存到此，缘由有二：
+ * 终端会话常驻单例管理器，在 beforeAll 里动态 import 缓存到此，缘由有二：
  * ① **动态 import**——晚于各测试文件的 `vi.mock` 注册与全局桩安装，import 拿到的是这些桩生效后的模块；
  *    静态顶层 import 会抢在它们之前把模块绑进缓存。
  * ② **缓存供 afterEach 同步调用**——afterEach 内若 `await import(...)` 会多出一个拆卸 tick，

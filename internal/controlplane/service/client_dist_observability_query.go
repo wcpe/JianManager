@@ -35,7 +35,7 @@ type ObsSummary struct {
 	SuccessRate      float64 `json:"successRate"`
 	FailStaticRate   float64 `json:"failStaticRate"`
 	RollbackRate     float64 `json:"rollbackRate"`
-	// ActiveMachines 区间「活跃客户端」；ActiveMachinesExact 标明是否为精确去重独立数（ADR-049 §4）。
+	// ActiveMachines 区间「活跃客户端」；ActiveMachinesExact 标明是否为精确去重独立数。
 	ActiveMachines      int64 `json:"activeMachines"`
 	ActiveMachinesExact bool  `json:"activeMachinesExact"`
 }
@@ -148,7 +148,7 @@ func (s *ClientDistObservabilityService) queryAt(now time.Time, q ObservabilityQ
 		sum.FailStaticRate = float64(sum.UpdateFailStatic) / float64(sum.UpdateTotal)
 		sum.RollbackRate = float64(sum.UpdateRolledBack) / float64(sum.UpdateTotal)
 	}
-	// 活跃客户端独立数（ADR-049 §4）：区间完全落在明细保留窗内 → 回查明细做区间级精确去重；
+	// 活跃客户端独立数：区间完全落在明细保留窗内 → 回查明细做区间级精确去重；
 	// 否则只能给各桶 active_machines 求和（人次近似上界）。
 	exactActive, exact, err := s.activeMachinesExact(now, q.ChannelID, from, to)
 	if err != nil {

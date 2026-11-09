@@ -1,4 +1,4 @@
-// Package botdist 实现 bot-worker dist 的自愈下发（见 ADR-072）：
+// Package botdist 实现 bot-worker dist 的自愈下发：
 // Worker 启动后经既有 CP gRPC 通道拉取内嵌归档，物化到 <dataroot>/opt/bot-worker/。
 // 运行时依赖不随归档分发，由节点受控项目根提供；ESM 经 node_modules 链接解析。
 package botdist

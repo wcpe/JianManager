@@ -5,7 +5,7 @@ import { renderWithI18n } from '@/test/i18n'
 import NodeGlobalPackagesSection, { type GlobalPackagesView } from '@/components/views/nodes/NodeGlobalPackagesSection'
 
 /** 
- *节点全局包管理 · 受控视图测（ADR-103 b 范式）。
+ *节点全局包管理 · 受控视图测。
  *
  * 与迁移前的两处差异**是有意的取舍，勿当缺陷「修掉」**：
  * 1. 数据经 props 注入，不再经 mock 后端取数，因此没有「卸载成功后列表联动消失」这一
@@ -37,7 +37,7 @@ function renderSection(props: Partial<Parameters<typeof NodeGlobalPackagesSectio
   return { ...handlers, ...result }
 }
 
-describe('NodeGlobalPackagesSection（ADR-103 b 范式）', () => {
+describe('NodeGlobalPackagesSection', () => {
   it('加载态渲染骨架占位而非空态', () => {
     const { container } = renderSection({ isLoading: true, data: undefined })
     expect(container.querySelectorAll('[data-slot="skeleton"]').length).toBe(3)

@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-/** 进度视图工厂选择（FR-099）：禁用→Noop；headless→文本；展示操作不抛。 */
+/** 进度视图工厂选择：禁用→Noop；headless→文本；展示操作不抛。 */
 class ProgressViewTest {
 
     @Test

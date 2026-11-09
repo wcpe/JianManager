@@ -702,7 +702,7 @@ func (s *OrphanScanner) handleDockerLeftover(ctx context.Context, finding *Orpha
 		//   · 名字必须解析出实例 UUID（格式校验，必要条件）；
 		//   · 带平台受管标签且标签内实例 UUID 与容器名一致 → 强归属确证（managed_label）；
 		//     标签与容器名不一致 → 判为归属不通过并拒绝删除（真判据，可失败）；
-		//   · 无标签（本 FR 之前创建的存量容器）→ 仅名字格式校验（name_format_only），
+		//   · 无标签（之前创建的存量容器）→ 仅名字格式校验（name_format_only），
 		//     **不构成强归属证明**，仍有「同名容器」残余风险；该降级如实写进审计 detail 供运维核查。
 		ownership, ok := verifyContainerOwnership(finding.ContainerName, finding.ManagedLabel, finding.LabelInstanceUUID)
 		if !ok {
@@ -1136,7 +1136,7 @@ func containerUUID(name string) (string, bool) {
 //
 //   - managed_label：容器带平台受管标签，且标签内实例 UUID 与容器名解析出的 UUID 一致 → 强归属确证。
 //   - label_mismatch：容器带受管标签但标签实例与容器名不一致（标签/命名被篡改或串号）→ 不通过。
-//   - name_format_only：无受管标签（本 FR 之前创建的存量容器）→ 退化为容器名格式校验，
+//   - name_format_only：无受管标签（之前创建的存量容器）→ 退化为容器名格式校验，
 //     **不构成强归属证明**，存在同名容器被误删的残余风险；但容器名由本平台按 UUID 生成，
 //     误删面因此极窄，为兼容存量仍放行（不静默：证据档位如实入审计）。
 func verifyContainerOwnership(containerName string, managedLabel bool, labelInstanceUUID string) (string, bool) {

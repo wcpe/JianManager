@@ -15,7 +15,7 @@ type Client struct {
 	NodeUUID string
 }
 
-// TunnelProvider 提供节点反向隧道通道（见 ADR-066）；由 TunnelRegistry 实现。
+// TunnelProvider 提供节点反向隧道通道；由 TunnelRegistry 实现。
 // 以接口声明避免 pool 对隧道实现的硬依赖（测试可注入假 provider）。
 type TunnelProvider interface {
 	Channel(nodeUUID string) (grpc.ClientConnInterface, bool)

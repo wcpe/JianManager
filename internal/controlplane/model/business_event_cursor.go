@@ -2,9 +2,9 @@ package model
 
 import "time"
 
-// BusinessEventCursor 业务事件位点账本（ADR-107，属的旁路能力）。
+// BusinessEventCursor 业务事件位点账本（属的旁路能力）。
 //
-// **只存投递元数据，绝不存 payload**——这是与 ADR-106 的分界线：
+// **只存投递元数据，绝不存 payload**——这是分界线：
 // 位点是「信封的运输单据」，payload 是「信封里的信」。一旦本表长出 payload 列，
 // 紧接着的需求必然是按 payload 查询与聚合，那正是花力气退役掉的能力。
 // 故本文件**不得**新增任何 payload / output / 业务字段；内容重放的正确归属是
@@ -22,7 +22,7 @@ type BusinessEventCursor struct {
 	StreamSeq int64 `gorm:"not null;uniqueIndex:ux_bec_seq,priority:1"`
 	// InstanceID 来源实例（CP 侧 DB ID；信封里的 UUID 已由 BusinessStreamService 解析）。
 	InstanceID uint `gorm:"not null;index:idx_bec_scope,priority:1"`
-	// Domain 业务域。JM 只当字符串标签，不理解其语义（ADR-106）。
+	// Domain 业务域。JM 只当字符串标签，不理解其语义。
 	Domain string `gorm:"type:varchar(64);not null;index:idx_bec_scope,priority:2"`
 	// Seq 探针分配的 per-domain 序号；探针未上报时为 0（信封缺字段属正常，不是错误）。
 	Seq int64 `gorm:"not null;index:idx_bec_scope,priority:3"`

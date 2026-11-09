@@ -11,7 +11,7 @@ import (
 // # 为什么需要（2026-10-01 生产事故根因）
 //
 // 四层模型 CP → Worker → wrapper(setsid 游离) → sh -c → java 承诺「Worker/CP 重启不牵连服务器」
-// （ADR-003、ADR-093）。`setsid` 让 wrapper 逃脱 Worker 的**进程组**，但逃不出 systemd 的
+// `setsid` 让 wrapper 逃脱 Worker 的**进程组**，但逃不出 systemd 的
 // **cgroup**：`systemctl restart <worker 单元>` 时 systemd 按 KillMode（默认 `control-group`，
 // KillSignal=15）向该单元 cgroup 内的**全部**进程发 SIGTERM。真机复现（本机 jm-prod-worker.service）：
 // Worker 与其 11 个 wrapper、11 个 java 同处 `/user.slice/…/app.slice/jm-prod-worker.service`，

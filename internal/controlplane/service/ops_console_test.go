@@ -14,22 +14,22 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-func TestFR037OpsConsoleReusesNodeInstanceAndTerminalServices(t *testing.T) {
-	db := newFR037OpsConsoleDB(t)
+func TestOpsConsoleReusesNodeInstanceAndTerminalServices(t *testing.T) {
+	db := newOpsConsoleDB(t)
 	nodeSvc := NewNodeService(db)
 	instanceSvc := NewInstanceService(db, nil, nil)
 	t.Cleanup(instanceSvc.Shutdown)
-	terminalSvc := NewTerminalService(db, "fr037-terminal-secret", "ws://fallback.invalid")
+	terminalSvc := NewTerminalService(db, "ops-console-terminal-secret", "ws://fallback.invalid")
 
-	alpha := createFR037ServiceNode(t, db, "fr037-alpha")
-	beta := createFR037ServiceNode(t, db, "fr037-beta")
-	running := createFR037ServiceInstance(t, db, alpha.ID, "fr037-survival", model.InstanceStatusRunning)
-	createFR037ServiceInstance(t, db, alpha.ID, "fr037-lobby", model.InstanceStatusStopped)
-	createFR037ServiceInstance(t, db, beta.ID, "fr037-creative", model.InstanceStatusCrashed)
+	alpha := createOpsConsoleServiceNode(t, db, "ops-console-alpha")
+	beta := createOpsConsoleServiceNode(t, db, "ops-console-beta")
+	running := createOpsConsoleServiceInstance(t, db, alpha.ID, "ops-console-survival", model.InstanceStatusRunning)
+	createOpsConsoleServiceInstance(t, db, alpha.ID, "ops-console-lobby", model.InstanceStatusStopped)
+	createOpsConsoleServiceInstance(t, db, beta.ID, "ops-console-creative", model.InstanceStatusCrashed)
 
 	nodes, err := nodeSvc.List()
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"fr037-alpha", "fr037-beta"}, []string{nodes[0].Name, nodes[1].Name})
+	assert.ElementsMatch(t, []string{"ops-console-alpha", "ops-console-beta"}, []string{nodes[0].Name, nodes[1].Name})
 
 	allInstances, err := instanceSvc.List(InstanceFilter{})
 	require.NoError(t, err)
@@ -38,7 +38,7 @@ func TestFR037OpsConsoleReusesNodeInstanceAndTerminalServices(t *testing.T) {
 	betaInstances, err := instanceSvc.List(InstanceFilter{NodeID: &beta.ID})
 	require.NoError(t, err)
 	require.Len(t, betaInstances, 1)
-	assert.Equal(t, "fr037-creative", betaInstances[0].Name)
+	assert.Equal(t, "ops-console-creative", betaInstances[0].Name)
 	assert.Equal(t, beta.ID, betaInstances[0].NodeID)
 
 	token, err := terminalSvc.IssueToken(running.ID, "write", "panel.example.test", true)
@@ -48,7 +48,7 @@ func TestFR037OpsConsoleReusesNodeInstanceAndTerminalServices(t *testing.T) {
 
 	claims := jwt.MapClaims{}
 	parsed, err := jwt.ParseWithClaims(token.Token, claims, func(t *jwt.Token) (interface{}, error) {
-		return []byte("fr037-terminal-secret"), nil
+		return []byte("ops-console-terminal-secret"), nil
 	})
 	require.NoError(t, err)
 	require.True(t, parsed.Valid)
@@ -56,9 +56,9 @@ func TestFR037OpsConsoleReusesNodeInstanceAndTerminalServices(t *testing.T) {
 	assert.Equal(t, "write", claims["permission"])
 }
 
-func newFR037OpsConsoleDB(t *testing.T) *gorm.DB {
+func newOpsConsoleDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "fr037-ops-console.db")), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "ops-console-ops-console.db")), &gorm.Config{})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
@@ -67,7 +67,7 @@ func newFR037OpsConsoleDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func createFR037ServiceNode(t *testing.T, db *gorm.DB, name string) model.Node {
+func createOpsConsoleServiceNode(t *testing.T, db *gorm.DB, name string) model.Node {
 	t.Helper()
 	node := model.Node{
 		UUID:          name + "-uuid",
@@ -83,7 +83,7 @@ func createFR037ServiceNode(t *testing.T, db *gorm.DB, name string) model.Node {
 	return node
 }
 
-func createFR037ServiceInstance(t *testing.T, db *gorm.DB, nodeID uint, name string, status model.InstanceStatus) model.Instance {
+func createOpsConsoleServiceInstance(t *testing.T, db *gorm.DB, nodeID uint, name string, status model.InstanceStatus) model.Instance {
 	t.Helper()
 	inst := model.Instance{
 		UUID:         name + "-uuid",

@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Agent 写白名单与动作常量（见 ADR-076/080）。
+// Agent 写白名单与动作常量。
 const (
 	AgentWriteInstanceLife    = "instance.life"
 	AgentWriteNodeMaintenance = "node.maintenance"
@@ -76,7 +76,7 @@ const (
 	AgentActionApprovalGet         = "agent.approval_get"
 	AgentActionApprovalWithdraw    = "agent.approval_withdraw"
 	AgentActionInstanceSendCommand = "agent.instance_send_command"
-	// 实例分组（ADR-033）：分组仅承载运维归类，读走 instance.read、写走 instance.write。
+	// 实例分组：分组仅承载运维归类，读走 instance.read、写走 instance.write。
 	AgentActionInstanceGroupList          = "agent.instance_group_list"
 	AgentActionInstanceGroupRead          = "agent.instance_group_read"
 	AgentActionInstanceGroupCreate        = "agent.instance_group_create"
@@ -84,7 +84,7 @@ const (
 	AgentActionInstanceGroupDelete        = "agent.instance_group_delete"
 	AgentActionInstanceGroupAddMembers    = "agent.instance_group_add_members"
 	AgentActionInstanceGroupRemoveMembers = "agent.instance_group_remove_members"
-	// Beacon 拓扑拉取（见 ADR-090）：手动触发把 Beacon 区服结构树映射为
+	// Beacon 拓扑拉取：手动触发把 Beacon 区服结构树映射为
 	// 本地分组树并补 region:/zone:/role: 标签。改的是实例归属与分组，故与实例分组同权限面
 	// （instance.write）；不做 destructive——它是幂等对账而非删除语义。
 	AgentActionBeaconTopologyPull   = "agent.beacon_topology_pull"
@@ -155,7 +155,7 @@ const (
 	AgentActionBotSendCommand = "agent.bot_send_command"
 	AgentActionBotDelete      = "agent.bot_delete"
 
-	// 压测模板 action（resource=none，平台级视角，见 ADR-080 附注）。
+	// 压测模板 action（resource=none，平台级视角，附注）。
 	AgentActionLoadTestTemplateList   = "agent.loadtest_template_list"
 	AgentActionLoadTestTemplateGet    = "agent.loadtest_template_get"
 	AgentActionLoadTestTemplateCreate = "agent.loadtest_template_create"
@@ -297,7 +297,7 @@ type AgentPrincipal struct {
 	// ActAsUserID 该 principal 代表哪个**人类用户**行事（仅有非 Token 场景会填）。
 	//
 	// 【为何需要】审批票要记“申请人是谁”。 Agent Token 场景下能从 TokenID 反查
-	// created_by；但助手派生出的用户委托身份**没有 Token**（ADR-105 明确不为人类
+	// created_by；但助手派生出的用户委托身份**没有 Token**（明确不为人类
 	// 用户签发 jmat_），TokenID 恒为 0 —— 只靠 TokenID 反查会让所有助手触发的
 	// 审批票 applicant_user_id=0，进而：① 幂等唯一索引把不同用户的同参数请求当成
 	// 同一张票；② own.* 接口按 applicant 过滤，真申请人看不到自己的申请也撤回不了。
@@ -313,7 +313,7 @@ type AgentPrincipal struct {
 	Capabilities      []string
 }
 
-// AgentTokenService Agent Token 管理与策略引擎（见 ADR-076/080）。
+// AgentTokenService Agent Token 管理与策略引擎。
 type AgentTokenService struct {
 	db *gorm.DB
 }

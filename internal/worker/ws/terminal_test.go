@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFR037TerminalServerAcceptsControlPlaneToken(t *testing.T) {
+func TestTerminalServerAcceptsControlPlaneToken(t *testing.T) {
 	server := NewTerminalServer(testSecret)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/terminal", server.Handler())
@@ -23,7 +23,7 @@ func TestFR037TerminalServerAcceptsControlPlaneToken(t *testing.T) {
 
 	now := time.Now()
 	token := signToken(t, testSecret, jwt.MapClaims{
-		"instanceId": "fr037-survival-uuid",
+		"instanceId": "terminal-survival-uuid",
 		"permission": "write",
 		"exp":        now.Add(30 * time.Second).Unix(),
 		"iat":        now.Unix(),
@@ -41,6 +41,6 @@ func TestFR037TerminalServerAcceptsControlPlaneToken(t *testing.T) {
 	var welcome TerminalMessage
 	require.NoError(t, conn.ReadJSON(&welcome))
 	assert.Equal(t, "stdout", welcome.Type)
-	assert.Equal(t, "fr037-survival-uuid", welcome.InstanceID)
-	assert.Contains(t, welcome.Data, "已连接到实例 fr037-survival-uuid")
+	assert.Equal(t, "terminal-survival-uuid", welcome.InstanceID)
+	assert.Contains(t, welcome.Data, "已连接到实例 terminal-survival-uuid")
 }

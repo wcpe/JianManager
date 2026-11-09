@@ -11,7 +11,7 @@
  *        Combobox/Badge/Button/Input/Panel/Select/Table/Textarea/Dialog 原语、lucide 图标、翻译上下文
  * @output SecurityActionsTabView、SecurityActionsTabViewProps
  * @sync apps/control-plane-web/src/components/client-dist/SecurityActionsTab.tsx
- * @since（组件受控化迁包；原ADR-088 处置 Tab，含 S2.1 常驻表单改模态）
+ * @since（组件受控化迁包；处置 Tab，含 S2.1 常驻表单改模态）
  */
 import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -52,7 +52,7 @@ const KEY_STATE_OPTIONS: KeySecurityState[] = ['normal', 'observe', 'throttled',
 const PROT_MODE_OPTIONS: ChannelProtectionMode[] = ['throttle', 'concurrency', 'queue', 'retry_after']
 
 /** 
- * 处置 Tab 的注入契约（受控视图，ADR-103 a+b 双范式）。
+ * 处置 Tab 的注入契约（受控视图）。
  *
  * 受控边界：
  * - **归容器（会触发重新取数）**：处置流水数据与加载/错误态，以及三个筛选条件

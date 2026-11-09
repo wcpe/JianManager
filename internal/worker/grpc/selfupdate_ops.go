@@ -16,10 +16,10 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 面板自更新 RPC（见 ADR-020 §4）。
+// 面板自更新 RPC。
 // Worker 经 CP gRPC 编排升级：CP 下发二进制地址/sha256，Worker 下载校验替换重启。
 // daemon 模式下不杀游戏服——替换/重启只动 Worker 主进程，wrapper 子进程（持有 Java 游戏服）
-// 独立存活；Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper（ADR-003）。
+// 独立存活；Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper。
 
 // restartDelay 是替换成功后延迟重启的时长，用于先让 UpgradeWorker 的 gRPC 响应回到 CP，
 // 再退出/重启进程（确保 CP 收到升级结果而非因连接被切而误判失败）。
@@ -47,7 +47,7 @@ func (s *Server) GetVersion(_ context.Context, _ *workerpb.GetVersionRequest) (*
 func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerRequest) (*workerpb.UpgradeWorkerResponse, error) {
 	from := version.Version
 
-	// action=rollback：回滚本地升级前备份，不下载（见 ADR-042）。
+	// action=rollback：回滚本地升级前备份，不下载。
 	if strings.EqualFold(strings.TrimSpace(req.Action), workerRollbackAction) {
 		return s.rollbackWorker(from), nil
 	}
@@ -99,7 +99,7 @@ func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerR
 // workerRollbackAction 是 UpgradeWorkerRequest.action 触发回滚的取值。
 const workerRollbackAction = "rollback"
 
-// rollbackWorker 回滚本地升级前备份（见 ADR-042）：校验备份 sha → 换回 → 异步延迟重启。
+// rollbackWorker 回滚本地升级前备份：校验备份 sha → 换回 → 异步延迟重启。
 // 无备份回 success=false（error 文案含 NO_BACKUP 供 CP 映射友好码）；不下载任何远端制品。
 func (s *Server) rollbackWorker(from string) *workerpb.UpgradeWorkerResponse {
 	target, err := s.resolveExecutable()

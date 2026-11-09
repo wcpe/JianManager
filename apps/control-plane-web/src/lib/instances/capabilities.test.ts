@@ -10,7 +10,7 @@ import {
 } from './capabilities'
 
 /** 
- *ADR-091：前端能力画像兜底表与解析逻辑。
+ *前端能力画像兜底表与解析逻辑。
  *
  * 约定：本地兜底表与后端 `service/capability_profile.go` 的注册表一一对应；
  * 后端下发的 `capabilities` 优先，缺失时按 (type, role) 本地兜底。

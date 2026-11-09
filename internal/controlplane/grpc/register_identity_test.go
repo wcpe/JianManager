@@ -19,13 +19,13 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// nodeUUIDHeader / nodeSecretHeader 与 grpc / worker register / heartbeat 中常量一致（wire 约定，ADR-039）。
+// nodeUUIDHeader / nodeSecretHeader 与 grpc / worker register / heartbeat 中常量一致（wire 约定）。
 const (
 	nodeUUIDHeader   = "node-uuid"
 	nodeSecretHeader = "node-secret"
 )
 
-// newIdentityRegisterHandler 建带真实 EnrollTokenService 的 Register handler 与底层 DB（ADR-039）。
+// newIdentityRegisterHandler 建带真实 EnrollTokenService 的 Register handler 与底层 DB。
 func newIdentityRegisterHandler(t *testing.T) (*cpgrpc.ControlPlaneHandler, *gorm.DB, *service.EnrollTokenService) {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
@@ -64,7 +64,7 @@ func seedNode(t *testing.T, db *gorm.DB, name, host, secret string) string {
 	return n.UUID
 }
 
-// TestRegister_UUIDProof_Reregisters 升级后 Worker 持 uuid+secret 重注册：按 UUID 命中、更新 host/port、放行（ADR-039 §1.2-1）。
+// TestRegister_UUIDProof_Reregisters 升级后 Worker 持 uuid+secret 重注册：按 UUID 命中、更新 host/port、放行。
 func TestRegister_UUIDProof_Reregisters(t *testing.T) {
 	h, db, _ := newIdentityRegisterHandler(t)
 	uuid := seedNode(t, db, "edge-a", "10.0.0.1", "secret-a")
@@ -80,7 +80,7 @@ func TestRegister_UUIDProof_Reregisters(t *testing.T) {
 	require.Equal(t, "10.0.0.99", node.Host, "UUID 命中重注册应更新 host")
 }
 
-// TestRegister_UUIDProof_AllowsRename 升级后 Worker 持 uuid+secret 改名重注册：允许改名（受唯一约束）（ADR-039 §1.2-1）。
+// TestRegister_UUIDProof_AllowsRename 升级后 Worker 持 uuid+secret 改名重注册：允许改名（受唯一约束）。
 func TestRegister_UUIDProof_AllowsRename(t *testing.T) {
 	h, db, _ := newIdentityRegisterHandler(t)
 	uuid := seedNode(t, db, "edge-old-name", "10.0.0.1", "secret-a")
@@ -94,7 +94,7 @@ func TestRegister_UUIDProof_AllowsRename(t *testing.T) {
 	require.Equal(t, "edge-new-name", node.Name, "UUID 命中重注册应允许改名")
 }
 
-// TestRegister_UUIDProof_SecretMismatch 持 uuid 但 secret 不符：拒绝（PermissionDenied），不覆写（ADR-039 §1.2-1）。
+// TestRegister_UUIDProof_SecretMismatch 持 uuid 但 secret 不符：拒绝（PermissionDenied），不覆写。
 func TestRegister_UUIDProof_SecretMismatch(t *testing.T) {
 	h, db, _ := newIdentityRegisterHandler(t)
 	uuid := seedNode(t, db, "edge-a", "10.0.0.1", "secret-a")
@@ -119,7 +119,7 @@ func TestRegister_MissingIdentityRejectsExistingNode(t *testing.T) {
 }
 
 // TestRegister_SameNameDifferentHost_Rejected 核心 BUG-A：另一台机器（host 不同）用同名、无 uuid、带有效 token 注册
-// → 撞名拒绝，绝不覆写旧节点身份/host（ADR-039 §1.2-3）。
+// → 撞名拒绝，绝不覆写旧节点身份/host。
 func TestRegister_SameNameDifferentHost_Rejected(t *testing.T) {
 	h, db, enrollSvc := newIdentityRegisterHandler(t)
 	uuid := seedNode(t, db, "edge-a", "10.0.0.1", "secret-a")
@@ -144,7 +144,7 @@ func TestRegister_SameNameDifferentHost_Rejected(t *testing.T) {
 	require.Equal(t, int64(1), count, "撞名不得新建节点行")
 }
 
-// TestRegister_NewNameValidToken_CreatesFreshNode 新名 + 有效 token：建全新 UUID 节点（ADR-039 §1.2-3）。
+// TestRegister_NewNameValidToken_CreatesFreshNode 新名 + 有效 token：建全新 UUID 节点。
 func TestRegister_NewNameValidToken_CreatesFreshNode(t *testing.T) {
 	h, db, enrollSvc := newIdentityRegisterHandler(t)
 	_ = seedNode(t, db, "edge-a", "10.0.0.1", "secret-a")

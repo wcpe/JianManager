@@ -24,7 +24,7 @@ const batchMetaMaxBytes = 1 << 20 // 1 MiB
 // ClientUploadEfficiencyHandler 客户端分发上传增效端点（增强251）。
 //
 // 鉴权与分块上传同组：JWT 平台管理员（requirePlatformAdmin），挂 admin 组，
-// 与玩家拉取密钥端点物理隔离（ADR-022/023）。独立 handler 不碰 client_version.go / client_chunk_upload.go。
+// 与玩家拉取密钥端点物理隔离。独立 handler 不碰 client_version.go / client_chunk_upload.go。
 //
 // 协议（spec docs/specs/client-upload-efficiency/spec.md §3）：
 //   - POST /client-channels/:id/files/precheck：批量秒传预查（≤500 hash/次，只读）。

@@ -151,7 +151,7 @@ func (s *InstanceService) SetSettingsReader(r SettingsReader) {
 	s.settings = r
 }
 
-// SetBeaconPush 注入 Beacon 拓扑推送服务（见 ADR-090）。在 main 装配阶段调用。
+// SetBeaconPush 注入 Beacon 拓扑推送服务。在 main 装配阶段调用。
 //
 // **可选协同，绝非依赖**：传 nil（未配置 beacon.endpoint 或未开 push-enabled）时全部推送
 // 触发点直接返回——实例创建/删除/改名照常成功，无任何报错或降级提示。
@@ -162,7 +162,7 @@ func (s *InstanceService) SetBeaconPush(p *BeaconPushService) {
 // pushTopologyAsync 是的推送触发点：把一次**拓扑变更**异步推给 Beacon。
 //
 // 只有四类事件会走到这里：实例创建 / 删除 / 改名 / 改归属（role、tags）。
-// **实例启停与重启刻意不推送**（ADR-090 §6）：高频操作（批量重启 60 台 = 120 次推送），
+// **实例启停与重启刻意不推送**：高频操作（批量重启 60 台 = 120 次推送），
 // 且 Beacon 的在线状态本就由 agent 心跳自维护，推送只会造成重复真源。
 //
 // 本方法恒不返回错误、恒不阻塞：未配置协同时内部直接返回（连 goroutine 都不起），
@@ -223,9 +223,9 @@ type CreateInstanceRequest struct {
 	LaunchSpec       string             `json:"launchSpec"`
 	WorkDir          string             `json:"workDir"`
 	EnvVars          map[string]string  `json:"envVars"`
-	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（ADR-019）。
+	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用。
 	Image string `json:"image"`
-	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（ADR-019）；仅 processType=docker 使用，0=不限制。
+	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额；仅 processType=docker 使用，0=不限制。
 	CPULimit    float64 `json:"cpuLimit"`
 	MemLimitMB  int64   `json:"memLimitMb"`
 	DiskLimitMB int64   `json:"diskLimitMb"`
@@ -236,9 +236,9 @@ type CreateInstanceRequest struct {
 	QueryPort   int     `json:"queryPort"`
 	ProbePort   int     `json:"probePort"`
 
-	// importWorkDir / importInPlace 仅供包内导入流程（见 ADR-069）预置工作目录：
+	// importWorkDir / importInPlace 仅供包内导入流程预置工作目录：
 	// 就地=原目录绝对路径、搬迁=已搬迁的系统分配相对路径，绕过下方系统分配。
-	// 未导出故 JSON 绑定不可注入——外部 API 依旧无法手填任意工作目录（ADR-007 原则不破）。
+	// 未导出故 JSON 绑定不可注入——外部 API 依旧无法手填任意工作目录（原则不破）。
 	importWorkDir string
 	importInPlace bool
 }
@@ -260,7 +260,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 
 	req.StartCommand = sanitizeStartCommand(req.StartCommand)
 
-	// MC 结构化启动（ADR-008）：提供 launchSpec 时由其派生 java 启动命令，
+	// MC 结构化启动：提供 launchSpec 时由其派生 java 启动命令，
 	// 取代自由文本 start_command；启动时由 Worker 注入绑定 JDK 的 JAVA_HOME/PATH。
 	if spec, err := parseLaunchSpec(req.LaunchSpec); err != nil {
 		return nil, err
@@ -272,7 +272,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		req.StartCommand = derived
 	}
 
-	// 非 docker 实例必须有启动命令；docker 实例可空——交镜像 entrypoint 自管启动（ADR-019）。
+	// 非 docker 实例必须有启动命令；docker 实例可空——交镜像 entrypoint 自管启动。
 	if strings.TrimSpace(req.StartCommand) == "" && req.ProcessType != model.ProcessTypeDocker {
 		return nil, ErrStartCommandRequired
 	}
@@ -281,10 +281,10 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 	req.MemLimitMB = normalizeResourceLimitMB(req.MemLimitMB)
 	req.DiskLimitMB = normalizeResourceLimitMB(req.DiskLimitMB)
 
-	// 工作目录系统分配（ADR-007/ADR-010）：MC 实例始终系统分配（忽略用户手填）；
+	// 工作目录系统分配：MC 实例始终系统分配（忽略用户手填）；
 	// 其它类型（generic）调用方未传则同样系统分配（创建向导隐藏工作目录、统一自动生成），
 	// 显式传入则保留（API 调用方仍可指定）。一律落数据根 var/servers 下相对路径保证便携。
-	// 导入流程经包内未导出字段预置工作目录，是系统分配的唯一例外（ADR-069）。
+	// 导入流程经包内未导出字段预置工作目录，是系统分配的唯一例外。
 	workDir := req.WorkDir
 	switch {
 	case req.importWorkDir != "":
@@ -293,7 +293,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		workDir = allocWorkDirRel(req.Name)
 	}
 
-	// 角色化（ADR-007）：未指定或非法时落 universal（grandfather 既有创建路径）。
+	// 角色化：未指定或非法时落 universal（grandfather 既有创建路径）。
 	role := req.Role
 	if !model.ValidInstanceRole(role) {
 		role = model.InstanceRoleUniversal
@@ -463,7 +463,7 @@ func applyDBFilters(q *gorm.DB, f InstanceFilter) *gorm.DB {
 		q = q.Where("instances.role = ?", *f.Role)
 	}
 	if f.NetworkID != nil {
-		// 群组是 M:N 软标签（ADR-007）：经 network_members 关联过滤。
+		// 群组是 M:N 软标签：经 network_members 关联过滤。
 		q = q.Joins("JOIN network_members ON network_members.instance_id = instances.id").
 			Where("network_members.network_id = ?", *f.NetworkID)
 	}
@@ -1024,7 +1024,7 @@ var (
 // 超时强杀进程树），停成才继续删；停不成中止删除并返回可操作错误——此前 CP 删记录而
 // Worker 运行态守卫拒杀进程，DB 与现实脱钩，java 进程沦为无主孤儿继续占端口。
 // 随后经 gRPC 让 Worker 清理实例数据（工作目录 + 派生索引 + 注册表条目），成功后再删记录，
-// 兑现删除确认文案「所有数据将被删除」；否则系统分配的 hash 后缀目录（ADR-007）不复用，
+// 兑现删除确认文案「所有数据将被删除」；否则系统分配的 hash 后缀目录不复用，
 // 反复建删会无限堆积孤儿目录。清理失败则中止删除（记录保留可重试），不静默孤儿化。
 func (s *InstanceService) Delete(id uint) error {
 	return s.deleteInternal(id, 0)
@@ -1070,7 +1070,7 @@ func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		// 删除组关联
 		tx.Where("instance_id = ?", id).Delete(&model.GroupInstance{})
-		// 级联删除群组服关系（ADR-007）：作为代理或后端的注册记录、群组成员关系。
+		// 级联删除群组服关系：作为代理或后端的注册记录、群组成员关系。
 		tx.Where("proxy_id = ? OR backend_id = ?", id, id).Delete(&model.ServerRegistration{})
 		tx.Where("instance_id = ?", id).Delete(&model.NetworkMember{})
 		// 级联清理崩溃快照。
@@ -1307,7 +1307,7 @@ func (s *InstanceService) removeWorkerDataOnce(instance *model.Instance) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	// 就地导入实例（见 ADR-069）：显式指示 Worker 跳过目录删除，
+	// 就地导入实例：显式指示 Worker 跳过目录删除，
 	// 原目录归用户自管；Worker 托管区守卫是第二道保险。
 	resp, err := client.Worker.RemoveInstance(ctx, &workerpb.RemoveInstanceRequest{
 		InstanceUuid: instance.UUID,
@@ -1807,8 +1807,8 @@ func (s *InstanceService) registerOnWorkerLocked(instance *model.Instance) error
 }
 
 // buildCreateInstanceRequest 把一条实例模型翻译成下发给 Worker 的实例规格。
-// 解出 EnvVars JSON、解析绑定 JDK 安装路径（注入 JAVA_HOME/PATH，ADR-008）、派生优雅停止命令、
-// 计算 docker 端口映射。registerOnWorker（单实例补注册）与 ResyncNode（重连整节点重推，见 ADR-050）
+// 解出 EnvVars JSON、解析绑定 JDK 安装路径（注入 JAVA_HOME/PATH）、派生优雅停止命令、
+// 计算 docker 端口映射。registerOnWorker（单实例补注册）与 ResyncNode（重连整节点重推）
 // 共用此翻译，确保两条路径下发给 Worker 的规格完全一致。
 func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (*workerpb.CreateInstanceRequest, error) {
 	// 把存储为 JSON 字符串的 EnvVars 解出来，原样下发给 Worker 注入到进程环境。
@@ -1820,7 +1820,7 @@ func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (
 	}
 
 	// 解析实例绑定的 JDK 安装路径下发给 Worker：Worker 启动时据此注入 JAVA_HOME 并把
-	// <jdk>/bin 接入 PATH（ADR-008），结构化启动命令里的 `java` 即指向它。
+	// <jdk>/bin 接入 PATH，结构化启动命令里的 `java` 即指向它。
 	jdkPath, err := s.resolveJDKPath(instance)
 	if err != nil {
 		return nil, err
@@ -1842,7 +1842,7 @@ func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (
 	if err := s.db.Select("uuid").First(&logNode, instance.NodeID).Error; err != nil {
 		return nil, fmt.Errorf("解析日志 holder 身份失败: %w", err)
 	}
-	// FR-502：下发日志采集规则名，使 Worker 能按核心类型选择正确的活动日志路径
+	// 下发日志采集规则名，使 Worker 能按核心类型选择正确的活动日志路径
 	// （如 BungeeCord 的 proxy.log.0 在实例根目录，而非 logs/latest.log）。
 	// 推导失败不阻断注册——回退 bukkit，行为与本项落地前逐字一致。
 	return &workerpb.CreateInstanceRequest{
@@ -1912,7 +1912,7 @@ func minPositiveInt64(a, b int64) int64 {
 	}
 }
 
-// ResyncNode 在 Worker 重连/重注册成功后，把该节点全部实例规格一次性重推给 Worker（见 ADR-050）。
+// ResyncNode 在 Worker 重连/重注册成功后，把该节点全部实例规格一次性重推给 Worker。
 // 修 bug #2：Worker 重启后只经 PID 文件恢复 RUNNING daemon 实例，STOPPED 实例在 Worker 内存
 // 注册表丢失，致文件/配置/归档 op 报「实例不存在」。CP 是真源，重连后重推让 Worker 重新认识停机实例
 // （Worker 据此按 STOPPED 填表、不启动进程；已恢复的 RUNNING 实例在 Worker 侧按 UUID 命中跳过）。
@@ -2001,10 +2001,10 @@ func (s *InstanceService) ResyncNode(nodeUUID string) {
 }
 
 // mcContainerServerPort 是 MC 服务端在容器内的约定监听端口（多数 MC 镜像固定 25565）。
-// docker 模式把端口池分配的宿主端口映射到此容器内端口（ADR-019）。
+// docker 模式把端口池分配的宿主端口映射到此容器内端口。
 const mcContainerServerPort = 25565
 
-// dockerPortMappings 为 docker 模式实例派生容器↔宿主端口映射（ADR-019）。
+// dockerPortMappings 为 docker 模式实例派生容器↔宿主端口映射。
 // 非 docker 模式返回 nil（direct/daemon 直接监听宿主端口，无需映射）。
 // MC 实例：宿主 ServerPort 映射到容器内 25565（tcp + query 同号 udp）；
 // 其它类型：缺乏容器内端口约定，宿主端口与容器内端口同号直通（host=container）。
@@ -2950,7 +2950,7 @@ func (s *InstanceService) preflightStart(instance *model.Instance) error {
 		return ErrNodeOffline
 	}
 
-	// 启动前幂等重注册（ADR-050）：Worker 对已注册实例幂等返回成功，故走到这里报错的
+	// 启动前幂等重注册：Worker 对已注册实例幂等返回成功，故走到这里报错的
 	// 一定是真实失败（如工作目录不可创建、节点配置漂移）。失败必须升格为预检失败并携带
 	// 根因——否则预检只会报下游症状「实例未注册: <uuid>」，真正的根因（如 mkdir /app:
 	// permission denied）被 Debug 日志吞掉，排障得跨两台机器的日志对时序。

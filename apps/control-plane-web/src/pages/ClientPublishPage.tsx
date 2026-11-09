@@ -25,7 +25,7 @@ function isAbortError(e: unknown): boolean {
 }
 
 /** 
- * 客户端分发「发布新版本」独立页面（编排重做）的接线层（ADR-103）。
+ * 客户端分发「发布新版本」独立页面（编排重做）的接线层。
  *
  * 展示层已回迁应用侧（`ClientPublishPageView`），此处只保留应用侧职责：
  * - 步骤与 `?step=` 的双向同步（浏览器前进/后退）；

@@ -25,7 +25,7 @@ var (
 	// ErrPullKeyNotFound 拉取密钥不存在（或不属于该频道）。
 	ErrPullKeyNotFound = errors.New("拉取密钥不存在")
 	// ErrPullKeyNotRevealable 拉取密钥不可查看（无 KeyEnc：存量老哈希密钥，或创建时未配加密密钥）。
-	// 供 reveal 端点映射 404 业务码 KEY_NOT_REVEALABLE（见 ADR-044）。
+	// 供 reveal 端点映射 404 业务码 KEY_NOT_REVEALABLE。
 	ErrPullKeyNotRevealable = errors.New("拉取密钥不可查看")
 	// ErrPullKeyInvalid 拉取密钥鉴权失败（不存在/吊销/过期/频道不匹配）。
 	// 供面向玩家端点映射 401/403；不区分具体原因以免泄露密钥状态。
@@ -38,12 +38,12 @@ const pullKeyPlaintextPrefix = "jmck_"
 // pullKeyPrefixLen 落库 KeyPrefix 截取的明文前缀长度（含 `jmck_`），仅供列表识别、不足以重建密钥。
 const pullKeyPrefixLen = 9
 
-// ClientChannelService 客户端分发频道与拉取密钥管理（见 ADR-022）。
+// ClientChannelService 客户端分发频道与拉取密钥管理。
 // 密钥鉴权（VerifyKey）只用 SHA-256 哈希比对；另存 AES-256-GCM 可逆加密副本供管理员查看明文。
 // 鉴权（VerifyKey）供面向玩家的 manifest/制品端点消费。
 type ClientChannelService struct {
 	db *gorm.DB
-	// encryptor 拉取密钥可逆加密器（见 ADR-044）。nil=未配置加密：建/轮换不写 KeyEnc、
+	// encryptor 拉取密钥可逆加密器。nil=未配置加密：建/轮换不写 KeyEnc、
 	// 查看返 ErrPullKeyNotRevealable（生产未注入 JIANMANAGER_CLIENT_KEY_ENC_SECRET 时优雅降级）。
 	encryptor *KeyEncryptor
 }
@@ -54,7 +54,7 @@ func NewClientChannelService(db *gorm.DB) *ClientChannelService {
 	return &ClientChannelService{db: db}
 }
 
-// SetKeyEncryptor 注入拉取密钥可逆加密器（见 ADR-044）。
+// SetKeyEncryptor 注入拉取密钥可逆加密器。
 // 传 nil 即「未配置加密」降级语义。装配处按生产/开发态用 ResolveKeyEncryptor 解析后注入。
 func (s *ClientChannelService) SetKeyEncryptor(enc *KeyEncryptor) {
 	s.encryptor = enc
@@ -270,7 +270,7 @@ func (s *ClientChannelService) UpdateKey(channelID string, keyID uint, p UpdateK
 	return key, plaintext, nil
 }
 
-// RevealKey 返回拉取密钥明文（见 ADR-044）：解密 KeyEnc 还原明文，供平台管理员查看 + 复制。
+// RevealKey 返回拉取密钥明文：解密 KeyEnc 还原明文，供平台管理员查看 + 复制。
 // 无 KeyEnc（存量老哈希密钥 / 创建时未配加密密钥）→ ErrPullKeyNotRevealable（哈希单向，救不回）。
 // 鉴权不变（仍用 KeyHash 比对）；本方法只读、不刷新 last_used_at（查看非鉴权命中）。
 func (s *ClientChannelService) RevealKey(channelID string, keyID uint) (string, error) {
@@ -335,7 +335,7 @@ func (s *ClientChannelService) VerifyKey(channelID, plaintext string) (*model.Cl
 
 // VerifyAnyKey 校验请求头明文密钥但不绑定具体频道：对明文做 SHA-256 → 按哈希查找 →
 // 校验未吊销、未过期。供的制品端点（GET /client-artifacts/{sha256}，路径无频道段）消费。
-// 制品内容寻址、跨频道共享，任一有效密钥即可授权路由；内容可信靠 manifest 签名而非密钥（ADR-022 §2）。
+// 制品内容寻址、跨频道共享，任一有效密钥即可授权路由；内容可信靠 manifest 签名而非密钥。
 // 命中刷新 last_used_at（弱一致）。未命中/吊销/过期统一返回 ErrPullKeyInvalid（不泄露具体原因）。
 func (s *ClientChannelService) VerifyAnyKey(plaintext string) (*model.ClientPullKey, error) {
 	plaintext = strings.TrimSpace(plaintext)

@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// DockerImageHandler 暴露节点级 Docker 镜像管理（见 ADR-019）。
+// DockerImageHandler 暴露节点级 Docker 镜像管理。
 // 所有操作经 service 委托目标节点 Worker；仅平台管理员可访问。
 type DockerImageHandler struct{ svc *service.DockerImageService }
 

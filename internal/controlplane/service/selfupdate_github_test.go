@@ -15,7 +15,7 @@ import (
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 )
 
-// assetName 按 ADR-036 §1 契约为本测试运行平台拼资产名（windows 带 .exe）。
+// assetName 按契约为本测试运行平台拼资产名（windows 带 .exe）。
 // 测试固件据此构造与解析器同契约的资产名，使测试跨平台可移植。
 func assetName(component string) string {
 	n := fmt.Sprintf("%s-%s-%s", component, runtime.GOOS, runtime.GOARCH)

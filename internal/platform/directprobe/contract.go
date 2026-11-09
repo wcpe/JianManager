@@ -24,7 +24,7 @@ const (
 	// 但在推导采集预算时必须计入（探针抓取与 SLP/Query 在同一实例任务内**串行**）。
 	ProbeScrapeTimeoutCap = 5 * time.Second
 
-	// HeartbeatInterval 是心跳上报节拍（ADR-013，30s）。apps/worker/main.go 据此启动心跳；
+	// HeartbeatInterval 是心跳上报节拍（30s）。apps/worker/main.go 据此启动心跳；
 	// 采集预算必须显著小于本值，否则一拍未结束下一拍又来，心跳积压。
 	HeartbeatInterval = 30 * time.Second
 

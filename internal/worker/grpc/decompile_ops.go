@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// maxDecompileInputBytes 是反编译输入 class/jar 的字节上限（ADR-018 决策 4）。
+// maxDecompileInputBytes 是反编译输入 class/jar 的字节上限。
 // 超限拒绝，避免巨 jar 拖垮节点内存/耗时。
 const maxDecompileInputBytes = 16 * 1024 * 1024
 
@@ -22,7 +22,7 @@ const maxDecompileInputBytes = 16 * 1024 * 1024
 func (s *Server) SetDecompiler(p *decompiler.Provider) { s.decompiler = p }
 
 // DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码。
-// 全程只读 + 超时 + 体积上限 + 失败降级（ADR-018）：CFR 静态分析字节码，不加载/运行目标代码。
+// 全程只读 + 超时 + 体积上限 + 失败降级：CFR 静态分析字节码，不加载/运行目标代码。
 // 失败/降级返回 success=false + error（结构化），不抛错（除实例不存在/路径越界这类前置校验）。
 func (s *Server) DecompileClass(ctx context.Context, req *workerpb.DecompileClassRequest) (*workerpb.DecompileClassResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)

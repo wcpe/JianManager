@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Beacon 拉取映射相关常量（见 ADR-090 §5）。
+// Beacon 拉取映射相关常量。
 const (
 	// BeaconTagRegionPrefix / BeaconTagZonePrefix / BeaconTagRolePrefix 是拉取时补齐的标签前缀。
 	// 与的 `env:` 同属「前缀即维度」约定，不新增字段、不新增迁移。
@@ -75,7 +75,7 @@ type BeaconPullResult struct {
 
 // BeaconSyncService 实现「从 Beacon 拉取拓扑并映射为分组树」。
 //
-// 两个硬约束（ADR-090 §5）：
+// 两个硬约束：
 //  1. 可选协同，绝非依赖——未配置 endpoint 时全部方法返回 ErrBeaconSyncDisabled，
 //     不触碰任何本地数据；本平台其余功能完全不受影响。
 //  2. 失败零改动——先全量拉取到内存并校验，全部通过后才在**单事务**内写入
@@ -117,7 +117,7 @@ func (s *BeaconSyncService) Enabled() bool {
 
 // PullTopology 从 Beacon 拉取拓扑并映射为本地分组树。
 //
-// 调用方为「手动触发」（ADR-090：首次拉取必须手动，不自动建树）。
+// 调用方为「手动触发」（首次拉取必须手动，不自动建树）。
 // 流程严格两段：
 //
 //	① 拉取 + 校验：全量读入内存，不写任何本地数据；失败即返回错误（本地零改动）。

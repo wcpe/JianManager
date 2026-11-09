@@ -22,12 +22,12 @@ type Services struct {
 	User       *service.UserService
 	Group      *service.GroupService
 	Node       *service.NodeService
-	// NodeProxy 节点级出站代理管控（见 ADR-043）；nil 时节点代理端点关闭。
+	// NodeProxy 节点级出站代理管控；nil 时节点代理端点关闭。
 	NodeProxy     *service.NodeProxyService
 	Instance      *service.InstanceService
 	InstanceBatch *service.InstanceBatchService
 	InstanceGroup *service.InstanceGroupService
-	// BeaconSync Beacon 拓扑拉取映射（见 ADR-090）；nil 时 /beacon/topology 端点关闭。
+	// BeaconSync Beacon 拓扑拉取映射；nil 时 /beacon/topology 端点关闭。
 	BeaconSync  *service.BeaconSyncService
 	JDK         *service.JDKService
 	NodeRuntime *service.NodeRuntimeService
@@ -53,7 +53,7 @@ type Services struct {
 	// BusinessStream 业务事件纯透传通道+ SSE 连接治理；
 	// nil 时 /business/stream 端点关闭。
 	BusinessStream *service.BusinessStreamService
-	// BusinessCursor 业务事件位点账本查询（ADR-107）：只读位点，不含 payload；
+	// BusinessCursor 业务事件位点账本查询：只读位点，不含 payload；
 	// nil 时 /business/cursor 端点关闭。
 	BusinessCursor *service.BusinessCursorService
 	// CrashSnapshot 实例崩溃快照只读查询；nil 时端点关闭。
@@ -64,7 +64,7 @@ type Services struct {
 	Quota *service.QuotaEnforcer
 	// Snapshot 实例整机快照与一键回滚；nil 时快照端点关闭。
 	Snapshot *service.SnapshotService
-	// Business 纯透传通道编排（ADR-106）：只下发 domain.verb 信封，不理解任何业务语义。
+	// Business 纯透传通道编排：只下发 domain.verb 信封，不理解任何业务语义。
 	Business *service.BusinessService
 	// BusinessBatch 业务批量命令 + 跨区二次确认 + 流式进度；
 	// nil 时 /business/batch 与 /business/batch/preview 端点关闭。
@@ -114,7 +114,7 @@ type Services struct {
 	Schedule      *service.ScheduleService
 	Backup        *service.BackupService
 	BackupStorage *service.BackupStorageService
-	// ArtifactStorage 制品存储渠道（见 ADR-073）：client-file 外置对象存储配置；
+	// ArtifactStorage 制品存储渠道：client-file 外置对象存储配置；
 	// nil 时渠道端点关闭（上传恒本地）。
 	ArtifactStorage *service.ArtifactStorageChannelService
 	// ArtifactMigration 制品存量迁移：渠道间搬运后台任务；nil 时迁移端点关闭。
@@ -139,7 +139,7 @@ type Services struct {
 	Provision       *service.ProvisionService
 	Proxy           *service.ProxyService
 	Clone           *service.CloneService
-	// ImportServer 导入现有服务器（见 ADR-069）；nil 时导入端点关闭。
+	// ImportServer 导入现有服务器；nil 时导入端点关闭。
 	ImportServer *service.ImportServerService
 	Registration *service.RegistrationService
 	Network      *service.NetworkService
@@ -156,7 +156,7 @@ type Services struct {
 	// PlatformObservability 是平台管理员首页的有界总览读模型。
 	PlatformObservability *service.PlatformObservabilityService
 	Settings              *service.SettingsService
-	// Assistant AI 助手供应商/模型配置（见 ADR-105）；nil 时 /assistant 端点关闭。
+	// Assistant AI 助手供应商/模型配置；nil 时 /assistant 端点关闭。
 	Assistant *service.AssistantService
 	// AssistantChat 助手对话运行时：会话/消息/run/事件（Phase D）；nil 时
 	// /assistant/conversations 与 /assistant/runs 端点关闭（配置面不受影响）。
@@ -183,31 +183,31 @@ type Services struct {
 	// ClientRuntimeState 客户端运行态心跳与聚合。
 	ClientRuntimeState *service.ClientRuntimeStateService
 	ClientDistSecurity *service.ClientDistSecurityService
-	// ClientDistObservability 分发观测时序底座（见 ADR-049）。
+	// ClientDistObservability 分发观测时序底座。
 	ClientDistObservability *service.ClientDistObservabilityService
 	// ClientDistExport 分发统计与安全日志 CSV 导出。
 	ClientDistExport *service.ClientDistExportService
 	RuntimeAssets    *service.RuntimeAssetsService
 	EnrollToken      *service.EnrollTokenService
-	// AgentToken Agent 专用令牌 + 策略引擎（见 ADR-076）；nil 时 agent 端点关闭。
+	// AgentToken Agent 专用令牌 + 策略引擎；nil 时 agent 端点关闭。
 	AgentToken *service.AgentTokenService
-	// AgentCallLog Agent 调用流水（见 ADR-076）；nil 时不记流水、无 call-logs/count。
+	// AgentCallLog Agent 调用流水；nil 时不记流水、无 call-logs/count。
 	AgentCallLog *service.AgentCallLogService
 	// AgentTransfer 流式传输票据：MCP 不承载大文件字节，改由票据换取一次性数据面。
 	// nil 时 /api/v1/agent-transfer 关闭（未配置服务端主密钥）。
 	AgentTransfer *service.AgentTransferTicketService
-	// MCP 内嵌 MCP 网关（见 ADR-077；无状态化见 ADR-096）；
+	// MCP 内嵌 MCP 网关（无状态化）；
 	// nil 时 /api/v1/mcp 与 Token 活动视图关闭。
 	MCP *mcp.Handler
-	// EnrollInstall 拼装一键安装命令所需的对外地址（见 ADR-020）。
+	// EnrollInstall 拼装一键安装命令所需的对外地址。
 	EnrollInstall EnrollInstallConfig
 	Storage       *service.StorageService
 	DBBrowse      *service.DBBrowseService
 	SelfUpdate    *service.SelfUpdateService
-	// 全局任务中心 + 站内信（见 ADR-040）。
+	// 全局任务中心 + 站内信。
 	Task         *service.TaskService
 	Notification *service.NotificationService
-	// 统一通知中心（见 ADR-048）：聚合站内信 + 告警为一条只读通知流。
+	// 统一通知中心：聚合站内信 + 告警为一条只读通知流。
 	NotificationFeed *service.NotificationFeedService
 	// Stats 对外只读统计契约：六组 /stats/* 只读端点；
 	// nil 时整组端点不注册（等价「未启用对外统计」）。
@@ -294,11 +294,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		NewAgentTransferHandler(svcs.AgentTransfer, svcs.File, svcs.FileVersion).RegisterRoutes(api)
 	}
 
-	// 面向玩家的客户端分发消费端点（见 ADR-022/023、contract §4）：
+	// 面向玩家的客户端分发消费端点（contract §4）：
 	// manifest/制品端点用拉取密钥（X-Client-Key）鉴权，与运营浏览器 JWT 入口物理隔离，
 	// 故挂在 api（公网、仅限流）而非 protected（JWT）。内容可信靠 manifest 签名而非密钥。
 	if svcs.ClientChannel != nil && (svcs.ClientVersion != nil || svcs.ClientTelemetry != nil || svcs.ClientRuntimeState != nil || svcs.ClientDistSecurity != nil) {
-		// L7 防护（见 ADR-023）：消费端点独立子组挂 IP 黑白名单 + per-IP 限流 + 并发信号量，
+		// L7 防护：消费端点独立子组挂 IP 黑白名单 + per-IP 限流 + 并发信号量，
 		// 不影响其它 api 路由。L3/L4 容量型 DDoS 靠 CDN/云清洗，不在此。
 		consumerGroup := api.Group("")
 		if svcs.ClientIPGuard != nil {
@@ -376,14 +376,14 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			NewPMConfigHandler(svcs.PMConfig, svcs.Audit).RegisterRoutes(permRead("node.read", "node.manage"))
 		}
 
-		// 节点级出站代理（见 ADR-043）：查看/设置某节点继承全局或自定义代理。
+		// 节点级出站代理：查看/设置某节点继承全局或自定义代理。
 		// Handler 内按平台管理员收敛 + 设置写审计；经心跳下发 Worker 运行时生效。
 		if svcs.NodeProxy != nil {
 			nodeProxyHandler := NewNodeProxyHandler(svcs.NodeProxy, svcs.Audit)
 			nodeProxyHandler.RegisterRoutes(permRead("node.read", "node.manage"))
 		}
 
-		// Docker 镜像管理（见 ADR-019）：节点级列出/拉取/删除本机镜像。仅平台管理员。
+		// Docker 镜像管理：节点级列出/拉取/删除本机镜像。仅平台管理员。
 		if svcs.DockerImage != nil {
 			dockerImageHandler := NewDockerImageHandler(svcs.DockerImage)
 			dockerImageHandler.RegisterRoutes(permRead("node.manage"))
@@ -444,14 +444,14 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 				RegisterRoutes(permRead("instance.read", "instance.operate"))
 		}
 
-		// 实例组织分组树（见 ADR-033）：多级嵌套文件夹式归类 + 实例 M:N，
+		// 实例组织分组树：多级嵌套文件夹式归类 + 实例 M:N，
 		// 正交于用户组 / 网络群组；读 instance:read、写 instance:write，挂 /instance-groups。
 		if svcs.InstanceGroup != nil {
 			instanceGroupHandler := NewInstanceGroupHandler(svcs.InstanceGroup, svcs.Authz)
 			instanceGroupHandler.RegisterRoutes(permRead("instance.read"))
 		}
 
-		// Beacon 拓扑拉取（见 ADR-090）：手动触发从 Beacon 拉取区服结构树并映射为
+		// Beacon 拓扑拉取：手动触发从 Beacon 拉取区服结构树并映射为
 		// 分组树 + 补 region:/zone:/role: 标签。可选协同——未配置 beacon.endpoint 时端点仍注册
 		// 但返回 503 明确提示（不静默成功），未部署 Beacon 时本平台全部功能不受影响。
 		if svcs.BeaconSync != nil {
@@ -557,7 +557,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		}
 
 		// JBIS 业务对接：经探针桥下发业务命令（domain.action+payload）并透传结果，instance:operate 且实例可访问。
-		// ADR-106：仅保留纯透传通道；业务事件读接口（events / economy.*）已退役。
+		// 仅保留纯透传通道；业务事件读接口（events / economy.*）已退役。
 		if svcs.Business != nil {
 			businessHandler := NewBusinessHandler(svcs.Business, svcs.Authz, svcs.Audit)
 			businessHandler.RegisterRoutes(permRead("instance.read", "instance.business.write", "instance.operate"))
@@ -663,19 +663,19 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			observabilityHandler.RegisterRoutes(permRead("monitor.read", "stats.read", "node.read"))
 		}
 
-		// 全局任务中心（见 ADR-040）：认证用户可见，非管理员只见自己发起的任务（service 层收敛）。
+		// 全局任务中心：认证用户可见，非管理员只见自己发起的任务（service 层收敛）。
 		if svcs.Task != nil {
 			taskHandler := NewTaskHandler(svcs.Task)
 			taskHandler.RegisterRoutes(permRead("task.read"))
 		}
 
-		// 站内信（见 ADR-040）：认证用户只读/操作自己的站内信。
+		// 站内信：认证用户只读/操作自己的站内信。
 		if svcs.Notification != nil {
 			notificationHandler := NewNotificationHandler(svcs.Notification)
 			notificationHandler.RegisterRoutes(permRead("notification.read", "alert.read"))
 		}
 
-		// 统一通知中心（见 ADR-048）：聚合站内信 + 告警为一条只读通知流，
+		// 统一通知中心：聚合站内信 + 告警为一条只读通知流，
 		// 页眉单铃铛 + 通知中心页消费。认证用户（消息按本人、告警全局）。
 		if svcs.NotificationFeed != nil {
 			notificationFeedHandler := NewNotificationFeedHandler(svcs.NotificationFeed)
@@ -700,7 +700,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		provisionHandler := NewProvisionHandler(svcs.Core, svcs.Provision, svcs.Proxy, svcs.Clone)
 		provisionHandler.RegisterRoutes(permRead("instance.create", "node.manage"))
 
-		// 导入现有服务器：就地接管 / 搬迁托管区（见 ADR-069）。平台管理员 + 审计。
+		// 导入现有服务器：就地接管 / 搬迁托管区。平台管理员 + 审计。
 		if svcs.ImportServer != nil {
 			importServerHandler := NewImportServerHandler(svcs.ImportServer, svcs.Audit)
 			importServerHandler.RegisterRoutes(permRead("instance.create", "node.manage"))
@@ -738,7 +738,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			NewArtifactReconcileHandler(svcs.ArtifactReconcile, svcs.Audit).RegisterRoutes(permRead("node.manage"))
 		}
 
-		// 平台配置（ADR-015）。
+		// 平台配置。
 		if svcs.Settings != nil {
 			settingsHandler := NewSettingsHandler(svcs.Settings)
 			settingsHandler.RegisterRoutes(permRead("settings.read", "settings.write", "license.read"))
@@ -752,7 +752,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			logAcqHandler.RegisterNodeRoutes(permRead("node.read", "node.manage"))
 		}
 
-		// AI 助手配置（，见 ADR-105）：可用模型摘要对所有登录用户开放，
+		// AI 助手配置：可用模型摘要对所有登录用户开放，
 		// 管理子域由 handler 内部按 IsPlatformAdmin 把守（不挂 permRead——
 		// 供应商配置掌握出站地址与凭据引用，不能按业务权限节点放行）。
 		if svcs.Assistant != nil {
@@ -909,7 +909,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		NewBusinessStreamHandler(svcs.BusinessStream).RegisterRoutes(streamGroup)
 	}
 
-	// 业务事件位点缺口查询（ADR-107）：`GET /api/v1/business/cursor`。
+	// 业务事件位点缺口查询：`GET /api/v1/business/cursor`。
 	//
 	// 鉴权与 SSE 订阅同一套（Agent Token 优先、JWT 兜底）：这是同一条业务通道的位点视角，
 	// 若两者鉴权不一致，会出现「能订阅事件却查不到位点」的分裂，业务台无法完成缺口恢复。
@@ -933,7 +933,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		NewStatsHandler(svcs.Stats, svcs.Authz).RegisterRoutes(statsGroup)
 	}
 
-	// CP 内嵌 MCP 网关（ADR-077）：Streamable HTTP + SSE；仅 Agent Token。
+	// CP 内嵌 MCP 网关：Streamable HTTP + SSE；仅 Agent Token。
 	if svcs.MCP != nil && svcs.AgentToken != nil {
 		mcpGroup := api.Group("/mcp")
 		mcpGroup.Use(middleware.AgentAuth(svcs.AgentToken))
@@ -947,7 +947,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		svcs.MCP.RegisterMCPRoutes(mcpGroup)
 	}
 
-	// Worker 一键安装脚本匿名静态端点（见 ADR-020 §2）：一键命令 `curl <cp>/install-worker.sh | sh`
+	// Worker 一键安装脚本匿名静态端点：一键命令 `curl <cp>/install-worker.sh | sh`
 	// 依赖 CP 自托管这两个脚本。显式注册（根路径、非 /api/v1）以先于下方 SPA NoRoute 回退命中。
 	registerInstallScriptRoutes(r)
 

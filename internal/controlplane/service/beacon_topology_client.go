@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Beacon 拉取侧常量（见 ADR-090）。
+// Beacon 拉取侧常量。
 const (
 	// BeaconAPIPathZoneTree 区服结构树只读聚合端点（BC 集群 → 大区 → 小区）。
 	BeaconAPIPathZoneTree = "/admin/v2/zone-tree"
@@ -136,7 +136,7 @@ type BeaconTopology struct {
 type BeaconClient struct {
 	cfg    BeaconClientConfig
 	client *http.Client
-	// provider 是运行时出站持有者（ADR-043）：非 nil 时每次请求取当前 client，
+	// provider 是运行时出站持有者：非 nil 时每次请求取当前 client，
 	// 使平台设置里改出站代理后 Beacon 调用即时生效，无需重启。
 	provider func() *http.Client
 }

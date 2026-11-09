@@ -20,7 +20,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// Streamable HTTP 无状态化（ADR-096）的契约测试。
+// Streamable HTTP 无状态化的契约测试。
 //
 // 覆盖：不读也不写 Mcp-Session-Id、无会话可用、陈旧/陌生 session 头被忽略而非拒绝、
 // GET/DELETE 改 405、无凭据仍 401；SSE 兼容路径（/message）的连接语义保持不变；
@@ -178,7 +178,7 @@ func waitForSSEEndpoint(t *testing.T, w *sseTestWriter) string {
 // TestHandleSSE_RegistersAndUnregistersConn /sse 建连即登记、客户端断开即注销。
 //
 // 连接 id 仍编进 endpoint URL（`/api/v1/mcp/message?sessionId=mcps_...`），
-// 但不再下发 Mcp-Session-Id 响应头（协议会话已移除，ADR-096）。
+// 但不再下发 Mcp-Session-Id 响应头（协议会话已移除）。
 func TestHandleSSE_RegistersAndUnregistersConn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	reg := NewSSEConnRegistry()

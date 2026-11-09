@@ -53,7 +53,7 @@ func (l logLifecycle) run(ctx context.Context) {
 		go purgeDriver.Run(ctx)
 		slog.Info("归档对象回收驱动器已启动", "schedule", purgeDriver.DescribeSchedule())
 	}
-	// 实例本地 gz 吸存（ADR-098 §5）：把各实例 logs/*.log.gz 以**文件身份原样**
+	// 实例本地 gz 吸存：把各实例 logs/*.log.gz 以**文件身份原样**
 	// 吸存到归档（与 Deep Archive 同一个 provider）。
 	//
 	// 三条边界（写在这里以免日后被当成优化点）：

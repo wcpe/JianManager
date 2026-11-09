@@ -1,5 +1,5 @@
 /** 
- * 客户端分发统计契约（ADR-103）。
+ * 客户端分发统计契约。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 
@@ -67,7 +67,7 @@ export interface ClientDistSeriesPoint {
 }
 
 /** 
- * 客户端分发观测复合视图（见 ADR-049）。
+ * 客户端分发观测复合视图。
  * 平台统计页只取 summary + 分布；分发监控页额外画 series 时序趋势。
  */
 export interface ClientDistObservability {

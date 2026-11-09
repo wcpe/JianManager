@@ -32,11 +32,11 @@ type topologyRespFull struct {
 	} `json:"instances"`
 }
 
-// TestFR453TopologyIncludesAllInstances 验证 GET /topology 带出全量实例投影（453）：
+// TestTopologyIncludesAllInstances 验证 GET /topology 带出全量实例投影（453）：
 // 未注册实例（beacon / 独立服务 / 未挂 BC 的后端）也出现在 instances 里，而 proxies 仍只含已注册代理。
-func TestFR453TopologyIncludesAllInstances(t *testing.T) {
+func TestTopologyIncludesAllInstances(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupFR032Router(t, db)
+	r := setupNetworkResourceRouter(t, db)
 	adminToken := getAdminToken(t, r)
 
 	// 空拓扑：instances 为空数组（非 null），前端可安全 .map。
@@ -48,11 +48,11 @@ func TestFR453TopologyIncludesAllInstances(t *testing.T) {
 	require.Empty(t, emptyResp.Instances)
 
 	node := createTestNode(t, db)
-	proxy := createFR032Instance(t, db, node.ID, "topo-proxy", model.InstanceRoleProxy, 25565)
-	backend := createFR032Instance(t, db, node.ID, "reg-backend", model.InstanceRoleBackend, 25566)
+	proxy := createNetworkResourceInstance(t, db, node.ID, "topo-proxy", model.InstanceRoleProxy, 25565)
+	backend := createNetworkResourceInstance(t, db, node.ID, "reg-backend", model.InstanceRoleBackend, 25566)
 	// 未注册/配套服务：不进 proxies，但必须在 instances 里（完整网络视图）。
-	orphan := createFR032Instance(t, db, node.ID, "orphan-backend", model.InstanceRoleBackend, 25567)
-	beacon := createFR032Instance(t, db, node.ID, "beacon-cp", model.InstanceRoleBeacon, 0)
+	orphan := createNetworkResourceInstance(t, db, node.ID, "orphan-backend", model.InstanceRoleBackend, 25567)
+	beacon := createNetworkResourceInstance(t, db, node.ID, "beacon-cp", model.InstanceRoleBeacon, 0)
 	require.NoError(t, db.Model(&beacon).Update("type", model.InstanceTypeGeneric).Error)
 	// 给 beacon 打 region/zone 标签，验证 tags 原文透出（前端分组依赖）。
 	require.NoError(t, db.Model(&beacon).Update("tags", `["region:r1","zone:z1"]`).Error)
@@ -86,12 +86,12 @@ func TestFR453TopologyIncludesAllInstances(t *testing.T) {
 	require.Equal(t, `["region:r1","zone:z1"]`, b.Tags)
 }
 
-// TestFR453TopologyInstancesScoped 验证 GET /topology 的 instances 投影按调用者可访问实例收敛
+// TestTopologyInstancesScoped 验证 GET /topology 的 instances 投影按调用者可访问实例收敛
 // （自审修复）：路由守卫 network.read 被组管理员/运维/只读持有，非管理员不得看到全量实例元数据。
 // 平台管理员仍取全量；proxies/networks 维持既有全量契约不变。
-func TestFR453TopologyInstancesScoped(t *testing.T) {
+func TestTopologyInstancesScoped(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupFR032Router(t, db)
+	r := setupNetworkResourceRouter(t, db)
 	adminToken := getAdminToken(t, r)
 
 	groupA := createGroupViaAPI(t, r, adminToken, "拓扑组A")
@@ -99,14 +99,14 @@ func TestFR453TopologyInstancesScoped(t *testing.T) {
 
 	node := createTestNode(t, db)
 	// 组 A 内后端（alice 可见）、组 B 内后端（alice 不可见）、未分组后端（alice 不可见）。
-	inA := createFR032Instance(t, db, node.ID, "scoped-a", model.InstanceRoleBackend, 25566)
+	inA := createNetworkResourceInstance(t, db, node.ID, "scoped-a", model.InstanceRoleBackend, 25566)
 	require.NoError(t, db.Create(&model.GroupInstance{GroupID: groupA, InstanceID: inA.ID}).Error)
-	inB := createFR032Instance(t, db, node.ID, "scoped-b", model.InstanceRoleBackend, 25567)
+	inB := createNetworkResourceInstance(t, db, node.ID, "scoped-b", model.InstanceRoleBackend, 25567)
 	require.NoError(t, db.Create(&model.GroupInstance{GroupID: groupB, InstanceID: inB.ID}).Error)
-	createFR032Instance(t, db, node.ID, "scoped-orphan", model.InstanceRoleBackend, 25568)
+	createNetworkResourceInstance(t, db, node.ID, "scoped-orphan", model.InstanceRoleBackend, 25568)
 
 	// 代理 + 一条注册关系：验证 proxies 对非管理员仍是全量契约。
-	proxy := createFR032Instance(t, db, node.ID, "scoped-proxy", model.InstanceRoleProxy, 25565)
+	proxy := createNetworkResourceInstance(t, db, node.ID, "scoped-proxy", model.InstanceRoleProxy, 25565)
 	mkReg := makeRequest(r, http.MethodPost, "/api/v1/proxies/"+itoa(proxy.ID)+"/registrations", map[string]any{
 		"backendId": inA.ID, "alias": "lobby", "priority": 0,
 	}, adminToken)

@@ -395,7 +395,7 @@ func firstRunningInstanceID(instances []model.Instance) (uint, bool) {
 //
 // 这是 JM 对 manifest 内容的**唯一**一处读取，且刻意做得极窄：只找
 // domains.<domain>.actions[] 里与请求同名的动作，读它的 risk 字段。
-// 其余内容（inputSchema / outputSchema / attributes…）一律不碰——ADR-106 的边界是
+// 其余内容（inputSchema / outputSchema / attributes…）一律不碰——边界是
 // 「不把 manifest 内容当业务语义来源」，而区分 READ 与 WRITE 是通道安全约束，不是业务语义。
 type manifestEnvelope struct {
 	Domains map[string]struct {

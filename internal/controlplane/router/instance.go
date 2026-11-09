@@ -211,9 +211,9 @@ type createInstanceRequest struct {
 	LaunchSpec       string             `json:"launchSpec"`
 	WorkDir          string             `json:"workDir"`
 	EnvVars          map[string]string  `json:"envVars"`
-	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（ADR-019）。
+	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用。
 	Image string `json:"image"`
-	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（ADR-019）；仅 docker 模式使用，0=不限制。
+	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额；仅 docker 模式使用，0=不限制。
 	CPULimit    float64 `json:"cpuLimit"`
 	MemLimitMB  int64   `json:"memLimitMb"`
 	DiskLimitMB int64   `json:"diskLimitMb"`

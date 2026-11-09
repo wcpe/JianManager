@@ -453,7 +453,7 @@ func (m *Manager) restorePersistedCircuit(uuid string) bool {
 // 返回是否本次真正触发（此前未熔断）。
 //
 // forceCrash 由调用方按「进程侧证据是否显示仍在运行」决定：daemon 下 wrapper 存活而 Java 已崩时
-// Worker 记账本就是 RUNNING（本 FR 待修的错位），熔断置 CRASHED 与该错位一致；但若证据显示进程
+// Worker 记账本就是 RUNNING（本处待修的错位），熔断置 CRASHED 与该错位一致；但若证据显示进程
 // 确实在跑（wrapper 已把 Java 拉起并稳定），强行覆盖为 CRASHED 只会制造反向错位，此时只停自动重启、
 // 保留真实状态，等其下次退出后再自然收敛。
 func (m *Manager) breakCircuit(uuid, reason string, forceCrash bool) bool {

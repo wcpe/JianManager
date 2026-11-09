@@ -27,14 +27,14 @@ export interface DirectorCanvasProps {
 }
 
 /** 
- * 导播台单场景画布（ADR-035）。
+ * 导播台单场景画布。
  *
  * 渲染一个场景的卡片网格（复用卡壳）。与可编辑画布不同：
  * - **只读布局**：导播台聚焦瞬切/轮播，场景布局在超级工作台预先编排好，这里不拖拽/不缩放/不关卡。
  * - **保活 + 节流**：本组件**始终挂载**（故卡内 WS 保活）；非激活场景由 `active=false` 触发节流——
  *   ① 通过 {@link DirectorRenderProvider} 让终端暂停 xterm 重绘（WS 继续收数据缓冲）；
  *   ② 容器 `content-visibility:hidden`（CSS 类 `director-scene-idle`）让浏览器跳过整棵子树的布局/绘制
- *      （图表/DOM 不重绘），切回激活即恢复。这正是 ADR-035 的「非激活降频/暂停渲染」。
+ *      （图表/DOM 不重绘），切回激活即恢复。这正是「非激活降频/暂停渲染」。
  *
  * 同一时刻只有 active 场景可见（绝对定位铺满，非激活叠在下层且 `pointer-events-none`）。
  */

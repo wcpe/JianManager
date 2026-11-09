@@ -2,7 +2,7 @@
 import type { SecurityLevel } from '@/lib/client-dist/client-dist-security-contracts'
 
 /** 
- * 客户端分发安全侧的展示工具（ADR-088）。
+ * 客户端分发安全侧的展示工具。
  * 从应用侧 `security-shared` 原样提取的纯展示部分（查询读写 hook 仍留应用侧）。
  */
 

@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Beacon 推送侧实现（见 ADR-090 §6）。
+// Beacon 推送侧实现。
 //
 // 触发时机刻意**只覆盖拓扑变更**：实例创建 / 删除 / 改名 / 改归属（role、tags）。
 // 实例启停与重启**绝不推送**——高频操作（批量重启 60 台 = 120 次推送），且 Beacon 的在线
@@ -63,7 +63,7 @@ type BeaconPushClientConfig struct {
 	//
 	// 留空时推送在后台被跳过并留痕：Beacon 的机器注册要解析 namespace 才能落身份，未知/空
 	// namespace 会被拒；与其盲推被拒（每次变更留一条 fail 审计），不如显式记为「未配置」。
-	// 多环境映射见 ADR-090 §7 未决项：首版单配置项。
+	// 多环境映射未决项：首版单配置项。
 	Namespace string
 }
 
@@ -91,7 +91,7 @@ type BeaconServerPush struct {
 // BeaconPushClient 是 Beacon 推送客户端：在的 BeaconClient 传输层上
 // 加一个写端点。endpoint / token / 出站代理持有者全部复用既有客户端，不重复配置。
 type BeaconPushClient struct {
-	// base 复用拉取侧客户端的 endpoint 归一化、token 与运行时出站持有者（ADR-043）。
+	// base 复用拉取侧客户端的 endpoint 归一化、token 与运行时出站持有者。
 	base        *BeaconClient
 	namespace   string
 	pushEnabled bool

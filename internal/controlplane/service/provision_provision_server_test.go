@@ -25,12 +25,12 @@ func (f *failingDownloadWorker) DownloadCore(_ context.Context, in *workerpb.Dow
 	return &workerpb.DownloadCoreResponse{Success: false, Error: "下载超时：源站 200KB/s 挂了"}, nil
 }
 
-// newFR319Harness 建 provision 异步测试基座：spongevanilla 假源（免 paper API）+ 任务表。
-func newFR319Harness(t *testing.T, worker workerpb.WorkerServiceClient) (*ProvisionService, *TaskService, *model.Node, func()) {
+// newProvisionServerHarness 建 provision 异步测试基座：spongevanilla 假源（免 paper API）+ 任务表。
+func newProvisionServerHarness(t *testing.T, worker workerpb.WorkerServiceClient) (*ProvisionService, *TaskService, *model.Node, func()) {
 	t.Helper()
 	db := newInstanceTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskLog{}, &model.Notification{}))
-	node := &model.Node{UUID: "node-fr319-" + t.Name(), Status: model.NodeStatusOnline, OS: "linux"}
+	node := &model.Node{UUID: "node-provision-server-" + t.Name(), Status: model.NodeStatusOnline, OS: "linux"}
 	require.NoError(t, db.Create(node).Error)
 
 	coreRepo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +68,7 @@ func waitTaskTerminal(t *testing.T, taskSvc *TaskService, taskID string) model.T
 
 // TestProvisionServerAsync_SucceedsViaTask 异步搭建：立即返回实例+任务，后台完成任务终态 succeeded。
 func TestProvisionServerAsync_SucceedsViaTask(t *testing.T) {
-	svc, taskSvc, node, done := newFR319Harness(t, &fakeProvisionWorker{})
+	svc, taskSvc, node, done := newProvisionServerHarness(t, &fakeProvisionWorker{})
 	defer done()
 
 	inst, taskID, err := svc.ProvisionServerAsync(context.Background(), ProvisionServerRequest{
@@ -86,7 +86,7 @@ func TestProvisionServerAsync_SucceedsViaTask(t *testing.T) {
 // TestProvisionServerAsync_FailureVisible 下载失败：任务 failed 带错误链 + 实例 statusReason
 // 标注「搭建未完成」——空壳实例为什么不可用一目了然（核心验收）。
 func TestProvisionServerAsync_FailureVisible(t *testing.T) {
-	svc, taskSvc, node, done := newFR319Harness(t, &failingDownloadWorker{})
+	svc, taskSvc, node, done := newProvisionServerHarness(t, &failingDownloadWorker{})
 	defer done()
 
 	inst, taskID, err := svc.ProvisionServerAsync(context.Background(), ProvisionServerRequest{

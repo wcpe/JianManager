@@ -64,7 +64,7 @@ class WedgeConfigTest {
                 "{\"channel\":\"c\",\"endpoint\":\"https://e/api/v1/client-channels/c/manifest\"}"));
     }
 
-    // ---- 旧配置兼容性（FR-256 去掉的字段不影响解析）----
+    // ---- 旧配置兼容性（已去掉的字段不影响解析）----
 
     @Test
     void oldConfigFieldsAreIgnoredWithoutError() {

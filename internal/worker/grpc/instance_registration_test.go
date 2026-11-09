@@ -16,7 +16,7 @@ func TestCreateInstance_RefreshesExistingLaunchSpec(t *testing.T) {
 	mgr := process.NewManager(t.TempDir())
 	srv := NewServer(mgr, "test-node", nil, nil, nil)
 	ctx := context.Background()
-	const uuid = "fr233-refresh"
+	const uuid = "refresh-uuid"
 
 	first, err := srv.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
 		InstanceUuid: uuid,

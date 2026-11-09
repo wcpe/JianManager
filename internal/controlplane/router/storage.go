@@ -11,7 +11,7 @@ import (
 
 // StorageHandler 平台存储资源管理器路由。
 //
-// 对 CP 侧数据根（ADR-010 FHS 布局）只读浏览 + 占用统计 + 制品归档可见 + cache 受控清理。
+// 对 CP 侧数据根（FHS 布局）只读浏览 + 占用统计 + 制品归档可见 + cache 受控清理。
 // 数据根是平台级资源（仅 CP 读写，见架构不变量），故所有端点限平台管理员。
 type StorageHandler struct {
 	svc *service.StorageService

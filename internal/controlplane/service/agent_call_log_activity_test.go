@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Token 维度活动聚合（ADR-096 决策 6）：
+// Token 维度活动聚合：
 // 数据源是 agent_call_logs，按 token_id 在窗口内聚合。
 
 // setupActivityDB 建库并迁移活动聚合涉及的两张表（流水 + Token 名/前缀来源）。

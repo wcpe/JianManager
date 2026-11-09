@@ -361,10 +361,10 @@ body {
   transition: background-color var(--motion-duration-normal) var(--motion-easing-standard), box-shadow var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
-/* 方案 C 品牌顶栏：品牌列宽度随侧栏同步收放，右缘描边与侧栏右缘连成一条竖线（ADR-071）。
+/* 方案 C 品牌顶栏：品牌列宽度随侧栏同步收放，右缘描边与侧栏右缘连成一条竖线。
 阶段 6 补丁后品牌列由 ui 包 `TopNav` 的品牌槽位渲染（顶栏是唯一一条、内含 `.space-nav`），
    而 TopNav 的品牌槽位按原型写死 246px（原型折叠只改 `.sidebar`，`.brand` 不动）。这里在外壳侧
-   把它接回侧栏宽度变量：折叠时与侧栏同宽同轴，交界处才不会出现一条错位的竖线（ADR-071 的原意）。
+   把它接回侧栏宽度变量：折叠时与侧栏同宽同轴，交界处才不会出现一条错位的竖线。
    选择器走 `data-slot`（ui 包的样式钩子约定），不改 `packages/ui` 一行代码。 */
 .jm-console-header [data-slot='top-nav-brand'] {
   border-right: 1px solid color-mix(in srgb, var(--border) 76%, transparent);

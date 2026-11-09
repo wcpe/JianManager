@@ -12,14 +12,14 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// LogAcqSettingsHandler 日志采集配置路由（FR-503）。
+// LogAcqSettingsHandler 日志采集配置路由。
 //
 //	GET/PUT  /settings/log-acquisition            平台默认（5 个键）
 //	GET      /nodes/:id/settings/log-acquisition  该节点对照视图（默认/平台/生效/覆盖）
 //	PUT      /nodes/:id/settings/log-acquisition  写节点级覆盖
 //	DELETE   /nodes/:id/settings/log-acquisition  清除节点级覆盖（恢复继承平台默认）
 //
-// 权限：平台端点沿用平台配置口径；节点端点读沿用节点读、写仅平台管理员（同节点代理 FR-185）。
+// 权限：平台端点沿用平台配置口径；节点端点读沿用节点读、写仅平台管理员（同节点代理）。
 // 写入一律落审计；生效仍由心跳下发（≤1 周期），本层不直接触达 Worker。
 type LogAcqSettingsHandler struct {
 	settings *service.SettingsService

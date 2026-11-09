@@ -3,7 +3,7 @@ import api from '@/api/client'
 import { tasksRefetchInterval, type Task } from '@/api/tasks'
 
 /** 
- * 制品存储渠道（见 ADR-073）：客户端分发制品（client-file）的落点路由配置。
+ * 制品存储渠道：客户端分发制品（client-file）的落点路由配置。
  * 凭证面板直填、后端可逆加密落库；响应永不含明文/密文，以 hasAccessKey/hasSecretKey 标示。
  */
 export interface ArtifactStorageChannel {

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 文件/目录信息（与后端 service.FileInfo 对应权限元数据加性）。 */
-// 条目类型已回迁应用侧（迁包已撤销，见 ADR-103）；此处转出，调用点零改动。
+// 条目类型已回迁应用侧（迁包已撤销）；此处转出，调用点零改动。
 import type { FileInfo } from '@/lib/file-browser/file-entry'
 export type { FileInfo } from '@/lib/file-browser/file-entry'
 
@@ -156,7 +156,7 @@ export interface SearchResult {
   hits: SearchHit[]
   /** 命中达到上限被截断。 */
   truncated: boolean
-  /** 索引首建未就绪（ADR-024）：hits 为空，应稍后用同一查询重试。 */
+  /** 索引首建未就绪：hits 为空，应稍后用同一查询重试。 */
   indexing: boolean
 }
 

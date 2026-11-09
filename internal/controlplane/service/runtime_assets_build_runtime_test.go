@@ -15,9 +15,9 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-func newFR301DB(t *testing.T) *gorm.DB {
+func newRuntimeAssetsDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := "file:fr301_" + t.Name() + "?mode=memory&cache=shared"
+	dsn := "file:runtime-assets_" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 
@@ -29,13 +29,13 @@ func newFR301DB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// fakeFR301JDKWorker 假 Worker：ListJDKs 回预置清单（Refresh 强制同步路径）。
-type fakeFR301JDKWorker struct {
+// fakeRuntimeAssetsJDKWorker 假 Worker：ListJDKs 回预置清单（Refresh 强制同步路径）。
+type fakeRuntimeAssetsJDKWorker struct {
 	workerpb.WorkerServiceClient
 	jdks []*workerpb.JDKInfo
 }
 
-func (f *fakeFR301JDKWorker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
+func (f *fakeRuntimeAssetsJDKWorker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
 	return &workerpb.ListJDKsResponse{Jdks: f.jdks}, nil
 }
 
@@ -77,7 +77,7 @@ func TestBuildRuntimeMatrix_MultiType(t *testing.T) {
 
 // Overview 加性扩展：runtimes 多类型矩阵 + 每节点/整体 syncedAt；老字段（JDKs 等）不受影响。
 func TestRuntimeAssetsService_Overview_RuntimesAndSyncedAt(t *testing.T) {
-	db := newFR301DB(t)
+	db := newRuntimeAssetsDB(t)
 	svc := NewRuntimeAssetsService(db)
 
 	synced := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
@@ -119,7 +119,7 @@ func TestRuntimeAssetsService_Overview_RuntimesAndSyncedAt(t *testing.T) {
 
 // 从未同步的节点 syncedAt 为 nil；无任何同步时整体 SyncedAt 为 nil。
 func TestRuntimeAssetsService_Overview_NeverSynced(t *testing.T) {
-	db := newFR301DB(t)
+	db := newRuntimeAssetsDB(t)
 	svc := NewRuntimeAssetsService(db)
 	node := &model.Node{Name: "node-never", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s"}
 	require.NoError(t, db.Create(node).Error)
@@ -134,17 +134,17 @@ func TestRuntimeAssetsService_Overview_NeverSynced(t *testing.T) {
 // Refresh 失败容忍：在线节点同步成功（清单入库 + syncedAt 前移），离线节点 ok=false
 // 且旧数据原样保留（显旧数据语义），整体不返回 error。
 func TestRuntimeAssetsService_Refresh_ToleratesFailure(t *testing.T) {
-	db := newFR301DB(t)
+	db := newRuntimeAssetsDB(t)
 	pool := cpgrpc.NewClientPool()
 	jdkSvc := NewJDKService(db, pool)
 	svc := NewRuntimeAssetsService(db)
 	svc.SetJDKSync(jdkSvc)
 
-	online := &model.Node{UUID: "u-fr301-ok", Name: "n-ok", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
-	offline := &model.Node{UUID: "u-fr301-off", Name: "n-off", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOffline}
+	online := &model.Node{UUID: "u-runtime-assets-ok", Name: "n-ok", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
+	offline := &model.Node{UUID: "u-runtime-assets-off", Name: "n-off", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOffline}
 	require.NoError(t, db.Create(online).Error)
 	require.NoError(t, db.Create(offline).Error)
-	pool.SetWorkerClientForTest(online.UUID, &fakeFR301JDKWorker{jdks: []*workerpb.JDKInfo{
+	pool.SetWorkerClientForTest(online.UUID, &fakeRuntimeAssetsJDKWorker{jdks: []*workerpb.JDKInfo{
 		{Vendor: "Temurin", MajorVersion: 21, Version: "21.0.4", Arch: "x64", Path: "/opt/jdk21", Managed: true},
 	}})
 	// 离线节点预置旧库存：刷新失败后必须仍在（容忍显旧）。
@@ -184,7 +184,7 @@ func TestRuntimeAssetsService_Refresh_ToleratesFailure(t *testing.T) {
 
 // 未装配同步器（main 未 SetJDKSync）时 Refresh 直接报错，不静默吞。
 func TestRuntimeAssetsService_Refresh_NoSyncer(t *testing.T) {
-	db := newFR301DB(t)
+	db := newRuntimeAssetsDB(t)
 	svc := NewRuntimeAssetsService(db)
 	_, err := svc.Refresh()
 	require.Error(t, err)

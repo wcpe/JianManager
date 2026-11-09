@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 观测聚合常量（ADR-049：单档小时桶离线卷积 + TTL 清理）。
+// 观测聚合常量（单档小时桶离线卷积 + TTL 清理）。
 const (
 	// obsBucket 快照桶粒度：整小时。
 	obsBucket = time.Hour
@@ -23,11 +23,11 @@ const (
 	// obsSnapshotRetention 快照自身留存（小时桶 × 半年）。
 	obsSnapshotRetention = 180 * 24 * time.Hour
 	// obsEventDetailRetention 明细（client_dist_event）保留窗，须与 ClientDistTrackingService.retentionDays 一致；
-	// 决定跨区间「活跃客户端」能否回查明细做精确去重（ADR-049 §4）。
+	// 决定跨区间「活跃客户端」能否回查明细做精确去重。
 	obsEventDetailRetention = 14 * 24 * time.Hour
 )
 
-// ClientDistObservabilityService 客户端分发观测数据底座（见 ADR-049）。
+// ClientDistObservabilityService 客户端分发观测数据底座。
 //
 // 离线把 client_dist_event+ client_telemetry卷积为按「频道×小时桶」的时序快照
 // client_dist_snapshot，供观测·分发监控页与频道统计 Tab 扩维消费。聚合落 CP

@@ -14,12 +14,12 @@ import { searchBoxClass } from '@/lib/shared/header-layout'
  */
 
 /** 
- * 顶栏品牌区（方案 C，见 ADR-071）：Logo + 折叠开关，整体作为折叠触发器复用 `toggleSidebar`
+ * 顶栏品牌区（方案 C）：Logo + 折叠开关，整体作为折叠触发器复用 `toggleSidebar`
  * （展开态点击=收起、折叠态=展开，接管原侧栏 logo 的行为）。
  *
  * 本组件只排两个按钮，**列宽/内边距/右缘描边由 ui 包 `TopNav` 的品牌槽位与外壳 CSS 提供**：
  * 宽度经 CSS 绑定 `--sidebar-expanded-width`/`--sidebar-collapsed-width` 随侧栏同步收放
- * （ADR-071 的「左列一条连续竖线」），因此这里不能再自己写宽度类，否则会与同步规则打架。
+ * （的「左列一条连续竖线」），因此这里不能再自己写宽度类，否则会与同步规则打架。
  * 窄屏（<sm）侧栏隐藏，品牌列随之隐藏，顶栏回落为「工作区切换 + 操作区」满宽。
  */
 export function ConsoleBrandSegment({

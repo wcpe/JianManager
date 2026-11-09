@@ -1,5 +1,5 @@
 /** 
- * 页面 B「客户端分发运维」（`/client-dist-ops`）Tab 归一化（ADR-088）。
+ * 页面 B「客户端分发运维」（`/client-dist-ops`）Tab 归一化。
  *
  * 两条旧路由（`/client-dist-security`、`/client-dist-monitor`）保留为透传 query 的
  * 参数翻译重定向：读取原始 `tab` → 归一化为新 7 Tab 体系（+ `seg`/`type` 派生），

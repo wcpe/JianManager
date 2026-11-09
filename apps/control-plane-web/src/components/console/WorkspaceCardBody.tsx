@@ -27,8 +27,8 @@ interface WorkspaceCardBodyProps {
   /** 卡片功能类型。 */
   type: CardType
   /** 
-   * 终端会话保活（ADR-067）：服务器统一控制台（keep-alive 宿主）下传 true——
-   * 页签隐藏/卸载不断 WS；画布/导播台等独立表面保持默认卸载即释放（ADR-035 资源模型不变）。
+   * 终端会话保活：服务器统一控制台（keep-alive 宿主）下传 true——
+   * 页签隐藏/卸载不断 WS；画布/导播台等独立表面保持默认卸载即释放（资源模型不变）。
    */
   persistTerminal?: boolean
 }

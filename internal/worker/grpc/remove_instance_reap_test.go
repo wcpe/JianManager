@@ -59,7 +59,7 @@ func TestRemoveInstance_ReapsLingeringDaemonTree(t *testing.T) {
 	defer cleanJava()
 
 	// 托管区内的工作目录 + world 子目录（模拟真实实例目录）。
-	workDir := filepath.Join(root.ServersDir(), "fr316-precheck-test-c3a5033b")
+	workDir := filepath.Join(root.ServersDir(), "precheck-test-c3a5033b")
 	require.NoError(t, os.MkdirAll(filepath.Join(workDir, "world"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workDir, "server.jar"), []byte("jar"), 0o644))
 
@@ -83,7 +83,7 @@ func TestRemoveInstance_ReapsLingeringDaemonTree(t *testing.T) {
 	// 忠实复现「注册表已无、但进程树 + PID 记录仍在」的删除窗口。
 	resp, err := srv.RemoveInstance(context.Background(), &workerpb.RemoveInstanceRequest{
 		InstanceUuid: uuid,
-		WorkDir:      "var/servers/fr316-precheck-test-c3a5033b",
+		WorkDir:      "var/servers/precheck-test-c3a5033b",
 	})
 	require.NoError(t, err)
 	require.True(t, resp.Success, "删除应成功: %s", resp.Error)

@@ -10,7 +10,7 @@ import { OPS_ALL } from '@/components/views/client-dist/OpsShared'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
 /** 
- * 页面 B · 全量日志 Tab（ADR-088 去重合并的**唯一入口**）。
+ * 页面 B · 全量日志 Tab（去重合并的**唯一入口**）。
  *
  * 按 `type` 双视图：
  * - `type=request`（缺省）：加厚请求表 + 脱敏详情（`useClientDistEventSearch` + `useClientDistEventDetail`，保留）。

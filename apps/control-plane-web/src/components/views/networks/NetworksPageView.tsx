@@ -739,7 +739,7 @@ export function NetworkDetailPanelView({
 }
 
 /** 
- * 群组页的注入契约（ADR-103 a+b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
+ * 群组页的注入契约：**不取数、不发请求、不弹 toast、不读路由**。
  *
  * 受控边界：
  * - 数据经 props 注入（容器调 `useNetworks` / `useNetwork`）；
@@ -804,7 +804,7 @@ export interface NetworksPageViewProps {
 }
 
 /** 
- * 群组（Network 软标签）管理页（ADR-007）：
+ * 群组（Network 软标签）管理页：
  * 列表（成员健康分布）/ 拓扑（proxy↔backend 注册关系）两视图，详情可深链（?network=&view=）改为可寻址双栏。
  */
 export function NetworksPageView({

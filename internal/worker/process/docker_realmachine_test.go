@@ -6,7 +6,7 @@
 //	go test -tags docker_integration -run TestDockerRealMachine ./internal/worker/process/ -v
 //
 // 用 alpine 轻量镜像驱动真实 dockerStrategy 走完整生命周期（拉镜像→创建→attach→
-// stdin/stdout→停止→清理），验证容器化实例真机链路（ADR-019）。
+// stdin/stdout→停止→清理），验证容器化实例真机链路。
 package process
 
 import (

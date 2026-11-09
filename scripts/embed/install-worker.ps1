@@ -1,5 +1,5 @@
 # JianManager Worker Node 安装脚本（Windows PowerShell）。
-#  见ADR-051（改写 ADR-020 的安装编排立场）：脚本退化为「取二进制 + 调 worker setup」。
+#  脚本退化为「取二进制 + 调 worker setup」，不再自己拼装安装编排。
 #
 # 两阶段（参考 GitHub Actions Runner「下载」与「config+run」分离）：
 #   [下载阶段] 取 Worker 二进制。安装目录（或 -Binary 指向处）已有完整二进制则跳过下载。
@@ -35,7 +35,7 @@ function Install-JianManagerWorker {
         [string]$Binary = "",
         # Worker 二进制下载基址/地址（可选）。也可用环境变量 JIANMANAGER_WORKER_DOWNLOAD_URL 指向镜像。
         # 面板一键命令默认传入 CP-local 地址；脚本直接运行时回退 GitHub Releases latest
-        # （ADR-036 产物命名契约：worker-<os>-<arch>.exe）。
+        # （产物命名契约：worker-<os>-<arch>.exe）。
         [string]$DownloadUrl = $(if ($env:JIANMANAGER_WORKER_DOWNLOAD_URL) { $env:JIANMANAGER_WORKER_DOWNLOAD_URL } else { "https://github.com/wcpe/JianManager/releases/latest/download" }),
         # 安装目录（默认 C:\JianManager）。
         [string]$InstallDir = "C:\JianManager",
@@ -129,7 +129,7 @@ function Install-JianManagerWorker {
     } elseif ($DownloadUrl) {
         $url = $DownloadUrl
         $url = $url.Replace("{os}", "windows").Replace("{arch}", $arch)
-        # ADR-036 产物命名契约: <base>/worker-windows-<arch>.exe；若已指向具体产物文件或 CP-local worker-assets 端点则原样用。
+        # 产物命名契约: <base>/worker-windows-<arch>.exe；若已指向具体产物文件或 CP-local worker-assets 端点则原样用。
         if (($url -notlike "*worker-*") -and ($url -notlike "*/worker-assets/*/worker*")) {
             $url = $url.TrimEnd("/") + "/worker-windows-$arch.exe"
         }

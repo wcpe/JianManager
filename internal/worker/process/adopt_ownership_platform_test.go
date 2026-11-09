@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// FR-497③ 平台口径：**Windows 上收养必须 fail-closed**（只告警、不收养、不杀）。
+// 平台口径：**Windows 上收养必须 fail-closed**（只告警、不收养、不杀）。
 //
 // 这份用例的判据放在无构建约束的文件里，Linux 与 Windows 都编译、都运行；它断言的东西在两平台上
 // **完全一致**，因此本机（Linux）跑它也是有效证据，而不是「假装验过 Windows」。
@@ -20,14 +20,14 @@ import (
 // 这正是规格刻意的取舍：**宁可不收养，绝不误纳管**。代价是 Windows 上收养不生效、退回原来的
 //「只告警」行为——这一点在 spec §5 已如实登记为已知降级，本用例把它钉成可回归的契约。
 //
-// 能在这份用例里断言、而**不能**在 Linux 上验证的部分（真机才能验，本 FR 未验，见报告）：
+// 能在这份用例里断言、而**不能**在 Linux 上验证的部分（真机才能验，尚未验证，见报告）：
 //   - `IsPIDAlive` 走 OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)，与 signal 0 的语义差异；
 //   - `taskkill /T /F` 的进程树终止范围与异步性；
 //   - Windows 上 PID 复用判据（`GetProcessTimes` 创建时刻在本项目里并未参与归属判定）；
 //   - `samePath` 在 Windows 上**大小写不敏感**（`C:\Foo` 与 `c:\foo` 是同一路径）——当前实现走
 //     filepath.Abs + 直接字符串比较，大小写差异会被判成不同路径。这是弱特征判定，
-//     只会让「cwd 命中」更保守（少判真），方向与 fail-closed 一致，故本 FR 不改；
-//     但它会进 `DefaultVerifyProcessOwnership` 的宽口径（强杀路径），属既有行为，记录待后续 FR。
+//     只会让「cwd 命中」更保守（少判真），方向与 fail-closed 一致，故本次不做改动；
+//     但它会进 `DefaultVerifyProcessOwnership` 的宽口径（强杀路径），属既有行为，记录待后续处理。
 
 // TestVerifyAdoptOwnership_NoEnvironFailsClosed 环境读不到时**两个分支都不得判真**。
 //

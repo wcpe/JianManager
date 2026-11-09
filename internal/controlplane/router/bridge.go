@@ -12,7 +12,7 @@ import (
 
 // BridgeHandler 桥能力接入路由处理器。
 //
-// 三条端点，全部是**只读诊断或通道治理**，不碰业务语义（ADR-106）：
+// 三条端点，全部是**只读诊断或通道治理**，不碰业务语义：
 //   - GET  /instances/:id/bridge/status        桥线路健康度（重连/队列/丢弃/在途重载）
 //   - PUT  /instances/:id/bridge/subscription  事件主题订阅（整批覆盖）
 //   - GET  /instances/:id/business/status      已注册业务域与健康状态（30s 缓存）

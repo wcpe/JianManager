@@ -28,11 +28,11 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// enrollTokenHeader 注册请求携带 enrollment token 的 gRPC metadata header 名（见 ADR-020）。
+// enrollTokenHeader 注册请求携带 enrollment token 的 gRPC metadata header 名。
 // 与 internal/controlplane/grpc 中的常量保持一致。token 经 metadata 传递、不改 proto。
 const enrollTokenHeader = "enroll-token"
 
-// nodeUUIDHeader / nodeSecretHeader 重注册请求携带本地身份的 gRPC metadata header 名（见 ADR-039）。
+// nodeUUIDHeader / nodeSecretHeader 重注册请求携带本地身份的 gRPC metadata header 名。
 // 与 internal/controlplane/grpc、internal/worker/heartbeat 中的常量保持一致。
 // 重注册时出示二者，CP 据此按 UUID（而非可重复的 name）匹配既有节点，杜绝重名覆写（BUG-A）。
 const (
@@ -47,11 +47,11 @@ type Config struct {
 	WsPort           int    // WebSocket 端口
 	GrpcPort         int    // 历史兼容字段；Worker 不再监听 gRPC 端口。
 	Host             string // 本机 IP（留空自动检测，优先 127.0.0.1）
-	// EnrollToken enrollment token 明文（见 ADR-020）。
+	// EnrollToken enrollment token 明文。
 	// 仅新节点首次注册（无本地身份文件）时携带；经 gRPC metadata 传给 CP 校验消费。
 	// 已有本地身份的重注册留空；CP 仅按 UUID 与密钥放行，不消费 token。
 	EnrollToken string
-	// NodeUUID / NodeSecret 本地持久化的节点身份（见 ADR-039）。
+	// NodeUUID / NodeSecret 本地持久化的节点身份。
 	// 重注册时（已有本地身份文件）填入并经 gRPC metadata 出示，CP 按 UUID 匹配既有节点、
 	// 校验 secret 后重注册，避免 name 锚定带来的重名覆写。首注册留空。
 	NodeUUID   string
@@ -62,7 +62,7 @@ type Config struct {
 type Result struct {
 	NodeUUID   string
 	NodeSecret string
-	// WSTokenSecret CP 下发的 WS 令牌密钥（见 ADR-061）；旧 CP 响应为空。
+	// WSTokenSecret CP 下发的 WS 令牌密钥；旧 CP 响应为空。
 	WSTokenSecret string
 }
 
@@ -82,7 +82,7 @@ func Register(ctx context.Context, cfg Config) (*Result, error) {
 	info := collectSystemInfo(cfg)
 
 	// 首次注册携带 enrollment token（经 metadata，不改 proto）。
-	// 重注册（已有本地身份）出示 node_uuid + node_secret，CP 按 UUID 匹配既有节点（ADR-039）。
+	// 重注册（已有本地身份）出示 node_uuid + node_secret，CP 按 UUID 匹配既有节点。
 	if cfg.EnrollToken != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, enrollTokenHeader, cfg.EnrollToken)
 	}

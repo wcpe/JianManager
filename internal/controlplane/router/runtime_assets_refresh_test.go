@@ -14,13 +14,13 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// fakeFR301Worker 假 Worker：ListJDKs 回预置清单（refresh 强制同步路径）。
-type fakeFR301Worker struct {
+// fakeRuntimeAssetsWorker 假 Worker：ListJDKs 回预置清单（refresh 强制同步路径）。
+type fakeRuntimeAssetsWorker struct {
 	workerpb.WorkerServiceClient
 	jdks []*workerpb.JDKInfo
 }
 
-func (f *fakeFR301Worker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
+func (f *fakeRuntimeAssetsWorker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
 	return &workerpb.ListJDKsResponse{Jdks: f.jdks}, nil
 }
 
@@ -37,16 +37,16 @@ type refreshOutcome struct {
 }
 
 // POST /runtime-assets/refresh：平台管理员强制全节点同步，失败容忍逐节点回报，写审计。
-func TestFR301RuntimeAssetsRefresh(t *testing.T) {
+func TestRuntimeAssetsRefresh(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
 	r := setupTestRouterWithPool(db, pool)
 	adminToken := getAdminToken(t, r)
-	memberToken := getMemberToken(t, r, "member-fr301", "password123")
+	memberToken := getMemberToken(t, r, "member-runtime-assets", "password123")
 
 	online := createTestNode(t, db)
-	offline := createTestNodeWithSuffix(t, db, "fr301-offline")
-	pool.SetWorkerClientForTest(online.UUID, &fakeFR301Worker{jdks: []*workerpb.JDKInfo{
+	offline := createTestNodeWithSuffix(t, db, "runtime-assets-offline")
+	pool.SetWorkerClientForTest(online.UUID, &fakeRuntimeAssetsWorker{jdks: []*workerpb.JDKInfo{
 		{Vendor: "Temurin", MajorVersion: 21, Version: "21.0.4+9", Arch: "x64", Path: "/opt/jdks/temurin-21", Managed: true},
 	}})
 
@@ -84,7 +84,7 @@ func TestFR301RuntimeAssetsRefresh(t *testing.T) {
 }
 
 // GET /runtime-assets/overview：加性扩展 runtimes / runtimeSyncs / syncedAt，老字段不动。
-func TestFR301OverviewRuntimesFields(t *testing.T) {
+func TestOverviewRuntimesFields(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 	adminToken := getAdminToken(t, r)

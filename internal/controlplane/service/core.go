@@ -40,7 +40,7 @@ const bungeeJenkinsURL = "https://ci.md-5.net/job/BungeeCord/lastSuccessfulBuild
 // 因此 ResolveBuild/ListVersions 对其一律短路，制品来源由请求直供（见 BinarySource）。
 const CoreTypeBinary = "binary"
 
-// CoreTypeBeacon 是内置 Beacon 快速搭建预设的核心类型（见 ADR-090）。
+// CoreTypeBeacon 是内置 Beacon 快速搭建预设的核心类型。
 //
 // 它是 coreType=binary 之上的**语法糖**：内部展开为 binary + 固定参数
 // （落盘名 `beacon-{version}-linux-amd64`、启动命令 `./beacon-{version}-linux-amd64`、
@@ -121,7 +121,7 @@ type CoreInfo struct {
 // CoreService 解析 MC 服务端核心的可用版本与下载信息（046）。
 type CoreService struct {
 	client *http.Client
-	// httpProvider 运行时出站持有者（ADR-043）：非 nil 时每次请求取当前 client，
+	// httpProvider 运行时出站持有者：非 nil 时每次请求取当前 client，
 	// 使全局代理改动即时生效（补足 20s 超时）。优先于固定 client。
 	httpProvider func() *http.Client
 	base         string // PaperMC 下载 API 根，测试可注入 httptest 地址
@@ -142,7 +142,7 @@ func NewCoreService() *CoreService {
 	}
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理ADR-037）：解析核心版本/构建的 API 请求经此 client。
+// SetHTTPClient 注入出站 client（经进程级代理）：解析核心版本/构建的 API 请求经此 client。
 // 由 main 装配；client 为 nil 时忽略（保留默认）。注入的 client 若未设 Timeout，补足 20s 避免无限等待。
 func (s *CoreService) SetHTTPClient(c *http.Client) {
 	if c == nil {
@@ -151,7 +151,7 @@ func (s *CoreService) SetHTTPClient(c *http.Client) {
 	s.client = withDefaultTimeout(c)
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次请求取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者：每次请求取当前 client，
 // 使全局代理改动即时生效。优先于 SetHTTPClient 注入的固定 client；补足 20s 超时避免无限等待。
 func (s *CoreService) SetHTTPClientProvider(p func() *http.Client) {
 	s.httpProvider = p

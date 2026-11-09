@@ -16,7 +16,7 @@ func wsSecretFilePath(t *testing.T) string {
 }
 
 func TestResolveWSTokenSecret_ExplicitWins(t *testing.T) {
-	// 显式配置非空 → 优先于 dev 回退与自动生成，不生成/不写文件（过渡逃生口，见 ADR-061 决策 2.1）。
+	// 显式配置非空 → 优先于 dev 回退与自动生成，不生成/不写文件（过渡逃生口，.1）。
 	path := wsSecretFilePath(t)
 	secret, src, err := ResolveWSTokenSecret("  my-explicit-secret  ", true, path)
 	require.NoError(t, err)
@@ -41,7 +41,7 @@ func TestResolveWSTokenSecret_DevFallback(t *testing.T) {
 
 func TestDevWSTokenSecret_MatchesLegacyDefault(t *testing.T) {
 	// dev 回退值必须与既有两端默认（dev-secret-change-me）一致：
-	// 存量 dev 部署与探针长期 token 才不因升级失效（ADR-061 决策 2.3）。
+	// 存量 dev 部署与探针长期 token 才不因升级失效。
 	require.Equal(t, "dev-secret-change-me", DevWSTokenSecret)
 }
 
@@ -75,7 +75,7 @@ func TestResolveWSTokenSecret_AutogenRandomPerDeploy(t *testing.T) {
 }
 
 func TestResolveWSTokenSecret_EmptyPersistedFileFailsClosed(t *testing.T) {
-	// 已存在但为空的密钥文件 → fail-fast 且不覆盖现场（ADR-061 决策 2：不静默轮换掩盖问题）。
+	// 已存在但为空的密钥文件 → fail-fast 且不覆盖现场（不静默轮换掩盖问题）。
 	path := wsSecretFilePath(t)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte("   \n"), 0o600))
@@ -86,7 +86,7 @@ func TestResolveWSTokenSecret_EmptyPersistedFileFailsClosed(t *testing.T) {
 	require.Empty(t, src)
 }
 
-// TestWSTokenSecret_IsolatedFromUserSessionSecret 密钥隔离契约（验收 #2，见 ADR-061 决策 1）：
+// TestWSTokenSecret_IsolatedFromUserSessionSecret 密钥隔离契约（验收 #2）：
 // 终端令牌用注入的专用 WS 密钥签发——jwt.secret 校验必须不过（轮换 jwt.secret 不影响终端；
 // 反向亦然：Worker 仅持 WS 密钥，伪造不了会话类令牌）。签发点与 jwt.secret 的分离由
 // cmd/control-plane/main.go 装配保证（TerminalService/TerminalProxy/PluginBridgeService

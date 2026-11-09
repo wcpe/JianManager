@@ -96,7 +96,7 @@ func newInstanceTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// MC 实例：忽略用户手填 WorkDir，系统在 var/servers 下按相对路径分配（ADR-007/ADR-010）。
+// MC 实例：忽略用户手填 WorkDir，系统在 var/servers 下按相对路径分配。
 func TestCreate_MinecraftAllocatesRelativeWorkDir(t *testing.T) {
 	db := newInstanceTestDB(t)
 	svc := NewInstanceService(db, nil, nil)

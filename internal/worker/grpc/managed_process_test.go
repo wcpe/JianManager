@@ -13,7 +13,7 @@ import (
 )
 
 func TestInspectManagedProcessRejectsPidOutsideInstanceTree(t *testing.T) {
-	srv, _, uuid := startFR343RunningInstance(t)
+	srv, _, uuid := startMetricsRunningInstance(t)
 
 	resp, err := srv.InspectManagedProcess(context.Background(), &workerpb.ManagedProcessInspectRequest{
 		InstanceUuid: uuid,
@@ -32,7 +32,7 @@ func TestInspectManagedProcessRejectsPidOutsideInstanceTree(t *testing.T) {
   所以这里必须验证状态确实变了，否则放开就退化成「杀了但平台还记着 RUNNING」。
 */
 func TestTerminateManagedProcessAllowsRootPID(t *testing.T) {
-	srv, mgr, uuid := startFR343RunningInstance(t)
+	srv, mgr, uuid := startMetricsRunningInstance(t)
 	rootPID := mgr.GetInstancePID(uuid)
 	require.Greater(t, rootPID, 0)
 
@@ -55,7 +55,7 @@ func TestTerminateManagedProcessAllowsRootPID(t *testing.T) {
 }
 
 func TestInspectManagedProcessReturnsTreeScopedDetail(t *testing.T) {
-	srv, mgr, uuid := startFR343RunningInstance(t)
+	srv, mgr, uuid := startMetricsRunningInstance(t)
 	rootPID := int32(mgr.GetInstancePID(uuid))
 	require.Greater(t, rootPID, int32(0))
 
@@ -85,7 +85,7 @@ func TestInspectManagedProcessReturnsTreeScopedDetail(t *testing.T) {
 }
 
 func TestTerminateManagedProcessRejectsUnsupportedMode(t *testing.T) {
-	srv, mgr, uuid := startFR343RunningInstance(t)
+	srv, mgr, uuid := startMetricsRunningInstance(t)
 	rootPID := int32(mgr.GetInstancePID(uuid))
 	require.Greater(t, rootPID, int32(0))
 

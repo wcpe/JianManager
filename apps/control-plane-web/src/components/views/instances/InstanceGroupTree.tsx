@@ -47,12 +47,12 @@ function flattenSearchGroups(tree: GroupTreeNode[], query: string): VisibleGroup
 }
 
 /** 
- * 实例组织分组树（design §4.4 左树 / ADR-033）。
+ * 实例组织分组树（design §4.4 左树）。
  * 文件夹式多级嵌套：新建组 / 嵌套子组 / 改名 / 删（非空后端拒删）/ 折叠优先（折叠分支只渲染分组头）/
  * 选中。每节点挂「子树聚合去重」实例数。折叠态由外壳注入（键 `igroup:<id>`，
  * 与侧栏实例树 `tree:` 隔离）。支持把实例从右列表拖入某组（HTML5 原生 DnD）。
  *
- * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast —— 分组列表、折叠态与四个
+ * 受控视图：不取数、不发请求、不弹 toast —— 分组列表、折叠态与四个
  * 写动作都由外壳注入。树构建、搜索剪枝、虚拟化、键盘导航、拖放解析留在视图内。
  */
 export interface InstanceGroupTreeProps {

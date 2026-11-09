@@ -18,14 +18,14 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-func TestFR031ConfigService_GrpcWorkerVersionDiffRollbackAndCrossCheck(t *testing.T) {
+func TestConfigService_GrpcWorkerVersionDiffRollbackAndCrossCheck(t *testing.T) {
 	db := newConfigTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Instance{}); err != nil {
 		t.Fatalf("迁移节点和实例失败: %v", err)
 	}
 
-	const nodeUUID = "node-fr031"
-	const instanceUUID = "inst-fr031-a"
+	const nodeUUID = "node-config-sync"
+	const instanceUUID = "inst-config-sync-a"
 	workDir := t.TempDir()
 	seedContent := "# 主端口\nserver-port=25565\nonline-mode=true\nmotd=Old MOTD\nmax-players=20\n"
 	if err := os.WriteFile(filepath.Join(workDir, "server.properties"), []byte(seedContent), 0644); err != nil {
@@ -33,10 +33,10 @@ func TestFR031ConfigService_GrpcWorkerVersionDiffRollbackAndCrossCheck(t *testin
 	}
 
 	pool := cpgrpc.NewClientPool()
-	conn := newFR031WorkerConn(t, nodeUUID, instanceUUID, workDir)
+	conn := newConfigWorkerConn(t, nodeUUID, instanceUUID, workDir)
 	pool.SetWorkerClientForTest(nodeUUID, workerpb.NewWorkerServiceClient(conn))
 
-	node := &model.Node{UUID: nodeUUID, Name: "fr031-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s"}
+	node := &model.Node{UUID: nodeUUID, Name: "config-sync-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s"}
 	if err := db.Create(node).Error; err != nil {
 		t.Fatalf("插入节点失败: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestFR031ConfigService_GrpcWorkerVersionDiffRollbackAndCrossCheck(t *testin
 		t.Fatalf("插入实例失败: %v", err)
 	}
 	// 同节点其它实例只需提供最新版本内容，跨实例校验会聚合它触发端口冲突。
-	sibling := &model.Instance{UUID: "inst-fr031-b", NodeID: node.ID, Name: "creative", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "java -jar server.jar", WorkDir: t.TempDir()}
+	sibling := &model.Instance{UUID: "inst-config-sync-b", NodeID: node.ID, Name: "creative", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "java -jar server.jar", WorkDir: t.TempDir()}
 	if err := db.Create(sibling).Error; err != nil {
 		t.Fatalf("插入同节点实例失败: %v", err)
 	}
@@ -61,8 +61,8 @@ func TestFR031ConfigService_GrpcWorkerVersionDiffRollbackAndCrossCheck(t *testin
 	if read.Model != "server.properties" || !strings.Contains(read.SchemaJSON, "Minecraft Java") {
 		t.Fatalf("应由 CP 在 Worker 响应上叠加内置 schema，实际 model=%q schema=%s", read.Model, read.SchemaJSON)
 	}
-	assertFR031Field(t, read.Fields, "server-port", "25565", "int", 2)
-	assertFR031Field(t, read.Fields, "online-mode", "true", "bool", 3)
+	assertConfigField(t, read.Fields, "server-port", "25565", "int", 2)
+	assertConfigField(t, read.Fields, "online-mode", "true", "bool", 3)
 
 	patchedID, validation, err := svc.WriteFields(inst.ID, "server.properties", map[string]string{
 		"motd":        "Edited MOTD",
@@ -127,12 +127,12 @@ func TestFR031ConfigService_GrpcWorkerVersionDiffRollbackAndCrossCheck(t *testin
 	if err != nil {
 		t.Fatalf("跨实例一致性校验失败: %v", err)
 	}
-	if !containsFR031Issue(issues, "端口 25565 重复") {
+	if !containsConfigIssue(issues, "端口 25565 重复") {
 		t.Fatalf("应检出同节点重复端口，实际 %+v", issues)
 	}
 }
 
-func newFR031WorkerConn(t *testing.T, nodeUUID, instanceUUID, workDir string) *grpc.ClientConn {
+func newConfigWorkerConn(t *testing.T, nodeUUID, instanceUUID, workDir string) *grpc.ClientConn {
 	t.Helper()
 	pm := process.NewManager(t.TempDir())
 	if err := pm.Create(instanceUUID, "survival", "java -jar server.jar", "", workDir, nil, false, process.ProcessTypeDirect, "", "", 0, 0); err != nil {
@@ -148,7 +148,7 @@ func newFR031WorkerConn(t *testing.T, nodeUUID, instanceUUID, workDir string) *g
 	t.Cleanup(server.Stop)
 
 	conn, err := grpc.NewClient(
-		"passthrough:///fr031-worker",
+		"passthrough:///config-sync-worker",
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return listener.DialContext(ctx)
 		}),
@@ -161,7 +161,7 @@ func newFR031WorkerConn(t *testing.T, nodeUUID, instanceUUID, workDir string) *g
 	return conn
 }
 
-func assertFR031Field(t *testing.T, fields []map[string]any, key, value, typ string, line int32) {
+func assertConfigField(t *testing.T, fields []map[string]any, key, value, typ string, line int32) {
 	t.Helper()
 	for _, f := range fields {
 		if f["key"] != key {
@@ -175,7 +175,7 @@ func assertFR031Field(t *testing.T, fields []map[string]any, key, value, typ str
 	t.Fatalf("未找到字段 %s，全部字段: %+v", key, fields)
 }
 
-func containsFR031Issue(issues []map[string]any, needle string) bool {
+func containsConfigIssue(issues []map[string]any, needle string) bool {
 	for _, issue := range issues {
 		msg, _ := issue["message"].(string)
 		if strings.Contains(msg, needle) {
@@ -185,9 +185,9 @@ func containsFR031Issue(issues []map[string]any, needle string) bool {
 	return false
 }
 
-// TestFR031ConfigService_CrossCheckNoVersionSiblingInlinePorts 覆盖§2.4 补漏：
+// TestConfigService_CrossCheckNoVersionSiblingInlinePorts 覆盖§2.4 补漏：
 // 同节点兄弟实例「无配置版本、端口仅以 inline 登记」时，也应并入跨实例端口校验触发冲突。
-func TestFR031ConfigService_CrossCheckNoVersionSiblingInlinePorts(t *testing.T) {
+func TestConfigService_CrossCheckNoVersionSiblingInlinePorts(t *testing.T) {
 	db := newConfigTestDB(t)
 	if err := db.AutoMigrate(&model.Node{}, &model.Instance{}); err != nil {
 		t.Fatalf("迁移节点和实例失败: %v", err)
@@ -201,7 +201,7 @@ func TestFR031ConfigService_CrossCheckNoVersionSiblingInlinePorts(t *testing.T) 
 	}
 
 	pool := cpgrpc.NewClientPool()
-	conn := newFR031WorkerConn(t, nodeUUID, instanceUUID, workDir)
+	conn := newConfigWorkerConn(t, nodeUUID, instanceUUID, workDir)
 	pool.SetWorkerClientForTest(nodeUUID, workerpb.NewWorkerServiceClient(conn))
 
 	node := &model.Node{UUID: nodeUUID, Name: "nv-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s"}
@@ -230,7 +230,7 @@ func TestFR031ConfigService_CrossCheckNoVersionSiblingInlinePorts(t *testing.T) 
 	if err != nil {
 		t.Fatalf("跨实例一致性校验失败: %v", err)
 	}
-	if !containsFR031Issue(issues, "端口 25565 重复") {
+	if !containsConfigIssue(issues, "端口 25565 重复") {
 		t.Fatalf("应检出「无版本兄弟的内联端口」与当前实例的冲突，实际 %+v", issues)
 	}
 }

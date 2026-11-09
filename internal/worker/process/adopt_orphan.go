@@ -13,7 +13,7 @@ import (
 
 // ③：未纳管活进程的全自动收养。
 //
-// 背景（ADR-093 决策 1 的缺口）：Worker 重启时 RecoverDaemonInstances 对「wrapper 仍存活、仅 socket
+// 背景：Worker 重启时 RecoverDaemonInstances 对「wrapper 仍存活、仅 socket
 // 瞬时不可达」的实例只告警 + 保留 PID 文件、不杀（这是对的——绝不误杀健康服务器）；但该实例此后
 // **没有任何出口**：启动接管只有一次机会，周期扫描的 scanWrapperGone 只抓「wrapper 死 / Java 活」，
 // 对「wrapper 与 Java 都活、只是当时拨不通」完全沉默。于是它永久脱管——健康巡检不覆盖、终端与日志
@@ -21,7 +21,7 @@ import (
 //
 // 本文件补上这个出口：发现 PID 目录中「未纳管的活进程对」（wrapper 与 Java 均活、PID 文件有效）
 // → 归属复核通过 → **只重连、登记为 RUNNING**；不重启、不杀、不碰进程（PID 不变）。
-// 判据与 ADR-093 / docs/specs/restart-resilience/spec.md §2.1 完全一致：复核不通过一律只告警。
+// 判据与 docs/specs/restart-resilience/spec.md §2.1 完全一致：复核不通过一律只告警。
 //
 // 与（AdoptForeignRuntime）的分工：那条路径处置的是**外来**进程（无 PID 记录、非 wrapper，
 // 人工确认后先停后启）；本路径只接管**平台自有 wrapper**（PID 记录 + 环境 UUID 确证），全程不碰进程。
@@ -128,7 +128,7 @@ func (m *Manager) AdoptUnmanagedDaemonInstances() (int, []OrphanFinding) {
 //
 // 用途：`orphan_scan.auto_adopt=false` 时仍有观测能力——规格 §2.3/§4 的口径是「`false` 只关收养」，
 // 故开关关闭只应关闭**收养动作**（归属复核 + 重连 + 登记），不该关闭「发现并发告警」这件事本身。
-// 否则开关一关，磁盘上跑着服务器而平台彻底沉默，运维连线索都没有（正是本 FR 要收敛的缺陷形态）。
+// 否则开关一关，磁盘上跑着服务器而平台彻底沉默，运维连线索都没有（正是本次变更要收敛的缺陷形态）。
 //
 // 与 AdoptUnmanagedDaemonInstances 共用同一发现判据与同一枚举顺序，区别仅在于**不重连、不登记**；
 // 返回的 finding 一律 Adopted=false，绝不调用 Start / killTree / signalTree（护栏五.1 同口径）。
@@ -200,7 +200,7 @@ func (m *Manager) instanceAdoptedOrLive(uuid string) bool {
 // adoptUnmanagedRecord 对一条未纳管的活进程记录执行收养：归属复核 → 单次拨号 → 登记 RUNNING。
 // 返回 true 表示已登记为 RUNNING（收养成功）；false 表示被复核拦截或拨号失败（只告警，PID 文件保留）。
 //
-// 安全闸（与 ① / ADR-093 同口径，但**判据更严**）：配送任何动作之前先做归属复核——
+// 安全闸（与 ① 同口径，但**判据更严**）：配送任何动作之前先做归属复核——
 // wrapper 分支必须 argv 形如 `<worker> daemon` **且** 进程环境携带本实例 UUID；Java 分支必须有强特征
 // （实例 UUID 出现在 cmdline 或进程环境）。cwd / cmdline 含工作目录这类弱特征**单独不足以判真**
 // （`DefaultVerifyAdoptOwnership`）：收养会把 wrapper 子树迁进实例 cgroup 并取得其控制权，一旦按 cwd
@@ -277,7 +277,7 @@ func (m *Manager) adoptUnmanagedRecord(instanceUUID string, rec *daemon.PIDRecor
 		// 启动宽限期的纪元起点：本路径让实例**从非 RUNNING 跳到 RUNNING**，与
 		// startLocked 里的 `inst.StartedAt = time.Now()` 是同一个语义位置，必须同时写。
 		//
-		// 为什么不能省（真机隐患，本 FR 补验时确认）：warmupRemaining 在纪元为零值时返回 0，即
+		// 为什么不能省（真机隐患，补验时确认）：warmupRemaining 在纪元为零值时返回 0，即
 		// 「做了宽限」变成「完全没有宽限」。而收养实例有两个恰好会踩上去的特征：① ServerPort 为 0
 		// （记录里没有它），响应维度只能落 ProbePort；② ProbePort 来自 PID 记录，未部署 ServerProbe
 		// 时无人监听。于是探针恒失败 + 无宽限 ⇒ 连续 SuspicionThreshold（默认 3）拍后直接判

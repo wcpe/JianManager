@@ -10,7 +10,7 @@ import { loginMockUser } from '@/test/auth'
 import { getWithRateLimitRetry, isLogRequestCanceled, useLogsFederation, useLogsFederationFacets, useLogsFederationStats } from './logFederation'
 
 /**
- * 取消/信号贯穿（FR-482 回归）。
+ * 取消/信号贯穿（回归）。
  *
  * 2026-10-29 缩范围：经典 `useLogs` / `useLegacyLogs` 已随 CP `logs` 表删除而下线，
  * 本文件原先把它们也纳入「路径列表」，那两路现在不存在，保留只会让用例挂在一个

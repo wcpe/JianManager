@@ -1,6 +1,6 @@
 // Package grpcmsg 提供 CP↔Worker gRPC 单消息尺寸上限的单一真值与应用层守卫。
 //
-// 背景：直拨链路的上限由 grpc.Server 选项显式限定（64MiB），而反向隧道（ADR-066）挂在
+// 背景：直拨链路的上限由 grpc.Server 选项显式限定（64MiB），而反向隧道挂在
 // grpctunnel 的 ReverseTunnelServer 上——v0.3.0 不暴露任何尺寸配置，唯一天花板是硬编码的
 // math.MaxUint32（4GB），造成同一载荷「直拨拒收、隧道吃进」的双轨不一致与整块缓冲 OOM 暴露面。
 // 治理手段为应用层拦截器（见 docs/specs/tunnel-message-size-guard/spec.md）：请求于进入

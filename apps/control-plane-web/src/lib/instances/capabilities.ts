@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 
 /** 
- * 实例能力画像（ADR-091）——前端门控的唯一真源。
+ * 实例能力画像——前端门控的唯一真源。
  *
  * 后端**详情路径**（HTTP `GET /instances/:id` 与 MCP `agent_get_instance`）在序列化前
  * 现算并以 `capabilities` 字段下发权威画像；列表/搜索响应同样逐行下发。前端**优先**用它。

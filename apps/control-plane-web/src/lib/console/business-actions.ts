@@ -1,7 +1,7 @@
 import type { BusinessAction } from './business'
 
 /** 
- * 业务动作的纯函数判定（见 ADR-029）。抽成独立模块便于单测，
+ * 业务动作的纯函数判定。抽成独立模块便于单测，
  * 且不污染 BusinessSegment 组件文件的 fast-refresh（react-refresh/only-export-components）。
  */
 

@@ -2,14 +2,14 @@ package service
 
 import "github.com/wcpe/JianManager/internal/controlplane/model"
 
-// profileKey 画像注册表键：实现形态 × 拓扑职责（两轴正交，见 ADR-091）。
+// profileKey 画像注册表键：实现形态 × 拓扑职责（两轴正交）。
 type profileKey struct {
 	Type model.InstanceType
 	Role model.InstanceRole
 }
 
 // universalFallback 未知 (type, role) 组合的安全回退画像：只保留对任何进程都成立的能力，
-// 保证非白屏（§2.3、ADR-091 §理由）。
+// 保证非白屏。
 var universalFallback = model.InstanceCapabilityProfile{
 	Type:         "",
 	Role:         "",
@@ -17,7 +17,7 @@ var universalFallback = model.InstanceCapabilityProfile{
 	Capabilities: []model.Capability{model.CapOverview, model.CapTerminal, model.CapFiles, model.CapBackup},
 }
 
-// capabilityRegistry 代码内描述符注册表（不入 DB，见 ADR-091 §理由）：
+// capabilityRegistry 代码内描述符注册表（不入 DB）：
 // 画像每一项都对应一段前端渲染 + 后端数据源实现，二者随代码发布；存 DB 会让
 // 「声明了某 Tab 但代码还没有」成为可能状态。新增产品 = 加一条描述符。
 var capabilityRegistry = map[profileKey]model.InstanceCapabilityProfile{

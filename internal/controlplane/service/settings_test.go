@@ -106,7 +106,7 @@ func TestGet_SensitiveMasked(t *testing.T) {
 	require.NotContains(t, dsn.Value, "supersecret") // 口令段被打码
 }
 
-// TestGet_WSTokenSecretDisplay jwt.ws_secret 只读展示（见 ADR-061）：
+// TestGet_WSTokenSecretDisplay jwt.ws_secret 只读展示：
 // 显式配置掩码；未配置按 dev_mode 显示来源描述，不回显 autogen 解析出的密钥值。
 func TestGet_WSTokenSecretDisplay(t *testing.T) {
 	// 显式配置 → 掩码 + sensitive。
@@ -307,7 +307,7 @@ func TestNewService_ReplaysPersistedLogLevel(t *testing.T) {
 	config.SetLogLevel("info") // 复位
 }
 
-// === 出站代理（network 分类ADR-043） ===
+// === 出站代理（network 分类） ===
 
 // TestProxy_KeysEditableAndNetwork proxy.url/proxy.no_proxy 为可编辑项；proxy.url 标 sensitive、脱敏展示。
 func TestProxy_KeysEditableAndNetwork(t *testing.T) {

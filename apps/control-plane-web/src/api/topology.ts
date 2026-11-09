@@ -13,7 +13,7 @@ export interface TopologyProxy {
   registrations: Registration[]
 }
 
-/** 拓扑分组概要：一个 network 的成员实例归属（软标签非独占，ADR-007）。 */
+/** 拓扑分组概要：一个 network 的成员实例归属（软标签非独占）。 */
 export interface TopologyNetwork {
   id: number
   name: string

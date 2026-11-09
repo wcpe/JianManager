@@ -47,7 +47,7 @@ var (
 // 直接复用会让「一个环境变量名」实际变成「可读取数据根下任意文件」的入口。
 var assistantCredentialEnvPattern = regexp.MustCompile(`^JIANMANAGER_ASSISTANT_[A-Z0-9_]{1,64}$`)
 
-// AssistantService AI 供应商/模型配置服务（见 ADR-105）。
+// AssistantService AI 供应商/模型配置服务。
 type AssistantService struct {
 	db  *gorm.DB
 	enc *KeyEncryptor

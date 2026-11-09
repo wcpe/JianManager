@@ -245,7 +245,7 @@ export interface ArtifactTextPreview {
  * 读取客户端分发制品文本内容用于**管理台**预览。
  *
  * 走 JWT 平台管理员端点 `GET /client-channels/:id/files/content?sha256=`——玩家制品端点
- * `GET /client-artifacts/:sha256` 用拉取密钥、浏览器无之不能复用（ADR-022/023）。
+ * `GET /client-artifacts/:sha256` 用拉取密钥、浏览器无之不能复用。
  */
 export async function fetchClientArtifactContent(
   channelId: string,

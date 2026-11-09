@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 二进制/Beacon 版本管理（见 ADR-090 补记）。
+// 二进制/Beacon 版本管理（补记）。
 //
 // 版本真源是制品库 Asset（内容寻址），本文件维护「实例 ↔ 版本」绑定，并承载
 // 受控升级 / 一级回滚。核心语义修订：**重建不再重新解析来源**（旧行为会让运行中的

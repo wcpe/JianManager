@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// AI 助手路由权限测试（见 ADR-105）。
+// AI 助手路由权限测试。
 //
 // 这组用例守的是「谁能改 AI 配置」这条线。它特别值得单独测，因为项目里已有一个
 // 名字叫 requirePlatformAdmin 的 helper，但它实际要求的是 node.manage 权限节点——

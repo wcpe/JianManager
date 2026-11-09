@@ -16,13 +16,13 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-func fr396TestDB(t *testing.T) *gorm.DB {
+func capabilityTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	// 本组用例测的是工具自身逻辑（精确确认/scope/参数校验），
 	// 而审批是它前面的一道闸——旁路它，才能测到后面的行为。
 	WithApprovalBypassForTest(t)
 	// 内存库：避免 Windows 上 TempDir 清理时 sqlite 文件仍被占用。
-	dsn := fmt.Sprintf("file:fr396_%s?mode=memory&cache=shared", t.Name())
+	dsn := fmt.Sprintf("file:capability%s?mode=memory&cache=shared", t.Name())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
@@ -40,12 +40,12 @@ func fr396TestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// fr396Deps 构造 ToolDeps 并**始终装配审批服务**（之后高危工具必须能出票）。
+// capabilityToolDeps 构造 ToolDeps 并**始终装配审批服务**（之后高危工具必须能出票）。
 //
 // 用 helper 而不是逐处 `ToolDeps{...}` 的原因：这批用例断言的是工具自身的确认/scope 语义，
 // 漏装配会让它们全部撞在「未装配（失败关闭）」上——那种失败与被测行为无关，
 // 读起来极具误导性（看错误会以为是审批坏了，而不是装配漏了）。
-func fr396Deps(db *gorm.DB, mutate func(*ToolDeps)) ToolDeps {
+func capabilityToolDeps(db *gorm.DB, mutate func(*ToolDeps)) ToolDeps {
 	d := ToolDeps{Approval: service.NewApprovalService(db)}
 	if mutate != nil {
 		mutate(&d)
@@ -53,12 +53,12 @@ func fr396Deps(db *gorm.DB, mutate func(*ToolDeps)) ToolDeps {
 	return d
 }
 
-func fr396Seed(t *testing.T, db *gorm.DB) (*service.AgentTokenService, *service.AgentPrincipal, *model.Node, *model.Instance) {
+func capabilitySeed(t *testing.T, db *gorm.DB) (*service.AgentTokenService, *service.AgentPrincipal, *model.Node, *model.Instance) {
 	t.Helper()
-	node := &model.Node{UUID: "n-fr396", Name: "node-alpha", Status: model.NodeStatusOnline}
+	node := &model.Node{UUID: "n-capability", Name: "node-alpha", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 	inst := &model.Instance{
-		UUID: "i-fr396", NodeID: node.ID, Name: "room-1",
+		UUID: "i-capability", NodeID: node.ID, Name: "room-1",
 		Type: model.InstanceTypeGeneric, Role: model.InstanceRoleUniversal,
 		ProcessType: model.ProcessTypeDirect, StartCommand: "noop",
 		Status: model.InstanceStatusStopped, WorkDir: "/srv/room",
@@ -66,7 +66,7 @@ func fr396Seed(t *testing.T, db *gorm.DB) (*service.AgentTokenService, *service.
 	require.NoError(t, db.Create(inst).Error)
 	agent := service.NewAgentTokenService(db)
 	_, plain, err := agent.Issue(service.IssueAgentTokenRequest{
-		Name: "fr396", ScopedInstanceIDs: []uint{inst.ID}, ScopedNodeIDs: []uint{node.ID},
+		Name: "capability", ScopedInstanceIDs: []uint{inst.ID}, ScopedNodeIDs: []uint{node.ID},
 		PolicyVersion: service.AgentPolicyVersionV2, CapabilitiesProvided: true,
 		Capabilities: []string{
 			service.AgentCapabilityInstanceDestructive,
@@ -85,12 +85,12 @@ func fr396Seed(t *testing.T, db *gorm.DB) (*service.AgentTokenService, *service.
 	return agent, p, node, inst
 }
 
-func TestFR396_ConfirmRejectsMismatch(t *testing.T) {
-	db := fr396TestDB(t)
-	agent, p, _, inst := fr396Seed(t, db)
+func TestConfirmRejectsMismatch(t *testing.T) {
+	db := capabilityTestDB(t)
+	agent, p, _, inst := capabilitySeed(t, db)
 	instanceSvc := service.NewInstanceService(db, nil, nil)
 	instanceSvc.Shutdown()
-	deps := fr396Deps(db, func(d *ToolDeps) { d.Agent = agent; d.Instance = instanceSvc; d.Node = service.NewNodeService(db) })
+	deps := capabilityToolDeps(db, func(d *ToolDeps) { d.Agent = agent; d.Instance = instanceSvc; d.Node = service.NewNodeService(db) })
 
 	res := CallTool(context.Background(), deps, p, "instance_kill", map[string]any{
 		"id": float64(inst.ID), "confirmInstanceName": "wrong-name",
@@ -100,10 +100,10 @@ func TestFR396_ConfirmRejectsMismatch(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "确认名称与目标不符")
 }
 
-func TestFR396_ConfirmRejectsMissing(t *testing.T) {
-	db := fr396TestDB(t)
-	agent, p, _, inst := fr396Seed(t, db)
-	deps := fr396Deps(db, func(d *ToolDeps) {
+func TestConfirmRejectsMissing(t *testing.T) {
+	db := capabilityTestDB(t)
+	agent, p, _, inst := capabilitySeed(t, db)
+	deps := capabilityToolDeps(db, func(d *ToolDeps) {
 		d.Agent = agent
 		d.Instance = service.NewInstanceService(db, nil, nil)
 		d.Node = service.NewNodeService(db)
@@ -115,12 +115,12 @@ func TestFR396_ConfirmRejectsMissing(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "confirmInstanceName")
 }
 
-func TestFR396_ConfirmDoesNotRevealOutOfScopeTarget(t *testing.T) {
-	db := fr396TestDB(t)
-	agent, p, node, _ := fr396Seed(t, db)
+func TestConfirmDoesNotRevealOutOfScopeTarget(t *testing.T) {
+	db := capabilityTestDB(t)
+	agent, p, node, _ := capabilitySeed(t, db)
 	other := &model.Node{UUID: "n-other", Name: "hidden-node", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(other).Error)
-	deps := fr396Deps(db, func(d *ToolDeps) { d.Agent = agent; d.Node = service.NewNodeService(db) })
+	deps := capabilityToolDeps(db, func(d *ToolDeps) { d.Agent = agent; d.Node = service.NewNodeService(db) })
 	res := CallTool(context.Background(), deps, p, "node_purge_archived", map[string]any{
 		"id": float64(other.ID), "confirmNodeName": other.Name,
 	})
@@ -130,18 +130,18 @@ func TestFR396_ConfirmDoesNotRevealOutOfScopeTarget(t *testing.T) {
 	assert.NotEqual(t, node.ID, other.ID)
 }
 
-func TestFR396_PurgeArchivedUsesArchivedName(t *testing.T) {
-	db := fr396TestDB(t)
-	agent, p, node, _ := fr396Seed(t, db)
+func TestPurgeArchivedUsesArchivedName(t *testing.T) {
+	db := capabilityTestDB(t)
+	agent, p, node, _ := capabilitySeed(t, db)
 	require.NoError(t, db.Delete(node).Error)
-	deps := fr396Deps(db, func(d *ToolDeps) { d.Agent = agent; d.Node = service.NewNodeService(db) })
+	deps := capabilityToolDeps(db, func(d *ToolDeps) { d.Agent = agent; d.Node = service.NewNodeService(db) })
 	res := CallTool(context.Background(), deps, p, "node_purge_archived", map[string]any{
 		"id": float64(node.ID), "confirmNodeName": node.Name, "force": true,
 	})
 	assert.False(t, res.IsError, "归档节点应可按其名称确认后清理: %v", res.Content)
 }
 
-func TestFR396_V1CannotSeeNewTools(t *testing.T) {
+func TestV1CannotSeeNewTools(t *testing.T) {
 	p := &service.AgentPrincipal{
 		PolicyVersion:     service.AgentPolicyVersionV1,
 		ScopedInstanceIDs: []uint{1}, ScopedNodeIDs: []uint{1},
@@ -160,8 +160,8 @@ func TestFR396_V1CannotSeeNewTools(t *testing.T) {
 	assert.True(t, names["agent_whoami"])
 }
 
-func TestFR396_BatchRejectsOutOfScopeWholly(t *testing.T) {
-	db := fr396TestDB(t)
+func TestBatchRejectsOutOfScopeWholly(t *testing.T) {
+	db := capabilityTestDB(t)
 	node := &model.Node{UUID: "n-batch", Name: "node-batch", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 	inScope := &model.Instance{
@@ -192,7 +192,7 @@ func TestFR396_BatchRejectsOutOfScopeWholly(t *testing.T) {
 
 	batch := service.NewInstanceBatchService(db, nil)
 	batch.SetInstanceService(service.NewInstanceService(db, nil, nil))
-	deps := fr396Deps(db, func(d *ToolDeps) {
+	deps := capabilityToolDeps(db, func(d *ToolDeps) {
 		d.Agent = agent
 		d.Batch = batch
 		d.Instance = service.NewInstanceService(db, nil, nil)
@@ -205,7 +205,7 @@ func TestFR396_BatchRejectsOutOfScopeWholly(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "整体拒绝")
 }
 
-func TestFR396_ToolsRegistered(t *testing.T) {
+func TestToolsRegistered(t *testing.T) {
 	names := map[string]bool{}
 	for _, n := range ToolNames() {
 		names[n] = true
@@ -222,18 +222,18 @@ func TestFR396_ToolsRegistered(t *testing.T) {
 
 // 执行器级测试：直接调 tool handler，验证真实调用链 ----
 
-func TestFR396_SearchFiltersAndPaginates(t *testing.T) {
-	db := fr396TestDB(t)
-	agent, p, node, inst := fr396Seed(t, db)
+func TestSearchFiltersAndPaginates(t *testing.T) {
+	db := capabilityTestDB(t)
+	agent, p, node, inst := capabilitySeed(t, db)
 	// 追加第二个实例（同名前缀不同后缀），验证 q 过滤与分页。
 	other := &model.Instance{
-		UUID: "i-fr396-b", NodeID: node.ID, Name: "room-b",
+		UUID: "i-capability-b", NodeID: node.ID, Name: "room-b",
 		Type: model.InstanceTypeGeneric, Role: model.InstanceRoleUniversal,
 		ProcessType: model.ProcessTypeDirect, StartCommand: "noop",
 		Status: model.InstanceStatusStopped, WorkDir: "/srv/room",
 	}
 	require.NoError(t, db.Create(other).Error)
-	deps := fr396Deps(db, func(d *ToolDeps) { d.Agent = agent; d.Node = service.NewNodeService(db) })
+	deps := capabilityToolDeps(db, func(d *ToolDeps) { d.Agent = agent; d.Node = service.NewNodeService(db) })
 
 	// q 过滤：只命中 room-1。
 	res := CallTool(context.Background(), deps, p, "instance_search", map[string]any{"q": "room-1"})
@@ -256,12 +256,12 @@ func TestFR396_SearchFiltersAndPaginates(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "total")
 }
 
-func TestFR396_GetEnvSuccessAndOutOfScope(t *testing.T) {
-	db := fr396TestDB(t)
-	agent, p, node, inst := fr396Seed(t, db)
+func TestGetEnvSuccessAndOutOfScope(t *testing.T) {
+	db := capabilityTestDB(t)
+	agent, p, node, inst := capabilitySeed(t, db)
 	// 节点置离线：GetInstanceEnv 走「节点离线」分支，不触发 gRPC（测试无 ClientPool）。
 	require.NoError(t, db.Model(&model.Node{}).Where("id = ?", node.ID).Update("status", model.NodeStatusOffline).Error)
-	deps := fr396Deps(db, func(d *ToolDeps) {
+	deps := capabilityToolDeps(db, func(d *ToolDeps) {
 		d.Agent = agent
 		d.Instance = service.NewInstanceService(db, nil, nil)
 		d.Node = service.NewNodeService(db)
@@ -287,13 +287,13 @@ func TestFR396_GetEnvSuccessAndOutOfScope(t *testing.T) {
 	require.NoError(t, err)
 
 	outScope := &model.Instance{
-		UUID: "i-fr396-out", NodeID: node.ID, Name: "out-scope",
+		UUID: "i-capability-out", NodeID: node.ID, Name: "out-scope",
 		Type: model.InstanceTypeGeneric, Role: model.InstanceRoleUniversal,
 		ProcessType: model.ProcessTypeDirect, StartCommand: "noop",
 		Status: model.InstanceStatusStopped, WorkDir: "/srv/out",
 	}
 	require.NoError(t, db.Create(outScope).Error)
-	depsOnly := fr396Deps(db, func(d *ToolDeps) {
+	depsOnly := capabilityToolDeps(db, func(d *ToolDeps) {
 		d.Agent = agentOnly
 		d.Instance = service.NewInstanceService(db, nil, nil)
 		d.Node = service.NewNodeService(db)
@@ -305,11 +305,11 @@ func TestFR396_GetEnvSuccessAndOutOfScope(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "能力/scope 不足")
 }
 
-func TestFR396_SendCommandRequiresScopeAndConfirm(t *testing.T) {
-	db := fr396TestDB(t)
-	agent, p, _, inst := fr396Seed(t, db)
+func TestSendCommandRequiresScopeAndConfirm(t *testing.T) {
+	db := capabilityTestDB(t)
+	agent, p, _, inst := capabilitySeed(t, db)
 	instanceSvc := service.NewInstanceService(db, nil, nil)
-	deps := fr396Deps(db, func(d *ToolDeps) { d.Agent = agent; d.Instance = instanceSvc; d.Node = service.NewNodeService(db) })
+	deps := capabilityToolDeps(db, func(d *ToolDeps) { d.Agent = agent; d.Instance = instanceSvc; d.Node = service.NewNodeService(db) })
 
 	// 无 confirm：破坏性工具要求精确确认（seed 实例未运行，先被运行状态闸拦截，也属安全护栏）。
 	res := CallTool(context.Background(), deps, p, "instance_send_command", map[string]any{
@@ -333,7 +333,7 @@ func TestFR396_SendCommandRequiresScopeAndConfirm(t *testing.T) {
 	pOnly, err := agentOnly.Authenticate(plainOnly)
 	require.NoError(t, err)
 	outScope := &model.Instance{
-		UUID: "i-fr396-cmd-out", NodeID: inst.NodeID, Name: "cmd-out",
+		UUID: "i-capability-cmd-out", NodeID: inst.NodeID, Name: "cmd-out",
 		Type: model.InstanceTypeGeneric, Role: model.InstanceRoleUniversal,
 		ProcessType: model.ProcessTypeDirect, StartCommand: "noop",
 		Status: model.InstanceStatusStopped,

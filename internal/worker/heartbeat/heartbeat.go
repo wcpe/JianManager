@@ -33,7 +33,7 @@ const maxConcurrentProbeScrapes = 8
 // = 探针(5s) + SLP(t) + Query(t)（t 可至 30s → 65s）远超 15s，该实例的时序样本每拍都被预算
 // 静默砍成「不可用」，监控缺失却无任何告警。现在预算 = directprobe.CollectBudgetFor(生效 slp,
 // 生效 query) = 余量 + 探针上限 + slp + query，恒 ≥ 单实例同源串行最坏，且上界
-// （directprobe.MaxCollectBudget()，26s）< 心跳节拍（30s，ADR-013）——「超时可配」与「心跳护栏」
+// （directprobe.MaxCollectBudget，26s）< 心跳节拍（30s）——「超时可配」与「心跳护栏」
 // 在代码层自洽（推导与三处同源的超时上界见 internal/platform/directprobe）。
 //
 // 预算耗尽仍按既有语义处理：用**已完成部分**返回、未完成实例补「全部不可用」空样本（CP 落 NULL
@@ -72,7 +72,7 @@ func warnIfBudgetBreaksTickGuardrail(budget, slp, query time.Duration) {
 // 完整超时；69 实例规模下这正是把节拍拖垮的主因。故连续失败达阈值后按失败次数指数推迟重探：
 // 60s → 120s（上限 probeSourceMaxRetryInterval），一旦恢复立即清零。
 //
-// 首档**必须严格大于心跳节拍**（30s，ADR-013），否则退避窗口会被下一拍起点追上而形同虚设
+// 首档**必须严格大于心跳节拍**（30s），否则退避窗口会被下一拍起点追上而形同虚设
 // （复审 N4）；配合「退避基准取探测完成时刻」（见 collectInstanceMetricsAt），
 // 首档 60s 实际至少跳过一拍。
 // 退避**只作用于 30s 时序采样**：用户手动打开详情页走的 GetInstanceMetrics 实时链路不查询退避，
@@ -152,7 +152,7 @@ type InstanceStateProvider interface {
 	GetAllInstanceStates() []process.InstanceSnapshot
 }
 
-// TaskSnapshotProvider 提供运行中长任务的心跳快照（见 ADR-040）。
+// TaskSnapshotProvider 提供运行中长任务的心跳快照。
 // 由 Worker gRPC 服务实现持有的内存任务表实现。终态任务上报后由本心跳调 Drop 移除。
 type TaskSnapshotProvider interface {
 	TaskSnapshots() []*workerpb.TaskSnapshot
@@ -216,10 +216,10 @@ type Heartbeat struct {
 	// hostObserver 主机级观测采集器。nil 时不上报主机级数据——
 	// 老装配/测试构造无需改动，CP 侧按缺测处理。
 	hostObserver hostobs.Reader
-	// proxyApplier 据心跳响应里 CP 下发的期望代理运行时重建 Worker 出站 client（见 ADR-043）；
+	// proxyApplier 据心跳响应里 CP 下发的期望代理运行时重建 Worker 出站 client；
 	// 为 nil 时心跳不应用下发代理（Worker 仅用本地 yaml/env，向后兼容旧 CP）。
 	proxyApplier *proxyApplier
-	// wsSecretApplier 据心跳响应里 CP 下发的 WS 令牌密钥热应用（见 ADR-061）；
+	// wsSecretApplier 据心跳响应里 CP 下发的 WS 令牌密钥热应用；
 	// 为 nil 时不应用（向后兼容旧 CP：Worker 沿用启动时生效值）。
 	wsSecretApplier *wsSecretApplier
 	// healthApplier 据心跳响应里 CP 下发的实例健康巡检策略热应用到巡检器；
@@ -253,7 +253,7 @@ func (h *Heartbeat) SetCPUReader(reader metrics.CPUReader) {
 	h.cpuReader = reader
 }
 
-// SetTaskProvider 注入运行中任务快照来源（见 ADR-040）。
+// SetTaskProvider 注入运行中任务快照来源。
 // 由 main 装配（传入 Worker gRPC 服务实现）；不调用则心跳不携带任务进度。
 func (h *Heartbeat) SetTaskProvider(p TaskSnapshotProvider) {
 	h.taskProvider = p
@@ -270,14 +270,14 @@ func (h *Heartbeat) SetVLDiskProvider(p VLDiskProvider) {
 	h.vlDiskProvider = p
 }
 
-// SetProxyRebuilder 注入「据心跳下发代理重建出站 client」的回调（，见 ADR-043）。
+// SetProxyRebuilder 注入「据心跳下发代理重建出站 client」的回调。
 // 由 main 装配（包裹 httpclient.Provider.Rebuild）；不调用则忽略 CP 下发的代理（向后兼容）。
 // 内部用 generation 比较，仅在期望代理变化时才重建（避免每拍重建）。
 func (h *Heartbeat) SetProxyRebuilder(rebuild func(httpclient.Config) error) {
 	h.proxyApplier = newProxyApplier(rebuild)
 }
 
-// SetWSSecretApplier 注入「据心跳下发 WS 令牌密钥热应用」的回调（见 ADR-061）。
+// SetWSSecretApplier 注入「据心跳下发 WS 令牌密钥热应用」的回调。
 // current 为启动时已生效的密钥（首拍据此去重）；apply 由 main 装配（热更新终端/插件桥 +
 // 持久化身份文件）。不调用则忽略 CP 下发的密钥（向后兼容）。
 func (h *Heartbeat) SetWSSecretApplier(current string, apply func(secret string) error) {
@@ -333,7 +333,7 @@ func (h *Heartbeat) sendHeartbeatWithRetry() {
 	for {
 		if err := h.sendHeartbeat(req); err == nil {
 			// 终态任务已随本次心跳上报且 CP 已确认接收，从内存表移除避免重复上报
-			// （见 ADR-040）。仅在心跳成功确认后才 Drop，确保 CP 至少收到一次终态快照。
+			// 仅在心跳成功确认后才 Drop，确保 CP 至少收到一次终态快照。
 			if h.taskProvider != nil {
 				for _, id := range terminalTaskIDs {
 					h.taskProvider.DropTask(id)
@@ -401,7 +401,7 @@ func (h *Heartbeat) buildHeartbeatRequest() (*workerpb.HeartbeatRequest, []strin
 		}
 	}
 
-	// 附加运行中长任务进度快照（见 ADR-040）。
+	// 附加运行中长任务进度快照。
 	var terminalTaskIDs []string
 	if h.taskProvider != nil {
 		req.Tasks = h.taskProvider.TaskSnapshots()
@@ -449,11 +449,11 @@ func (h *Heartbeat) sendHeartbeat(req *workerpb.HeartbeatRequest) error {
 		return err
 	}
 
-	// 应用 CP 下发的期望出站代理（见 ADR-043）：generation 变化才重建出站 client。
+	// 应用 CP 下发的期望出站代理：generation 变化才重建出站 client。
 	// 重连/重启天然由后续心跳重发，无需 Worker 落盘。
 	h.proxyApplier.apply(reply)
 
-	// 应用 CP 下发的 WS 令牌密钥（见 ADR-061）：值变化才热更新终端/插件桥校验 + 持久化。
+	// 应用 CP 下发的 WS 令牌密钥：值变化才热更新终端/插件桥校验 + 持久化。
 	h.wsSecretApplier.applyReply(reply)
 
 	// 应用 CP 下发的 MC 直探超时：写入 metrics 生效值，心跳与实时两条链路共用。

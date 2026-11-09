@@ -17,16 +17,16 @@ import java.util.Set;
 import java.util.function.LongConsumer;
 
 /**
- * 文件级 reconcile 引擎（契约 §2/§6.4，FR-090 核心）。
+ * 文件级 reconcile 引擎（契约 §2/§6.4）。
  *
  * <p>增量：对 manifest 中 {@code platform} 适配本机的文件，md5/size 快筛命中即跳过；
  * 否则从 transport 取制品 → 解码 → sha256 强校验 → 原子放置。
  * 减量：仅在 {@code managedDirs} 内、对 {@code sync} 非 once/ignore 的文件，删「本地有但 manifest 未列」的。
  * 玩家区永不碰（{@link PathRules}）。
  *
- * <p>FR-256 起：去掉 CAS 内容寻址缓存（CasCache 已删）。重复文件复用靠 size+sha256 快筛（命中即跳过下载）。
+ * <p>已去掉 CAS 内容寻址缓存（CasCache 已删）。重复文件复用靠 size+sha256 快筛（命中即跳过下载）。
  *
- * <p>FR-257 起：下载改为流式——Transport 返回 {@link InputStream}，边读边写盘（64KB 缓冲）+
+ * <p>下载改为流式——Transport 返回 {@link InputStream}，边读边写盘（64KB 缓冲）+
  * {@link DigestInputStream} 流式 sha256 + zstd 流式解压；支持 HTTP Range 断点续传
  * （{@code .jmtmp.dl} 残留则从已下载大小处续传）。1GB 文件下载内存占用恒定 &lt; 10MB。
  */
@@ -51,7 +51,7 @@ final class Reconciler {
     private final Transport transport;
     private final Platform platform;
     private final Logger log;
-    /** 下载进度上报（FR-099）；不展示时为 Noop reporter（非 null）。 */
+    /** 下载进度上报；不展示时为 Noop reporter（非 null）。 */
     private final ProgressReporter reporter;
 
     Reconciler(Path gameDir, Transport transport, Platform platform, Logger log,
@@ -70,14 +70,14 @@ final class Reconciler {
     Result reconcile(Manifest manifest) throws IOException {
         Result result = new Result();
 
-        // 进度分母：廉价预估本次将下载的压缩字节（不哈希；FR-099）。
+        // 进度分母：廉价预估本次将下载的压缩字节（不哈希）。
         reporter.plan(estimateDownloadBytes(manifest));
 
         // 本机适配的目标文件相对路径集合（用于减量时判断「manifest 未列」）。
         Set<String> desiredPaths = new HashSet<>();
 
         for (Manifest.FileEntry entry : manifest.files) {
-            // 玩家关闭进度窗 → 停止下载、fail-static 放行（FR-099）。
+            // 玩家关闭进度窗 → 停止下载、fail-static 放行。
             if (reporter.isCancelled()) {
                 result.errors.add("用户取消更新（玩家关闭进度窗）");
                 log.warn("玩家关闭进度窗，取消剩余下载，fail-static 带本地版本放行");
@@ -124,7 +124,7 @@ final class Reconciler {
     }
 
     /**
-     * 廉价预估本次将下载的压缩字节（FR-099 进度分母）：不哈希——按 once/exists、size 匹配粗筛，
+     * 廉价预估本次将下载的压缩字节（进度分母）：不哈希——按 once/exists、size 匹配粗筛，
      * 余者计 {@code artifactSize}。同大小不同 md5 的极少数误判由收尾 snap-to-100% 兜底。
      */
     private long estimateDownloadBytes(Manifest manifest) {
@@ -160,7 +160,7 @@ final class Reconciler {
         }
     }
 
-    /** 单文件增量：快筛 → 流式下载 → 校验 → 解压 → 原子放置（按 sync 策略，FR-257 流式）。 */
+    /** 单文件增量：快筛 → 流式下载 → 校验 → 解压 → 原子放置（按 sync 策略，流式）。 */
     private void applyFile(Manifest.FileEntry entry, Result result) throws IOException {
         Path target = PathRules.resolveSafe(gameDir, entry.path);
 
@@ -172,7 +172,7 @@ final class Reconciler {
             return;
         }
 
-        // strict（或 once 且缺失）：md5/size 快筛——命中即认为已是目标内容，跳过下载（性能，ADR-022 决策 3）。
+        // strict（或 once 且缺失）：md5/size 快筛——命中即认为已是目标内容，跳过下载（性能）。
         if (exists && quickMatch(target, entry)) {
             result.skipped++;
             return;
@@ -182,7 +182,7 @@ final class Reconciler {
             return;
         }
 
-        // 流式下载并原子放置（FR-257：64KB 缓冲，不再全量读进 byte[]）。
+        // 流式下载并原子放置（64KB 缓冲，不再全量读进 byte[]）。
         downloadAndPlace(entry, target);
         result.downloaded++;
     }
@@ -202,7 +202,7 @@ final class Reconciler {
         return false;
     }
 
-    /** 64KB 流式读写缓冲（FR-257：大文件内存占用恒定，不随文件大小增长）。 */
+    /** 64KB 流式读写缓冲（大文件内存占用恒定，不随文件大小增长）。 */
     private static final int STREAM_BUF = 64 * 1024;
     /** 下载临时后缀（存制品流，支持断点续传；含 {@code .jmtmp.} 以被减量跳过保留供下次续传）。 */
     private static final String DL_TMP_SUFFIX = ".jmtmp.dl";
@@ -214,7 +214,7 @@ final class Reconciler {
     private static final long PATCH_DICT_HEAP_LIMIT = 64L * 1024L * 1024L;
 
     /**
-     * 流式下载制品 → 校验 → 解压 → 原子放置（FR-257）。
+     * 流式下载制品 → 校验 → 解压 → 原子放置。
      *
      * <p>下载阶段：检查 {@code .jmtmp.dl} 已下载大小 → HTTP Range 从断点续传 → 追加写（64KB 缓冲），
      * 边读边回调进度（玩家关窗时 sink 抛异常中止本次下载，已写部分保留供下次续传）。下载完成后校验
@@ -392,12 +392,12 @@ final class Reconciler {
 
     /**
      * 减量：遍历托管目录，删本地存在但 manifest 未列、且非 once/ignore 保护的文件。
-     * FR-255：managedDirs 含 "*" 时遍历整个 gameDir（clean-all）；cleanExclude 命中则永不删。
+     * managedDirs 含 "*" 时遍历整个 gameDir（clean-all）；cleanExclude 命中则永不删。
      */
     private void removeStale(List<String> managedDirs, List<String> cleanExclude,
                              Set<String> desiredPaths,
                              Set<String> protectedFromRemoval, Result result) {
-        // FR-255：clean-all 哨兵 → 遍历整个 gameDir。
+        // clean-all 哨兵 → 遍历整个 gameDir。
         if (managedDirs != null && managedDirs.contains(PathRules.ALL_GAMEDIR_SENTINEL)) {
             removeStaleInDir(gameDir, "", cleanExclude, desiredPaths, protectedFromRemoval, result);
             return;
@@ -434,7 +434,7 @@ final class Reconciler {
             if (PathRules.isPlayerZone(rel)) {
                 continue;
             }
-            // FR-255：运营自定义排除命中 → 永不删。
+            // 运营自定义排除命中 → 永不删。
             if (PathRules.isExcluded(rel, cleanExclude)) {
                 continue;
             }

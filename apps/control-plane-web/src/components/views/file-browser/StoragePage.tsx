@@ -48,14 +48,14 @@ export interface StoragePageProps {
 }
 
 /** 
- * 平台存储资源管理器：对 CP 侧数据根（ADR-010 FHS 布局）只读浏览 + 占用统计
+ * 平台存储资源管理器：对 CP 侧数据根（FHS 布局）只读浏览 + 占用统计
  * + 制品归档冷热可见 + cache 受控清理（二次确认）。
  *
  * 数据根是平台级资源（仅 CP 读写，见架构不变量），故整页仅平台管理员可见，后端 RBAC 同样收敛。
  * 浏览走平台存储端点（/storage/*），不复用实例级文件 API；Worker 侧数据根（var/servers、
  * opt/jdks 落各节点本机）按节点经既有实例文件管理浏览，不在此页范围。
  *
- * 受控视图（ADR-103）：概览取数、cache 清理、权限判定、数据源与浏览壳依赖全部由外壳注入。
+ * 受控视图：概览取数、cache 清理、权限判定、数据源与浏览壳依赖全部由外壳注入。
  */
 export default function StoragePage({
   isPlatformAdmin,

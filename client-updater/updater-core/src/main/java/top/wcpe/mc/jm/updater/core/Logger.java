@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
 /**
- * 本地诊断日志（契约 FR-090「本地诊断日志，供排障与遥测 FR-094」）。
+ * 本地诊断日志（供排障与遥测）。
  *
  * <p>同时写 {@code <gameDir>/.jm-updater/logs/updater.log} 与 stderr（楔子控制台可见）。
  * 凭据（key/token）绝不入日志。

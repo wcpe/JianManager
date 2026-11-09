@@ -132,7 +132,7 @@ func TestManager_DaemonStopAllGraceful(t *testing.T) {
 	recovered, recErr := m.RecoverDaemonInstances()
 	t.Logf("recover: recovered=%d err=%v wrapperPID=%d", recovered, recErr, wrapperPID)
 	// 同 TestManager_DaemonReArm：同步返回值只反映「首拨是否当场成功」，首拨失败的记录会转后台
-	// 有界重试（FR-455 两阶段化）。断言前必须收敛，否则整包并发下是间歇红。
+	// 有界重试（两阶段化）。断言前必须收敛，否则整包并发下是间歇红。
 	require.NoError(t, recErr)
 	require.True(t, m.WaitStartupTakeover(10*time.Second), "后台接管重试应在超时内收敛")
 	st, stErr := m.GetState(uuid)
@@ -212,7 +212,7 @@ func TestManager_DaemonEnableRestartReArmsWrapper(t *testing.T) {
 	require.NoError(t, m.Create(uuid, "Daemon", exitAfterCmd(4), "", pidDir, nil, true, ProcessTypeDaemon, "", "", 0, 0))
 	recovered, recErr := m.RecoverDaemonInstances()
 	require.NoError(t, recErr)
-	// RecoverDaemonInstances 现在只同步做「快速首拨」（FR-455 两阶段化）：首拨失败时该记录转
+	// RecoverDaemonInstances 现在只同步做「快速首拨」（两阶段化）：首拨失败时该记录转
 	// **后台**有界重试、函数立即返回 0，靠后台重试补上的不计入返回 —— 见
 	// recover_orphan.go startStartupTakeoverRetries 与 recover_orphan_test.go 的说明。
 	// 因此不能直接断言 recovered==1（整包并发下首拨可能一时拨不通，造成间歇红），

@@ -149,7 +149,7 @@ func TestHeartbeat_KeepsDamagedOnStoppedReport(t *testing.T) {
 	node := seedHeartbeatNode(t, db, model.NodeStatusOnline, time.Now())
 
 	damaged := &model.Instance{
-		UUID: "inst-damaged", Name: "fr342-damaged", NodeID: node.ID,
+		UUID: "inst-damaged", Name: "heartbeat-damaged", NodeID: node.ID,
 		Status: model.InstanceStatusDamaged, StatusReason: "搭建未完成：下载核心失败",
 	}
 	require.NoError(t, db.Create(damaged).Error)

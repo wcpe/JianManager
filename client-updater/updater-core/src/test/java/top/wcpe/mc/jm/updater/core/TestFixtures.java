@@ -57,11 +57,11 @@ final class TestFixtures {
             return new ByteArrayInputStream(data, start, data.length - start);
         }
 
-        /** 最近一次遥测上报体（FR-094 测试断言用）。 */
+        /** 最近一次遥测上报体（测试断言用）。 */
         String lastTelemetry;
-        /** 最近一次运行态心跳上报体（FR-265 测试断言用）。 */
+        /** 最近一次运行态心跳上报体（测试断言用）。 */
         String lastRuntimeHeartbeat;
-        /** 最近一次启动安全画像上报体（FR-264 测试断言用）。 */
+        /** 最近一次启动安全画像上报体（测试断言用）。 */
         String lastHello;
 
         @Override
@@ -117,7 +117,7 @@ final class TestFixtures {
 
     /**
      * 构造 manifest 对象树（不含 sig），并把制品填入 transport。
-     * FR-255：cleanExclude 非空时加入 manifest（omitempty 语义由调用方控制——传 null 即省略）。
+     * cleanExclude 非空时加入 manifest（omitempty 语义由调用方控制——传 null 即省略）。
      */
     static Map<String, Object> buildManifest(String channel, long version, List<String> managedDirs,
                                              List<String> cleanExclude,
@@ -128,7 +128,7 @@ final class TestFixtures {
         manifest.put("version", version);
         manifest.put("issuedAt", "2026-06-23T10:00:00Z");
         manifest.put("managedDirs", new ArrayList<>(managedDirs));
-        // FR-255：cleanExclude 仅在非空时加入（omitempty，与 Go manifestToTree 对齐）。
+        // cleanExclude 仅在非空时加入（omitempty，与 Go manifestToTree 对齐）。
         if (cleanExclude != null && !cleanExclude.isEmpty()) {
             manifest.put("cleanExclude", new ArrayList<>(cleanExclude));
         }

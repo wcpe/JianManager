@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// daemonStrategy 通过独立 wrapper 子进程管理游戏服（ADR-003）。
+// daemonStrategy 通过独立 wrapper 子进程管理游戏服。
 // Worker spawn wrapper 子进程（脱离 Worker 进程组），wrapper 作为 Java 父进程。
 // 两者通过 Unix Socket / Named Pipe + 二进制帧协议通信。
 // Worker 退出/重启时 wrapper 继续运行，Worker 重启后通过 PID 文件 reconnect。

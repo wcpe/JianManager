@@ -37,11 +37,11 @@ func (f *fakePkgWorker) RemoveGlobalPackage(_ context.Context, req *workerpb.Rem
 	return &workerpb.RemoveGlobalPackageResponse{Success: true}, nil
 }
 
-// TestFR307GlobalPackagesEndpoints 列表代理 / 异步安装 202+taskId / 卸载（含 @scope 名经 query）。
-func TestFR307GlobalPackagesEndpoints(t *testing.T) {
+// TestGlobalPackagesEndpoints 列表代理 / 异步安装 202+taskId / 卸载（含 @scope 名经 query）。
+func TestGlobalPackagesEndpoints(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	r := setupFR033Router(t, db, pool)
+	r := setupJDKRouter(t, db, pool)
 	adminToken := getAdminToken(t, r)
 	node := createTestNode(t, db)
 	fake := &fakePkgWorker{}

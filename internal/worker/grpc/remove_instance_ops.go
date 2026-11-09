@@ -26,7 +26,7 @@ const (
 // RemoveInstance 移除实例注册并删除其工作目录与派生搜索索引（CP 删除实例时真清理，
 // 兑现删除确认文案「所有数据将被删除」）。
 // 运行态守卫防 CP/Worker 状态漂移把在跑的服务器连目录端掉；目录删除仅限托管区
-// （数据根 var/servers，ADR-010 系统分配）之内——托管区外（历史手填绝对路径）跳过
+// （数据根 var/servers，系统分配）之内——托管区外（历史手填绝对路径）跳过
 // 删除但不阻断实例删除，经 work_dir_skipped/skip_reason 回报，绝不越界 RemoveAll。
 func (s *Server) RemoveInstance(ctx context.Context, req *workerpb.RemoveInstanceRequest) (*workerpb.RemoveInstanceResponse, error) {
 	// 工作目录以注册表为准（注册时已解析为绝对路径）；未注册（Worker 重启后未重推）时
@@ -59,7 +59,7 @@ func (s *Server) RemoveInstance(ctx context.Context, req *workerpb.RemoveInstanc
 	resp := &workerpb.RemoveInstanceResponse{Success: true}
 	switch {
 	case req.SkipWorkDir:
-		// 就地导入实例（见 ADR-069）：CP 显式指示保留原目录，
+		// 就地导入实例：CP 显式指示保留原目录，
 		// 与下方托管区守卫互为双保险——任一生效原目录都完好。
 		resp.WorkDirSkipped = true
 		resp.SkipReason = "就地导入实例：按 CP 指示保留原目录，未删除任何文件"
@@ -83,7 +83,7 @@ func (s *Server) RemoveInstance(ctx context.Context, req *workerpb.RemoveInstanc
 		slog.Info("实例删除：已清理工作目录", "instanceId", req.InstanceUuid, "workDir", workDir)
 	}
 
-	// 派生搜索索引随实例一并清理（ADR-017：索引是可随时删除重建的本地派生资产）。
+	// 派生搜索索引随实例一并清理（索引是可随时删除重建的本地派生资产）。
 	s.dropSearchIndex(req.InstanceUuid)
 	return resp, nil
 }

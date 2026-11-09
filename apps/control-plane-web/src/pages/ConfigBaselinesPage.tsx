@@ -1,11 +1,11 @@
-// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做列表/漂移取数、三个写动作、组级删除门禁与分组候选接线。
+// 视图已回迁应用侧（迁包已撤销）；本层只做列表/漂移取数、三个写动作、组级删除门禁与分组候选接线。
 import { useState } from 'react'
 import { useBaselineDrift, useConfigBaselines, useConvergeBaseline, useDeleteBaseline, useUpsertBaseline } from '@/api/configBaselines'
 import { useInstanceGroups } from '@/api/instanceGroups'
 import { ConfigBaselinesPageView } from '@/components/views/config-baselines/ConfigBaselinesPageView'
 
 /**
- * 配置基线页容器（ADR-103 b 范式）：基线列表、漂移明细与分组候选的取数，保存 / 删除 / 收敛三个写动作，
+ * 配置基线页容器：基线列表、漂移明细与分组候选的取数，保存 / 删除 / 收敛三个写动作，
  * 组级删除门禁都在这里决定——列表、漂移面板与编辑弹窗交共享视图。
  * 三个 mutation 的成功/失败提示由 `@/api/configBaselines` 统一给出（与原实现同源，此处不重复弹）。
  *
@@ -23,7 +23,7 @@ export default function ConfigBaselinesPage() {
   const [driftBaselineId, setDriftBaselineId] = useState<number | null>(null)
   const { data: drift, isLoading: driftLoading, refetch, isFetching: driftFetching } = useBaselineDrift(driftBaselineId)
   const converge = useConvergeBaseline()
-  // `group:<id>` scope 选择器的候选：组织树分组（ADR-033），与用户组 id 正交。
+  // `group:<id>` scope 选择器的候选：组织树分组，与用户组 id 正交。
   const { data: groups } = useInstanceGroups()
   // 删除是组级破坏操作：角色门禁在应用侧判定后注入（包内不持鉴权状态）。
 

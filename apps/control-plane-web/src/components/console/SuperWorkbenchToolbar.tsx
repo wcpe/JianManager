@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只注入路由链接渲染（受控化）。
+// 视图已回迁应用侧（迁包已撤销）；本层只注入路由链接渲染（受控化）。
 import { Link } from 'react-router'
 import { SuperWorkbenchToolbar as SuperWorkbenchToolbarView } from '@/components/views/console/WorkbenchLeafParts'
 import type { WorkspacePreset } from '@/lib/console/workspace-preset'
@@ -11,7 +11,7 @@ interface SuperWorkbenchToolbarProps {
   onApplyPreset: (presetId: string) => void
   onSavePreset: (name: string) => void
   onDeletePreset: (presetId: string) => void
-  /** 打开「专注终端」（沉浸终端模式，ADR-087）：取画布上首个终端卡实例。未提供=不渲染按钮。 */
+  /** 打开「专注终端」（沉浸终端模式）：取画布上首个终端卡实例。未提供=不渲染按钮。 */
   onOpenFocusTerminals?: () => void
   /** 禁用原因（画布无终端卡等）；给出时按钮禁用并以 title 提示。 */
   focusTerminalsDisabledReason?: string

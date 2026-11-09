@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 通用二进制运行时搭建（见 ADR-090）。
+// 通用二进制运行时搭建。
 //
 // 与 MC 核心搭建的分工：paper/sponge/velocity 走 CoreService.ResolveBuild 的「版本 → 构建 →
 // 下载 URL」三段解析；binary 跳过全部三段，由请求直供制品来源（BinarySource），
@@ -109,7 +109,7 @@ func binarySourceOf(req ProvisionServerRequest) BinarySource {
 	return *req.BinarySource
 }
 
-// Beacon 预设（见 ADR-090）----
+// Beacon 预设----
 //
 // coreType=beacon 是 coreType=binary 之上的语法糖：把「Beacon 该用哪个二进制、叫什么名字、
 // 怎么启动、什么角色」这几件固定事实内置，用户不必知道这些细节就能一键搭出可用实例。
@@ -857,7 +857,7 @@ func (p *ProvisionService) createBinaryInstance(req ProvisionServerRequest, plan
 // 复用存库的搭建参数重跑取件到既有实例，不需再次提供来源；成功 → STOPPED，失败 → 仍 DAMAGED。
 //
 // 起**冻结版本**：优先读 InstanceBinaryBinding 取绑定版本重取，而非重新按优先级
-// 解析来源。旧行为（ADR-090 原文「重解析而非复用上次制品」）会在制品库出现更高版本时
+// 解析来源。旧行为（原文「重解析而非复用上次制品」）会在制品库出现更高版本时
 // 把重建变成一次静默升降级，运维无法预期；「吃到新版本」现由受控升级
 // （BinaryVersionService.Upgrade）显式承担，重建回归「恢复原状」职责。
 //

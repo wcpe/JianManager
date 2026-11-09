@@ -1,5 +1,5 @@
 /** 
- * 客户端分发可观测性契约（ADR-103）。
+ * 客户端分发可观测性契约。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 
@@ -17,7 +17,7 @@ export interface ClientDistObservabilitySummary {
   failStaticRate: number
   rollbackRate: number
   activeMachines: number
-  /** 区间在明细保留窗(14d)内=精确去重独立数 true；窗外=各桶人次求和近似 false（ADR-049）。 */
+  /** 区间在明细保留窗(14d)内=精确去重独立数 true；窗外=各桶人次求和近似 false。 */
   activeMachinesExact: boolean
 }
 

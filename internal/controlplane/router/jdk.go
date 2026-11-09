@@ -50,7 +50,7 @@ func (h *JDKHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, jdk)
 }
 
-// Install 异步发起 JDK 安装（见 ADR-040）：建任务、令 Worker 启动即返回，
+// Install 异步发起 JDK 安装：建任务、令 Worker 启动即返回，
 // 立即回 202 + {taskId}（不再阻塞最长 20min）。进度/完成经任务中心与站内信查看。
 func (h *JDKHandler) Install(c *gin.Context) {
 	if !requirePlatformAdmin(c) {

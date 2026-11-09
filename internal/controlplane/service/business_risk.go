@@ -10,7 +10,7 @@ import (
 //
 // 分级只回答一件事：**这次批量影响面有多大、是否需要用户再做一次确认**。
 // 动作自身的风险（READ / WRITE / DESTRUCTIVE）由插件的 manifest 声明、经业务台透传进来；
-// JM **不推断风险**（ADR-106：平台不解析 manifest 内容），未声明时按 WRITE 处理。
+// JM **不推断风险**（平台不解析 manifest 内容），未声明时按 WRITE 处理。
 
 // 业务批量风险等级字面量（对应 RiskAssessment.level）。
 //

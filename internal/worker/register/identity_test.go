@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestIdentity_SaveLoadRoundtrip 写入后读回字段一致（见 ADR-020 §3；WS 令牌密钥见）。
+// TestIdentity_SaveLoadRoundtrip 写入后读回字段一致（含 WS 令牌密钥）。
 func TestIdentity_SaveLoadRoundtrip(t *testing.T) {
 	etcDir := t.TempDir()
 	want := &Identity{NodeUUID: "uuid-123", NodeSecret: "secret-xyz", NodeName: "edge-1", WSTokenSecret: "ws-abc"}

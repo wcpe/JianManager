@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ClientDistStatsService 分发统计后台只读聚合（见 ADR-023）。
+// ClientDistStatsService 分发统计后台只读聚合。
 // 复用094 聚合表 + 明细机器码登记，**只读 GROUP BY、不引入新表**。
 type ClientDistStatsService struct {
 	db *gorm.DB

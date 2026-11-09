@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// 命令编排相关常量与错误码，遵循规格（ADR-075 bot.chat 成功边界）。
+// 命令编排相关常量与错误码，遵循规格（bot.chat 成功边界）。
 const (
 	commandScheduleMinCommands     = 1
 	commandScheduleMaxCommands     = 100

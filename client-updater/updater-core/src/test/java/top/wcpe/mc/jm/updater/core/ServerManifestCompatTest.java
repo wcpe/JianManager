@@ -7,20 +7,20 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 服务端 manifest 兼容性固化测试（FR-087 契约硬验证）。
+ * 服务端 manifest 兼容性固化测试（跨端契约硬验证）。
  *
  * <p>{@link #GOLDEN} 是 JM 服务端对契约 §2 样例**真实输出**的 manifest JSON（由 Go 侧
  * service 测试 emit、原样粘入）。本测试证明服务端输出的字段名/嵌套/类型可被
  * {@link Manifest#parse} 解析（两线接口对齐）。
  *
- * <p>FR-256 起 manifest 不再携带签名段（信任模型改为 HTTPS + 拉取密钥鉴权），故 GOLDEN
+ * <p>manifest 不再携带签名段（信任模型改为 HTTPS + 拉取密钥鉴权），故 GOLDEN
  * 已去掉 sig 段，验签相关断言/方法已删除，仅保留解析兼容性校验。
  *
  * <p>更新规则：服务端字段若变更，须重跑 Go 侧 emit 并替换 {@link #GOLDEN}，双线同步。
  */
 class ServerManifestCompatTest {
 
-    /** JM 服务端真实输出（dev 私钥已去，contract §2 样例，FR-256 起无 sig 段）。勿手改，须由服务端 emit 同步。 */
+    /** JM 服务端真实输出（dev 私钥已去，contract §2 样例，无 sig 段）。勿手改，须由服务端 emit 同步。 */
     private static final String GOLDEN = "{\n"
             + "  \"agent\": {\n"
             + "    \"core\": {\n"
@@ -93,14 +93,14 @@ class ServerManifestCompatTest {
         assertEquals("windows", m.files.get(1).platform);
         assertEquals("once", m.files.get(1).sync);
         assertEquals(2, m.managedDirs.size());
-        // agent.core 段保留（楔子消费，FR-258）。
+        // agent.core 段保留（楔子消费）。
         assertEquals(5L, m.agentCoreVersion, "agent.core.version 须解析");
     }
 
-    // ── FR-255：cleanExclude 跨端对照 ──────────────────────────────────────
+    // ── cleanExclude 跨端对照 ─────────────────────────────────────────────
 
     /**
-     * 含 cleanExclude + managedDirs["*"] 的 manifest（Go 侧 dev 私钥已去，FR-256 起无 sig）。
+     * 含 cleanExclude + managedDirs["*"] 的 manifest（Go 侧 dev 私钥已去，无 sig）。
      * 由 Go TestGenCleanExcludeGolden 生成，双线同步——勿手改。
      */
     private static final String GOLDEN_CLEAN_EXCLUDE = "{\n"

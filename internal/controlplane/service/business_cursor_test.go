@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ADR-107 §3 / §5：缺口查询与保留期裁剪测试。
+// 缺口查询与保留期裁剪测试。
 //
 // 守三件事：
 //  1. 只返回**位点**，不含 payload（表里没有该列，这里断言对外结构也没有）；
@@ -94,7 +94,7 @@ func TestBusinessCursorQuery_LimitClamp(t *testing.T) {
 	require.EqualValues(t, 1, items[0].Seq)
 }
 
-// TestBusinessCursorQuery_NoPayloadField 对外结构不含各字段 payload（ADR-107 红线）。
+// TestBusinessCursorQuery_NoPayloadField 对外结构不含各字段 payload（红线）。
 func TestBusinessCursorQuery_NoPayloadField(t *testing.T) {
 	// 结构体只有四个字段；任何"顺手加个 payload"的改动都会在这里红。
 	item := BusinessCursorItem{}
@@ -105,7 +105,7 @@ func TestBusinessCursorQuery_NoPayloadField(t *testing.T) {
 
 	db := newCursorDB(t)
 	require.False(t, db.Migrator().HasColumn(&model.BusinessEventCursor{}, "payload"),
-		"位点账本表绝不能有 payload 列（ADR-107 明文禁止）")
+		"位点账本表绝不能有 payload 列（明文禁止）")
 	require.False(t, db.Migrator().HasColumn(&model.BusinessEventCursor{}, "output"))
 	require.False(t, db.Migrator().HasColumn(&model.BusinessEventCursor{}, "data"))
 }

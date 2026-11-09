@@ -3,7 +3,7 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
 
 /** 
- * AI 助手配置域 mock（见 ADR-105）。
+ * AI 助手配置域 mock。
  *
  * 复刻真后端的关键语义，而不是「对什么都答应」，否则 mock 模式下看不见缺陷：
  * - 管理面要求平台管理员（非管理员 403），与 `router/assistant.go` 的

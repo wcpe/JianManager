@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 
- * 面板自更新 API（见 ADR-020）。
+ * 面板自更新 API。
  * 仅平台管理员可用（后端挂在 admin 组、RBAC 强制）。检查更新对比 CP 自身 + 各节点版本；
  * 升级为 CP 自更新 / 单节点 / 全网逐节点编排（rollout）。
  */

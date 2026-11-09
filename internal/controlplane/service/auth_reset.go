@@ -13,7 +13,7 @@ import (
 
 // ResetUserPassword 本机应急重置指定用户密码并解锁账号。
 // 仅供 CP 二进制 `reset-password` 子命令在本机调用——数据库仅 Control Plane 可读写
-// 的所有权不变量因此保持（jmctl 按 ADR-041 不得直连 DB，故命令落在 CP 自身）。
+// 的所有权不变量因此保持（jmctl 按不得直连 DB，故命令落在 CP 自身）。
 // 重置同时将 Status 置回 Active：应急场景下密码丢失常伴随账号被锁，一次到位。
 func ResetUserPassword(db *gorm.DB, username, plain string) (*model.User, error) {
 	var user model.User

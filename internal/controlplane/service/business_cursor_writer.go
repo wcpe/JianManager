@@ -13,9 +13,9 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 业务事件位点账本写入器（ADR-107 §2：写入异步、批量、不阻塞扇出）。
+// 业务事件位点账本写入器（写入异步、批量、不阻塞扇出）。
 //
-// 设计要点（逐条对应 ADR-107）：
+// 设计要点（逐条对应）：
 //   - **旁路**：扇出热路径只把一条位点塞进有界队列，落库完全异步。写失败只记 WARN + 计数，
 //     绝不影响事件投递——位点是「恢复用的旁路」，不是主链路；
 //   - **有界且丢最旧**：队列满即丢最旧并递增 dropped。位点丢失的后果是「Loom 保守多拉一次快照」，
@@ -26,17 +26,17 @@ import (
 // 与 BusinessStreamBuffer 的关系：缓冲是**非持久**的短窗口（30s/20 万条），本账本是**持久**的
 // 长窗口（默认 7 天）。二者只共享 streamSeq，互不依赖。
 const (
-	// BusinessCursorQueueSize 位点队列默认容量（ADR-107 §2：默认 10000）。
+	// BusinessCursorQueueSize 位点队列默认容量（默认 10000）。
 	BusinessCursorQueueSize = 10_000
-	// BusinessCursorBatchSize 单批落库条数阈值（ADR-107 §2：默认 500 条）。
+	// BusinessCursorBatchSize 单批落库条数阈值（默认 500 条）。
 	BusinessCursorBatchSize = 500
-	// BusinessCursorFlushInterval 定时落库间隔（ADR-107 §2：默认 1 秒）。
+	// BusinessCursorFlushInterval 定时落库间隔（默认 1 秒）。
 	BusinessCursorFlushInterval = time.Second
 	// BusinessCursorWriteTimeout 单次批量写入的超时，避免数据库挂起时占住写入协程无限期。
 	BusinessCursorWriteTimeout = 10 * time.Second
 )
 
-// BusinessCursorMetrics 是位点写入器的内存计数快照（ADR-107：反馈队列健康度）。
+// BusinessCursorMetrics 是位点写入器的内存计数快照（反馈队列健康度）。
 //
 // 全部为旁路指标：任何一个数字变差都**不影响**事件投递，只影响「缺口可检测的精度」。
 type BusinessCursorMetrics struct {
@@ -90,7 +90,7 @@ type BusinessCursorWriter struct {
 	batchSize  int
 }
 
-// BusinessCursorWriterOptions 是写入器的可调参数（零值走 ADR-107 默认）。
+// BusinessCursorWriterOptions 是写入器的可调参数（零值走默认）。
 type BusinessCursorWriterOptions struct {
 	// QueueSize 有界队列容量，<=0 取默认 10000。
 	QueueSize int

@@ -8,8 +8,8 @@ import (
 )
 
 // 新 action 一律 V1Allowed=false，V2 按能力发现。
-func TestFR396_ActionCatalog_V1NeverSeesNewActions(t *testing.T) {
-	for _, d := range fr396DomainActions {
+func TestActionCatalog_V1NeverSeesNewActions(t *testing.T) {
+	for _, d := range capabilityDomainActions {
 		assert.False(t, d.V1Allowed, "action 不得对 V1 开放: "+d.Action)
 		got, ok := DescribeAgentAction(d.Action)
 		require.True(t, ok, "action 必须登记: "+d.Action)
@@ -18,7 +18,7 @@ func TestFR396_ActionCatalog_V1NeverSeesNewActions(t *testing.T) {
 	}
 }
 
-func TestFR396_CanDiscover_V2CapabilityMatrix(t *testing.T) {
+func TestCanDiscover_V2CapabilityMatrix(t *testing.T) {
 	p := &AgentPrincipal{
 		PolicyVersion:     AgentPolicyVersionV2,
 		ScopedInstanceIDs: []uint{1},
@@ -33,20 +33,20 @@ func TestFR396_CanDiscover_V2CapabilityMatrix(t *testing.T) {
 	assert.ErrorIs(t, err, ErrAgentForbidden, "无 node.destructive 不得发现 purge")
 }
 
-func TestFR396_CanDiscover_V1Blocked(t *testing.T) {
+func TestCanDiscover_V1Blocked(t *testing.T) {
 	p := &AgentPrincipal{
 		PolicyVersion:     AgentPolicyVersionV1,
 		ScopedInstanceIDs: []uint{1},
 		ScopedNodeIDs:     []uint{1},
 		WriteAllowlist:    []string{AgentWriteInstanceLife, AgentWriteNodeMaintenance},
 	}
-	for _, d := range fr396DomainActions {
+	for _, d := range capabilityDomainActions {
 		_, err := CanDiscover(p, d.Action)
 		assert.ErrorIs(t, err, ErrAgentForbidden, "V1 不得发现 "+d.Action)
 	}
 }
 
-func TestFR396_DestructiveRequiresConfirmFlag(t *testing.T) {
+func TestDestructiveRequiresConfirmFlag(t *testing.T) {
 	for _, action := range []string{
 		AgentActionInstanceKill, AgentActionInstanceDelete, AgentActionNodePurgeArchived,
 	} {

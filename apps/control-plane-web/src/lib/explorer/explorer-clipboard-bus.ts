@@ -1,5 +1,5 @@
 /** 
- * 资源管理器跨窗剪贴板 / 拖放总线（ADR-078）。
+ * 资源管理器跨窗剪贴板 / 拖放总线。
  * 实例级共享；同页 EventTarget 订阅 + BroadcastChannel 跨标签；sessionStorage 冷启动镜像。
  */
 

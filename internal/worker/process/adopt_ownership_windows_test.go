@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-497③ Windows 侧可执行断言（`//go:build windows`）。
+// Windows 侧可执行断言（`//go:build windows`）。
 //
 // **本机是 Linux，这些用例从未在 Windows 上真机跑过。** 它们的价值有两个，且都有限：
 //  1. 它们是「收养在 Windows 上必须 fail-closed」这条契约的可执行描述——一旦有人给 Windows 补上
@@ -22,7 +22,7 @@ import (
 //  2. `GOOS=windows go vet ./internal/worker/process/` 会编译它，保证 Windows 侧代码路径不会被
 //     改坏而没人发现。
 //
-// 未验清单（真机才能验，见 FR-497 验收报告「Windows」一节）：
+// 未验清单（真机才能验，验收报告「Windows」一节）：
 //  - `IsPIDAlive` 的 OpenProcess 语义（句柄权限不足时会误判「不在」）；
 //  - `taskkill /T /F` 的进程树终止范围、异步性，以及「杀完立查仍存活」的窗口；
 //  - PID 复用判据（本项目只用 PID 数字，没有进程创建时刻校验）；
@@ -74,7 +74,7 @@ func TestAdoptOwnership_WindowsDaemonArgvStillRejected(t *testing.T) {
 	require.NoError(t, os.WriteFile(workerExe, body, 0o755))
 
 	cmd := exec.Command(workerExe, "daemon")
-	cmd.Env = append(os.Environ(), "JM_FR497_WINDOWS_PROBE=1")
+	cmd.Env = append(os.Environ(), "JM_ADOPT_WINDOWS_PROBE=1")
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()

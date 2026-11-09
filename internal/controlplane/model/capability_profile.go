@@ -2,7 +2,7 @@ package model
 
 // Capability 实例能力：一个能力对应一段前端渲染 + 后端数据源实现，
 // 在详情页通常呈现为一个页签。声明式画像据此决定可见 Tab 集合与顺序，取代散布的
-// `if role === '...'` 硬编码分支（见 ADR-091）。
+// `if role === '...'` 硬编码分支。
 type Capability string
 
 const (
@@ -33,7 +33,7 @@ const (
 	SourceNone   DataSource = "none"
 )
 
-// InstanceCapabilityProfile 实例能力画像（ADR-091）：
+// InstanceCapabilityProfile 实例能力画像：
 // 以 (type, role) 为键声明该实例有哪些能力、是否具备 MC 世界语义、各能力的数据来源偏好。
 //
 // type 是实现形态（Java 进程 / 原生二进制），role 是拓扑职责（代理 / 子服 / 配套服务），

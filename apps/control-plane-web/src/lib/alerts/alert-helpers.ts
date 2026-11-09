@@ -194,7 +194,7 @@ export function parseChannelIds(raw: string | null | undefined): number[] {
   }
 }
 
-// ── QQ 网关状态展示（FR-494）──
+// ── QQ 网关状态展示──
 export type QQGatewayStatusKey = 'connected' | 'connecting' | 'disconnected' | 'error' | 'unknown'
 export function qqGatewayLevel(status: string | undefined): StatusLevel {
   switch (status) {

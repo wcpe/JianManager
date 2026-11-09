@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 )
 
-// 本文件实现 FR-501 的 `ActionArchiveCopy` 落地侧：「导出 → 压缩 → 校验」。
+// 本文件实现 `ActionArchiveCopy` 落地侧：「导出 → 压缩 → 校验」。
 //
 // 它在硬规则里的位置（见 retention 包 go 的文件头）：
 //

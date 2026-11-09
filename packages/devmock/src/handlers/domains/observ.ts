@@ -1126,7 +1126,7 @@ function alertLevelToUnified(level: string): FeedItemMock['level'] {
   return 'info'
 }
 
-/** 把 notifications + alertEvents 合并为统一通知流（见 ADR-048）。 */
+/** 把 notifications + alertEvents 合并为统一通知流。 */
 function mergedFeed(): FeedItemMock[] {
   const messages: FeedItemMock[] = notifications.list().map((n) => ({
     source: 'message',
@@ -2337,7 +2337,7 @@ export const handlers = [
     return HttpResponse.json({ ok: true })
   }),
 
-  // ===== 统一通知中心 feed（见 ADR-048）：聚合 notifications + alertEvents =====
+  // ===== 统一通知中心 feed（聚合 notifications + alertEvents） =====
   domainRoute('get', '/notifications/feed', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied

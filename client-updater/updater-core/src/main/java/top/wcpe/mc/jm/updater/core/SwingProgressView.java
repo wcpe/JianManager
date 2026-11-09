@@ -15,7 +15,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 
 /**
- * 独立 Swing 进度窗口（FR-099）：进度条 + 速度 + ETA + 当前文件名，更新期弹出、下载完关闭。
+ * 独立 Swing 进度窗口：进度条 + 速度 + ETA + 当前文件名，更新期弹出、下载完关闭。
  *
  * <p>UI 构建/刷新全在 EDT；{@link Timer} 每 200ms 读 {@link ProgressModel} 刷新（即便下载停滞，
  * 速度/ETA 仍随时间回落）。玩家关窗 → {@link #isCancelled()} 置真（reconcile 据此停下载、fail-static）。

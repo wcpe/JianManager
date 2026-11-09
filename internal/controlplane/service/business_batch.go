@@ -127,7 +127,7 @@ type BusinessBatchPreview struct {
 // idempotencyRecord 是一次批量执行的幂等快照。
 //
 // 只存在内存（§6.3「内存 + 可选持久化」）：进程重启后在途记录丢失，调用方凭 requestId 重试
-// 会被当成新请求重新执行——这是规格接受的取舍（结果本身不落库，ADR-106 不持有业务数据）。
+// 会被当成新请求重新执行——这是规格接受的取舍（结果本身不落库，不持有业务数据）。
 type idempotencyRecord struct {
 	digest    string
 	response  *BusinessBatchResponse
@@ -619,7 +619,7 @@ func (s *BusinessBatchService) runOne(ctx context.Context, inst model.Instance, 
 
 // businessOfflineReasons 是 BusinessService 降级文案中代表「未下发」的几种。
 //
-// 用文案匹配而非错误码是本项目既有现实（BusinessResult 只有 Error 字符串，ADR-026 的
+// 用文案匹配而非错误码是本项目既有现实（BusinessResult 只有 Error 字符串，
 // 「降级即默认」就是这样表达的）。集中在一处便于将来引入结构化原因后统一替换。
 var businessOfflineReasons = map[string]struct{}{
 	"节点未连接": {},

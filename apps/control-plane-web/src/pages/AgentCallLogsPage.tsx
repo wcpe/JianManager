@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做平台管理员门禁、筛选取数与跳转接线。
+// 视图已回迁应用侧（迁包已撤销）；本层只做平台管理员门禁、筛选取数与跳转接线。
 import { useMemo, useState } from 'react'
 import { useDebounced } from '@/lib/hooks/use-debounced'
 import { useTranslation } from 'react-i18next'
@@ -27,7 +27,7 @@ const DEFAULT_QUERY: AgentCallLogsQuery = {
 
 /** 
  * Agent 调用流水页容器：平台管理员门禁、筛选/分页状态、Token 候选取数、
- * 按筛选构造请求与页头跳转入口都在这里，筛选条、表格与三态展示交共享视图（ADR-103）。
+ * 按筛选构造请求与页头跳转入口都在这里，筛选条、表格与三态展示交共享视图。
  * 保留同路径默认导出，路由表无需改动。
  */
 export default function AgentCallLogsPage() {

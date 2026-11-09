@@ -30,7 +30,7 @@ type JDKService struct {
 	// settings 提供平台设置生效值（jdk.mirror.<vendor>），使运行时配置的镜像源真生效；
 	// 为 nil 时安装走 Worker 本地 env/默认源。
 	settings SettingsReader
-	// tasks 是全局任务中心服务（见 ADR-040）；非 nil 时 Install 走异步任务路径
+	// tasks 是全局任务中心服务；非 nil 时 Install 走异步任务路径
 	// （建 Task→Worker 启动即返回 taskId→返回 taskId，不再阻塞 20min）。为 nil 时回退同步路径。
 	tasks *TaskService
 }
@@ -39,7 +39,7 @@ func NewJDKService(db *gorm.DB, pool *cpgrpc.ClientPool) *JDKService {
 	return &JDKService{db: db, pool: pool}
 }
 
-// SetTaskService 注入任务中心服务，启用 JDK 安装异步化（见 ADR-040）。
+// SetTaskService 注入任务中心服务，启用 JDK 安装异步化。
 // 在 main 装配阶段调用；不调用则 Install 回退同步阻塞路径（向后兼容）。
 func (s *JDKService) SetTaskService(t *TaskService) {
 	s.tasks = t
@@ -137,7 +137,7 @@ func (s *JDKService) Create(nodeID uint, req CreateJDKRequest) (*model.NodeJDK, 
 	return jdk, nil
 }
 
-// InstallAsync 异步发起 JDK 安装（见 ADR-040）：建 Task → 令 Worker 启动即返回 taskId →
+// InstallAsync 异步发起 JDK 安装：建 Task → 令 Worker 启动即返回 taskId →
 // 把 Task 置为 running → 返回 Task（HTTP 202 语义，不再阻塞最长 20min）。
 // 落 model.NodeJDK 与完成站内信由心跳终态副作用完成（见 TaskService.IngestSnapshots）。
 // createdBy 为发起用户 ID（任务归属 + 完成站内信收件人）。
@@ -239,7 +239,7 @@ func (s *JDKService) Probe(nodeID uint, path string) (*ProbeResult, error) {
 }
 
 // Install 同步发起 JDK 安装（阻塞至完成，最长 20min）。保留供未启用任务中心时回退与既有测试。
-// 生产路径已改用 InstallAsync（见 ADR-040）。
+// 生产路径已改用 InstallAsync。
 func (s *JDKService) Install(nodeID uint, req InstallJDKRequest) (*model.NodeJDK, error) {
 	node, err := s.nodeByID(nodeID)
 	if err != nil {

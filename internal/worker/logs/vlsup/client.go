@@ -673,5 +673,5 @@ func (c *Client) Post(ctx context.Context, path string, query url.Values) ([]byt
 // 用户看到的是报错，而不是数据。
 //
 // 仍然要有上限：无界的 `io.ReadAll` 会让一个异常响应把 Worker 内存拖死，
-// 而 Worker 的 RSS 预算是硬约束（FR-498）。
+// 而 Worker 的 RSS 预算是硬约束。
 const maxQueryResponseBytes int64 = 256 << 20

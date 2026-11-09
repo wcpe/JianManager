@@ -1,5 +1,5 @@
 #!/bin/sh
-#  JianManager Control Plane（面板）SSH 推送式部署脚本（见 ADR-063）。在操作机执行。
+#  JianManager Control Plane（面板）SSH 推送式部署脚本。在操作机执行。
 #
 # 首次部署 = scp 本地 dist 二进制 → 建目录 → 生成最小 control-plane.yml（端口 + sqlite +
 #            dev_mode:false）→ 写 systemd unit → 启动 → HTTP 探活。
@@ -7,7 +7,7 @@
 # 保存 JWT；更新时校验制品、归档旧裸二进制并保留既有配置。system 档保留原 direct/.bak 行为。
 # 首次 / 更新由远端有无对应 systemd unit 自动判定；幂等可重复执行。
 #
-# 服务档位（JM_SERVICE_SCOPE，ADR-063 §2）：
+# 服务档位（JM_SERVICE_SCOPE）：
 #   system  /etc/systemd/system + systemctl（root 直连，或非 root 免密 sudo 自动提权）
 #   user    ~/.config/systemd/user + systemctl --user（纯普通用户；强制 linger 保常驻）
 #   auto    默认：root 或免密 sudo → system，否则 → user
@@ -327,7 +327,7 @@ printf 'VERSIONED_CURRENT=%s\\n' \"\$new_release\""
 elif [ "$MODE" = "install" ]; then
     echo "[4/5] 首次部署：建目录 + 最小 control-plane.yml + systemd unit + 启动"
     # 远端首装脚本：本地展开配置值；\$ 开头的是远端运行期求值（linger/XDG）。
-    # yml 仅在不存在时写（重跑幂等）；密钥零写入——CP 生产态自动生成持久化（ADR-061）。
+    # yml 仅在不存在时写（重跑幂等）；密钥零写入——CP 生产态自动生成持久化。
     LINGER_BLOCK=":"
     if [ "$SCOPE" = "user" ]; then
         LINGER_BLOCK="export XDG_RUNTIME_DIR=/run/user/\$(id -u)

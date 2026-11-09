@@ -129,7 +129,7 @@ function pickSplitDirection(): PaneSplitDirection {
 }
 
 /** 
- * 沉浸控制台工作台（ADR-087）。
+ * 沉浸控制台工作台。
  *
  * 它不是 tmux 仿真：F11/Esc 只负责进出，全局不抢 Ctrl+B 或复制键。多实例和分屏通过
  * 始终可见的顶部布局按钮与 pane 标题栏完成，日志/输入保持在原有 DOM 输出 + 原生输入架构上。
@@ -268,7 +268,7 @@ export function ConsoleImmersiveMode({
     setFocusedPaneId(paneId)
   }, [])
 
-  // 维持 ADR-067 会话保活：可见 pane 标前台，其他 pane 标后台；本层自行创建的会话在移除
+  // 维持会话保活：可见 pane 标前台，其他 pane 标后台；本层自行创建的会话在移除
   // pane 后释放，进入前已存在的实例会话仍交由外层热缓存负责。
   const managedSessionsRef = useRef(new Map<number, boolean>())
   const sessionIdsKey = sessionIds.join(',')

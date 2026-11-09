@@ -9,7 +9,7 @@ import java.util.Map;
 /**
  * 已解析的版本清单（契约 §2）。携带 reconcile 所需字段。
  *
- * <p>FR-256 起 manifest 不再携带签名段（信任模型改为 HTTPS + 拉取密钥鉴权，见
+ * <p>manifest 不再携带签名段（信任模型改为 HTTPS + 拉取密钥鉴权，见
  * updater-arch-simplification spec §2 A），故本类不再保留 sig 字段或签名输入字节。
  */
 final class Manifest {
@@ -64,7 +64,7 @@ final class Manifest {
         }
     }
 
-    /** updater-core 自更新段单平台制品引用（契约 §2 agent.core.platforms[os].artifact，FR-091）。 */
+    /** updater-core 自更新段单平台制品引用（契约 §2 agent.core.platforms[os].artifact）。 */
     static final class AgentArtifact {
         /** 制品自身 hash（下载寻址 key）。 */
         final String sha256;
@@ -83,12 +83,12 @@ final class Manifest {
     final String channel;
     final long version;
     final List<String> managedDirs;
-    /** 运营自定义追加排除（FR-255）：命中前缀的路径永不删。空列表=未声明。 */
+    /** 运营自定义追加排除：命中前缀的路径永不删。空列表=未声明。 */
     final List<String> cleanExclude;
     final List<FileEntry> files;
-    /** updater-core 自更新声明版本（契约 §2 agent.core.version，FR-091）；-1=未声明。段保留供楔子消费。 */
+    /** updater-core 自更新声明版本（契约 §2 agent.core.version）；-1=未声明。段保留供楔子消费。 */
     final long agentCoreVersion;
-    /** updater-core 自更新各平台制品（os→artifact，FR-091）；可空。 */
+    /** updater-core 自更新各平台制品（os→artifact）；可空。 */
     final Map<String, AgentArtifact> agentCorePlatforms;
 
     private Manifest(int schemaVersion, String channel, long version, List<String> managedDirs,
@@ -106,7 +106,7 @@ final class Manifest {
     }
 
     /**
-     * 取指定平台（windows|macos|linux）的 updater-core 自更新制品；无自更新段或该平台缺失返回 null（FR-091）。
+     * 取指定平台（windows|macos|linux）的 updater-core 自更新制品；无自更新段或该平台缺失返回 null。
      */
     AgentArtifact agentCoreArtifact(String platform) {
         if (agentCorePlatforms == null || platform == null) {
@@ -136,7 +136,7 @@ final class Manifest {
             }
         }
 
-        // FR-255：运营自定义追加排除（omitempty，可缺省）。
+        // 运营自定义追加排除（omitempty，可缺省）。
         List<String> cleanExclude = new ArrayList<>();
         Object ce = obj.get("cleanExclude");
         if (ce instanceof List) {
@@ -190,8 +190,8 @@ final class Manifest {
             }
         }
 
-        // agent.core 自更新段（契约 §2，FR-091）：version + platforms[os].artifact。可缺省。
-        // FR-256 起 core 自更新上移到楔子（FR-258），但 manifest 仍透传该段供楔子消费，故解析保留。
+        // agent.core 自更新段（契约 §2）：version + platforms[os].artifact。可缺省。
+        // core 自更新已上移到楔子，但 manifest 仍透传该段供楔子消费，故解析保留。
         long agentCoreVersion = -1;
         Map<String, AgentArtifact> agentCorePlatforms = null;
         Object agent = obj.get("agent");

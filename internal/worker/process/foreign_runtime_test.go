@@ -499,9 +499,9 @@ func TestPreflight_PortFree_NoFalsePositiveOnRepeatedProbe(t *testing.T) {
 	}
 }
 
-// TestManager_PreflightStart_IncludesFR471Checks：PreflightStart 在既有三项后返回
+// TestManager_PreflightStart_IncludesForeignRuntimeChecks：PreflightStart 在既有三项后返回
 // work_dir_busy 与 port_free 两项（docker 仍整体放行）。
-func TestManager_PreflightStart_IncludesFR471Checks(t *testing.T) {
+func TestManager_PreflightStart_IncludesForeignRuntimeChecks(t *testing.T) {
 	origList, origPort := preflightListProcesses, preflightPortFree
 	defer func() { preflightListProcesses, preflightPortFree = origList, origPort }()
 	withJavaProbe(t, func(string) (int, bool) { return 21, true })
@@ -509,7 +509,7 @@ func TestManager_PreflightStart_IncludesFR471Checks(t *testing.T) {
 	workDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(workDir, "server.jar"), []byte("x"), 0o644))
 	m := NewManager(t.TempDir())
-	uuid := "preflight-fr471"
+	uuid := "preflight-adopt"
 	require.NoError(t, m.Create(uuid, "实例", "java -jar server.jar nogui", "stop", workDir, nil, false, ProcessTypeDirect, "/opt/jdk21", "", 0, 0))
 	m.SetServerPort(uuid, 25599)
 

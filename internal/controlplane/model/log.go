@@ -45,7 +45,7 @@ const (
 //   - 保留靠“先归档 NDJSON、再 DELETE 行”维持，而 DELETE 大表不回收空间，只能 VACUUM。
 //
 // 现在日志分两路：
-//   - **实例日志** → Worker 的受管 VictoriaLogs（ADR-094），CP 只做授权与联邦查询；
+//   - **实例日志** → Worker 的受管 VictoriaLogs，CP 只做授权与联邦查询；
 //   - **平台（CP 自身）日志** → 自轮转文件（internal/platform/rollog），
 //     面板读尾部（/api/v1/diagnostics/log），要查更早的走 grep。
 //

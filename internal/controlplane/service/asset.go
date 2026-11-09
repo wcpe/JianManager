@@ -69,18 +69,18 @@ func (e *AssetInUseError) Error() string {
 func (e *AssetInUseError) Unwrap() error { return ErrAssetInUse }
 
 // AssetService 制品库服务：类型分区的内容寻址存储（CAS）+ DB 索引。
-// 参见 ADR-011: 资产存 var/artifacts/<type>/<sha256[:2]>/<sha256><ext>，
+// 资产存 var/artifacts/<type>/<sha256[:2]>/<sha256><ext>，
 // 类型内按 sha256 去重，入库即算 sha256+md5 并可比对来源校验和。
 type AssetService struct {
 	db   *gorm.DB
 	root *dataroot.Root
-	// httpClient IngestFromURL 下载远端资源所用出站 client（经进程级代理ADR-037）。
+	// httpClient IngestFromURL 下载远端资源所用出站 client（经进程级代理）。
 	// 为 nil 时回退 http.DefaultClient（向后兼容）。
 	httpClient *http.Client
-	// httpProvider 运行时出站 client 持有者（ADR-043）：非 nil 时每次取当前 client，
+	// httpProvider 运行时出站 client 持有者：非 nil 时每次取当前 client，
 	// 使设置面板改全局代理后立即生效（无需重启），优先于 httpClient。
 	httpProvider func() *http.Client
-	// storageChannels 制品存储渠道服务（见 ADR-073）：注入后 client-file 类型入库
+	// storageChannels 制品存储渠道服务：注入后 client-file 类型入库
 	// 按活跃渠道路由落点（local 行为原文不变；s3 上传对象并在记录上自述位置）。
 	// 不注入 = 纯 local（既有装配/测试零改动）。
 	storageChannels *ArtifactStorageChannelService
@@ -91,19 +91,19 @@ func NewAssetService(db *gorm.DB, root *dataroot.Root) *AssetService {
 	return &AssetService{db: db, root: root}
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理ADR-037）：IngestFromURL 下载经此 client。
+// SetHTTPClient 注入出站 client（经进程级代理）：IngestFromURL 下载经此 client。
 // 由 main 装配；不调用则回退 http.DefaultClient（向后兼容，测试不受影响）。
 func (s *AssetService) SetHTTPClient(c *http.Client) {
 	s.httpClient = c
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次下载取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者：每次下载取当前 client，
 // 使全局代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
 func (s *AssetService) SetHTTPClientProvider(p func() *http.Client) {
 	s.httpProvider = p
 }
 
-// SetStorageChannels 注入制品存储渠道服务（见 ADR-073）：仅 client-file 类型的
+// SetStorageChannels 注入制品存储渠道服务：仅 client-file 类型的
 // Ingest 落点按活跃渠道路由，其余类型恒本地。由 main 装配；不调用则行为与历史完全一致。
 func (s *AssetService) SetStorageChannels(ch *ArtifactStorageChannelService) {
 	s.storageChannels = ch
@@ -197,7 +197,7 @@ func (s *AssetService) Ingest(r io.Reader, p IngestParams) (*model.Asset, error)
 	err = s.db.Where("type = ? AND sha256 = ?", p.Type, sum256).First(&existing).Error
 	if err == nil {
 		// 失效自愈（见 artifact-s3-reconcile spec §3.6）：命中记录已标 lost（对账「标记失效」）
-		// 时，把同内容临时文件补传回**记录自述的渠道**（非当前活跃渠道——位置由记录自述，ADR-073）
+		// 时，把同内容临时文件补传回**记录自述的渠道**（非当前活跃渠道——位置由记录自述）
 		// 并复位 external。恢复闭环：报缺失 → 标失效 → 重传同文件 → 自愈复通。补传失败快失败（决策 5）。
 		if existing.StorageState == model.AssetStorageLost && existing.StorageBackend == model.AssetBackendS3 {
 			if s.storageChannels == nil {
@@ -226,7 +226,7 @@ func (s *AssetService) Ingest(r io.Reader, p IngestParams) (*model.Asset, error)
 
 	relPath := casRelPath(p.Type, sum256, p.Filename)
 
-	// 落点路由（见 ADR-073）：仅 client-file 且渠道服务已注入时取活跃渠道；
+	// 落点路由：仅 client-file 且渠道服务已注入时取活跃渠道；
 	// 活跃=s3 上传对象（键=CAS 相对路径挂渠道 prefix），失败快失败不静默回落（决策 5）；
 	// 活跃=local 与其余类型走下方既有 CAS 落盘原文（行为零变化）。
 	storageBackend := model.AssetBackendLocal

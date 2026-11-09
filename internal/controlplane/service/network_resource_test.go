@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-func newFR032ServiceTestDB(t *testing.T) *gorm.DB {
+func newNetworkResourceTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
@@ -33,9 +33,9 @@ func newFR032ServiceTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestFR032InstanceCreateAssignsRoleAndSystemWorkDir(t *testing.T) {
-	db := newFR032ServiceTestDB(t)
-	node := &model.Node{Name: "fr032-node", Host: "127.0.0.1", GRPCPort: 9100, WSPort: 9101, Secret: "secret", Status: model.NodeStatusOnline}
+func TestInstanceCreateAssignsRoleAndSystemWorkDir(t *testing.T) {
+	db := newNetworkResourceTestDB(t)
+	node := &model.Node{Name: "network-resource-node", Host: "127.0.0.1", GRPCPort: 9100, WSPort: 9101, Secret: "secret", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 
 	svc := NewInstanceService(db, nil, cpgrpc.NewClientPool())

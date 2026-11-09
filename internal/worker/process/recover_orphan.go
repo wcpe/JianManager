@@ -16,7 +16,7 @@ import (
 // 残留 java 占 Paper session.lock 致实例再也起不来）。现改为：
 // 有界重试（期间保留 PID 文件）→ 耗尽后按 PID 记录强杀孤儿进程树 → 死透才清理。
 //
-// ①/ADR-093 修订：强杀只对**真孤儿**（wrapper 已确证死亡、仅剩 Java）生效；
+// ① 修订：强杀只对**真孤儿**（wrapper 已确证死亡、仅剩 Java）生效；
 // 重试耗尽但 wrapper 仍存活（确属本实例、仅 socket 瞬时不可达）一律只告警 + 落审计、保留 PID 文件。
 // 且任何强杀前必须通过归属复核 verifyProcessOwnership，复核不过同样只告警不杀。
 
@@ -294,7 +294,7 @@ func (m *Manager) startStartupTakeoverRetries(tasks []startupTakeoverTask) {
 	}()
 }
 
-// settleStartupTakeoverFailure 接管重试彻底失败后的归类处置（/ ADR-093 / ，语义与旧实现一致）：
+// settleStartupTakeoverFailure 接管重试彻底失败后的归类处置（语义与旧实现一致）：
 //   - wrapper 仍存活：属「确属本实例、仅 socket 瞬时不可达」→ 只告警 + 落审计、保留 PID 文件、不杀
 //     （强杀会误杀一个 wrapper 与 Java 都健康、只是暂时拨不通的服务器）；
 //   - wrapper 已死：只观测 + 落审计（启动路径无任何静默破坏），交由周期扫描按 policy 与 接管处置。
@@ -303,8 +303,8 @@ func (m *Manager) settleStartupTakeoverFailure(instanceUUID string, rec *daemon.
 		detail := fmt.Sprintf(`{"instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"reason":"alive_unreachable"}`,
 			instanceUUID, rec.WrapperPID, rec.JavaPID)
 		m.auditOrphan("orphan.dispose_blocked", instanceUUID, detail, false,
-			"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），按 ADR-093 只告警不杀")
-		slog.Warn("接管重试耗尽但 wrapper 仍存活，按 ADR-093 只告警不杀，保留 PID 文件等下一轮/人工介入",
+			"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），只告警不杀")
+		slog.Warn("接管重试耗尽但 wrapper 仍存活，只告警不杀，保留 PID 文件等下一轮/人工介入",
 			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "error", reconnectErr)
 		return
 	}
@@ -396,7 +396,7 @@ func (m *Manager) observeOrphanAtStartup(instanceUUID string, rec *daemon.PIDRec
 //   - reconnectErr == errOrphanedWrapperGone：wrapper 已经不在，只剩 Java 孤儿（**真孤儿**）。
 //     只清 Java，跳过对已消失 wrapper 的杀树与存活复核。
 //   - 其余（reconnect 重试耗尽）：先判定 wrapper 是否仍存活——
-//     · wrapper 仍存活：属「确属本实例、仅 socket 瞬时不可达/暂不健康」（ADR-093 决策 1），
+//     · wrapper 仍存活：属「确属本实例、仅 socket 瞬时不可达/暂不健康」，
 //     **只告警 + 落审计、保留 PID 文件、不杀**，等下一轮扫描或人工介入（强杀会误杀一个
 //     wrapper 与 Java 都健康、只是 socket 一时拨不通的运行中服务器）；
 //     · wrapper 已在重试期间死亡：退化为真孤儿场景，按 PID 记录强杀 Java 树。
@@ -413,15 +413,15 @@ func (m *Manager) observeOrphanAtStartup(instanceUUID string, rec *daemon.PIDRec
 func (m *Manager) reapOrphanWrapper(instanceUUID, pidPath string, rec *daemon.PIDRecord, reconnectErr error) {
 	wrapperGone := errors.Is(reconnectErr, errOrphanedWrapperGone)
 
-	// ADR-093 决策 1（覆盖 spec §2.1 旧表述「复核不通过→只告警」）：接管重试耗尽但 wrapper 仍存活，
+	// 归属复核口径覆盖 spec §2.1 旧表述「复核不通过→只告警」：接管重试耗尽但 wrapper 仍存活，
 	// 判为「确属本实例、仅瞬时不可达」——只告警、保留 PID 文件、不杀。只有当 wrapper 已确证死亡
 	// （真孤儿）才进入处置。存活判据即「wrapper 进程仍存活」，与 socket 是否拨通无关。
 	if !wrapperGone && rec.WrapperPID > 0 && m.pidAlive(rec.WrapperPID) {
 		detail := fmt.Sprintf(`{"instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"reason":"alive_unreachable"}`,
 			instanceUUID, rec.WrapperPID, rec.JavaPID)
 		m.auditOrphan("orphan.dispose_blocked", instanceUUID, detail, false,
-			"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），按 ADR-093 只告警不杀")
-		slog.Warn("接管重试耗尽但 wrapper 仍存活，按 ADR-093 只告警不杀，保留 PID 文件等下一轮/人工介入",
+			"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），只告警不杀")
+		slog.Warn("接管重试耗尽但 wrapper 仍存活，只告警不杀，保留 PID 文件等下一轮/人工介入",
 			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "error", reconnectErr)
 		return
 	}

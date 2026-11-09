@@ -2,7 +2,7 @@
 # 从 proto/worker.proto 生成 Go gRPC 代码到 proto/workerpb/
 # 需要: protoc, protoc-gen-go, protoc-gen-go-grpc
 #
-# 生成链口径（2026-10-02 实测核实，ADR-101 后续项②）：
+# 生成链口径（2026-10-02 实测核实，后续项②）：
 #   1) 生成物一律由工具**重跑**产出，不得手改（含注释）；rawDesc（描述符字节数组）
 #      的 md5 是"生成物是否等价"的最硬判据——重跑后必须不变。
 #      提取脚本示例：.tmp/protoc-verify/rawdesc_md5.py <worker.pb.go>。

@@ -19,7 +19,7 @@ import (
 //
 // 第一轮把 AttachCapabilities 移出 ResolveInstanceTarget 后，只有 HTTP 路径补回了画像，
 // MCP 路径直接 toolOK(inst)，导致 agent_get_instance 不再下发 capabilities。
-func TestAgentGetInstance_AttachesCapabilities_FR445(t *testing.T) {
+func TestAgentGetInstance_AttachesCapabilities(t *testing.T) {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)

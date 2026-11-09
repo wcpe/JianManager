@@ -196,7 +196,7 @@ tabs_in_value: "a\tb"
 // messyProperties 同理：注释、空行、等号与冒号混用、行尾空格、无换行结尾。
 const messyProperties = "# 注释保留\nserver-port=25565\nmotd : 带冒号的值\nwhite-space=  前后都有空格   \n\nlast-line-without-newline=x"
 
-func TestFR533Adopt_ContentByteIdenticalAndHashMatchesDisk(t *testing.T) {
+func TestAdopt_ContentByteIdenticalAndHashMatchesDisk(t *testing.T) {
 	db := newAdoptTestDB(t)
 	// 真实磁盘文件：纳管前后比对 mtime，证明「不修改磁盘」。
 	workDir := t.TempDir()
@@ -276,9 +276,9 @@ func TestFR533Adopt_ContentByteIdenticalAndHashMatchesDisk(t *testing.T) {
 	}, src.readCalls, "纳管只应调用只读 Read")
 }
 
-// TestFR533Adopt_DoesNotReserializeStructuredContent 单独锁定「重新序列化」这个坑：
+// TestAdopt_DoesNotReserializeStructuredContent 单独锁定「重新序列化」这个坑：
 // 纳管后的内容里必须仍然能看到手写缩进、注释、引号风格等仅存在于原文的特征。
-func TestFR533Adopt_DoesNotReserializeStructuredContent(t *testing.T) {
+func TestAdopt_DoesNotReserializeStructuredContent(t *testing.T) {
 	db := newAdoptTestDB(t)
 	inst := mkAdoptInstance(t, db, "adopt-noreserialize", 1)
 	src := newFakeAdoptSource()
@@ -317,7 +317,7 @@ func TestFR533Adopt_DoesNotReserializeStructuredContent(t *testing.T) {
 // 验收 3：dryRun 零写入
 // ---------------------------------------------------------------------------
 
-func TestFR533Adopt_DryRunWritesNothing(t *testing.T) {
+func TestAdopt_DryRunWritesNothing(t *testing.T) {
 	db := newAdoptTestDB(t)
 	inst := mkAdoptInstance(t, db, "adopt-dryrun", 1)
 	src := newFakeAdoptSource()
@@ -358,9 +358,9 @@ func TestFR533Adopt_DryRunWritesNothing(t *testing.T) {
 	assert.Len(t, src.readCalls, 2)
 }
 
-// TestFR533Adopt_DryRunThenRealRun 覆盖「预演 → 实跑」的连贯性：
+// TestAdopt_DryRunThenRealRun 覆盖「预演 → 实跑」的连贯性：
 // 预演报告的计划应与实跑结果一致（避免预演骗人）。
-func TestFR533Adopt_DryRunThenRealRun(t *testing.T) {
+func TestAdopt_DryRunThenRealRun(t *testing.T) {
 	db := newAdoptTestDB(t)
 	inst := mkAdoptInstance(t, db, "adopt-preview", 1)
 	src := newFakeAdoptSource()
@@ -392,7 +392,7 @@ func TestFR533Adopt_DryRunThenRealRun(t *testing.T) {
 // 验收 4：重复纳管 → ALREADY_ADOPTED 且不覆盖
 // ---------------------------------------------------------------------------
 
-func TestFR533Adopt_RepeatAdoptReturnsAlreadyAdoptedAndNeverOverwrites(t *testing.T) {
+func TestAdopt_RepeatAdoptReturnsAlreadyAdoptedAndNeverOverwrites(t *testing.T) {
 	db := newAdoptTestDB(t)
 	inst := mkAdoptInstance(t, db, "adopt-repeat", 1)
 	src := newFakeAdoptSource()
@@ -427,9 +427,9 @@ func TestFR533Adopt_RepeatAdoptReturnsAlreadyAdoptedAndNeverOverwrites(t *testin
 	assert.Equal(t, adoptSha256Hex("a=1\n"), versions[0].ContentHash)
 }
 
-// TestFR533Adopt_ExistingConfigFileWithoutVersionBackfillsV1 覆盖 spec §6 的第二行：
+// TestAdopt_ExistingConfigFileWithoutVersionBackfillsV1 覆盖 spec §6 的第二行：
 // config_file 已存在但该实例无版本 → 补建 v1（而不是报已纳管）。
-func TestFR533Adopt_ExistingConfigFileWithoutVersionBackfillsV1(t *testing.T) {
+func TestAdopt_ExistingConfigFileWithoutVersionBackfillsV1(t *testing.T) {
 	db := newAdoptTestDB(t)
 	instA := mkAdoptInstance(t, db, "adopt-a", 1)
 	instB := mkAdoptInstance(t, db, "adopt-b", 1)
@@ -474,7 +474,7 @@ func TestFR533Adopt_ExistingConfigFileWithoutVersionBackfillsV1(t *testing.T) {
 // 验收 5：错误码
 // ---------------------------------------------------------------------------
 
-func TestFR533Adopt_ErrorCodes(t *testing.T) {
+func TestAdopt_ErrorCodes(t *testing.T) {
 	t.Run("文件不存在", func(t *testing.T) {
 		db := newAdoptTestDB(t)
 		inst := mkAdoptInstance(t, db, "err-notfound", 1)
@@ -578,8 +578,8 @@ func TestFR533Adopt_ErrorCodes(t *testing.T) {
 	})
 }
 
-// TestFR533Adopt_RequestValidation 覆盖请求级校验（不是逐文件错误码）。
-func TestFR533Adopt_RequestValidation(t *testing.T) {
+// TestAdopt_RequestValidation 覆盖请求级校验（不是逐文件错误码）。
+func TestAdopt_RequestValidation(t *testing.T) {
 	db := newAdoptTestDB(t)
 	svc := newAdoptSvc(t, db, newFakeAdoptSource())
 
@@ -598,7 +598,7 @@ func TestFR533Adopt_RequestValidation(t *testing.T) {
 // 验收 6/8：批量（100 实例、部分离线不整体失败）
 // ---------------------------------------------------------------------------
 
-func TestFR533Adopt_Batch100InstancesPartialOffline(t *testing.T) {
+func TestAdopt_Batch100InstancesPartialOffline(t *testing.T) {
 	db := newAdoptTestDB(t)
 	root := mkGroup(t, db, "cluster", nil)
 	child := mkGroup(t, db, "region-1", &root.ID)
@@ -686,8 +686,8 @@ func TestFR533Adopt_Batch100InstancesPartialOffline(t *testing.T) {
 	assert.Equal(t, 0, resp.Summary.Failed, "离线实例不应污染逐文件失败计数")
 }
 
-// TestFR533Adopt_BatchNoMatchAndTruncated 覆盖「无文件命中」与 Discover 截断标记。
-func TestFR533Adopt_BatchNoMatch(t *testing.T) {
+// TestAdopt_BatchNoMatchAndTruncated 覆盖「无文件命中」与 Discover 截断标记。
+func TestAdopt_BatchNoMatch(t *testing.T) {
 	db := newAdoptTestDB(t)
 	root := mkGroup(t, db, "cluster-no-match", nil)
 	inst := mkAdoptInstance(t, db, "nomatch", 1)
@@ -713,7 +713,7 @@ func TestFR533Adopt_BatchNoMatch(t *testing.T) {
 // 验收 10/11：纳管后能预览、能在其上建分层覆盖并正确合并
 // ---------------------------------------------------------------------------
 
-// TestFR533Adopt_ThenLayerOverrideAndMerge 覆盖 spec 验收 10/11：
+// TestAdopt_ThenLayerOverrideAndMerge 覆盖 spec 验收 10/11：
 // 纳管后能读回内容、能在其上建分层覆盖。
 //
 // 这里刻意用 YAML：properties 的合并输出是 `key=value`（规范化），
@@ -722,7 +722,7 @@ func TestFR533Adopt_BatchNoMatch(t *testing.T) {
 // 注意实例层基线在作用域链里优先级最高（config_layer.go resolveScopeChain 注释：
 // 「实例层恒在最后（优先级最高）」），所以分组层无法覆盖实例层已有的键——
 // 这是的既有语义，纳管不改变它。本用例按这个真实语义断言。
-func TestFR533Adopt_ThenLayerOverrideAndMerge(t *testing.T) {
+func TestAdopt_ThenLayerOverrideAndMerge(t *testing.T) {
 	db := newAdoptTestDB(t)
 	db = withLayerScopeMigration(t, db)
 	root := mkGroup(t, db, "cluster-merge", nil)
@@ -771,7 +771,7 @@ func TestFR533Adopt_ThenLayerOverrideAndMerge(t *testing.T) {
 // health 自检
 // ---------------------------------------------------------------------------
 
-func TestFR533Adopt_HealthReportsFactsOnly(t *testing.T) {
+func TestAdopt_HealthReportsFactsOnly(t *testing.T) {
 	db := newAdoptTestDB(t)
 	inst := mkAdoptInstance(t, db, "health-inst", 1)
 	src := newFakeAdoptSource()
@@ -809,7 +809,7 @@ func TestFR533Adopt_HealthReportsFactsOnly(t *testing.T) {
 // 纯函数单测
 // ---------------------------------------------------------------------------
 
-func TestFR533Adopt_NormalizePath(t *testing.T) {
+func TestAdopt_NormalizePath(t *testing.T) {
 	cases := []struct {
 		in      string
 		want    string
@@ -840,7 +840,7 @@ func TestFR533Adopt_NormalizePath(t *testing.T) {
 	}
 }
 
-func TestFR533Adopt_MatchConfigPath(t *testing.T) {
+func TestAdopt_MatchConfigPath(t *testing.T) {
 	cases := []struct {
 		pattern string
 		path    string
@@ -867,7 +867,7 @@ func TestFR533Adopt_MatchConfigPath(t *testing.T) {
 	}
 }
 
-func TestFR533Adopt_FormatDetection(t *testing.T) {
+func TestAdopt_FormatDetection(t *testing.T) {
 	cases := []struct {
 		path string
 		want model.ConfigFileFormat
@@ -890,10 +890,10 @@ func TestFR533Adopt_FormatDetection(t *testing.T) {
 	}
 }
 
-// TestFR533Adopt_TomlIsUnsupportedNotSilentlyTxt 明确记录这条边界：
+// TestAdopt_TomlIsUnsupportedNotSilentlyTxt 明确记录这条边界：
 // Discover 会把 .toml 当成配置返回（supported 取决于 schema），但 config_file 不支持 toml，
 // 因此纳管必须显式报 FORMAT_UNSUPPORTED，而不是硬塞成 yaml 导致后续解析全错。
-func TestFR533Adopt_TomlIsUnsupportedNotSilentlyTxt(t *testing.T) {
+func TestAdopt_TomlIsUnsupportedNotSilentlyTxt(t *testing.T) {
 	db := newAdoptTestDB(t)
 	inst := mkAdoptInstance(t, db, "toml-inst", 1)
 	src := newFakeAdoptSource()
@@ -933,8 +933,8 @@ func withLayerScopeMigration(t *testing.T, db *gorm.DB) *gorm.DB {
 	return db
 }
 
-// TestFR533Adopt_NoVersionWhenBaselineDisabled 覆盖 createBaseline=false 的两种分支。
-func TestFR533Adopt_NoVersionWhenBaselineDisabled(t *testing.T) {
+// TestAdopt_NoVersionWhenBaselineDisabled 覆盖 createBaseline=false 的两种分支。
+func TestAdopt_NoVersionWhenBaselineDisabled(t *testing.T) {
 	db := newAdoptTestDB(t)
 	inst := mkAdoptInstance(t, db, "no-baseline", 1)
 	src := newFakeAdoptSource()
@@ -963,9 +963,9 @@ func TestFR533Adopt_NoVersionWhenBaselineDisabled(t *testing.T) {
 	assert.Equal(t, AdoptActionNone, resp.Results[0].Action)
 }
 
-// TestFR533Adopt_UnparseableContentStillAdopted 验证「坏配置也要能纳管」：
+// TestAdopt_UnparseableContentStillAdopted 验证「坏配置也要能纳管」：
 // 纳管语义是记录现状，语法错误只作为 warning 带出，不阻断入库。
-func TestFR533Adopt_UnparseableContentStillAdopted(t *testing.T) {
+func TestAdopt_UnparseableContentStillAdopted(t *testing.T) {
 	db := newAdoptTestDB(t)
 	inst := mkAdoptInstance(t, db, "broken-yaml", 1)
 	broken := "a: [unclosed\n  b: : :\n\tbad-indent: 1\n"
@@ -990,9 +990,9 @@ func TestFR533Adopt_UnparseableContentStillAdopted(t *testing.T) {
 	assert.Equal(t, adoptSha256Hex(broken), head.ContentHash)
 }
 
-// TestFR533Adopt_AsNameSeparatesLogicalFiles 覆盖 asName：同一路径在不同实例可按不同逻辑名纳管，
+// TestAdopt_AsNameSeparatesLogicalFiles 覆盖 asName：同一路径在不同实例可按不同逻辑名纳管，
 // 也可让不同路径归并到同一逻辑名（每实例各存自己的 v1）。
-func TestFR533Adopt_AsNameSeparatesLogicalFiles(t *testing.T) {
+func TestAdopt_AsNameSeparatesLogicalFiles(t *testing.T) {
 	db := newAdoptTestDB(t)
 	instA := mkAdoptInstance(t, db, "asname-a", 1)
 	instB := mkAdoptInstance(t, db, "asname-b", 1)
@@ -1020,9 +1020,9 @@ func TestFR533Adopt_AsNameSeparatesLogicalFiles(t *testing.T) {
 	assert.Equal(t, "who: b\n", layerHeadOf(t, db, file.ID, instB.ID).Content)
 }
 
-// TestFR533Adopt_ConcurrentSameNameDoesNotDuplicate 验证并发写保护：
+// TestAdopt_ConcurrentSameNameDoesNotDuplicate 验证并发写保护：
 // 多实例并行读、串行写，同名 config_file 只能存在一份。
-func TestFR533Adopt_ConcurrentSameNameDoesNotDuplicate(t *testing.T) {
+func TestAdopt_ConcurrentSameNameDoesNotDuplicate(t *testing.T) {
 	db := newAdoptTestDB(t)
 	src := newFakeAdoptSource()
 	items := make([]AdoptFileItem, 0, 24)
@@ -1053,11 +1053,11 @@ func TestFR533Adopt_ConcurrentSameNameDoesNotDuplicate(t *testing.T) {
 	}
 }
 
-// TestFR533Adopt_ServiceDepsAreReadOnly 是一个结构性断言：
+// TestAdopt_ServiceDepsAreReadOnly 是一个结构性断言：
 // ConfigAdoptService 只依赖 ConfigAdoptSource（Discover/Read）与 ConfigFileService
 // （config_file / 层版本），两者都不碰 Worker 写盘接口。这条用例把该意图写成可读的断言，
 // 防止后来者给纳管加一条「顺手把规范化后的内容写回磁盘」的路径。
-func TestFR533Adopt_ServiceDepsAreReadOnly(t *testing.T) {
+func TestAdopt_ServiceDepsAreReadOnly(t *testing.T) {
 	// ConfigAdoptSource 的方法集就是全部只读方法；这里用编译期断言固化。
 	var _ ConfigAdoptSource = (*ConfigService)(nil)
 	assert.Contains(t, adoptBaselineRemark(adoptTask{Path: "a.yml"}, time.Unix(0, 0)),

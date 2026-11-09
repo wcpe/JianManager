@@ -12,7 +12,7 @@
  *         InstanceConsoleLinkArgs
  * @sync apps/control-plane-web/src/components/console/InstanceConsolePage.tsx、
  *        apps/control-plane-web/src/components/console/InstanceConsolePage.dom.test.tsx
- * @since（组件受控化迁包；原页统一控制台最近打开ADR-067 页签 keep-alive、
+ * @since（组件受控化迁包；原页统一控制台最近打开页签 keep-alive、
  *失败原因横幅搭建中禁启损毁重建TPS 真时序瘦身顶栏、
  *445/448 页签重组与能力门控失败原因复制423 视口自适应与分栏运行态漂移）
  */
@@ -155,7 +155,7 @@ export interface InstanceConsolePageViewProps {
 /** 
  * 服务器统一控制台页的受控视图。
  *
- * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不触达路由**。
+ * 受控边界：**不取数、不发请求、不弹 toast、不触达路由**。
  * - `activeTab` / `mountedTabs` 归容器：前者与 `?tab=` 深链同源且决定子组件取数，后者是 keep-alive 生命周期宿主；
  * - 首屏实例未就绪的早退分支（`serverConsole.noInstance`）留容器——它是实例查询的错误/加载态，不是本视图的呈现；
  * - 纯展示态留本视图：指标条折叠偏好（localStorage）、窄视口分支、页签溢出渐隐与激活项滚动。

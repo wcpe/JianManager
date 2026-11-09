@@ -20,26 +20,26 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// fakeFR298RuntimeWorker 假 Worker：ScanRuntimes 回预置候选，ListJDKs 回空（同步无副作用）。
-type fakeFR298RuntimeWorker struct {
+// fakeRuntimeScanWorker 假 Worker：ScanRuntimes 回预置候选，ListJDKs 回空（同步无副作用）。
+type fakeRuntimeScanWorker struct {
 	workerpb.WorkerServiceClient
 	scanReq    *workerpb.ScanRuntimesRequest
 	candidates []*workerpb.RuntimeCandidate
 }
 
-func (f *fakeFR298RuntimeWorker) ScanRuntimes(_ context.Context, req *workerpb.ScanRuntimesRequest, _ ...grpc.CallOption) (*workerpb.ScanRuntimesResponse, error) {
+func (f *fakeRuntimeScanWorker) ScanRuntimes(_ context.Context, req *workerpb.ScanRuntimesRequest, _ ...grpc.CallOption) (*workerpb.ScanRuntimesResponse, error) {
 	f.scanReq = req
 	return &workerpb.ScanRuntimesResponse{Candidates: f.candidates}, nil
 }
 
-func (f *fakeFR298RuntimeWorker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
+func (f *fakeRuntimeScanWorker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
 	return &workerpb.ListJDKsResponse{}, nil
 }
 
-func setupFR298Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
+func setupRuntimeLibraryRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-fr298", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
+	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-runtime-scan", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
@@ -77,14 +77,14 @@ type runtimeViewRow struct {
 	Managed      bool   `json:"managed"`
 }
 
-func TestFR298RuntimeScanEndpoint(t *testing.T) {
+func TestRuntimeScanEndpoint(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	r := setupFR298Router(t, db, pool)
+	r := setupRuntimeLibraryRouter(t, db, pool)
 	adminToken := getAdminToken(t, r)
-	memberToken := getMemberToken(t, r, "member-fr298", "password123")
+	memberToken := getMemberToken(t, r, "member-runtime-scan", "password123")
 	node := createTestNode(t, db)
-	fake := &fakeFR298RuntimeWorker{candidates: []*workerpb.RuntimeCandidate{
+	fake := &fakeRuntimeScanWorker{candidates: []*workerpb.RuntimeCandidate{
 		{Type: "jdk", Vendor: "Temurin", Version: "21.0.4+9", MajorVersion: 21, Arch: "x64", Path: "/usr/lib/jvm/temurin-21"},
 		{Type: "nodejs", Vendor: "Node.js", Version: "22.17.0", MajorVersion: 22, Arch: "x64", Path: "/usr/local/bin/node"},
 	}}
@@ -129,7 +129,7 @@ func TestFR298RuntimeScanEndpoint(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, badType.Code, badType.Body.String())
 
 	// 节点离线 503。
-	offline := createTestNodeWithSuffix(t, db, "fr298-offline")
+	offline := createTestNodeWithSuffix(t, db, "runtime-scan-offline")
 	offlineResp := makeRequest(r, http.MethodPost, fmt.Sprintf("/api/v1/nodes/%d/runtimes/scan", offline.ID), map[string]any{}, adminToken)
 	require.Equal(t, http.StatusServiceUnavailable, offlineResp.Code, offlineResp.Body.String())
 
@@ -139,13 +139,13 @@ func TestFR298RuntimeScanEndpoint(t *testing.T) {
 	require.GreaterOrEqual(t, scanAudits, int64(1))
 }
 
-func TestFR298RuntimeRegisterListDelete(t *testing.T) {
+func TestRuntimeRegisterListDelete(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	r := setupFR298Router(t, db, pool)
+	r := setupRuntimeLibraryRouter(t, db, pool)
 	adminToken := getAdminToken(t, r)
 	node := createTestNode(t, db)
-	pool.SetWorkerClientForTest(node.UUID, &fakeFR298RuntimeWorker{})
+	pool.SetWorkerClientForTest(node.UUID, &fakeRuntimeScanWorker{})
 
 	// 登记 type=jdk：转发现有 JDK 登记链路（落 node_jdks）。
 	jdkResp := makeRequest(r, http.MethodPost, fmt.Sprintf("/api/v1/nodes/%d/runtimes", node.ID), map[string]any{
@@ -221,18 +221,18 @@ func TestFR298RuntimeRegisterListDelete(t *testing.T) {
 	require.GreaterOrEqual(t, delAudits, int64(2))
 }
 
-// TestFR298JDKInUseDeleteBlocked 删除被实例占用的 JDK（经统一运行时端点）仍被 409 拦截。
-func TestFR298JDKInUseDeleteBlocked(t *testing.T) {
+// TestJDKInUseDeleteBlocked 删除被实例占用的 JDK（经统一运行时端点）仍被 409 拦截。
+func TestJDKInUseDeleteBlocked(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	r := setupFR298Router(t, db, pool)
+	r := setupRuntimeLibraryRouter(t, db, pool)
 	adminToken := getAdminToken(t, r)
 	node := createTestNode(t, db)
-	pool.SetWorkerClientForTest(node.UUID, &fakeFR298RuntimeWorker{})
+	pool.SetWorkerClientForTest(node.UUID, &fakeRuntimeScanWorker{})
 
 	inUse := &model.NodeJDK{NodeID: node.ID, Vendor: "Temurin", MajorVersion: 17, Version: "17.0.12+7", Arch: "x64", Path: "/opt/jdks/temurin-17"}
 	require.NoError(t, db.Create(inUse).Error)
-	inst := &model.Instance{NodeID: node.ID, Name: "fr298-bound", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDaemon, Status: model.InstanceStatusStopped, JDKID: inUse.ID}
+	inst := &model.Instance{NodeID: node.ID, Name: "runtime-scan-bound", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDaemon, Status: model.InstanceStatusStopped, JDKID: inUse.ID}
 	require.NoError(t, db.Create(inst).Error)
 
 	blocked := makeRequest(r, http.MethodDelete, fmt.Sprintf("/api/v1/nodes/%d/runtimes/%d?type=jdk", node.ID, inUse.ID), nil, adminToken)

@@ -32,7 +32,7 @@ func newNodeTestDB(t *testing.T) *gorm.DB {
 		&model.GroupInstance{},
 		&model.ServerRegistration{},
 		&model.NetworkMember{},
-		// FR-503：Purge 会顺带清理该节点的 Worker 级日志采集覆盖键（见 node.go）。
+		// Purge 会顺带清理该节点的 Worker 级日志采集覆盖键（见 node.go）。
 		&model.PlatformSetting{},
 	))
 	return db
@@ -420,7 +420,7 @@ func TestNodeService_Purge_HardDeletesArchived(t *testing.T) {
 	require.Empty(t, list)
 }
 
-// FR-503：彻底清理节点时顺带删除该节点的 Worker 级日志采集覆盖键；
+// 彻底清理节点时顺带删除该节点的 Worker 级日志采集覆盖键；
 // 另一节点的同键覆盖与平台级键必须保留（键后缀含完整 UUID，不得误伤）。
 func TestNodeService_Purge_RemovesNodeScopedLogAcqSettings(t *testing.T) {
 	db := newNodeTestDB(t)
