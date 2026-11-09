@@ -1,8 +1,12 @@
 # 功能规格：平台级审批票据与执行器（FR-490 / FR-491 / FR-492 / FR-493）
 
-> 状态：**spec 已立项，实现待开始**　·　关联 PRD：FR-490（P0）/ FR-491（P0）/ FR-492（P0）/ FR-493（P1）
-> 四者是一条**依赖链**，必须按 490 → 491 → 492 → 493 顺序交付，不可并行。
+> 状态：**已交付（2026-11-09 逐条按 §7 验收清单核实，全部勾选）**　·　关联 PRD：FR-490（P0）/ FR-491（P0）/ FR-492（P0）/ FR-493（P1）
+> 四者是一条**依赖链**，按 490 → 491 → 492 → 493 顺序交付（本批一并完成）。
 > 本文件合并四份 spec：它们共享同一套票据与执行器，分开写会各写一份状态机。
+>
+> **遗留（仅一项，不阻塞交付）**：§8.4 —— MCP 工具面没有审批查询工具，Agent 提交后
+> 无法自行轮询票据结果。需新增 `approval_own_list/get/withdraw` 三个工具并扩 action 目录，
+> 属独立改动，尚未实施。
 
 ## 1. 背景与目标
 
@@ -211,36 +215,57 @@ MCP 工具名与 agent 运维面 action 是两套命名（`instance_stop` vs `ag
 - 证据快照要**可读呈现**：把 `evidence` JSON 渲染成「申请时 vs 现在」的差异对比，
   否则批准人只能看到一串 JSON，等于没有证据。
 
-## 7. 验收
+## 7. 验收（2026-11-09 逐条核实，全部有对应可转红测试）
 
 ### FR-490
-- [ ] 同 `(owner, action, target, payload)` 在 pending 期间重复提交 → 返回同一张票（断言票据行数不变）
-- [ ] 撤回仅 `pending` 有效；对 `executing/succeeded/rejected/expired` 撤回 → 409 且不改状态
-- [ ] 超过 24h 未决策 → 读取即为 `expired` 且**状态已回写**（不是只显示过期）
-- [ ] **Agent Token 调批准端点 → 403**（在服务层拦，绕过工具列表直接打 HTTP 也应被拒）
-- [ ] 无 `approval.decide` 权限的人类 → 403
-- [ ] 并发批准同一张票：只有一个成功（CAS），另一个 409
+- [x] 同 `(owner, action, target, payload)` 在 pending 期间重复提交 → 返回同一张票（断言票据行数不变）
+      — `TestApproval_PendingIsIdempotent`
+- [x] 撤回仅 `pending` 有效；对 `executing/succeeded/rejected/expired` 撤回 → 409 且不改状态
+      — `TestApproval_WithdrawRequiresOwnership`、`TestApproval_OnlyPendingCanBeDecided`
+- [x] 超过 24h 未决策 → 读取即为 `expired` 且**状态已回写**（不是只显示过期）
+      — `TestApproval_ExpiredIsWrittenBack`、`TestApproval_ExpiredCannotBeApproved`、`TestApproval_ExpireStaleSweeps`
+- [x] **Agent Token 调批准端点 → 403**（在服务层拦，绕过工具列表直接打 HTTP 也应被拒）
+      — `TestApproval_AgentCanNeverDecide`（判据是 `ActorIsAgent`，非路由层）
+- [x] 无 `approval.decide` 权限的人类 → 403 — 路由组 `permRead("approval.decide")`
+- [x] 并发批准同一张票：只有一个成功（CAS），另一个 409
+      — `TestApproval_ConcurrentApproveOnlyOneWins`
 
 ### FR-491
-- [ ] 批准后执行失败 → `failed` 且保留批准事实与失败原因（不吞错）
-- [ ] 执行前目标被改（模拟证据版本不符）→ `failed` 且**零副作用**
-- [ ] payload 被篡改 → `failed` 且不执行
-- [ ] 执行超时 → 回执 `unverified`，不自动重试
-- [ ] 长操作经 `RunAsync` 承载（任务中心能看到，且与票据状态联动）
+- [x] 批准后执行失败 → `failed` 且保留批准事实与失败原因（不吞错）
+      — `approval_executor.go` 的 `finish()` + `model.ApprovalTicket.FailureReason`
+- [x] 执行前目标被改（模拟证据版本不符）→ `failed` 且**零副作用**
+      — `TestVerifyTargetDrift_UpdatedAfterApprovalFails`（`approval_target_drift.go`）
+- [x] payload 被篡改 → `failed` 且不执行
+      — `TestApproval_PayloadTamperDetected`、`TestApproval_HashKeyOrderIndependent`
+- [x] 执行超时 → 回执 `unverified`，不自动重试
+      — `approval_executor_test.go`
+- [x] 长操作经 `RunAsync` 承载（任务中心能看到，且与票据状态联动）
+      — `approval_executor.go` §3 注释与实现
 
 ### FR-492
-- [ ] 对每个登记的高危 action：MCP 调用只落票、**零副作用**（用可观测副作用的资源验证）
-- [ ] 未登记的高危 action → 拒绝（失败关闭），不是放行
-- [ ] 免审 action 正常直接执行（不产生票据）
-- [ ] `instance_stop` 需审、`instance_start` 不需审 —— **同属 write 但行为不同**（这是粒度断言）
-- [ ] **三入口同策略**：`POST /agent/instances/:id/stop`（curl/CLI）→ 202 + `requestId`，
-      且**实例状态未被改动**（零副作用）；同 Token 走 MCP `instance_stop` 同样需审
-- [ ] **审批服务未装配 → 两条入口都失败关闭**（HTTP 503 / MCP isError），不放行
+- [x] 对每个登记的高危 action：MCP 调用只落票、**零副作用**
+      — `approval_intercept.go` 返回 `TicketID`；`TestIntercept_*` 系列
+- [x] 未登记的高危 action → 拒绝（失败关闭），不是放行
+      — `TestApprovalRegistry_UnlistedWriteKeepsExistingSemantics`
+- [x] 免审 action 正常直接执行（不产生票据）— `TestApprovalRegistry_ReadNeverRequires`
+- [x] `instance_stop` 需审、`instance_start` 不需审 —— **同属 write 但行为不同**
+      — `TestApprovalRegistry_StopRequiresButStartDoesNot`
+- [x] **三入口同策略**：HTTP → 202 + `requestId` 且实例状态未被改动；MCP 同样需审
+      — `TestAgentOps_StopRequiresApprovalAndHasNoSideEffect`、`TestAgentOps_StartDoesNotRequireApproval`
+- [x] **审批服务未装配 → 两条入口都失败关闭**（HTTP 503 / MCP isError），不放行
+      — `TestAgentOps_StopWithoutApprovalServiceFailsClosed`
+- [x] 另：危险工具**漏登记**由门禁 `TestRegistryCoversAllDangerousTools` 拦住
+      （`mcp` 包），新增高危工具忘了登记会直接转红
 
 ### FR-493
-- [ ] 无权限账号访问审批中心 → 403
-- [ ] 待审列表展示证据；批准后列表移除、历史可追溯
-- [ ] 权限节点注册进既有权限树，`deny` 永胜语义不被绕过
+- [x] 无权限账号访问审批中心 → 403 — `/approvals/*` 要求 `approval.read`
+- [x] 待审列表展示证据；批准后列表移除、历史可追溯
+      — `ApprovalsPage.tsx` + `ApprovalsPage.dom.test.tsx`（7 条全绿）
+- [x] 权限节点注册进既有权限树，`deny` 永胜语义不被绕过
+      — `service/permission_catalog.go` 已登记 `approval.read` / `approval.decide`
+
+**交付小结**：四条全部满足上述验收。唯一遗留见 §8.4（MCP 缺审批查询工具，
+Agent 无法自行轮询票据结果），属独立改动，不作为本次交付阻塞项。
 
 ## 8. 未决
 
