@@ -24,7 +24,7 @@
 | [doc-sync.md](doc-sync.md) | 代码变更时文档必须同步更新 |
 | [doc-evolution.md](doc-evolution.md) | 文档演进方式（增量/原地/追加） |
 | [git-commit.md](git-commit.md) | Git 提交 / 分支 / 合并规范（单主干 master，禁直推，rebase+ff 优先） |
-| [no-fr-in-code.md](no-fr-in-code.md) | 代码 / 文件名 / 注释禁止出现 FR 编号（存量豁免，门禁只扫 diff 新增行） |
+| [no-ref-in-code.md](no-ref-in-code.md) | 代码 / 文件名 / 注释 / 标识符禁止出现 FR 与 ADR 编号；代码写理由本身（存量豁免，门禁只扫 diff 新增行） |
 | [scope-discipline.md](scope-discipline.md) | 范围纪律，不做 spec 之外的事 |
 | [static-analysis.md](static-analysis.md) | 静态分析和 lint 规范 |
 | [testing-and-quality.md](testing-and-quality.md) | 测试和质量要求（含状态 / 迁移类变更必须验「迁移 → 首启 → 停 → 二启 → 三启」+ 脏环境） |

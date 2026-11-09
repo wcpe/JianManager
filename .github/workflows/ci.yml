@@ -421,12 +421,12 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           bash scripts/check-openapi.sh
 
-      # 代码里不得出现 FR 编号（.claude/rules/no-fr-in-code.md）。
+      # 代码/文件名/注释里不得出现 FR 或 ADR 编号（.claude/rules/no-ref-in-code.md）。
       #
-      # 这个脚本就存在且带 --stock 模式，但从未被任何 workflow 调用：
-      # 于是“FR-508 已全量清零”可以带着 3 处残留合入。现在改成硬门禁。
-      - name: 代码内 FR 编号检查（--stock）
+      # 用 --stock 全量比对，而不是只看本次 diff：编号会随重构/搬包被复制到新位置，
+      # 只看 diff 会让存量在每轮大重构里悄悄回潮（实测从「0 命中」回潮到 2000+ 处）。
+      - name: 代码内 FR/ADR 编号检查（--stock）
         shell: bash
         run: |
           set -euo pipefail
-          sh .claude/scripts/check-no-fr-in-code.sh --stock
+          sh .claude/scripts/check-no-ref-in-code.sh --stock

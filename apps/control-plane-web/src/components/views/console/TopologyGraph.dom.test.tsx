@@ -15,7 +15,7 @@ import type { InstanceGroupNode } from '@/lib/instances/instance-group'
  *
  * 补的是**展示契约**：加载态、空态、节点/连线渲染、工具条控件、维度切换时的取数通知。
  * 取数（单条聚合请求消 N+1）、搜索过滤交互、viewBox 复位由应用侧
- * `TopologyGraph.dom.test.tsx` / `TopologyGraph.fr453.dom.test.tsx` 走假后端覆盖。
+ * `TopologyGraph.dom.test.tsx` / `TopologyGraph.instances.dom.test.tsx` 走假后端覆盖。
  */
 const testI18n = i18n.createInstance()
 void testI18n.use(initReactI18next).init({

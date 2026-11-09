@@ -9,7 +9,7 @@
 ### 必须注释
 - 所有导出的类型、函数、方法、常量（godoc 格式）
 - 非显而易见的业务逻辑（为什么这样处理）
-- 和 ADR 相关的实现（引用 ADR 编号）
+- 有争议的架构取舍（**把取舍理由写出来**，不要只写编号——见 [no-ref-in-code.md](no-ref-in-code.md)）
 - 临时方案 / workaround（标注 `// HACK:` 或 `// WORKAROUND:` 并解释原因）
 
 ### 禁止注释
@@ -21,9 +21,13 @@
 ```go
 // ProcessManager 管理单个 Worker Node 上所有实例的生命周期。
 // 它通过 IProcessCommand 策略接口支持多种启动方式（daemon/docker/direct）。
-// 参见 ADR-003: 守护进程 Wrapper 模式。
+// daemon 方式必须经 Wrapper 子进程隔离——否则 Worker 重启会连带杀掉
+// 运行中的游戏服（进程同属一个 cgroup / 进程组）。
 type ProcessManager struct { ... }
 ```
+
+> **不写编号**：`// 参见 ADR-003` 要求读者跳去翻 ADR 才知道理由，且改号后静默失效。
+> 写「为什么要这样」本身，理由就在原地。见 [no-ref-in-code.md](no-ref-in-code.md)。
 
 ## TypeScript
 

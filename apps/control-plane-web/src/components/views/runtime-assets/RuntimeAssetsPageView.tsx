@@ -12,7 +12,7 @@
  *         PluginBatchDeployResultView、RuntimeAssetsInstancePickerView、RuntimeAssetsInstancePickerViewProps、
  *         RuntimeAssetsInstancePickerArgs、RuntimeAssetsInstanceCandidateView
  * @sync apps/control-plane-web/src/pages/RuntimeAssetsPage.tsx、apps/control-plane-web/src/pages/RuntimeAssetsPage.dom.test.tsx、
- *       apps/control-plane-web/src/pages/RuntimeAssetsPage.fr301.dom.test.tsx
+ *       apps/control-plane-web/src/pages/RuntimeAssetsPage.smoke.dom.test.tsx
  * @since（组件受控化迁包；原页运行时与制品全局页多运行时矩阵与手动刷新、
  *制品导入上传进度引用保护与删除占用方提示）
  */

@@ -11,7 +11,7 @@
  *         NetworksInstancePickerArgs
  * @sync apps/control-plane-web/src/pages/NetworksPage.tsx（容器 + 拓扑 / 实例候选两个插槽的实现）、
  *        apps/control-plane-web/src/components/console/TopologyGraph.tsx（拓扑接线层，经 renderTopology 注入）、
- *        apps/control-plane-web/src/pages/NetworksPage.dom.test.tsx、NetworksPage.fr032.dom.test.tsx
+ *        apps/control-plane-web/src/pages/NetworksPage.dom.test.tsx、NetworksPage.resource.dom.test.tsx
  * @since（组件受控化迁包；原页群组关系模型可寻址双栏拓扑概要健康分布）
  */
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
