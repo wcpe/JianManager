@@ -88,10 +88,16 @@ func TestManager_DaemonRecover(t *testing.T) {
 	m2 := NewManager(pidDir)
 	recovered, err := m2.RecoverDaemonInstances()
 	require.NoError(t, err)
-	assert.Equal(t, 1, recovered)
+	// 不能断言 recovered==1：两阶段化后 RecoverDaemonInstances 只同步做「快速首拨」，
+	// 首拨失败时该记录转入**后台**有界重试、函数立即返回 0，靠后台补上的不计入返回值。
+	// 整包并发下首拨会因调度延迟一时拨不通，直接断言 recovered==1 即间歇红。
+	// 故与 TestManager_DaemonStopAllGraceful 同口径：先让后台重试收敛，再断言终态。
+	require.True(t, m2.WaitStartupTakeover(10*time.Second), "后台接管重试应在超时内收敛")
 
-	st, _ := m2.GetState(uuid)
-	assert.Equal(t, StateRunning, st)
+	st, stErr := m2.GetState(uuid)
+	require.NoError(t, stErr)
+	require.Equal(t, StateRunning, st,
+		fmt.Sprintf("应接管为 RUNNING（同步返回的 recovered=%d，首拨失败时由后台重试补齐）", recovered))
 
 	// 停止并退出，清理 wrapper
 	_ = m2.Stop(uuid)

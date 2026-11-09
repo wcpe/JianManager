@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -35,12 +36,19 @@ func NewPIDFile(path string) *PIDFile {
 func (p *PIDFile) Path() string { return p.path }
 
 // WriteRecord 写入完整恢复记录（JSON）。
+//
+// **必须原子写**（临时文件 + rename）：PID 文件会被写入**两次**——wrapper 监听就绪后写
+// 「wrapper_pid + socket」，Java 拉起后再补写 java_pid（见 wrapper.go 的两次调用）。
+// 裸 os.WriteFile 是「截断 → 写入」，中间存在文件长度 0 或半截 JSON 的窗口；此刻若读到，
+// ReadRecord 会返回解析错误，而 RecoverDaemonInstances 对解析失败记录的处理是
+// **删除 PID 文件并跳过**——一个正在服务的实例就被静默移出账本，再也不会被接管。
+// rename 在同一文件系统内是原子的，读者要么看到旧记录、要么看到新记录，永不会看到半截。
 func (p *PIDFile) WriteRecord(rec PIDRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("序列化 PID 记录失败: %w", err)
 	}
-	return os.WriteFile(p.path, data, 0644)
+	return writeFileAtomic(p.path, data, 0644)
 }
 
 // ReadRecord 读取完整恢复记录。
@@ -65,7 +73,47 @@ func (p *PIDFile) ReadRecord() (*PIDRecord, error) {
 
 // Write 写入 PID 文件（仅 wrapper pid，旧版兼容）。
 func (p *PIDFile) Write(pid int) error {
-	return os.WriteFile(p.path, []byte(strconv.Itoa(pid)), 0644)
+	return writeFileAtomic(p.path, []byte(strconv.Itoa(pid)), 0644)
+}
+
+// writeFileAtomic 以「同目录临时文件 + fsync + rename」方式原子替换文件内容。
+//
+// 为何不用 os.WriteFile：它会先截断再写入，读者在窗口内会看到空文件或半截内容。
+// 对 PID 文件而言这个窗口有真实代价——解析失败即被当成脏记录删除（见 WriteRecord 注释）。
+// rename 在同目录（同一文件系统）内原子生效，读者只会看到完整的旧内容或完整的新内容。
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
+	if err != nil {
+		return fmt.Errorf("创建临时 PID 文件失败: %w", err)
+	}
+	tmpName := tmp.Name()
+	// 任一步失败都清掉临时文件，避免在 PID 目录里堆积垃圾（该目录会被反复扫描）。
+	defer func() {
+		if tmpName != "" {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("写入临时 PID 文件失败: %w", err)
+	}
+	// fsync：确保 rename 后内容已落盘，避免掉电时留下「文件存在但内容为空」。
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("同步临时 PID 文件失败: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("关闭临时 PID 文件失败: %w", err)
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return fmt.Errorf("设置 PID 文件权限失败: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("替换 PID 文件失败: %w", err)
+	}
+	tmpName = "" // 已成功 rename，勿再删除
+	return nil
 }
 
 // Read 读取 PID 文件中的 PID（优先返回 wrapper pid）。

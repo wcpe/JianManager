@@ -225,6 +225,14 @@ func (s *BusinessService) sendToProbe(
 		Wait: true,
 	})
 	if err != nil {
+		// 把 ctx 到期与真正的调用失败分开：对账路径会按 timeout 传入较大的值，
+		// 单台慢实例到点时这里先返回。若一律报「业务命令调用失败」，运营看到的是
+		// 「调用链路坏了」的假象，而实际只是这一台没在预算内回执。
+		// 保留原始 error 语义以便上层（business_reconcile.runOne）归为超时。
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			result.Error = "INSTANCE_TIMEOUT: 下发后未在预算内收到回执"
+			return result
+		}
 		result.Error = "业务命令调用失败"
 		return result
 	}

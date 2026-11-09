@@ -35,6 +35,16 @@
     见 `internal/controlplane/database/business_retirement_restart_cycle_test.go`。
 
 ### 修复
+- **PID 文件改为原子写（潜在的服务器“从管理面消失”缺陷）**：`daemon.PIDFile.WriteRecord` 用 `os.WriteFile`（截断→写入），而 wrapper 会**写两次**该文件——监听就绪写 `wrapper_pid + socket`，Java 拉起后补写 `java_pid`。两次之间/之中存在「长度为 0 或半截 JSON」的窗口。
+  **后果链**：Worker 重启时 `RecoverDaemonInstances` 恰好读到该窗口 → `ReadRecord` 解析失败 → 命中「读取 PID 文件失败，清理」分支，**`os.Remove(pidPath)` 并 `continue`** —— 一台正在服务的 MC 服务器就此被静默移出账本，再也不会被接管（连人工接管入口也找不到它）。另一条路径风险相同：半截记录里 `WrapperPID` 已写但 `SocketAddr` 为空时，会误判 wrapper 不存活而删记录。
+  **修法**：新增 `writeFileAtomic()`（同目录临时文件 + `Sync()` + `Chmod()` + `Rename()`），`WriteRecord` 与 `Write` 均改走它。rename 在同文件系统内原子，读者只会看到完整的旧记录或新记录。（这也对齐仓库其他同类写入的既有做法：`setup/yml.go`、`register/identity.go`、`logs/logtail/bindings.go` 都已用「临时文件 + rename」。）
+  **验证**：新增 `TestPIDFile_WriteRecord_Atomic_ReaderNeverSeesPartial`（写侧循环 300 次 + 读侧持续读）。**已用反证证明用例有效**：临时改回 `os.WriteFile` 后该用例 **5/5 全红**（报 `unexpected end of JSON input`，一次能读到上百次），改回原子写后 **5/5 全绿**。
+  生产侧此前未触发过（`journalctl` 搜该告警为 0 次）——属低概率但后果严重的窗口，现从源头消除。
+- **对账单实例超时不再被误报为「业务命令调用失败」**：`BusinessService.sendToProbe` 把 gRPC 调用错误一概写成 `业务命令调用失败`，包括 `context.DeadlineExceeded`——**error 类型被丢弃**。对账链路 `runOne` 因此有两个几乎同时就绪的信号（自己的 `cctx.Done()` 与 dispatch 返回），`select` 随机取一：取到前者报 `INSTANCE_TIMEOUT`，取到后者就变成误导性的「调用链路坏了」。
+  **修法**：在 `sendToProbe` 处先判 `errors.Is(err, context.DeadlineExceeded/Canceled)` 并写成 `INSTANCE_TIMEOUT: 下发后未在预算内收到回执`，让超时语义与真正的调用失败分开。这样不管 `select` 选哪条分支，对外都是一致的超时语义。（代码库其他处都已正确区分该错误：`approval.go`、`assistant_tool_exec.go`、`assistant_chat.go`，本次是补齐这处遗漏。）
+  **验证**：`TestBusinessReconcile_InstanceTimeout_DoesNotBlockOthers` 保持**严格断言**（必须含 `INSTANCE_TIMEOUT`），连跑 40 次全绿；修复前连跑 30 次会红 2 次。
+- **`TestManager_DaemonRecover` 间歇红**：它断言 `recovered == 1`，但启动接管两阶段化后，首拨失败会转后台重试并让 `RecoverDaemonInstances` 立即返回 0。同文件另两个用例已改成「先 `WaitStartupTakeover` 收敛、再断言终态」，唯这个漏了。已对齐。
+  （它最初还表现为「0.01s 就失败、实例不存在」，真正根因是上面那条 PID 文件竞态——记录被当脏数据删掉，循环空跑、无待重试任务，`Wait` 立即返回真。）
 - **FR-497③ 三项登记缺口补齐（2026-10-27，未发布）**：收养链路此前有三处「仍未做到」，本轮补上并留下可转红证据。
   ① **Java 分支负例**：原端到端负例都停在 wrapper 分支（`wrapper_argv_mismatch`）、唯一的 Java 分支拒绝是注入桩，
   函数层断言不覆盖动作侧。新增端到端用例：wrapper 用真实形态（argv `<worker> daemon` + 环境带本实例 UUID，真通过），

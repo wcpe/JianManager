@@ -358,6 +358,10 @@ func TestBusinessReconcile_IdempotencyKeyReused(t *testing.T) {
 
 // TestBusinessReconcile_InstanceTimeout_DoesNotBlockOthers
 // 单实例超时不阻塞其他实例：慢实例记超时，其余照常拿到快照。
+//
+// 时序背景（此处曾间歇红）：dispatch 内部的 ctx 与 runOne 的 cctx 是同一 timeout、
+// 近同一时刻到期（business.go 自建 ctx，未继承 cctx），所以超时时两个信号几乎同时就绪，
+// select 随机取一。runOne 已按「cctx 已到期」归回超时语义，故这里可以严格断言文案。
 func TestBusinessReconcile_InstanceTimeout_DoesNotBlockOthers(t *testing.T) {
 	f := newReconcileFixture(t, 3)
 	f.svc.SetInstanceTimeout(80 * time.Millisecond)
@@ -373,6 +377,7 @@ func TestBusinessReconcile_InstanceTimeout_DoesNotBlockOthers(t *testing.T) {
 
 	assert.True(t, resp.Results[0].Success)
 	assert.False(t, resp.Results[1].Success)
+	// 严格断言：无论是 cctx.Done() 还是 dispatch 返回的 ctx 取消，对外都必须是超时语义。
 	assert.Contains(t, resp.Results[1].Error, "INSTANCE_TIMEOUT")
 	assert.True(t, resp.Results[2].Success, "超时的实例不应阻塞其他实例")
 	assert.Less(t, elapsed, time.Second, "整体耗时不应被慢实例拖到 2s")
