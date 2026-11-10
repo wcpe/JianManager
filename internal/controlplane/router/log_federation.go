@@ -469,7 +469,23 @@ func federationPermissionScope(access *service.UserAccess, targets []string) str
 // 命中 2 条——故存在结构化约束时把 keyword 包成 `(keyword) AND ...`。
 //
 // level 与 source 均走白名单：它们来自用户输入，直接拼进表达式会引入注入面。
-func federationFilter(c *gin.Context) string {
+//
+// # keyword 为什么要做平衡性校验（2026-11-09）
+//
+// 把 keyword 包成 `(keyword) AND ...` 的前提是 **keyword 自身括号与引号配对**。
+// 否则用户传 `keyword=a) OR (b` 会得到：
+//
+//	(a) OR (b) AND level:WARN
+//
+// 括号被提前闭合，`AND level:WARN` 只约束 `b` 分支，`a` 那段完全不受级别约束。
+// 真机实测（2026-11-09）：库里 2872 条全是 INFO，`pinged AND level:WARN` 正确得到 0 条；
+// 而 `(InitialHandler) OR (pinged) AND level:WARN` 得到 **2872 条**——级别筛选彻底失效，
+// 用户点「只看 WARN」却拿到全量 INFO。
+//
+// 处理选择：不平衡就**拒绝**（交给调用方返 400），而不是自作聪明地转义或重排——
+// 后者会静默改变用户意图；而「括号平衡」是 LogsQL 自由布尔表达式仍能正常使用的下限。
+// 返回 ok=false 时，调用方必须中止本次请求。
+func federationFilter(c *gin.Context) (string, bool) {
 	keyword := strings.TrimSpace(c.Query("keyword"))
 
 	terms := make([]string, 0, 2)
@@ -483,13 +499,54 @@ func federationFilter(c *gin.Context) string {
 
 	if len(terms) == 0 {
 		// 无结构化约束：保持既有行为，keyword 原样下发（其内部布尔结构由用户自负）。
-		return keyword
+		// 此时不包括号，也就不存在括号被提前闭合的问题。
+		return keyword, true
 	}
 	joined := strings.Join(terms, " AND ")
 	if keyword == "" {
-		return joined
+		return joined, true
 	}
-	return "(" + keyword + ") AND " + joined
+	if !balancedFilterExpr(keyword) {
+		return "", false
+	}
+	return "(" + keyword + ") AND " + joined, true
+}
+
+// balancedFilterExpr 判断一段 LogsQL 过滤表达式的括号与双引号是否配对。
+//
+// 只做「把它整体包进 ( ) 不会改变结构」所需的最小检查：
+//   - 括号深度不得中途转负（`a)b(` 不是合法分组）；
+//   - 扫描结束深度必须回到 0；
+//   - 双引号必须成对，且**引号内的括号不计入深度**——否则 `_msg:"a)"` 会被误判。
+//
+// 单引号/反引号不处理：LogsQL 字段值用双引号。宁可只守括号平衡这条底线，
+// 也不为了“更严”把合法表达式判成非法（那会让用户的关键词筛选直接不可用）。
+func balancedFilterExpr(s string) bool {
+	depth := 0
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			// 跳过转义的下一个字符（含转义引号），避免 `\"` 被当成引号边界。
+			if inQuote && i+1 < len(s) {
+				i++
+			}
+		case '"':
+			inQuote = !inQuote
+		case '(':
+			if !inQuote {
+				depth++
+			}
+		case ')':
+			if !inQuote {
+				depth--
+				if depth < 0 {
+					return false
+				}
+			}
+		}
+	}
+	return depth == 0 && !inQuote
 }
 
 // isFederationLevel 白名单校验：仅接受契约登记的四个级别。
@@ -543,6 +600,18 @@ func (h *LogFederationHandler) buildQuery(c *gin.Context) (logcoord.Query, bool)
 		return logcoord.Query{}, false
 	}
 
+	filter, ok := federationFilter(c)
+	if !ok {
+		// keyword 的括号/引号不配对时不能包进 ( )。放行会让结构化约束（级别/来源）
+		// 只作用于 keyword 的某一条 OR 分支，用户点「只看 WARN」却拿到全量 INFO。
+		// 拒绝而非静默转义：静默改变用户表达式的含义比报错更难排查。
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_REQUEST",
+			"message": "keyword 的括号或双引号不配对，无法与级别/来源筛选组合",
+		})
+		return logcoord.Query{}, false
+	}
+
 	q := logcoord.Query{
 		RequestID:           c.GetHeader("X-Request-ID"),
 		FromUTC:             c.Query("from"),
@@ -553,7 +622,7 @@ func (h *LogFederationHandler) buildQuery(c *gin.Context) (logcoord.Query, bool)
 		// F-008：稳定 PermissionScope 摘要（权限节点/角色/授权版本/目标），供 View 复用校验。
 		PermissionScope: federationPermissionScope(access, targets),
 		OnlineOnly:      parseBoolParam(c.Query("onlineOnly")),
-		Filter:          federationFilter(c),
+		Filter:          filter,
 		ViewID:          c.Query("viewId"),
 		Cursor:          c.Query("cursor"),
 	}
@@ -846,10 +915,20 @@ func (h *LogFederationHandler) Facets(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 与 buildQuery 里 Budget.Limit 同口径：先钳掉负值。
+	// 不钳就会在转 uint32 时溢出成 4294967295，使下游裁剪与 Truncated 标记一并失效——
+	// 本地裁剪是 field_values 响应的唯一体积闸（该端点不向 VL 传 limit）。
+	dimensionLimit := parseIntDefault(c.Query("dimensionLimit"), 0)
+	if dimensionLimit < 0 {
+		dimensionLimit = 0
+	}
+	if dimensionLimit > int(logcoord.MaxFacetDimensionLimit) {
+		dimensionLimit = int(logcoord.MaxFacetDimensionLimit)
+	}
 	fq := logcoord.FacetsQuery{
 		Query:          q,
 		Dimensions:     splitCSV(c.Query("dimensions")),
-		DimensionLimit: uint32(parseIntDefault(c.Query("dimensionLimit"), 0)),
+		DimensionLimit: uint32(dimensionLimit),
 	}
 	if len(fq.Dimensions) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "dimensions 不能为空"})

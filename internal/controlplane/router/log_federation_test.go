@@ -128,6 +128,10 @@ type fedWorker struct {
 	streamN int
 	// lastFilter 记录最近一次 Search 收到的过滤表达式，供断言结构化筛选是否已组合下发。
 	lastFilter string
+	// lastFacetLimit 记录最近一次 Facets 收到的每维上限，供断言 CP 侧钳制是否生效。
+	// DimensionLimit 是 uint32：用户传负值未钳制时会溢出成 4294967295，
+	// 使下游裁剪与 Truncated 标记一并失效（本地裁剪是 field_values 的唯一体积闸）。
+	lastFacetLimit uint32
 	// quality 覆盖 Search 上报的质量；nil 表示按真实 Worker 的默认值上报 exact/exact。
 	// 真实 Worker 在 planner 中始终给出这两个维度（internal/worker/logs/query/planner.go），
 	// 零值等价于「Worker 未上报质量」，会被 fail-closed 的导出闸门正确阻断——
@@ -187,8 +191,9 @@ func (w *fedWorker) Stats(_ context.Context, req logcoord.WorkerSearchRequest, _
 	}, nil
 }
 
-func (w *fedWorker) Facets(_ context.Context, req logcoord.WorkerSearchRequest, _ []string, _ uint32) (*logcoord.WorkerFacetsResponse, error) {
+func (w *fedWorker) Facets(_ context.Context, req logcoord.WorkerSearchRequest, _ []string, dimensionLimit uint32) (*logcoord.WorkerFacetsResponse, error) {
 	w.facetN++
+	w.lastFacetLimit = dimensionLimit
 	return &logcoord.WorkerFacetsResponse{
 		ViewID:  req.ViewID,
 		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...),

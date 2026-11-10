@@ -57,6 +57,19 @@ var ControlledFacetDimensions = map[string]bool{
 // 作为分面维度聚合会让响应体积膨胀数倍；而「按源看」已由 log_source_id 覆盖。
 // 它作为**内部身份**更适合出现在事件详情而非分面维度。
 
+// MaxFacetDimensionLimit 每维返回值上限的硬上限。
+//
+// 为什么必须有：field_values 端点不向 VL 传 limit（传 limit 会让 hits 全归零，见
+// vlrange/facets_field_values.go），所以 MergeFacets 的本地裁剪是字段值响应的
+// **唯一**体积闸。而 FacetsQuery.DimensionLimit 是 uint32，调用方把用户输入直接
+// 转换时，负值会溢出成 4294967295——`uint32(len(values)) > dimensionLimit` 恒假，
+// 裁剪与 Truncated 标记同时失效，一个高基数维度的全量值集会一次性进 CP 内存，
+// 且被 aggCache 按条数（非字节）缓存留驻。
+//
+// 取值理由：前端实际传 8（LogsPage.tsx），Worker 侧未设 limit 时回填 100，
+// 1000 已是其 10 倍，足够覆盖任何正常界面，同时把「一次拉全量」挡在外面。
+const MaxFacetDimensionLimit uint32 = 1000
+
 // IsControlledFacet 维度是否受控。
 func IsControlledFacet(dimension string) bool {
 	return ControlledFacetDimensions[dimension]
@@ -69,6 +82,10 @@ func IsControlledFacet(dimension string) bool {
 //   - 高基数维度：合并后仍可按 limit 裁剪，必须保留 Truncated + TruncatedCount；
 //   - 任一 Worker 侧 Truncated 传染到合并结果（不得把截断结果标成 exact 完整）。
 func MergeFacets(perWorker []WorkerFacetsResponse, dimensions []string, dimensionLimit uint32) []FacetDimension {
+	// 兜底：绕过 CP router 直接调用本函数的路径（包括未来新增的管理面）也必须受限。
+	if dimensionLimit > MaxFacetDimensionLimit {
+		dimensionLimit = MaxFacetDimensionLimit
+	}
 	type acc struct {
 		counts         map[string]uint64
 		workerTrunc    bool
