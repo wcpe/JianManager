@@ -184,3 +184,59 @@ FR-517 的外部 MCP 连接走 HTTP + Agent Token，并对指向本平台的地�
 
 🔨 代码完成待真机验收（2026-10-25）：`model/business_event_cursor.go`（无 payload）+ `service/business_cursor_writer.go`（有界环 + 批量 500/1s + 丢最旧计数 + Close flush）+ `service/business_cursor.go`（缺口查询 + 保留期裁剪）+ `router/business_cursor.go`（`GET /business/cursor`）；`business_stream.go` 的 `Ingest` 仅在投递之后追加一次非阻塞入队，**原投递语义与性能零改动**。契约已进 `docs/openapi`（`check-openapi.sh` 17/17 一致）。**实测修掉一个真实缺陷**：GORM 在 SQLite 上会静默忽略 `Delete` 的 `Limit`（生成无 LIMIT 的 DELETE），原「分批删除」形同虚设、一次删整段过期数据即长事务锁库 → 改为「先查 id 再按 id 批删」，并补一条超过单批上限的用例盯着。**未验证**：真实 MySQL 上的裁剪行为与批量写吞吐；真机 100 实例 × 20 事件/秒压力下的表体量与写入延迟（估算 7 天约 12 亿行，ADR-107 已指出需分区/归档，本轮未做）。
 
+---
+
+## 2026-11-10 真机验收：FR-539 出站代理 / FR-544 工具渐进式披露
+
+### FR-539 供应商级出站代理（PASS 5/5）
+
+模拟服务：`scripts/fr-acceptance/mock_http_proxy.py`（记录请求形态并注入
+`X-Mock-Proxy: hit` 证明流量经过）。
+
+验收用例：`internal/platform/httpclient/proxy_mock_test.go`
+
+| 用例 | 结果 | 说明 |
+|---|---|---|
+| custom 模式 | PASS | 返回 `ErrProxyUnsupported`，**显式拒绝而非静默绕过** |
+| direct 模式 | PASS | `Transport.Proxy == nil`，环境变量代理无法接管 |
+| env 模式 | PASS | 正确采用 `HTTPS_PROXY` |
+| no_proxy 命中 | PASS | 该目标不判为需经代理 |
+| 只配 no_proxy 不配 URL | PASS | 不把任何目标判为必须经代理 |
+
+**custom 模式报错是正确行为，不是缺陷**。受保护出站的核心取舍：
+
+> 目的地址准入必须在每次实际拨号时校验并固定 IP……一旦启用 HTTP/SOCKS 代理，
+> 拨号目标是代理而非业务域名，IP 无法固定，此时**显式拒绝**（ErrProxyUnsupported）
+> 而不是静默直连——静默直连会让「配了代理」的部署出现意外的绕过路径。
+
+因此本 FR 的验收口径不是「代理能不能转发」，而是「三种模式的**语义是否诚实**」：
+direct 确实不读环境代理、env 确实采用环境代理、custom 在不安全时明确报错。
+
+### FR-544 工具渐进式披露（PASS，附边界）
+
+验收用例：`internal/controlplane/service/assistant_tool_disclosure_measured_test.go`
+
+**实测数字（与本 spec 上方声明完全吻合）**：
+
+| 项 | 实测值 |
+|---|---|
+| 常驻 schema | **1350 字节**（声明也是 1350）|
+| 全量 108 工具 | **45088 字节** |
+| 常驻占比 | **3.0%** |
+
+**「与工具总数无关」的正面证明**：
+
+```
+目录 0 个工具   → 常驻 1350 字节
+目录 300 个工具 → 常驻 1350 字节   ← 完全一致
+```
+
+### 边界（必须与上述承诺一起读）
+
+`assistant_external_tools.go` 的 `externalToolSpecs` **全量下发外部 MCP 工具**，
+遍历全部 enabled 行逐个转换，**无数量上限**。
+
+因此「常驻体积与工具总数无关」**仅对内置工具成立**，外部 MCP 连接的工具不适用。
+这不是缺陷（外部工具有独立的风险/启停模型与管理员可见性约束），
+但引用本 FR 的结论时必须带上这个限定，否则会被误读为对所有工具成立。
+
