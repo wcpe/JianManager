@@ -3,10 +3,15 @@
 // 设计目标（见 docs/specs/node-runtime-library/spec.md §3.2「Node 安装器」）：
 //   - InstallNodeJS 从 nodejs.org dist（镜像可配）解析该 major 最新版本并下载便携归档，
 //     解压到托管目录 <数据根>/opt/runtimes/nodejs-<major>；
+//
 // 下载复用 jdk 包导出的 DownloadAndExtract 基建：同一出站 client 语义、
-//     停滞看门狗判卡死、网络失败可操作引导；
+//
+//	停滞看门狗判卡死、网络失败可操作引导；
+//
 // 残骸自愈：完成标记 = node 可执行文件（bin/node | node.exe），无标记的
-//     半截目录自动清除重装、有标记的完好目录拒绝覆盖；
+//
+//	半截目录自动清除重装、有标记的完好目录拒绝覆盖；
+//
 // Remove 删除归一到托管根下顶层子目录整体删除，拒绝根本身与根外路径。
 //
 // 所有操作只针对 Worker 本地文件系统；CP 通过 gRPC InstallRuntime/RemoveRuntime 触发，

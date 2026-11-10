@@ -25,7 +25,7 @@ type QQDiscoveredGroup struct {
 	// LastSeenAt 最近一次入群事件时间（重复进群刷新）。
 	LastSeenAt time.Time `json:"lastSeenAt"`
 	// SourceAppID 发现该群的机器人 appId。
-	SourceAppID string `gorm:"type:varchar(64);index" json:"sourceAppId"`
+	SourceAppID string    `gorm:"type:varchar(64);index" json:"sourceAppId"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
@@ -55,7 +55,7 @@ type QQGatewayConnection struct {
 	// LastError 最近一次错误（人类可读，4014 时明确指向 intent 权限）。
 	LastError string `gorm:"type:varchar(512)" json:"lastError"`
 	// SessionID 网关会话 ID（READY 后保存，Resume 时使用）。
-	SessionID string `gorm:"type:varchar(128)" json:"-"`
+	SessionID string    `gorm:"type:varchar(128)" json:"-"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }

@@ -196,10 +196,11 @@ func TestSQLitePool_ResetSessionRejectsPoisonedConn(t *testing.T) {
 //
 // 两个方向都要守：
 // 原生驱动**不实现** driver.Validator / SessionResetter —— 这正是的根因
-//     （database/sql 因此无法识别并驱逐带打开事务的连接）。一旦驱动改版补上这两个接口，
-//     本用例会失败提醒我们重新评估防线是否还需要自建。
-//   - 包装后**必须保留** ExecerContext / QueryerContext / ConnPrepareContext / ConnBeginTx /
-//     Pinger —— 否则 database/sql 的接口断言全部落空、退化到 Prepare 路径，性能与语义都会变。
+//
+//	  （database/sql 因此无法识别并驱逐带打开事务的连接）。一旦驱动改版补上这两个接口，
+//	  本用例会失败提醒我们重新评估防线是否还需要自建。
+//	- 包装后**必须保留** ExecerContext / QueryerContext / ConnPrepareContext / ConnBeginTx /
+//	  Pinger —— 否则 database/sql 的接口断言全部落空、退化到 Prepare 路径，性能与语义都会变。
 func TestGuardConnPreservesDriverInterfaces(t *testing.T) {
 	probe, err := sql.Open(sqlite.DriverName, filepath.Join(t.TempDir(), "iface.db"))
 	require.NoError(t, err)

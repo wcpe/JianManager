@@ -19,6 +19,7 @@
 | [architecture-invariants.md](architecture-invariants.md) | 架构不变量，任何代码变更都不得违反 |
 | [branch-only-records.md](branch-only-records.md) | 主线外（未合入 master）的 FR/ADR 可直接删除，不回填空号；已合入的走 doc-evolution.md 的保留规则 |
 | [comments.md](comments.md) | 注释规范 |
+| [code-format.md](code-format.md) | Go 源码格式（gofmt 零不合规；注释重排属正常排版） |
 | [config-files.md](config-files.md) | 配置文件格式和命名规范 |
 | [decision-alignment.md](decision-alignment.md) | 代码必须和 ADR 决策一致 |
 | [doc-sync.md](doc-sync.md) | 代码变更时文档必须同步更新 |

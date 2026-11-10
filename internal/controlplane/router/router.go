@@ -18,10 +18,10 @@ import (
 
 // Services 聚合所有服务依赖。
 type Services struct {
-	Auth       *service.AuthService
-	User       *service.UserService
-	Group      *service.GroupService
-	Node       *service.NodeService
+	Auth  *service.AuthService
+	User  *service.UserService
+	Group *service.GroupService
+	Node  *service.NodeService
 	// NodeProxy 节点级出站代理管控；nil 时节点代理端点关闭。
 	NodeProxy     *service.NodeProxyService
 	Instance      *service.InstanceService

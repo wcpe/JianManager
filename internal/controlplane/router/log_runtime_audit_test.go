@@ -203,4 +203,3 @@ func TestLogMigratePartitionRecordsAudit(t *testing.T) {
 	require.NoError(t, db.Where("action = ?", "node.log_partition.migrate").Find(&audits).Error)
 	require.Len(t, audits, 1, "Worker 报错时不得新增成功审计")
 }
-

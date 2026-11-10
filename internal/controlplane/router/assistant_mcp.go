@@ -50,18 +50,18 @@ type mcpOriginRequest struct {
 
 // mcpConnectionRequest 创建/更新连接的请求体。
 type mcpConnectionRequest struct {
-	Slug           string             `json:"slug"`
-	Name           string             `json:"name"`
-	Endpoint       string             `json:"endpoint"`
-	AuthStyle      string             `json:"authStyle"`
-	AuthHeaderName string             `json:"authHeaderName"`
-	AuthSource     string             `json:"authSource"`
-	AuthEnv        string             `json:"authEnv"`
-	AuthSecret     string             `json:"authSecret"`
-	ClearCredential bool              `json:"clearCredential"`
-	AllowedOrigins []mcpOriginRequest `json:"allowedOrigins"`
-	Enabled        bool               `json:"enabled"`
-	Version        int                `json:"version"`
+	Slug            string             `json:"slug"`
+	Name            string             `json:"name"`
+	Endpoint        string             `json:"endpoint"`
+	AuthStyle       string             `json:"authStyle"`
+	AuthHeaderName  string             `json:"authHeaderName"`
+	AuthSource      string             `json:"authSource"`
+	AuthEnv         string             `json:"authEnv"`
+	AuthSecret      string             `json:"authSecret"`
+	ClearCredential bool               `json:"clearCredential"`
+	AllowedOrigins  []mcpOriginRequest `json:"allowedOrigins"`
+	Enabled         bool               `json:"enabled"`
+	Version         int                `json:"version"`
 }
 
 func (r mcpConnectionRequest) toInput() service.MCPConnectionInput {

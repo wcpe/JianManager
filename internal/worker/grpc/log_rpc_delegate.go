@@ -146,4 +146,3 @@ func (s *Server) LogMigratePartition(ctx context.Context, req *workerpb.LogMigra
 	}
 	return s.UnimplementedWorkerServiceServer.LogMigratePartition(ctx, req)
 }
-

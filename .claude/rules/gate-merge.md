@@ -19,6 +19,7 @@
 ### 代码质量
 - [ ] 无编译错误
 - [ ] 无 lint 错误
+- [ ] Go 源码格式合规：`sh .claude/scripts/check-gofmt.sh` 通过（见 [code-format.md](code-format.md)）
 - [ ] 新增 / 修改的代码里没有 FR / ADR 编号：`sh .claude/scripts/check-no-ref-in-code.sh` 通过（存量豁免见 [no-ref-in-code.md](no-ref-in-code.md)）
 - [ ] 新增 / 修改的**文档**里没有 git commit hash：`sh .claude/scripts/check-no-hash-in-docs.sh` 通过（squash merge 后 hash 必悬空，见 [no-hash-in-docs.md](no-hash-in-docs.md)）
 - [ ] 核心逻辑有测试覆盖

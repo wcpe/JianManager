@@ -21,8 +21,8 @@ type HostMountSnapshot struct {
 	NodeUUID string `gorm:"type:char(36);not null;uniqueIndex:ux_host_mount_node_mp,priority:1" json:"nodeUuid"`
 	// Mountpoint 挂载点路径（如 /、/var）。
 	Mountpoint string `gorm:"type:varchar(255);not null;uniqueIndex:ux_host_mount_node_mp,priority:2" json:"mountpoint"`
-	TotalBytes uint64  `json:"totalBytes"`
-	UsedBytes  uint64  `json:"usedBytes"`
+	TotalBytes uint64 `json:"totalBytes"`
+	UsedBytes  uint64 `json:"usedBytes"`
 	// UsedPct 使用率（0..100）。
 	UsedPct float32 `json:"usedPct"`
 	// SampledAt 采集时刻，用于判鲜度与 TTL 清理。

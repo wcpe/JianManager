@@ -24,10 +24,10 @@ func purgeArchivedRecord(t *testing.T) (*Catalog, PartitionKey) {
 	key := purgeKey()
 	rec := NewStableRecord(key, OwnerHot, 1, "20260601")
 	rec.PublishedProjection = &PublishedProjection{
-		ManifestVersion:  "manifest-hot",
-		CoverageComplete: true,
-		QueryLocationDirID: "20260601",
-		QueryGeneration:    1,
+		ManifestVersion:      "manifest-hot",
+		CoverageComplete:     true,
+		QueryLocationDirID:   "20260601",
+		QueryGeneration:      1,
 		ProjectionGeneration: "p-hot",
 	}
 	ev := ArchiveEvidence{

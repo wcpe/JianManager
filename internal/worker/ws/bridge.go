@@ -63,8 +63,8 @@ type PluginEvent struct {
 	// 探针侧时钟」，Loom 摄入侧也按毫秒折 UTC 日。曾误用 time.Now().Unix()（秒），
 	// 结果 1792957711 被当毫秒解析成 1970-01-21，日聚合整体落到 1970。
 	Timestamp int64
-	Platform     string // bukkit | bungee（来自探针 hello）
-	Version      string // 探针版本（来自探针 hello）
+	Platform  string // bukkit | bungee（来自探针 hello）
+	Version   string // 探针版本（来自探针 hello）
 	// 以下为探针业务事件携带的结构化字段；连接/心跳事件为空。
 	PlayerName string // 玩家事件：玩家名
 	PlayerUUID string // 玩家事件：玩家 UUID

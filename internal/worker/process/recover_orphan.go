@@ -374,6 +374,7 @@ func (m *Manager) registerAdoptedDaemon(instanceUUID string, rec *daemon.PIDReco
 //   - 只记审计（`orphan.startup_detected_not_reaped`，success=true 表示「观测成功」而非「已处置」）
 //     并打 WARN，**保留 PID 文件**；
 //   - 交周期孤儿扫描按 `orphan.dispose_policy` 处置（默认 warn 只告警；显式 auto 才强杀）；
+//
 // 的漂移观测与 `adopt-runtime` 接管是人工/受控的解决出口。
 //
 // reason 用于审计定位触发分支（startup_wrapper_gone_java_alive / startup_reconnect_failed）。

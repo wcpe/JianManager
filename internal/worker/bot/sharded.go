@@ -29,7 +29,7 @@ type ShardedManager struct {
 	shardTotalCap int
 	maxBots       int
 
-	mu      sync.RWMutex
+	mu sync.RWMutex
 	// botShard 记录每个 bot 归属的片索引。批次分配后写入，停止/操作时据此路由。
 	botShard map[string]int
 
@@ -347,7 +347,7 @@ func (s *ShardedManager) pickShard() (int, *Manager) {
 // pickShardWithPending 在 pickShard 基础上叠加「本批已分配但未下发」的计数。
 //
 // 必要性：批次内连续分配时，各片 CapacitySnapshot 尚未反映刚分配出去的 bot
-//（它们要等 RPC 下发后才计入 ActiveBots），只看快照会把整批塞进同一片。
+// （它们要等 RPC 下发后才计入 ActiveBots），只看快照会把整批塞进同一片。
 // pending 为空时退化为普通 pickShard。
 func (s *ShardedManager) pickShardWithPending(pending map[int]int) int {
 	bestIdx := -1

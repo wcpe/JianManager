@@ -104,8 +104,8 @@ const (
 
 // Coverage partial / not-ready 可观测原因（契约 §6.3§3.1）。
 const (
-	ReasonColdMissing          = "COLD_MISSING"
-	ReasonArchiveNotRestored   = "ARCHIVE_NOT_RESTORED"
+	ReasonColdMissing        = "COLD_MISSING"
+	ReasonArchiveNotRestored = "ARCHIVE_NOT_RESTORED"
 	// ReasonArchivePurged 表示「该分区的归档副本已按保留期清除」。
 	//
 	// 为什么必须与 ARCHIVE_NOT_RESTORED 分开（而不是复用 LOG_ARCHIVE_MISSING）：
@@ -114,7 +114,7 @@ const (
 	// 复用 MISSING 会让界面把「已按保留期删除」显示成「历史日志尚未取回」，
 	// 用户点恢复、恢复失败、再报错，最后还是要人来解释——而那时用户已经
 	// 对「平台说数据在、其实不在」这件事失去了信任。
-	ReasonArchivePurged = "ARCHIVE_PURGED"
+	ReasonArchivePurged        = "ARCHIVE_PURGED"
 	ReasonRehydrateFailed      = "REHYDRATE_FAILED"
 	ReasonStagingExcluded      = "STAGING_EXCLUDED"
 	ReasonRecoveryRequired     = "RECOVERY_REQUIRED"
@@ -437,8 +437,8 @@ type QueryView struct {
 	LeaseIDs         map[string]string                       `json:"lease_ids,omitempty"`
 	Transient        bool                                    `json:"-"`
 	QueryableTargets map[string]bool                         `json:"queryable_targets,omitempty"`
-	TargetCoverage     map[string]TargetCoverage             `json:"target_coverage,omitempty"`
-	Quality            Quality                               `json:"quality"`
+	TargetCoverage   map[string]TargetCoverage               `json:"target_coverage,omitempty"`
+	Quality          Quality                                 `json:"quality"`
 	CreatedAt        time.Time                               `json:"created_at"`
 	ExpiresAt        time.Time                               `json:"expires_at"`
 }

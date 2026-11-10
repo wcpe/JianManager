@@ -755,8 +755,8 @@ func main() {
 	// Handler 不再持有 AgentTokenService（授权由 middleware.AgentAuth 前置完成），
 	// Agent 依赖只经 ToolDeps 供工具解析可信目标。
 	mcpToolDeps := mcp.ToolDeps{
-		Instance:  instanceSvc,
-		Node:      nodeSvc,
+		Instance: instanceSvc,
+		Node:     nodeSvc,
 		// 实例日志走联邦（真源在 Worker 的 VL）；不再注入 CP logs 表服务。
 		LogCoord:  logCoord,
 		Agent:     agentTokenSvc,

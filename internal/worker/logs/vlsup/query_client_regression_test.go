@@ -85,9 +85,9 @@ func TestQueryPostHonoursQueryTimeout(t *testing.T) {
 	defer srv.Close()
 
 	c, err := NewClient(ClientOptions{
-		BaseURL:        srv.URL,
+		BaseURL:          srv.URL,
 		AllowNonLoopback: true,
-		QueryTimeout:   50 * time.Millisecond,
+		QueryTimeout:     50 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

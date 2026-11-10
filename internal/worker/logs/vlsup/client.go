@@ -162,7 +162,7 @@ type Client struct {
 	// 为什么累加而不用常量 73×：实测比与数据形态强相关（重复度低时远不到 73×），而本仓的
 	// 写入是唯一高频对外请求，运维必须能在时序库里看到「实际压到多少」——否则「压缩优化没生效」
 	// 这种事在生产上完全不可观测。计数只增不减、读侧零锁，不参与任何判定。
-	compressOrigBytes  atomic.Int64
+	compressOrigBytes atomic.Int64
 	compressGzipBytes atomic.Int64
 	compressSamples   atomic.Int64
 }

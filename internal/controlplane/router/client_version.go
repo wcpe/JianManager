@@ -23,9 +23,10 @@ import (
 //
 // 鉴权分两组、物理隔离（关键安全设计）：
 // 发布端点（运营操作）：JWT 平台管理员，挂 admin 组（同频道管理）。
-//     POST /client-channels/:id/files、POST /client-channels/:id/versions。
-//   - 消费端点（玩家）：X-Client-Key 拉取密钥鉴权（service.VerifyKey/VerifyAnyKey），挂公网组。
-//     GET /client-channels/:id/manifest、GET /client-artifacts/:sha256。
+//
+//	  POST /client-channels/:id/files、POST /client-channels/:id/versions。
+//	- 消费端点（玩家）：X-Client-Key 拉取密钥鉴权（service.VerifyKey/VerifyAnyKey），挂公网组。
+//	  GET /client-channels/:id/manifest、GET /client-artifacts/:sha256。
 //
 // 理由：拉取密钥半公开（随整包分发必然泄露），用它鉴权「发布」=严重漏洞；
 // contract §4 只把 manifest/制品/遥测列为玩家 key 端点。发布走运营浏览器 JWT 入口。

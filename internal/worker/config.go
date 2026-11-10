@@ -898,7 +898,6 @@ type LogIngestConfig struct {
 	Charset string `mapstructure:"charset"`
 }
 
-
 // LogTailerConfig 是新采集器的配置面，键为 `log_tailer.*`。
 //
 // # 为什么是独立的一段而不是复用 log_ingest
@@ -1660,7 +1659,6 @@ func (c *Config) WALBudgetNotice() string {
 	}
 	return "log_capacity.max_wal_bytes=0（字节维度不限）：暂停仍由 log_capacity.max_wal_entries 兜住，但单条超大事件（如整段堆栈）不再有字节上界，请确认这是有意为之"
 }
-
 
 // LogLevel 解析 `log.level` 为 slog 等级。
 //

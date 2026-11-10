@@ -828,10 +828,11 @@ const runtimeDriftCmdlineMax = 512
 //
 // 语义边界：
 // 仅对**已存在实例**更新（按 uuid 匹配）；命中 0 行直接忽略，绝不越界到的孤儿语义
-//     （无主运行时的跟踪/宽限/自动处置由 OrphanRuntimeTracker 独立负责）。
-//   - 上报状态属运行类（RUNNING/STARTING/STOPPING）时，进程归受管生命周期所有，不算漂移；
-//     本拍若无外来进程或已回归受管，则把漂移清零（要求库中原值非 0，避免每拍对全量实例产生无谓写）。
-//   - 本函数只观测落库，不触发任何处置动作（接管须运维显式发起）。
+//
+//	  （无主运行时的跟踪/宽限/自动处置由 OrphanRuntimeTracker 独立负责）。
+//	- 上报状态属运行类（RUNNING/STARTING/STOPPING）时，进程归受管生命周期所有，不算漂移；
+//	  本拍若无外来进程或已回归受管，则把漂移清零（要求库中原值非 0，避免每拍对全量实例产生无谓写）。
+//	- 本函数只观测落库，不触发任何处置动作（接管须运维显式发起）。
 func (h *ControlPlaneHandler) applyRuntimeDrift(states []*workerpb.InstanceState) {
 	now := time.Now()
 	for _, s := range states {

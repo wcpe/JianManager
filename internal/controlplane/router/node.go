@@ -13,8 +13,8 @@ import (
 
 // NodeHandler 节点路由处理器。
 type NodeHandler struct {
-	nodeSvc   *service.NodeService
-	audit     *service.AuditService
+	nodeSvc *service.NodeService
+	audit   *service.AuditService
 }
 
 // NewNodeHandler 创建节点路由处理器。

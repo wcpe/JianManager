@@ -560,8 +560,8 @@ func TestAssistantChat_AllRolesCanCreateOwnConversation(t *testing.T) {
 		Update("role", model.RoleGroupAdmin).Error)
 	tokenB := loginAs(t, f.router, "chat_member_b", "password123")
 
-	convMember := f.createConversation(t, f.tokenA)  // 普通成员
-	convGroup := f.createConversation(t, tokenB)     // 组管理员
+	convMember := f.createConversation(t, f.tokenA)    // 普通成员
+	convGroup := f.createConversation(t, tokenB)       // 组管理员
 	convAdmin := f.createConversation(t, f.adminToken) // 平台管理员
 	require.NotEqual(t, convMember, convGroup, "不同用户应拿到不同会话")
 	require.NotEqual(t, convGroup, convAdmin)

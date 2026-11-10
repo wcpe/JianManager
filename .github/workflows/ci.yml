@@ -441,3 +441,15 @@ jobs:
         run: |
           set -euo pipefail
           sh .claude/scripts/check-no-hash-in-docs.sh --all
+
+      # Go 源码必须过 gofmt（.claude/rules/code-format.md）。
+      #
+      # 立此门前全仓有 34 个不合规文件，而 CI 与 golangci-lint 都没查格式
+      # （.golangci.yml 未启用 gofmt/gofumpt）—— 这批不一致可以无限期存在。
+      # 格式噪音还会淹没真实 diff：下一个改动者用 IDE 自动格式化就会带出一批
+      # 与本次无关的空白改动。
+      - name: Go 源码格式检查（gofmt）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh .claude/scripts/check-gofmt.sh
