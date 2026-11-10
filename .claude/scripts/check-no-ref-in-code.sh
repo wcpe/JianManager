@@ -165,8 +165,12 @@ fi
 
 # ── 新引入的文件名也不得带编号 ────────────────────────────────────
 # 只看 A（新增）/R（重命名后）；存量文件由 --stock 报告。
+#
+# 验收工具目录同样豁免：那里的文件名就是用例主键（如 g_fr498.py、p2_core.py），
+# 与代码内容豁免同一个理由——文件本身就用编号命名才有意义。
 # shellcheck disable=SC2086
 name_added=$(git diff -M --diff-filter=AR --name-only "$BASE"...HEAD -- $ROOTS \
+  | grep -vE "^($ALLOW_DIRS)/" \
   | grep -iE '(^|[^a-z0-9])(fr|adr)[0-9]+' || true)
 if [ -n "$name_added" ]; then
   echo "❌ 新增/重命名的文件名里带了 FR/ADR 编号（规则见 .claude/rules/no-ref-in-code.md）"
