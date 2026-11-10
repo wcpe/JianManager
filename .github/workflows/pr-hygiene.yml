@@ -175,6 +175,14 @@ $hits"
           set -eu
           # 允许的占位用户名与常见 CI/容器路径；其余 /home|/Users/<名>/ 与 C:\Users\ 一律视为泄漏。
           # 同样只看新增行：删除行不构成新的泄漏。
+          #
+          # 【特殊规则：wxys233 只放行用户名段，后面跟真实目录时仍然拦】
+          # 用户的决定：本机用户名本身可以不出现在拦截名单里（它与仓库作者同名字，
+          # 拦它会把正常引用一并误报），但**它后面的目录结构仍属泄漏**。
+          # 实现方式：先单独判定每个路径 token 的「用户名段之后的部分」——
+          #   · `/home/wxys233/` 结尾（无后续）或后面跟的是占位符 → 放行
+          #   · `/home/wxys233/projects/JianManager/...` 这类真实目录 → 仍然拦
+          # 不能简单把它加进 ALLOW：那会把后面的真实路径一起放过。
           ALLOW='(/home/(user|example|runner|app|node|ubuntu)/)|(/Users/(user|example|runner|shared)/)|(/opt/(app|jm|jianmanager)/)|(/tmp/)|(/var/(log|lib|run)/)|(/usr/)|(/etc/)|(C:\\Users\\(user|example|runner)\\)'
           ADDED=$(git diff "$BASE"...HEAD --unified=0 | grep -E '^\+' | grep -vE '^\+\+\+' || true)
           fail=0
@@ -186,7 +194,22 @@ $hits"
           PATH_HITS=$(printf '%s\n' "$ADDED" \
             | grep -aoE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\' \
             | sort -u \
-            | grep -vE "$ALLOW" || true)
+            | grep -vE "$ALLOW" \
+            | grep -vE '^/home/wxys233/$' || true)
+          # 上面先把 `/home/wxys233/` 这个**光用户名段**放过（用户决定：它与仓库作者同名，
+          # 拦它会把正常引用一并误报）。但**它后面的目录结构仍要查**，
+          # 所以下面单独把「用户名段 + 后续路径」完整抽出来再判一次。
+          WX_TAIL_HITS=$(printf '%s\n' "$ADDED" \
+            | grep -aoE '/home/wxys233/[A-Za-z0-9._/-]+' \
+            | sort -u \
+            | grep -vE '^/home/wxys233/(user|example|placeholder|\\.\\.\\.)(/|$)' || true)
+          if [ -n "$WX_TAIL_HITS" ]; then
+            if [ -n "$PATH_HITS" ]; then
+              PATH_HITS=$(printf '%s\n%s\n' "$PATH_HITS" "$WX_TAIL_HITS")
+            else
+              PATH_HITS="$WX_TAIL_HITS"
+            fi
+          fi
           if [ -n "$PATH_HITS" ]; then
             echo "::error::变更含真实绝对路径（泄漏用户名/目录结构），请改用相对路径、临时目录或配置注入"
             printf '%s\n' "$PATH_HITS" | head -20
