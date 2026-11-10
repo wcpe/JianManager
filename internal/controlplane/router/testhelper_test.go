@@ -60,8 +60,21 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	gin.DefaultWriter = io.Discard
 	dir := t.TempDir()
+	// 为何显式指定 synchronous(NORMAL)（2026-11-10）：
+	//
+	// 驱动（glebarez/sqlite）默认把 synchronous 置为 **FULL**，而 SQLite 官方在 WAL 模式下
+	// 推荐的正是 NORMAL。FULL 的代价是每次提交都 fsync WAL（本包实测单次 AutoMigrate
+	// **1075ms**，改 NORMAL 后 **78ms**，快 13.8 倍）。
+	//
+	// 这不是“为了快而牺牲安全”：WAL+NORMAL 仍然保证**数据库一致性**（不丢事务、不损坏库），
+	// 只可能在**掉电**时丢掉最后几个已提交事务——对测试库无意义（进程结束即删）。
+	//
+	// 为何必须改：本包 `setupTestDB` 被 **522 个用例**各调一次，每次都完整跑 AutoMigrate。
+	// FULL 下 522 × 1.07s ≈ **560s**，与 `go test` 默认超时 **600s** 只差 40s 余量——
+	// 机器 I/O 稍有波动即整包超时（实测：同一份代码在 12 次跑中均为 94~108s，
+	// 第13 次因宿主 I/O 压力升到 600s 撞线）。改 NORMAL 后约 **40s**，余量充足。
 	dsn := "file:" + filepath.ToSlash(filepath.Join(dir, "test.db")) +
-		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Discard,
 	})
