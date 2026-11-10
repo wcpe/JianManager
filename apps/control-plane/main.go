@@ -8,9 +8,12 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 	// M4：内嵌 IANA 时区库。`/metrics/players/trend` 的 `tz` 参数依赖
 	// `time.LoadLocation`，而官方容器镜像（alpine）不带 tzdata，systemd/裸机也可能缺
@@ -105,12 +108,63 @@ func recoverConnectedBotFleetSubscriptions(ctx context.Context, execution *servi
 	return execution.RecoverFleetSubscriptions(ctx, connected)
 }
 
-func runControlPlaneServer(run func() error, closeSubscriptions func()) error {
-	err := run()
-	if err != nil && closeSubscriptions != nil {
-		closeSubscriptions()
+// runControlPlaneServer 启动 HTTP 服务并阻塞至收到退出信号或 run 返回。
+//
+// 与 Worker 对齐（apps/worker/main.go 的 signal.Notify + closeProcessLogger）：
+// 此前 CP 没有任何 signal 处理，SIGTERM 走默认处理直接杀进程，于是：
+//   - closePlatformLogger 全仓零调用——rollog.Writer.Close 里「等后台 gzip 收尾」
+//     那段永不执行，退出时会留下未压缩的 .gz.tmp（下次启动 sweepOrphanTmp 补压，
+//     数据不丢，但“退出时不留未压缩档”的承诺落空）；
+//   - HTTP 服务没有优雅关闭，在途请求被直接切断。
+//
+// sigCh 作为参数而非函数内创建：测试需要在不向自身进程发信号的前提下
+// 验证「收到退出信号后 closeLogger 被调用」——这是本次修复的唯一可观测契约。
+func runControlPlaneServer(
+	run func() error,
+	shutdown func(context.Context) error,
+	closeSubscriptions func(),
+	closeLogger func(),
+	sigCh <-chan os.Signal,
+) error {
+	errCh := make(chan error, 1)
+	go func() { errCh <- run() }()
+
+	// 日志文件在最后关：上面每条 Info/Warn 还要落到它里；
+	// closeLogger 会等后台 gzip 收尾，避免刚 rename 的轮转档卡在未压缩状态。
+	finish := func() {
+		if closeSubscriptions != nil {
+			closeSubscriptions()
+		}
+		if closeLogger != nil {
+			closeLogger()
+		}
 	}
-	return err
+
+	select {
+	case err := <-errCh:
+		// run 自行返回（端口占用、ListenAndServe 失败）：无论成败都要收尾。
+		// 旧实现只在 err != nil 时关 subscriptions，日志则从未关过。
+		finish()
+		return err
+	case sig := <-sigCh:
+		slog.Info("收到退出信号，正在关闭", "signal", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if shutdown != nil {
+			if err := shutdown(ctx); err != nil {
+				slog.Warn("HTTP 服务关闭超时", "error", err)
+			}
+		}
+		finish()
+		return nil
+	}
+}
+
+// registerShutdownSignals 注册 CP 的退出信号（与 Worker 同口径：SIGINT/SIGTERM）。
+func registerShutdownSignals() (<-chan os.Signal, func()) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	return sigCh, func() { signal.Stop(sigCh) }
 }
 
 func main() {
@@ -1236,7 +1290,18 @@ func main() {
 	// 启动离线检测器
 	cpgrpc.StartOfflineDetector(db)
 
-	if err := runControlPlaneServer(func() error { return r.Run(addr) }, botLoadSvcs.subscriptions.Close); err != nil {
+	// 换成显式 http.Server：r.Run 无法优雅关闭（gin 的 Run 内部自建 server，
+	// Shutdown 拿不到句柄）。
+	httpSrv := &http.Server{Addr: addr, Handler: r}
+	sigCh, stopSignals := registerShutdownSignals()
+	defer stopSignals()
+	if err := runControlPlaneServer(
+		func() error { return httpSrv.ListenAndServe() },
+		httpSrv.Shutdown,
+		botLoadSvcs.subscriptions.Close,
+		closePlatformLogger,
+		sigCh,
+	); err != nil {
 		slog.Error("启动服务器失败", "error", err)
 	}
 }
