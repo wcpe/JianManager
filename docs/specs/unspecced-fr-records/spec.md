@@ -327,15 +327,15 @@ Agent Token 模型 + CP 侧鉴权（feat）：`agent_tokens` 表 + `POST/GET/DEL
 
 ### FR-385 jm-agent 管理 CLI（feat，仿 jmctl）
 
-jm-agent 管理 CLI（feat，仿 jmctl）：独立 Go 二进制 `apps/jmagent/`，仅引入 HTTP 客户端与标准库，不链 gRPC/DB；子命令 MVP = `whoami/list nodes/list instances/instance status metrics logs/start stop restart/node maintenance enter leave`，写白名单仅含 `instance.life`+`node.maintenance`；非交互 `--output json` 给脚本/CI；403/硬拒绝文案稳定；Token 仅 env 与 `--token` 传入不落盘（需 spec + 新 ADR-079，依赖 FR-384；建议并行 worktree）→ `docs/specs/jm-agent-cli/spec.md`
+jm-agent 管理 CLI（feat，仿 jmctl）：独立 Go 二进制 `apps/jmagent/`，仅引入 HTTP 客户端与标准库，不链 gRPC/DB；子命令 MVP = `whoami`、`list nodes`、`list instances`、`instance status`、`instance metrics`、`instance start|stop|restart`、`node maintenance enter|leave`，写白名单仅含 `instance.life`+`node.maintenance`；非交互 `--output json` 给脚本/CI；403/硬拒绝文案稳定；Token 仅 env 与 `--token` 传入不落盘（需 spec + 新 ADR-079，依赖 FR-384；建议并行 worktree）→ `docs/specs/jm-agent-cli/spec.md`
 
 ### FR-389 CP 内嵌 MCP 长连接服务（feat，取代 FR-386 远程入口形态）
 
-CP 内嵌 MCP 长连接服务（feat，取代 FR-386 远程入口形态）：Control Plane 提供 **Streamable HTTP（主）+ 兼容 SSE** MCP 端点；鉴权复用 Agent Token（FR-384）；工具集与 jm-agent 对齐、硬拒绝不注册；**可运维会话**：列表（token 名/前缀、IP、已连时长、最近 tool、传输类型 streamable_http sse）、强制踢线、空闲超时、绝对超时、每 Token/全局并发上限；会话态内存为主（单 CP 进程，HA 粘滞不在本期）；平台管理员 API 管理会话（需 spec + **改写 ADR-077** 为「CP 内嵌 MCP 网关」；依赖 FR-384）→ `docs/specs/cp-mcp-server/spec.md`
+CP 内嵌 MCP 长连接服务（feat，取代 FR-386 远程入口形态）：Control Plane 提供 **Streamable HTTP（主）+ 兼容 SSE** MCP 端点；鉴权复用 Agent Token（FR-384）；工具集与 jm-agent 对齐、硬拒绝不注册；**可运维会话**：列表（token 名/前缀、IP、已连时长、最近 tool、传输类型 `streamable_http` / `sse`）、强制踢线、空闲超时、绝对超时、每 Token/全局并发上限；会话态内存为主（单 CP 进程，HA 粘滞不在本期）；平台管理员 API 管理会话（需 spec + **改写 ADR-077** 为「CP 内嵌 MCP 网关」；依赖 FR-384）→ `docs/specs/cp-mcp-server/spec.md`
 
 ### FR-390 Agent 调用流水与 Token 活跃（feat）
 
-Agent 调用流水与 Token 活跃（feat）：统一 `agent_call_logs`（或等价）记录 MCP tool 与 Agent HTTP API（含 jmagent）的 action、tokenId、client（`X-JM-Agent-Client`：mcp jmagent curl unknown）、IP、成功/失败、耗时、时间；读路径也记；保留窗口可配置（默认建议 7~30 天）；Token 鉴权继续 bump `lastUsedAt` 并提供 24h 调用次数聚合只读字段/接口；写操作可仍写既有 audit 并在 detail 标明 actor（需 spec，依赖 FR-384；可与 FR-389 并行）→ `docs/specs/agent-call-log/spec.md`
+Agent 调用流水与 Token 活跃（feat）：统一 `agent_call_logs`（或等价）记录 MCP tool 与 Agent HTTP API（含 jmagent）的 action、tokenId、client（`X-JM-Agent-Client`：`mcp` / `jmagent` / `curl` / `unknown`）、IP、成功/失败、耗时、时间；读路径也记；保留窗口可配置（默认建议 7~30 天）；Token 鉴权继续 bump `lastUsedAt` 并提供 24h 调用次数聚合只读字段/接口；写操作可仍写既有 audit 并在 detail 标明 actor（需 spec，依赖 FR-384；可与 FR-389 并行）→ `docs/specs/agent-call-log/spec.md`
 
 ### FR-528
 
