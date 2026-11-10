@@ -373,8 +373,8 @@ header 规则要求取值 ≥8 位，而 `Bearer` 恰好 6 位，天然被排除
 
 ### 发现
 
-用外部 Python 模拟供应商（`scripts/fr-acceptance/mock_ai_provider.py`）
-按**官方格式**吐数据时，`anthropic` 协议的 finish_reason 为空、usage 丢失。
+用外部 Python 模拟供应商按**官方格式**吐数据时，`anthropic` 协议的 finish_reason
+为空、usage 丢失。（模拟服务为一次性验收工具，未入库。）
 
 ### 真因
 

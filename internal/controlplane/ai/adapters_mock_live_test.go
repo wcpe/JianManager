@@ -1,9 +1,10 @@
 package ai_test
 
-// 真机验收：用外部 Python 模拟供应商对打三种协议。
+// 真机验收：与一个外部 Python 模拟供应商对打三种协议。
 //
-// 模拟服务：scripts/fr-acceptance/mock_ai_provider.py
-// 启动：python3 mock_ai_provider.py 18181 /tmp/mockai-tls/cert.pem /tmp/mockai-tls/key.pem
+// 模拟服务是一个一次性验收工具（未入库）：它起一个 HTTPS 服务，
+// 按 openai-chat / openai-responses / anthropic 三种官方格式吐 SSE，
+// 模型名带 err401/err429/err500 时返回对应错误码。
 //
 // 为何不用 httptest：验收的目的就是「跟一个外部进程说的真实协议对打」，
 // httptest 跑在进程内、与实现同源，挡不住「我以为是这个形状」的自骗。

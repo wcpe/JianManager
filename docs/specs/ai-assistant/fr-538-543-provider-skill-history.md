@@ -190,8 +190,8 @@ FR-517 的外部 MCP 连接走 HTTP + Agent Token，并对指向本平台的地�
 
 ### FR-539 供应商级出站代理（PASS 5/5）
 
-模拟服务：`scripts/fr-acceptance/mock_http_proxy.py`（记录请求形态并注入
-`X-Mock-Proxy: hit` 证明流量经过）。
+模拟服务：一个按三种协议吐数据的 Python 外部进程（记录请求形态并注入
+`X-Mock-Proxy: hit` 证明流量经过）。该脚本为一次性验收工具，未入库。
 
 验收用例：`internal/platform/httpclient/proxy_mock_test.go`
 

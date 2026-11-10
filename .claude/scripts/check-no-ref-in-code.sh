@@ -11,8 +11,7 @@
 #   .claude/scripts/check-no-ref-in-code.sh --stock         # 存量模式（对工作区当前内容）
 #
 # 豁免：文档路径（docs/、CHANGELOG.md）与本规则目录不在扫描范围；
-#       代码行内可加 `no-ref-check` 标记逐行豁免（需在 PR 描述里说明原因）；
-#       验收工具目录 scripts/fr-acceptance/ 整目录豁免（编号是用例主键，见下）。
+#       代码行内可加 `no-ref-check` 标记逐行豁免（需在 PR 描述里说明原因）。
 #
 # 退出码：0 = 通过；1 = 命中违规
 set -eu
@@ -25,29 +24,24 @@ EXCLUDES=':!*.pb.go :!:!*.md :!*.json'
 # 编号正则：前面不得紧邻字母/数字/下划线/连字符，避开 XFR-1 这类标识符。
 PAT='(^|[^A-Za-z0-9_-])(FR|ADR)-[0-9]+'
 
-# 目录级豁免：验收工具把 FR 号当作「用例主键」——它是数据，不是解释性注释。
+# 验收工具目录级豁免：已废止。
 #
-# 判据：删掉这个号，脚本就失去身份（pending.py 正是靠扫 FR-(\d+)
-# 统计「哪些已被断言过」）。这与规则要防的失效模式不同：规则防的是
-# 「注释写了个编号当门牌号，号变了注释就成了死引用，且没有编译错误」。
-# 这里的编号有机器消费者，改号时必然要改这处数据，不会静默失效。
-#
-# 豁免仅限这一个目录；生产代码（apps/ internal/ packages/ proto/ 等）照旧要求 0。
-ALLOW_DIRS='scripts/fr-acceptance'
+# 仓库不再保存任何验收脚本。原先 scripts/fr-acceptance/ 因「FR 号是用例主键」
+# 被整目录豁免（pending.py 靠扫 FR-(\d+) 统计覆盖率），但用户已决定验收脚本
+# 一律不入库（它们用绝对路径、带本机用户名，且无法在 CI 里复跑）。
+# 目录删除后豁免一并撤回——否则这段代码会指着一个不存在的路径放行。
 
 # 扫「代码内容」的存量违规。
 grep_stock() {
   # shellcheck disable=SC2086
   git grep -InE "$PAT" -- $ROOTS ':!*.md' ':!*.json' ':!*.pb.go' 2>/dev/null \
-    | grep -v 'no-ref-check' \
-    | grep -vE "^($ALLOW_DIRS)/" || true
+    | grep -v 'no-ref-check' || true
 }
 
 # 扫「文件名」的存量违规（FR / ADR 两种前缀，大小写不敏感）。
 grep_names() {
   # shellcheck disable=SC2086
   git ls-files -- $ROOTS 2>/dev/null \
-    | grep -vE "^($ALLOW_DIRS)/" \
     | grep -iE '(^|[^a-z0-9])(fr|adr)[0-9]+' || true
 }
 
@@ -143,7 +137,6 @@ FILENAME == ARGV[1] {
   if (f !~ "\\.(" exts ")$") next
   if (f !~ /^(apps|internal|packages|scripts|proto|client-updater|configs)\//) next
   if (f ~ /(\.pb\.go|\.md|\.json)$/) next
-  if (f ~ /^scripts\/fr-acceptance\//) next
   if ($3 ~ /no-ref-check/) next
   n = split(refs($3), a, " ")
   for (i = 1; i <= n; i++) {
@@ -166,12 +159,22 @@ fi
 # ── 新引入的文件名也不得带编号 ────────────────────────────────────
 # 只看 A（新增）/R（重命名后）；存量文件由 --stock 报告。
 #
-# 验收工具目录同样豁免：那里的文件名就是用例主键（如 g_fr498.py、p2_core.py），
-# 与代码内容豁免同一个理由——文件本身就用编号命名才有意义。
+# 还要排除「已删」的文件名：`--diff-filter=AR` 里的 A 是「基线没有、HEAD 有」。
+# 但当本分支从某个含这些文件的远程分支出发、又把它们删掉时，会出现
+# 基线（origin/master）没有、工作区/索引已删的情形——那些名字已经不存在，
+# 不应被文件名门禁拦住。所以同时查 HEAD、索引、工作区三处的删除。
+# 漏掉 `--cached` 会让「已 git rm 但未提交」的文件仍被当成新增。
 # shellcheck disable=SC2086
+deleted_now=$(
+  { git diff -M --diff-filter=D --name-only "$BASE"...HEAD -- $ROOTS 2>/dev/null || true
+    git diff -M --diff-filter=D --name-only --cached -- $ROOTS 2>/dev/null || true
+    git diff -M --diff-filter=D --name-only -- $ROOTS 2>/dev/null || true
+    git ls-files --deleted -- $ROOTS 2>/dev/null || true
+  } | sort -u
+)
 name_added=$(git diff -M --diff-filter=AR --name-only "$BASE"...HEAD -- $ROOTS \
-  | grep -vE "^($ALLOW_DIRS)/" \
-  | grep -iE '(^|[^a-z0-9])(fr|adr)[0-9]+' || true)
+  | grep -iE '(^|[^a-z0-9])(fr|adr)[0-9]+' \
+  | { if [ -n "$deleted_now" ]; then grep -vxF "$deleted_now"; else cat; fi; } || true)
 if [ -n "$name_added" ]; then
   echo "❌ 新增/重命名的文件名里带了 FR/ADR 编号（规则见 .claude/rules/no-ref-in-code.md）"
   echo "   文件名不得含编号；要说明归属请把编号写进文档或提交信息。"
