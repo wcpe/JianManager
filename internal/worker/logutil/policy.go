@@ -1,4 +1,4 @@
-package retention
+package logutil
 
 import (
 	"fmt"

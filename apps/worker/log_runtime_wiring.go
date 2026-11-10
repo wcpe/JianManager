@@ -11,10 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
-	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
@@ -80,53 +78,6 @@ func (c *managedLogClients) client(owner catalog.Owner) (*vlsup.Client, error) {
 		return nil, fmt.Errorf("日志 owner %s 需要显式恢复路径", owner)
 	}
 	return c.Main, nil
-}
-
-// readyRetentionMover 不修改开关；冷层停止或传输失效时保留原物，后续同一驱动可恢复。
-func readyRetentionMover(mover retention.Mover, clients *managedLogClients, budget *vlsup.BudgetController) retention.Mover {
-	return retention.MoverFunc(func(ctx context.Context, namespace, day string) (string, error) {
-		if budget != nil {
-			if err := budget.Admit(vlsup.WorkBackground); err != nil {
-				return "", err
-			}
-		}
-		for _, owner := range []catalog.Owner{catalog.OwnerHot, catalog.OwnerCold} {
-			if err := clients.ready(ctx, owner); err != nil {
-				return "", err
-			}
-		}
-		return mover.MoveToCold(ctx, namespace, day)
-	})
-}
-
-// readyRehydratePublisher 保留固定 publisher，动态启动或同端口重启不需要替换裸指针。
-type readyRehydratePublisher struct {
-	clients   *managedLogClients
-	publisher archive.RehydratePublisher
-}
-
-func (p readyRehydratePublisher) Publish(ctx context.Context, key archive.PartitionKey, events []archive.ArchivedEvent, taskID string) error {
-	if err := p.clients.ready(ctx, catalog.OwnerArchive); err != nil {
-		return err
-	}
-	return p.publisher.Publish(ctx, key, events, taskID)
-}
-
-func (p readyRehydratePublisher) CanReuseRehydrate(ctx context.Context, key archive.PartitionKey, taskID string) bool {
-	if err := p.clients.ready(ctx, catalog.OwnerArchive); err != nil {
-		return false
-	}
-	if checker, ok := p.publisher.(archive.RehydrateReuseChecker); ok {
-		return checker.CanReuseRehydrate(ctx, key, taskID)
-	}
-	return false
-}
-
-func (p readyRehydratePublisher) ReportFailure(key archive.PartitionKey, reason string) error {
-	if reporter, ok := p.publisher.(archive.RehydrateFailureReporter); ok {
-		return reporter.ReportFailure(key, reason)
-	}
-	return nil
 }
 
 // logStreamFieldsState 在启动时输出一次 VL 流标签的生效形态。

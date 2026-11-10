@@ -34,16 +34,14 @@ import (
 	wgrpc "github.com/wcpe/JianManager/internal/worker/grpc"
 	"github.com/wcpe/JianManager/internal/worker/heartbeat"
 	jdks "github.com/wcpe/JianManager/internal/worker/jdk"
-	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/logassemble"
 	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtail"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/grpcsvc"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
-	"github.com/wcpe/JianManager/internal/worker/logs/retention"
+	"github.com/wcpe/JianManager/internal/worker/logutil"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/orphanaudit"
@@ -53,7 +51,6 @@ import (
 	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/internal/worker/setup"
-	workerstorage "github.com/wcpe/JianManager/internal/worker/storage"
 	"github.com/wcpe/JianManager/internal/worker/tunnel"
 	"github.com/wcpe/JianManager/internal/worker/ws"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -488,13 +485,8 @@ func runWorker() {
 	}
 	// 初始化进程管理器
 	manager := process.NewManager(serversDir)
-	// procManager 与 manager 同一实例，只是给它一个**不会被日志采集代码块遮蔽**的名字。
-	//
-	// 为什么不直接用 manager：下方日志采集段会写 `manager, ingestErr = newIngest()`，
-	// 把同名变量改成 `*ingest.Manager`。那个遮蔽是既有的、改动面很大的，而吸存需要的是
-	// 进程管理器（要拿实例的 WorkDir），两类 Manager 类型名相近但不能互换——
-	// 留着同名只用一次容易在下一个人改代码时静默传错。
-	procManager := manager
+	// 2026-11-10：原先这里有一个 procManager 别名，仅服务于已删除的「实例 gz 吸存」。
+	// 吸存功能随冷热分层一并移除（它需要归档目的地，单 VL 架构下没有）。
 	// 接管重试窗口（①）：Worker 重启后对存活 wrapper 的 reconnect 重试序列（默认 ≈127s），
 	// 覆盖分钟级瞬时故障；必须在下方 RecoverDaemonInstances 之前装配，否则该轮接管仍用默认序列。
 	manager.SetRecoverRetryBackoff(cfg.Recover.RetryBackoffSequence())
@@ -776,13 +768,10 @@ func runWorker() {
 	// 保留策略只用到「用了百分之几」这一个数字，所以这里只提供那个数字——
 	// 为一个字段传一整个已废弃的模型会让两边的概念永久绑在一起。
 	logCapacityProvider := newDiskUsageProvider(root.Base())
-	// 保留策略驱动器（G6）。声明在这里（而非 lifecycle 块内）是因为它要在采集运行时
-	// 启动之后才有意义：搬运的是已经落库的分区，采集还没起来时搬没有意义。
-	var logRetentionDriver *retention.Driver
-	// 归档对象自身的回收（的最后一块）：把「归档目的地里的副本」按保留期清掉。
-	// 声明在驱动器之外，是因为它由两个独立开关共同决定（保留策略总开关 + 本项开关），
-	// 且必须与 /metrics 的读数出口共用同一个实例。
-	var logArchivePurge *retention.ArchiveObjectReclaimer
+	// 2026-11-10：保留策略驱动器与归档对象回收器已随冷热分层旧架构一并删除。
+	// 原先这两个变量（logRetentionDriver / logArchivePurge）只服务于搬运/删除分区，
+	// 而单 VL 架构下不存在第二层可搬，它们的执行器类型也不再存在。
+	_ = logCapacityProvider
 	// 日志 Catalog journal：**纯内存**（2026-11-05 架构决策）。
 	//
 	// # 历史沿革（读到这里的人需要知道为什么绕了一圈）
@@ -861,167 +850,16 @@ func runWorker() {
 				"truncated", len(needsManual) > len(sample))
 		}
 	}
-	// 已归档但热层尚未回收的分区（回收闭环的可观测面）。
-	//
-	// 为什么会存在这种状态：权威态先改 ARCHIVED、再删热层。若进程恰在两步之间退出，
-	// 就会留下一份「数据安全、盘没省下来」的残留副本。这是**安全方向**的不一致
-	// （数据多一份而不是少一份），但必须有人知道——否则它永远不会被清理。
-	// 这里只报出来，不自动重试：自动删除必须重新过三闸与 Catalog 复核，
-	// 由保留策略的下一轮驱动承担（那是唯一持有完整判据的地方）。
-	if pending := logStack.Catalog.PendingArchiveReclaims(); len(pending) > 0 {
-		sample := pending
-		if len(sample) > maxNeedsManualPartitionsLogged {
-			sample = sample[:maxNeedsManualPartitionsLogged]
-		}
-		keys := make([]string, 0, len(sample))
-		for _, key := range sample {
-			keys = append(keys, key.String())
-		}
-		slog.Warn("存在已归档但热层未回收的分区（数据安全、磁盘未释放；下一轮保留策略会按三闸重试）",
-			"count", len(pending), "partitions", keys, "truncated", len(pending) > len(sample))
-	}
 	if vlHTTPClient != nil && vlSupervisor != nil {
-		hotCfg, hotErr := vlSupervisor.Config(vlsup.NamespaceHot)
-		if hotErr != nil {
-			slog.Error("日志 Lifecycle namespace 配置不可用", "error", hotErr)
-		} else if physical, lifecycleErr := lifecycle.NewVLPartitionOps(vlHTTPClient,
-			hotCfg.StorageDataPath, logStack.Catalog); lifecycleErr != nil {
-			slog.Error("日志 Lifecycle 物理适配器创建失败", "error", lifecycleErr)
-		} else {
-			physical.ResourceBudget = resourceBudget
-			// 2026-10-29：不再构造 DayManager / CanonicalDayInput —— 它们只服务冷层搬迁，
-			// 而搬迁已随冷热分层一起删除（见 lifecycle 包注释）。
-			// 保留策略驱动器（G6）：到期分区要么导出独立副本、要么如实落 blocked 保留原物。
-			//
-			// 2026-10-29：冷热双层已废除 ⇒ **不再装配 mover**（第三个参数传 nil）。
-			// `retention.Policy.PlanArchive` 的动作序会自动落到：
-			//   配了导出 → archive_copy；否则 → blocked（保留原物，不删）。
-			// 这正是单 VL 想要的语义，不需要改 Policy 本身。
-			if retentionPolicy, policyErr := cfg.RetentionPolicy(); policyErr != nil {
-				slog.Error("日志保留策略非法，保留驱动未启用", "error", policyErr)
-			} else if retentionPolicy.Enabled {
-				logRetentionDriver = retention.NewDriver(retentionPolicy,
-					newCatalogPartitionLister(logStack.Catalog),
-					nil,
-					newDiskPercentReader(logCapacityProvider))
-				// 导出归档（，硬规则的次选路径）：搬不了冷层时导出为独立副本。
-				//
-				// 默认关闭（`log_retention.archive_copy.enabled=false`）。这里**不做**任何
-				// 默认兜底目录：没有目的地就不装出口，计划阶段于是不会产出 archive_copy，
-				// 到期分区继续落 blocked（保留原物）——与本次改动之前的行为完全一致。
-				if retentionPolicy.ArchiveCopy.Enabled {
-					// 目的地的三种形态（local / s3 / minio）都在 newArchiveCopyProvider 里构造，
-					// 失败一律**只降级导出器**、不让 Worker 启动失败：拿不到目的地时正确的行为
-					// 是「不出副本、保留原物」，而不是「整个节点起不来」。方向与本次改动之前
-					// 「开关开了但没目的地」那条分支完全一致（blocked + 保留原物）。
-					provider, providerErr := newArchiveCopyProvider(cfg.LogRetention.ArchiveCopy)
-					if providerErr != nil {
-						slog.Error("导出归档目的地构造失败，归档出口未装配（到期分区将继续保留原物）",
-							"provider", cfg.LogRetention.ArchiveCopy.ArchiveProviderKind(), "error", providerErr)
-					} else {
-						// 导出器住在 logs/archive（manifest/Provider 契约的家），
-						// 但「冻结快照怎么取、能读哪里」属于物理布局，仍由 lifecycle 提供，
-						// 在这里注入——依赖方向因此保持单向：lifecycle 不认识 archive。
-						exporter := archive.NewArchiveCopyExporter(logStack.Catalog, physical.ExportSnapshot, provider)
-						logRetentionDriver.Executor().SetArchiveExporter(retention.ArchiveExporterFunc(
-							func(ctx context.Context, namespace, day string) (retention.ArchiveExportResult, error) {
-								sum, err := exporter.Export(ctx, namespace, day)
-								if err != nil {
-									return retention.ArchiveExportResult{}, err
-								}
-								return retention.ArchiveExportResult{
-									ObjectCount:      sum.ObjectCount,
-									SourceBytes:      sum.SourceBytes,
-									StoredBytes:      sum.StoredBytes,
-									Location:         sum.Location,
-									ProviderKind:     sum.ProviderKind,
-									ObjectPrefix:     sum.ObjectPrefix,
-									ManifestChecksum: sum.ManifestChecksum,
-									CoverageComplete: sum.CoverageComplete,
-								}, nil
-							}))
-						// 「已归档」权威态迁移出口 + 热层回收出口（回收热层闭环）。
-						//
-						// 三个出口必须成套装配才有回收：导出证明「副本可信」、authority 证明
-						// 「Catalog 已承认正本在归档」、remover 才允许真的删。缺 authority 时
-						// 执行器会拒绝删除（否则查询面会指向一个不存在的目录），这是硬判据。
-						//
-						// 三闸（discard + sweep.vl_sweep + log_vl.delete_enabled）仍然默认全关：
-						// 装配这几个出口**不等于**允许删，删不删由 Policy.DeleteGatesOpen 决定。
-						logRetentionDriver.Executor().SetArchiveAuthority(newCatalogArchiveAuthority(logStack.Catalog))
-						logRetentionDriver.Executor().SetRemover(retention.RemoverFunc(physical.RemoveArchivedPartition))
-						if ok, reason := logRetentionDriver.Executor().ArchiveReadyForReclaim(); !ok {
-							slog.Info("日志归档热层回收未就绪（导出仍会执行，原物保留）", "reason", reason)
-						} else {
-							slog.Warn("日志归档热层回收已就绪：三闸全开时将删除已归档分区的热层数据",
-								"provider", provider.Kind())
-						}
-						// 日志里只打 kind 与「本地根目录」；s3/minio 的 endpoint/bucket 也不打
-						// 是刻意的：现场日志常被导出传阅，少一个泄漏面。
-						slog.Info("日志导出归档已装配（搬不了冷层时导出为独立副本；回收热层仍需删除三闸全开）",
-							"provider", provider.Kind(), "root", strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root))
-					}
-				}
-				// 归档对象自身的回收：把归档目的地里**已过保留期**的副本删掉。
-				//
-				// 装配条件是「本项生效 **且** 有归档根」，**不**要求 archive_copy.enabled：
-				// 「停止写新归档，但仍要清理旧归档」是一个真实且合理的运维动作
-				// （例如归档盘快满了、或已经决定不再新增归档）。若把它绑在导出开关上，
-				// 那个动作就只能靠「继续导出 + 同时清理」来实现——反而多写数据。
-				// 注意**反方向不成立**：开了导出不等于授权清除（删除比写入危险得多），
-				// 清除仍要过同一套三闸。
-				//
-				// 三个出口必须成套：lister 提供候选、authority 提供「已清除」权威态、
-				// store 才是真正删除对象的那一步。任一缺失都让 reclaimer 为空，
-				// 于是启动日志会明确写出「未装配」——而不是一个永远不动的计数器。
-				if retentionPolicy.ArchiveObjectRetention.Active() {
-					// 目的地与导出侧**同源**：用同一个构造器（newArchiveCopyProvider）
-					// 按 `archive_copy.provider` 选 local / s3 / minio。
-					//
-					// 此前这里硬编码 `archive.NewLocalArchive(root)`，于是配了 s3 导出
-					// 的人在回收侧拿不到 provider，只能如实拒绝——「导出已能写 s3、却永远
-					// 不会清理 s3」就是这么来的。
-					//
-					// 注意：这里**不复用**导出器那个 provider 实例（两者不同 goroutine，
-					// 各自持有自己的连接状态更安全），但必须是**同一个目的地配置**。
-					provider, providerErr := newArchiveCopyProvider(cfg.LogRetention.ArchiveCopy)
-					if providerErr != nil {
-						slog.Warn("归档对象回收目的地构造失败，回收未装配（归档副本将继续累积）",
-							"provider", cfg.LogRetention.ArchiveCopy.ArchiveProviderKind(), "error", providerErr)
-					} else {
-						// root 只对本地目录有意义（清空目录骨架）；对象存储传空串。
-						root := ""
-						if provider.Kind() == archive.KindLocal {
-							root = strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root)
-						}
-						logArchivePurge = newArchiveObjectReclaimer(retentionPolicy, logStack.Catalog, provider, root)
-						if logArchivePurge == nil {
-							slog.Warn("归档对象回收已启用但出口装配失败（将在 /metrics 与下方日志中体现为零行动）",
-								"provider", provider.Kind())
-						} else if ok, reason := logArchivePurge.Ready(); !ok {
-							slog.Warn("归档对象回收出口不完整，本轮不会删除任何对象", "reason", reason)
-						} else if open, gateReason := retentionPolicy.DeleteGatesOpen(); !open {
-							slog.Info("归档对象回收已装配但删除三闸未全开（一个对象都不会删）", "reason", gateReason)
-						} else {
-							slog.Warn("归档对象回收已就绪：三闸全开时将按保留期删除归档目的地里的副本",
-								"provider", provider.Kind(), "root", root,
-								"retention", retentionPolicy.ArchiveObjectRetention.Retention.String(),
-								"archiveCopyEnabled", retentionPolicy.ArchiveCopy.Enabled)
-						}
-					}
-				}
-				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)
-			}
-			// 2026-10-29：分区下沉（hot→cold）能力已随冷热双层一起删除。
-			// 这里**显式**装一个明确拒绝的出口，而不是不装配：
-			// 不装配时 RPC 返回「log partition migration is not configured」，
-			// 运维会以为是漏配了某项；装配一个说出真实原因的拒绝，才能让人知道
-			// 「这个动作在新架构里不存在了」，而不是去翻配置找开关。
-			logStack.LogRPC.SetPartitionMigrator(grpcsvc.PartitionMigrateFunc(func(ctx context.Context, namespace, day, target string) error {
-				return fmt.Errorf("分区下沉已废弃：单个 VictoriaLogs 实例既是热层也是长期层，"+
-					"没有第二层可搬（storage_namespace=%s utc_day=%s target_tier=%s）", namespace, day, target)
-			}))
-		}
+		// 2026-10-29：分区下沉（hot→cold）能力已随冷热双层一起删除。
+		// 这里**显式**装一个明确拒绝的出口，而不是不装配：
+		// 不装配时 RPC 返回「log partition migration is not configured」，
+		// 运维会以为是漏配了某项；装配一个说出真实原因的拒绝，才能让人知道
+		// 「这个动作在新架构里不存在了」，而不是去翻配置找开关。
+		logStack.LogRPC.SetPartitionMigrator(grpcsvc.PartitionMigrateFunc(func(ctx context.Context, namespace, day, target string) error {
+			return fmt.Errorf("分区下沉已废弃：单个 VictoriaLogs 实例既是热层也是长期层，"+
+				"没有第二层可搬（storage_namespace=%s utc_day=%s target_tier=%s）", namespace, day, target)
+		}))
 	}
 	if vlSupervisor != nil {
 		logStack.LogRPC.SetRuntimeController(vlSupervisor)
@@ -1039,75 +877,6 @@ func runWorker() {
 		}
 	}
 	workerServer.SetLogQueryService(logStack.LogRPC)
-	// 归档 Registry/Rehydrate 进入同一 Worker 查询面。凭据只来自
-	// 环境覆盖的配置对象，不写入日志或诊断响应。
-	var archiveRegistry *archive.Registry
-	if cfg.LogArchive.Enabled {
-		var provider archive.Provider
-		archiveCfg := cfg.LogArchive
-		archiveStorageCfg := workerstorage.Config{
-			Type:     workerstorage.TypeS3,
-			Endpoint: archiveCfg.Endpoint, Bucket: archiveCfg.Bucket, Region: archiveCfg.Region,
-			Prefix: archiveCfg.Prefix, AccessKey: archiveCfg.AccessKey, SecretKey: archiveCfg.SecretKey,
-		}
-		if os.Getenv("JIANMANAGER_LOG_ARCHIVE_PROBE") == "1" && strings.EqualFold(archiveCfg.Provider, "s3") {
-			if probeErr := workerstorage.Probe(context.Background(), archiveStorageCfg); probeErr != nil {
-				slog.Error("日志归档对象存储探测失败", "error", probeErr)
-			} else {
-				slog.Info("日志归档对象存储探测通过", "provider", archiveCfg.Provider)
-			}
-		}
-		switch strings.ToLower(strings.TrimSpace(archiveCfg.Provider)) {
-		case "s3", "minio":
-			remote, archiveErr := archive.NewRemoteS3Provider(archiveStorageCfg)
-			if archiveErr != nil {
-				slog.Error("日志归档 S3 Provider 初始化失败", "error", archiveErr)
-			} else {
-				provider = remote
-			}
-		default:
-			provider = archive.NewLocalArchive(root.Abs("var/log/archive"))
-		}
-		if provider != nil {
-			registry := archive.NewRegistry(provider)
-			// 归档 manifest 记录受管 VL 的真实构建标识（资产审批），而非占位。
-			if vlsup.AssetBuildID != "" {
-				registry.SetEngineVersion("victorialogs/" + vlsup.AssetBuildID)
-			}
-			archiveRegistry = registry
-			rehydrate := archive.NewRehydrateManager(archive.RehydrateOptions{
-				DefaultTimeout: 5 * time.Minute, DefaultLeaseTTL: 5 * time.Minute,
-			})
-			// rehydrate 实例直接交给 query backend（下方 backend）；旧链路的 RecoveryHold 回调已删。
-			backend := archive.NewQueryBackend(registry, rehydrate)
-			backend.SetResourceBudget(archive.RehydrateResourceBudget{
-				Admit: func(ctx context.Context) error {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-					return resourceBudget.Admit(vlsup.WorkBackground)
-				},
-				ReserveStaging: func(ctx context.Context, bytes int64) (func(), error) {
-					if err := ctx.Err(); err != nil {
-						return nil, err
-					}
-					return resourceBudget.Reserve(vlsup.ReservationStaging, bytes)
-				},
-			})
-			if vlHTTPClient != nil {
-				backend.SetPublisher(readyRehydratePublisher{clients: managedClients,
-					// Retention 与主实例同源：传进去让 rehydrate 能当场认出「这个分区日已超出
-					// 目标 VL 保留期、注定写不进去」，而不是写一遍 200、verify 查不到、再报一个
-					// 看似瞬时的失败。
-					//
-					// 2026-10-29：回灌目标从 Rehydrate 层改为主实例 —— 已没有第二个实例，
-					// 而归档还原的语义是「把归档副本重新变成可查」，落在主实例上正是它该做的。
-					publisher: &archive.VLRehydratePublisher{Catalog: logStack.Catalog, VL: vlHTTPClient, Retention: resolveHotRetention(cfg)}})
-			}
-			logStack.SetArchiveBackend(backend)
-			slog.Info("日志归档运行时已装配", "provider", provider.Kind())
-		}
-	}
 	// 新采集器（tailer/logtail）。旧链路已删除，不存在「两者互斥」的问题。
 	var logTailRunner *logtail.Runner
 	// /504 的采集策略（含定时归档导入扫描周期）已随旧链路删除：
@@ -1192,6 +961,15 @@ func runWorker() {
 				// **历史天在查询侧永久变成「不存在」**（VL 里行还在，没人知道去查）。
 				// 2026-11-07 部署时实测确认了这个状态（日志：「未接 hits 数据源」）。
 				HitsSource: hitsSourceAdapter(vlHTTPClient),
+				// 非实例日志源：把旧的 log_sources 配置接进新采集器。
+				//
+				// # 为何需要这一步
+				//
+				// 新采集器只按绑定表（CP 下发的实例登记）归源，log_sources 被整体忽略。
+				// 而 Worker 自身日志既不在实例工作目录、也不在 stdio 目录下，
+				// 于是永远解析不出源、永远采不到。本步把 log_sources 转成 StaticSource，
+				// 让节点自身日志也能采、也能按 node:<id> 在查询侧筛出来。
+				StaticSources: staticSourcesFromConfig(cfg),
 			}, vlHTTPClient, nil)
 			if startErr != nil {
 				slog.Error("新日志采集器启动失败（本次启动不采集，需告警介入）", "error", startErr)
@@ -1209,16 +987,9 @@ func runWorker() {
 				defer cancelTailStats()
 				go sampleLogTailStats(tailStatsCtx, runner, time.Minute)
 				stats := runner.Stats()
-				// 与采集器**无关**的生命周期驱动器（保留策略 / 归档回收 / 实例 gz 吸存）。
-				// 它们原本住在旧采集块内；不迁到这里就会随旧链路一起消失，
-				// 表现为“数据到期不淘汰、归档副本不回收”——静默且极难归因。
-				logLifecycle{
-					retentionDriver: logRetentionDriver,
-					archivePurge:    logArchivePurge,
-					archiveRegistry: archiveRegistry,
-					procManager:     procManager,
-					adoptCfg:        cfg.LogArchive.InstanceGzAdopt.Normalized(),
-				}.run(context.Background())
+				// 2026-11-10：保留策略 / 归档回收 / 实例 gz 吸存三个驱动器已随冷热分层删除。
+				// 单 VL 架构下到期分区由 VL 自身按 -retentionPeriod 回收（真机 180d），
+				// 不再有第二层可搬，也不再有归档目的地可写。
 				slog.Info("新日志采集器已接管采集（旧 ingest 链路本次不构造）",
 					"lines", stats.Lines, "written", stats.Written)
 				startup.Mark("logTailer")
@@ -1413,35 +1184,16 @@ func runWorker() {
 	// 挂载位置与 pprof 同口径：同一个 **127.0.0.1 绑定**的 mux ⇒ **不新增暴露面** ✓
 	// （wsAddr 由 localWSAddr 固定回环，见下）。要跨机抓取请走 SSH 隧道或节点上的本地
 	// exporter，别把这个 mux 绑到 0.0.0.0——它没有令牌门，与 pprof 一样只靠回环隔离。
-	// 取舍说明：读数只有 8 个标量，故手写文本格式而不引 prometheus/client_golang（见
-	// retention.MetricsHandler 的注释）；logRetentionDriver 可能为 nil（保留策略未启用），
-	// 处理器照样输出全零序列 + jm_log_retention_driver_enabled 0，抓取侧不必写特殊分支。
-	// 事件段回收读数同理由 logIngest 提供：它可能为 nil（采集运行时创建失败），此时
-	// 回收序列输出 0、jm_log_eventstore_prune_enabled 0，同样是「全零而非缺序列」。
-	//
-	// 这里必须先判 nil 再作接口实参：logIngest 是 *ingest.Manager，直接把 nil 指针塞进
-	// 接口会得到**非 nil 的接口值**（带类型的 nil），MetricsHandler 里的 `prune != nil`
-	// 会因此为真，随后调用方法解引用 nil 指针 —— 表现为「采集没起来时抓 /metrics 直接 panic」。
-	// 事件段已整体删除（2026-11-03）：不再有段回收读数可上报。
-	var pruneSource retention.EventStorePruneSource
-	// 归档对象回收读数：同一个「带类型的 nil」陷阱——logArchivePurge 是具体指针类型，
-	// 未启用时直接作接口实参会得到非 nil 接口值，`purge != nil` 为真，
-	// 随后调用方法解引用 nil 指针（本方法对 nil 安全，但别指望下一个实现也安全）。
-	var purgeSource retention.ArchivePurgeSource
-	if logArchivePurge != nil {
-		purgeSource = logArchivePurge
-	}
-	// 索引库 SQL 慢查询读数随旧链路删除：数据源是 ingest.Manager 的索引库，
-	// 新架构没有索引库。此处显式传 nil，让 /metrics 输出「全零序列」而不是缺序列。
-	var indexSQLSource retention.IndexSQLSource
-	// 投递批次与索引 SQL 指标随旧链路删除（数据源是 ingest.Manager）。
-	// 保留策略的三条读数（prune/purge）照常输出。
-	wsMux.HandleFunc("/metrics", retention.MetricsHandler(logRetentionDriver, pruneSource, purgeSource, indexSQLSource))
+	// 2026-11-10：日志保留/事件段回收/归档对象回收/索引慢 SQL 四组读数已随
+	// 冷热分层旧架构一并删除（它们的数据源均来自已删除的 retention / ingest 包）。
+	// /metrics 端点因此不再存在：它原本只输出这 25 条序列，且真机全为 0（驱动未启用）。
 	// 运行期日志等级调整（GET 读 / POST 改）。
 	// 同样挂在 127.0.0.1 回环 mux 上，不新增暴露面；只调等级不改格式、不持久化，
-	// 重启后回到 log.level 配置值（见 retention.LogLevelController 的边界说明）。
+	// 重启后回到 log.level 配置值（见 logutil.LogLevelController 的边界说明）。
 	// 这里正是 logLevelVar 注释里预留的接线点：此前它是 runWorker 的局部量、无任何可达入口。
-	wsMux.HandleFunc("/debug/log-level", retention.NewLogLevelController(logLevelVar).Handler())
+	// 2026-11-10：从 retention 包迁到 logutil —— 冷热分层旧架构已删除，
+	// 而运行期调级是仍在生产的独立能力，不该跟着旧包一起消失。
+	wsMux.HandleFunc("/debug/log-level", logutil.NewLogLevelController(logLevelVar).Handler())
 	// 的 HTTP 日志推送端点（/insert/jsonline）已随旧链路删除。
 	//
 	// 它依赖 `PUSH_ONLY` 源与 `Pipeline.Ingest` 的 WAL 攒批/背压语义——新采集器的模型里
@@ -1837,7 +1589,7 @@ func resolveHotRetention(cfg *workercfg.Config) time.Duration {
 	if raw == "" {
 		raw = vlsup.DefaultRetentionPeriod
 	}
-	period, err := retention.ParseRuntimeTTL(raw)
+	period, err := logutil.ParseRuntimeTTL(raw)
 	if err != nil {
 		slog.Warn("热层 retention 解析失败：不启用「热层可发布窗口」过滤（行为与改动前一致）",
 			"retentionPeriod", raw, "error", err)
@@ -1937,6 +1689,58 @@ func hitsSourceAdapter(c *vlsup.Client) logtail.HitsSource {
 		}
 		return out, nil
 	}
+}
+
+// staticSourcesFromConfig 把旧链路的 log_sources 转成新采集器的静态源声明。
+//
+// # 为何存在这个函数
+//
+// `log_sources` 原本属于旧采集链路；新采集器（tailer 模式）只按绑定表推导路径，
+// 所以启动时有一条 WARN：「log_tailer.enabled=true：旧采集链路的 log_sources 配置
+// 将被忽略」。对**实例**日志这没问题（它们在实例工作目录下，绑定表能推到）；
+// 但对**非实例**日志（节点自身 worker.log）就是硬缺口：既不在实例目录、
+// 也不在 stdio 目录，Resolver 永远返空，采集器每轮都报「尚未识别所属源」。
+//
+// 真机实测（2026-11-10 开发实例）：配了 log_tailer.paths 指向 worker.log，
+// 结果是 0 条采集、0 条可查，而后端又在 log_federation 里把 `worker` 类别
+// 映射到 `node:` 前缀——前端下拉框选“worker”永远空，用户无从得知原因。
+//
+// # 只转 FILE_PRIMARY
+//
+// STDIO_PRIMARY 的日志由 stdio 桥接器落盘、本来就在 stdio 目录下，
+// 再叠一个静态源会让同一行进 VL 两次（event_id 相同不保证 VL 去重）。
+func staticSourcesFromConfig(cfg *workercfg.Config) []logtail.StaticSource {
+	if cfg == nil || len(cfg.LogSources) == 0 {
+		return nil
+	}
+	out := make([]logtail.StaticSource, 0, len(cfg.LogSources))
+	for _, s := range cfg.LogSources {
+		// 只接文件源；stdio 源走桥接目录，不需要也不应该再登记一遍。
+		if s.Mode != "" && s.Mode != logconf.ModeFilePrimary {
+			continue
+		}
+		path := strings.TrimSpace(s.Path)
+		target := strings.TrimSpace(s.StorageNamespace)
+		if target == "" {
+			target = strings.TrimSpace(s.LogSourceID)
+		}
+		// LogSourceID 形如 `node:1/file`（含 stream 后缀），而静态源要的是目标 ID
+		// + 单独的 stream。按最后一个 `/` 切：左侧是 target，右侧是 stream。
+		stream := ""
+		if i := strings.LastIndex(target, "/"); i > 0 {
+			stream = target[i+1:]
+			target = target[:i]
+		}
+		if stream == "" {
+			stream = "file"
+		}
+		out = append(out, logtail.StaticSource{
+			TargetID: target,
+			Path:     path,
+			Stream:   stream,
+		})
+	}
+	return out
 }
 
 // multilineRuleSource 说明生效的多行规则来自哪里（默认 vs 显式配置）。

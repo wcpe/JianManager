@@ -25,7 +25,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/hostobs"
 	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
-	"github.com/wcpe/JianManager/internal/worker/logs/retention"
+	"github.com/wcpe/JianManager/internal/worker/logutil"
 	"github.com/wcpe/JianManager/internal/worker/logs/tailer"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/process"
@@ -780,7 +780,7 @@ type LogSourceConfig struct {
 
 // logSourceTargetRe 是可被查询枚举到的目标标识形态：`inst:<实例ID>` / `node:<节点ID>`。
 //
-// 与 retention.sourceIDRe 的字符集白名单互补：那条回答「能否安全用于删除过滤器」，
+// 与 logutil.sourceIDRe 的字符集白名单互补：那条回答「能否安全用于删除过滤器」，
 // 本正则回答「这个命名空间是否可能被 CP 枚举到」。
 //
 // 三种合法形态（与 CP 侧 logcoord/assemble.go 的目标解析一一对应）：
@@ -1131,7 +1131,7 @@ type LogReadLimitsConfig struct {
 // LogRetentionConfig 保留策略的配置面（键 `log_retention.*`）。
 //
 // 保留期写成**字符串**（`3d` / `7d` / `30d` / `90d`）：Go 的 time.ParseDuration 不认 d/w，
-// 而保留期天然按天表达，故经 retention.ParseTTL 解析（见该函数的说明）。
+// 而保留期天然按天表达，故经 logutil.ParseTTL 解析（见该函数的说明）。
 //
 // 两道闸分开的原因：删除**不可逆**，与采样折叠（有汇总事件承接区间，可查可证）不是
 // 同一量级的风险。`enabled` 决定「保留多久」（策略），`sweep.vl_sweep` 决定「真的删」
@@ -1148,13 +1148,13 @@ type LogRetentionConfig struct {
 	//
 	// 这是**意图闸**，与 sweep.vl_sweep（执行闸）相互独立，两者同时成立才可达删除。
 	// 默认动作是把日分区搬运到冷层；本项的作用是解除「没有归档路径时的阻塞」，
-	// 即使显式打开，只要冷层路径可用，动作**仍然**是搬运（见 retention.PlanArchive 的次序）。
+	// 即使显式打开，只要冷层路径可用，动作**仍然**是搬运（见归档动作次序）。
 	Discard bool `mapstructure:"discard"`
 	// HotRetention 热层保留窗口（超期即搬运到冷层）；空 = 用默认 90d。
 	//
 	// 为什么是**字符串**而不是 time.Duration：Go 的 time.ParseDuration 不认 `d`/`w`，
 	// 而保留期天然按天写（用户口径就是「热 90 天 / 冷 730 天」）。同 by_level 的处理方式，
-	// 统一经 retention.ParseTTL 解析。若用 time.Duration，viper 解码 `90d` 会直接失败——
+	// 统一经 logutil.ParseTTL 解析。若用 time.Duration，viper 解码 `90d` 会直接失败——
 	// 那会让**整个 Load 失败**，而不只是这一个键无效（曾经真的发生过）。
 	HotRetention string `mapstructure:"hot_retention"`
 	// ColdRetention 冷层保留期（所有级别统一）；空 = 用默认 730d。
@@ -1195,7 +1195,7 @@ type LogRetentionArchiveObjectRetentionConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 	// Retention 归档副本保留期（自 ArchiveEvidence.ArchivedAt 起算）；空 = 不启用。
 	//
-	// 支持 `730d` / `104w` / `17520h` 等写法（经 retention.ParseTTL 解析）。
+	// 支持 `730d` / `104w` / `17520h` 等写法（经 logutil.ParseTTL 解析）。
 	// 启用但为空 ⇒ 启动即拒（与 archive_copy.root 同一取舍：
 	// 静默按未启用处理会让运维以为归档在按保留期清理，而它一条都没删）。
 	Retention string `mapstructure:"retention"`
@@ -1319,7 +1319,7 @@ type LogRetentionTriggerConfig struct {
 	// Interval 是**冷层搬运驱动器的调度周期**（字符串，支持 15m/1h）。
 	//
 	// 为什么必须有本键（B1，2026-10-12 修复）：生产唯一的驱动器构造点
-	// `retention.NewDriver` 取的是 `policy.Trigger.Normalize().Interval`
+	// 驱动器取的是 `policy.Trigger.Normalize().Interval`
 	// （见 driver.go 的 `interval: policy.Trigger.Normalize().Interval`），
 	// 而不是 `sweep.interval`（后者只作用于删除执行器 `Sweeper`，而本版本
 	// `NewSweeper` 在生产**没有构造点**）。
@@ -1364,27 +1364,27 @@ type LogRetentionSweep struct {
 }
 
 // RetentionPolicy 装配为 retention 包策略。解析失败时返回错误（由 Load 启动即拒）。
-func (c *Config) RetentionPolicy() (retention.Policy, error) {
+func (c *Config) RetentionPolicy() (logutil.Policy, error) {
 	if c == nil {
-		return retention.Policy{}, nil
+		return logutil.Policy{}, nil
 	}
 	cfg := c.LogRetention
-	p := retention.Policy{
+	p := logutil.Policy{
 		Enabled: cfg.Enabled,
 		Discard: cfg.Discard,
-		Trigger: retention.Trigger{
+		Trigger: logutil.Trigger{
 			DiskPercent: cfg.Trigger.DiskPercent,
 		},
-		Sweep: retention.Sweep{
+		Sweep: logutil.Sweep{
 			VLSweep:  cfg.Sweep.VLSweep,
 			Interval: cfg.Sweep.Interval,
 			Timeout:  cfg.Sweep.Timeout,
 			// 第三闸（VL 侧）来自 log_vl.delete_enabled：它是受管 VL 进程的参数事实，
 			// 由 vlsup 按同一配置位注入 -delete.enable。两处读同一个键，避免「策略以为开了、
-			// VL 其实没开」的分裂读数（见 retention.Policy.DeleteGatesOpen）。
+			// VL 其实没开」的分裂读数（见 logutil.Policy.DeleteGatesOpen）。
 			VLDeleteEnabled: c.LogVL.DeleteEnabled,
 		},
-		ArchiveCopy: retention.ArchiveCopyPolicy{Enabled: cfg.ArchiveCopy.Enabled},
+		ArchiveCopy: logutil.ArchiveCopyPolicy{Enabled: cfg.ArchiveCopy.Enabled},
 	}
 	// 导出归档启用但没给目的地 ⇒ 启动即拒。
 	//
@@ -1393,7 +1393,7 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	// 反过来，把「没有目的地」显式挡在启动阶段，问题在第一次部署时就暴露。
 	if cfg.ArchiveCopy.Enabled {
 		if err := cfg.ArchiveCopy.ValidateArchiveCopyDestination(); err != nil {
-			return retention.Policy{}, err
+			return logutil.Policy{}, err
 		}
 	}
 	// 归档对象回收：开了开关就必须给出保留期，否则启动即拒。
@@ -1402,19 +1402,19 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	// 运维看到 enabled=true，去面板看归档仍然一天天涨，而日志里没有任何报错。
 	// 静默空转是这类「默认关闭 + 必须显式配置」的功能最典型的现场。
 	if cfg.ArchiveObjectRetention.Enabled && strings.TrimSpace(cfg.ArchiveObjectRetention.Retention) == "" {
-		return retention.Policy{}, fmt.Errorf(
+		return logutil.Policy{}, fmt.Errorf(
 			"log_retention.archive_object_retention.retention 不能为空（启用归档对象回收必须给出明确的保留期，如 730d）")
 	}
 	if raw := strings.TrimSpace(cfg.ArchiveObjectRetention.Retention); raw != "" {
-		d, err := retention.ParseTTL(raw)
+		d, err := logutil.ParseTTL(raw)
 		if err != nil {
-			return retention.Policy{}, fmt.Errorf("log_retention.archive_object_retention.retention: %w", err)
+			return logutil.Policy{}, fmt.Errorf("log_retention.archive_object_retention.retention: %w", err)
 		}
 		// 解析成 0 表示「永久保留」——对**删除**类配置来说这是个陷阱：
 		// 运维写 "0" 的直觉可能是「立刻删」，而语义恰好相反。
 		// 明确拒绝，避免「以为配了保留期，实际一条都不会删」。
 		if d <= 0 {
-			return retention.Policy{}, fmt.Errorf(
+			return logutil.Policy{}, fmt.Errorf(
 				"log_retention.archive_object_retention.retention 必须为正的有限时长，得到 %q（0 表示永久保留，与「启用回收」相矛盾）", raw)
 		}
 		p.ArchiveObjectRetention.Retention = d
@@ -1422,48 +1422,48 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	p.ArchiveObjectRetention.Enabled = cfg.ArchiveObjectRetention.Enabled
 	p.ArchiveObjectRetention.SweepAtHour = cfg.ArchiveObjectRetention.SweepAtHour
 	if h := p.ArchiveObjectRetention.SweepAtHour; h < 0 || h > 23 {
-		return retention.Policy{}, fmt.Errorf(
+		return logutil.Policy{}, fmt.Errorf(
 			"log_retention.archive_object_retention.sweep_at_hour 必须在 0..23（本地整点），得到 %d", h)
 	}
 	if strings.TrimSpace(cfg.HotRetention) != "" {
-		d, err := retention.ParseTTL(cfg.HotRetention)
+		d, err := logutil.ParseTTL(cfg.HotRetention)
 		if err != nil {
-			return retention.Policy{}, fmt.Errorf("log_retention.hot_retention: %w", err)
+			return logutil.Policy{}, fmt.Errorf("log_retention.hot_retention: %w", err)
 		}
 		p.HotRetention = d
 	}
 	if strings.TrimSpace(cfg.ColdRetention) != "" {
-		d, err := retention.ParseTTL(cfg.ColdRetention)
+		d, err := logutil.ParseTTL(cfg.ColdRetention)
 		if err != nil {
-			return retention.Policy{}, fmt.Errorf("log_retention.cold_retention: %w", err)
+			return logutil.Policy{}, fmt.Errorf("log_retention.cold_retention: %w", err)
 		}
 		p.ColdRetention = d
 	}
 	if strings.TrimSpace(cfg.Trigger.MinAge) != "" {
-		d, err := retention.ParseTTL(cfg.Trigger.MinAge)
+		d, err := logutil.ParseTTL(cfg.Trigger.MinAge)
 		if err != nil {
-			return retention.Policy{}, fmt.Errorf("log_retention.trigger.min_age: %w", err)
+			return logutil.Policy{}, fmt.Errorf("log_retention.trigger.min_age: %w", err)
 		}
 		p.Trigger.MinAge = d
 	}
 
 	// B1：搬运驱动器的调度周期（NewDriver 实际读取的键）。空 = 用 DefaultDriverInterval。
 	if strings.TrimSpace(cfg.Trigger.Interval) != "" {
-		d, err := retention.ParseTTL(cfg.Trigger.Interval)
+		d, err := logutil.ParseTTL(cfg.Trigger.Interval)
 		if err != nil {
-			return retention.Policy{}, fmt.Errorf("log_retention.trigger.interval: %w", err)
+			return logutil.Policy{}, fmt.Errorf("log_retention.trigger.interval: %w", err)
 		}
 		p.Trigger.Interval = d
 	}
 
 	// 每日搬运触发时刻（默认凌晨 3 点）。空 = 默认值；-1 = 回退上面的 interval ticker 兼容档。
-	// 不在这里做范围判断以外的事：0..23 的有效性由 retention.Policy.Validate 统一拦
+	// 不在这里做范围判断以外的事：0..23 的有效性由 logutil.Policy.Validate 统一拦
 	// （启动即拒，与 hot_retention 等键同一取舍）。
-	p.Trigger.SweepAtHour = retention.DefaultSweepAtHour
+	p.Trigger.SweepAtHour = logutil.DefaultSweepAtHour
 	if raw := strings.TrimSpace(cfg.Trigger.SweepAtHour); raw != "" {
 		hour, err := strconv.Atoi(raw)
 		if err != nil {
-			return retention.Policy{}, fmt.Errorf(
+			return logutil.Policy{}, fmt.Errorf(
 				"log_retention.trigger.sweep_at_hour: 无法解析 %q（应为本地整点小时数 0..23，或 -1 表示回退间隔 ticker）", raw)
 		}
 		p.Trigger.SweepAtHour = hour
@@ -1471,29 +1471,29 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	if len(cfg.ByLevel) > 0 {
 		p.ByLevel = make(map[string]time.Duration, len(cfg.ByLevel))
 		for rawLevel, rawTTL := range cfg.ByLevel {
-			level := retention.LevelKeyOf(rawLevel)
+			level := logutil.LevelKeyOf(rawLevel)
 			if level == "" {
-				return retention.Policy{}, fmt.Errorf("log_retention.by_level 含未知级别 %q（支持 TRACE/DEBUG/INFO/WARN/ERROR）", rawLevel)
+				return logutil.Policy{}, fmt.Errorf("log_retention.by_level 含未知级别 %q（支持 TRACE/DEBUG/INFO/WARN/ERROR）", rawLevel)
 			}
-			ttl, err := retention.ParseTTL(rawTTL)
+			ttl, err := logutil.ParseTTL(rawTTL)
 			if err != nil {
-				return retention.Policy{}, fmt.Errorf("log_retention.by_level.%s: %w", rawLevel, err)
+				return logutil.Policy{}, fmt.Errorf("log_retention.by_level.%s: %w", rawLevel, err)
 			}
 			p.ByLevel[level] = ttl
 		}
 	}
 	for i, src := range cfg.Sources {
-		override := retention.SourceOverride{Match: strings.TrimSpace(src.Match)}
+		override := logutil.SourceOverride{Match: strings.TrimSpace(src.Match)}
 		if len(src.ByLevel) > 0 {
 			override.ByLevel = make(map[string]time.Duration, len(src.ByLevel))
 			for rawLevel, rawTTL := range src.ByLevel {
-				level := retention.LevelKeyOf(rawLevel)
+				level := logutil.LevelKeyOf(rawLevel)
 				if level == "" {
-					return retention.Policy{}, fmt.Errorf("log_retention.sources[%d].by_level 含未知级别 %q", i, rawLevel)
+					return logutil.Policy{}, fmt.Errorf("log_retention.sources[%d].by_level 含未知级别 %q", i, rawLevel)
 				}
-				ttl, err := retention.ParseTTL(rawTTL)
+				ttl, err := logutil.ParseTTL(rawTTL)
 				if err != nil {
-					return retention.Policy{}, fmt.Errorf("log_retention.sources[%d].by_level.%s: %w", i, rawLevel, err)
+					return logutil.Policy{}, fmt.Errorf("log_retention.sources[%d].by_level.%s: %w", i, rawLevel, err)
 				}
 				override.ByLevel[level] = ttl
 			}
@@ -1501,7 +1501,7 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 		p.Sources = append(p.Sources, override)
 	}
 	if err := p.Validate(); err != nil {
-		return retention.Policy{}, err
+		return logutil.Policy{}, err
 	}
 	return p, nil
 }
@@ -1525,12 +1525,12 @@ const (
 //
 // 2026-10-29：冷热双层已废除 ⇒ 不再校验 `cold_retention_period`（该键已删除），
 // 也不再要求 `start_cold`（没有第二个接收端可启）。剩下的是一个 VL 的保留期校验。
-func (c *Config) validateRuntimeRetention(p retention.Policy) error {
+func (c *Config) validateRuntimeRetention(p logutil.Policy) error {
 	hotRaw := strings.TrimSpace(c.LogVL.RetentionPeriod)
 	if hotRaw == "" {
 		hotRaw = vlsup.DefaultRetentionPeriod
 	}
-	actual, err := retention.ParseRuntimeTTL(hotRaw)
+	actual, err := logutil.ParseRuntimeTTL(hotRaw)
 	if err != nil {
 		return fmt.Errorf("log_vl.retention_period: %w", err)
 	}
@@ -1546,8 +1546,8 @@ func (c *Config) validateRuntimeRetention(p retention.Policy) error {
 	if !p.Enabled {
 		return nil
 	}
-	requirements := retention.RuntimeHeadroom{DriverInterval: p.Trigger.Normalize().Interval}
-	if _, err := retention.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), requirements); err != nil {
+	requirements := logutil.RuntimeHeadroom{DriverInterval: p.Trigger.Normalize().Interval}
+	if _, err := logutil.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), requirements); err != nil {
 		return fmt.Errorf("log_vl.retention_period: %w", err)
 	}
 	if strings.TrimSpace(c.LogVL.BinaryPath) == "" && strings.TrimSpace(c.LogVL.PackagePath) == "" {
@@ -1568,7 +1568,7 @@ func (c *Config) validateRuntimeRetention(p retention.Policy) error {
 		{"copy_verify_budget", c.LogRetention.Migration.CopyVerifyBudget, &requirements.CopyVerifyBudget, defaultCopyVerifyBudget},
 		{"recovery_budget", c.LogRetention.Migration.RecoveryBudget, &requirements.RecoveryBudget, defaultRecoveryBudget},
 	} {
-		d, err := retention.ParseTTL(strings.TrimSpace(field.raw))
+		d, err := logutil.ParseTTL(strings.TrimSpace(field.raw))
 		if err != nil {
 			return fmt.Errorf("log_retention.migration.%s 无法解析：%w", field.key, err)
 		}
@@ -1588,21 +1588,21 @@ func (c *Config) validateRuntimeRetention(p retention.Policy) error {
 		}
 		*field.dst = d
 	}
-	if _, err := retention.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), requirements); err != nil {
+	if _, err := logutil.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), requirements); err != nil {
 		return fmt.Errorf("log_vl.retention_period: %w", err)
 	}
 	// 每日固定时刻调度（默认凌晨 3 点）把「到点 → 开始搬」的最坏等待从 ticker 的 15m
-	// 放宽到一整天（见 retention.Policy.SweepWaitBudget），于是上面那条按 interval 预留扫描余量的
+	// 放宽到一整天（见 logutil.Policy.SweepWaitBudget），于是上面那条按 interval 预留扫描余量的
 	// 校验，对**余量偏紧**的存量配置不再足够。这里只**告警不拒绝**：那些配置在升级前是被接受的
 	// （启动即拒会让存量节点升不上来），但按新口径确实差了一点，必须在启动日志里点名，
 	// 否则「少留了一天」永远不会有人看见。
-	dailyReqs := retention.RuntimeHeadroom{
+	dailyReqs := logutil.RuntimeHeadroom{
 		DriverInterval:   p.SweepWaitBudget(),
 		CopyVerifyBudget: requirements.CopyVerifyBudget,
 		RecoveryBudget:   requirements.RecoveryBudget,
 	}
 	if dailyReqs.DriverInterval != requirements.DriverInterval { // ticker 兼容档下两个口径相同，不重复告警
-		if _, tight := retention.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), dailyReqs); tight != nil {
+		if _, tight := logutil.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), dailyReqs); tight != nil {
 			slog.Warn("原生TTL相对热窗口的余量按每日调度口径偏紧（不阻断启动，但 VL 原生淘汰可能抢先删）",
 				"hotRetention", p.HotWindow().String(), "nativeRetention", hotRaw,
 				"scheduleWait", dailyReqs.DriverInterval.String(), "error", tight)
@@ -2099,7 +2099,11 @@ func Load(path string) (*Config, error) {
 	// 装配层已经用 if/else 保证只会构造一套，这里再加一道启动即拒是因为「配了两套」
 	// 本身就是运维的误解，而它的表现（日志重复、EVENT 条数翻倍）不会指向配置。
 	if cfg.LogTailer.Enabled && len(cfg.LogSources) > 0 {
-		slog.Warn("log_tailer.enabled=true：旧采集链路的 log_sources 配置将被忽略（新采集器按绑定表推导路径）",
+		// 措辞要说准（2026-11-10 修正）：这批配置**不再被忽略**——装配层会把
+		// FILE_PRIMARY 类条目转成 logtail.StaticSources，让节点自身日志也能归源。
+		// 旧文案写的是“将被忽略”，与实现不符，会让人以为配了没用、进而去查
+		// 一个不存在的错。
+		slog.Info("log_tailer.enabled=true：log_sources 将作为非实例静态源接入新采集器",
 			"logSources", len(cfg.LogSources))
 	}
 	if cfg.LogCapacity.DegradedAtPercent <= 0 || cfg.LogCapacity.DegradedAtPercent >= 100 ||

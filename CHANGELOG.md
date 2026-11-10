@@ -35,6 +35,16 @@
     见 `internal/controlplane/database/business_retirement_restart_cycle_test.go`。
 
 ### 修复
+- **删除冷热分层旧架构残留（约 1.86 万行）**：`archive` / `retention` / `lifecycle` 三个包自单 VL 改造后已无执行对象，但代码与装配路径一直保留。本轮彻底移除。
+  **删掉的**：`internal/worker/logs/archive`（6733 行，Deep Archive + Rehydrate + Provider/Registry）、`retention`（8332 行，Driver/Mover/Sweeper/ArchivePurge/VLDeleter）、`lifecycle`（1003 行，冷热迁移状态机）以及 `apps/worker/` 下 10 个装配文件。
+  **为何这是真的死代码**：① `retention.NewDriver` 的生产调用第三个参数（Mover）恒为 `nil`，冷层搬运从未执行；② 真机 metrics `jm_log_retention_driver_enabled` 为 **0**；③ 真机 `worker.yml` 完全没有 `log_retention` 与 `log_archive` 配置段；④ 代码注释自己写着「单实例下 Hot ≡ Cold，这条链的净效果是把日分区抄到自己身上、再把自己删掉」。
+  **保留的（新建 `internal/worker/logutil`，913 行）**：`/debug/log-level` 运行期调级（**真机 curl 验证在用**，返回 `{"level":"info"}` HTTP 200）、`ParseRuntimeTTL`（解析 `log_vl.retention_period`，真机 180d）、`ValidateRuntimeHeadroom`（校验 VL 原生 TTL 不早于产品保留期）、保留策略的配置数据模型（config.go 84 处引用）、`LOG_TASK_*` 协议常量。
+  **到期处置变化**：不再经应用层三闸编排，改由 VL 自身按 `-retentionPeriod=180d` + `-delete.enable` 自治删除（这两个参数由 `vlsup` 包独立注入，与本轮删除无关）。
+  **验证**：`go build` / `go vet` 退出 0；`go test ./...` 全包通过。PRD 同步：FR-478 改为「代码已彻底删除」并**纠正了此前与代码不符的表述**，FR-501 改为「已延期」并注明执行器已删；ARCHITECTURE.md 四处包路径表更新。
+- **`TestProxy_EnvMode_UsesEnvironmentProxy` 整包必红（既存测试隔离缺陷）**：`httpclient` 包内 `TestNew_EmptyConfig_UsesProxyFromEnvironment` 先调 `New(Config{})` 触发 `http.ProxyFromEnvironment`，该函数内部用 `sync.Once` **缓存了首次读到的进程环境**（Go 标准库行为，无导出重置 API）。后续用例 `t.Setenv` 改环境对缓存无效，于是本用例断言拿到的总是**宿主真实代理**（本机 `HTTPS_PROXY=127.0.0.1:7890`）而非设置的 `18182` ⇒ 单独跑 PASS、整包跑必 FAIL。
+  **修法**：测试改用 `httpproxy.FromEnvironment()` 现场读环境验证语义，不再依赖进程级缓存；同时保留对 `Transport.Proxy` 已挂载的断言（确保不会静默直连）。另加一条对照组（未配 ftp 代理时不返回代理）防止假通过。
+  **验证**：整包连跑 5 次全绿（修复前 5 次全红）；反证：把期望值临时改成错误端口即转红，证明新断言有信息量。
+  注：产品代码无需改——生产环境变量启动后不变，缓存反而是优势。
 - **PID 文件改为原子写（潜在的服务器“从管理面消失”缺陷）**：`daemon.PIDFile.WriteRecord` 用 `os.WriteFile`（截断→写入），而 wrapper 会**写两次**该文件——监听就绪写 `wrapper_pid + socket`，Java 拉起后补写 `java_pid`。两次之间/之中存在「长度为 0 或半截 JSON」的窗口。
   **后果链**：Worker 重启时 `RecoverDaemonInstances` 恰好读到该窗口 → `ReadRecord` 解析失败 → 命中「读取 PID 文件失败，清理」分支，**`os.Remove(pidPath)` 并 `continue`** —— 一台正在服务的 MC 服务器就此被静默移出账本，再也不会被接管（连人工接管入口也找不到它）。另一条路径风险相同：半截记录里 `WrapperPID` 已写但 `SocketAddr` 为空时，会误判 wrapper 不存活而删记录。
   **修法**：新增 `writeFileAtomic()`（同目录临时文件 + `Sync()` + `Chmod()` + `Rename()`），`WriteRecord` 与 `Write` 均改走它。rename 在同文件系统内原子，读者只会看到完整的旧记录或新记录。（这也对齐仓库其他同类写入的既有做法：`setup/yml.go`、`register/identity.go`、`logs/logtail/bindings.go` 都已用「临时文件 + rename」。）

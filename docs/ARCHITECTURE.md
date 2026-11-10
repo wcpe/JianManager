@@ -341,13 +341,13 @@ internal/worker/
 | 层 | 包 / 资产 | 对应 FR | 当前实现与验收边界 |
 |---|---|---|---|
 | 共享类型与事件身份 | `internal/worker/logs/logtypes` | FR-473 | 事件身份/内容哈希契约不变；~~账本~~ 已随采集链路重建删除（2026-11-06） |
-| 归档导出 | `internal/worker/logs/archive` | FR-501 | 只余 `archive_copy` 导出用的 Provider 抽象与 manifest/校验；~~冷层搬迁 / Rehydrate / 回灌~~ 已退役（2026-11-01） |
+| 归档导出 | ~~`internal/worker/logs/archive`~~ | ~~FR-501~~ | **已删除（2026-11-10）**：`archive_copy` 导出链随 `archive` 整包（20 文件/6733 行）一并移除——真机无归档目的地（`worker.yml` 无 `log_archive` 段），该路径从未启用 |
 | 采集器（新） | `internal/worker/logs/{tailer,logtail}` | FR-475 | **当前唯一采集链路**。对齐 Fluent Bit / Filebeat：prospector（glob）→ harvester（每文件一个）→ registry（fingerprint→offset）。见下方小节 |
 | 行解析与字符集 | `internal/worker/logs/logtail`（`parseline.go`）/ `normalize`（charset） | FR-475 | 级别/时刻提取的**唯一实现**；字符集解码复用 `normalize.CharsetDecoder`（auto 粘滞按源） |
-| 保留策略 | `internal/worker/logs/retention` + `apps/worker/log_retention.go` | FR-501 | **单 VL**：`retention.NewDriver(…, nil, …)` 的 mover **恒为 nil**，到期分区只会 `archive_copy`（需配目的地）或 `blocked`（保留原物）。~~默认搬运 COLD~~ 2026-10-29 废除 |
+| 保留策略 | ~~`internal/worker/logs/retention` + `apps/worker/log_retention.go`~~ | ~~FR-501~~ | **已删除（2026-11-10）**：保留执行器（Driver/Mover/Sweeper/ArchivePurge/VLDeleter，8332 行）移除。**到期处置现由 VL 自治**：`-retentionPeriod=180d` + `-delete.enable`，不经应用层编排。仍在生产的纯数据模型与工具已迁到 `internal/worker/logutil`（Policy/Trigger/ParseTTL/LogLevelController） |
 | VL 运行时 | `internal/worker/logs/vlsup` | FR-476 | 资产 v1.52.0、localhost、auth、supervisor + 15s 看护（见下一小节） |
-| Partition Catalog + Lifecycle | `internal/worker/logs/{catalog,lifecycle}` | FR-477 | 纯逻辑 + **内存 journal**；permit/lease/pin 保留 |
-| Deep Archive | ~~`internal/worker/logs/archive`~~ | ~~FR-478~~ | **已退役（2026-11-01）**：单 VL 后冷层与 Rehydrate 已删，对象不存在；包内只余 `archive_copy` 导出用的 Provider 抽象（FR-501 用） |
+| Partition Catalog | `internal/worker/logs/catalog` | FR-477 | 纯逻辑 + **内存 journal**；permit/lease/pin 保留。~~lifecycle 迁移状态机~~ 已删除（2026-11-10） |
+| Deep Archive | ~~`internal/worker/logs/archive`~~ | ~~FR-478~~ | **已删除（2026-11-10）**：整包移除，无残留 |
 | Worker 查询 | `internal/worker/logs/query` + `grpcmap/grpcsvc` | FR-479 | 逐源固定 view + budget + read pin |
 | CP 联邦协调 | `internal/controlplane/logcoord` + 反向隧道适配 | FR-480 | 扇出 → 合并 → 游标分页 → 覆盖/质量聚合 → HTTP |
 | 入库切换 | ~~`log_cutover.go` + `log_legacy.go` + DualPath 门面~~ | ~~FR-481~~ | **已下线（2026-10-29）**，**FR-481 已退役（2026-11-01）**：随 CP `logs` 表删除，切换两侧不再存在。残留的 `model.LogCutoverState` 表与 `LogCutoverReadiness` RPC 只是**兼容壳**，无任何开关消费者 |
@@ -432,10 +432,10 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | 采集通道 | `internal/worker/logs/{acquire,pipeline,ingest}` | FR-474/475 | tail/stdio/archive→WAL→VL 已接线；**投递路径已于 2026-11-02 简化**（`deliverCtx` 只做去重→规范化→写段→写 VL→异步登记缺口核对，见 §13.7），发布/物化/代次机制仅保留在**重建与对账**路径上 |
 | 归一化 | `internal/worker/logs/normalize` + 生产 pipeline | FR-475 | 既有归一化与事件身份/内容哈希契约不变；逻辑 Multiline 字节/行数有限默认修复中，独立库零值与显式合法限制保持 |
 | 采集侧成本策略 | `internal/worker/logs/sampling` | FR-498 配套 | 四类策略默认关，抑制折叠为汇总事件，不变量 R 与 default-deny 缺口判据不放宽；历史变异见 [成本规格](specs/log-cost-governance/spec.md) |
-| 保留与分层策略 | `internal/worker/logs/retention` + `apps/worker/log_retention.go` | FR-477/501 | 默认动作搬运 COLD，删除三闸默认关、Sweeper 未接线；TTL 余量、实际接收端、物理日批次续跑与删除边界修复中；gz 文件吸存和指标仍未实现 |
+| 保留与分层策略 | ~~`internal/worker/logs/retention` + `apps/worker/log_retention.go`~~ | ~~FR-477/501~~ | **已删除（2026-11-10）**：执行器移除。到期由 VL 自治（`-retentionPeriod=180d`）；纯数据模型迁至 `internal/worker/logutil` |
 | VL 运行时 | `internal/worker/logs/vlsup` | FR-476 | 既有资产/localhost/auth/supervisor 保留；typed 资源模型、诊断脱敏与退出事实、固定客户端/readiness 恢复及实际准入正在联合接线复验 |
-| Partition Catalog + Lifecycle | `internal/worker/logs/{catalog,lifecycle}` | FR-477 | 当前 40 文件内容的固定批次、permit/lease/pin、独立 sidecar 故障与真双 VL 三启组件回归通过；容量压力仅旧小 PP 内容，范围 lint 9 既有/0 新增，联合门禁仍待 |
-| Deep Archive | `internal/worker/logs/archive` | FR-478 | 既有 Provider/Registry/Rehydrate 与历史 RustFS S3 记录保留；读取前预算、流式硬界、重复合并及实际 IO 结束后释放正在修复 |
+| Partition Catalog | `internal/worker/logs/catalog` | FR-477 | permit/lease/pin 保留；~~lifecycle 迁移状态机~~ 已删除（2026-11-10） |
+| Deep Archive | ~~`internal/worker/logs/archive`~~ | ~~FR-478~~ | **已删除（2026-11-10）**：整包移除 |
 | Worker 查询 | `internal/worker/logs/query` + `grpcmap/grpcsvc` | FR-479 | 既有 Log RPC 已接线；完整逐源固定 view、真实租约/TTL/read pin、故障分页和全请求预算联合修复中 |
 | CP 联邦协调 | `internal/controlplane/logcoord` + 反向隧道适配 | FR-480 | 既有 Assemble 与授权保留；真实首屏 Worker view、顶层覆盖/截断、整请求预算与当前页导出修复中 |
 | 入库切换 | ~~`log_cutover.go` + `log_legacy.go` + DualPath 门面~~ | FR-481 | **已下线（2026-10-29）**：随 CP `logs` 表废弃删除，切换的两侧不再存在 |
