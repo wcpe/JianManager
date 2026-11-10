@@ -10,13 +10,19 @@ import os
 REPO = '/home/wxys233/projects/JianManager'
 
 # 从验收脚本里提取实际引用过的 FR 号
-# 注意：batch_probe.py 的 FR 号在 CASES 元组里，也要算
+# 注意：不同脚本的 FR 号位置不同：
+#   p*.py / batch_probe.py  → 在 CASES 元组里
+#   log_*.py / *_impl.py    → 在 Verdict('FR-xxx', ...) 调用里
+# 统一扫全部 .py（除了工具脚本自己）最省事。
 covered = set()
-for pat in ('p*.py', 'batch_probe.py'):
-    for f in glob.glob(os.path.join(REPO, 'scripts/fr-acceptance', pat)):
-        txt = open(f, encoding='utf-8').read()
-        for m in re.findall(r'FR-(\d+)', txt):
-            covered.add(int(m))
+TOOL_SCRIPTS = {'pending.py', 'routes.py', 'fr_acceptance.py', 'extract_fr.py',
+                'mock_ai_provider.py', 'mock_http_proxy.py'}
+for f in glob.glob(os.path.join(REPO, 'scripts/fr-acceptance', '*.py')):
+    if os.path.basename(f) in TOOL_SCRIPTS:
+        continue
+    txt = open(f, encoding='utf-8').read()
+    for m in re.findall(r'FR-(\d+)', txt):
+        covered.add(int(m))
 
 # 82 条新增 FR（相对 v0.23.0）：FR-472~486, 489~503, 505~512, 513~545, 546~556
 added = []
