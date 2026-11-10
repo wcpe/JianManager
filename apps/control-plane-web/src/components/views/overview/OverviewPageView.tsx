@@ -407,6 +407,119 @@ export function GaugeAttributionTooltip({
   const formatValue = (cpuPct: number | null, rssBytes: number | null): string => (
     gauge === 'cpu' ? displayNumber(cpuPct, '%') : rssBytes == null ? '--' : fmtBytes(rssBytes)
   )
+
+  /*
+    【悬停触发：鼠标靠近即展开，不必点击】
+    用户要为「鼠标移上去就该看到」——仪表球是纯读数据的东西，点一下才能看
+    细节不合直觉，也容易让人误以为那个球是可导航的链接。
+
+    但悬停浮层有两个真实陷阱，必须一并处理，否则修完比原来更难用：
+
+    ① 【两个触发器不能各自计时】
+       球与浮层面板之间隔着一个 sideOffset（下方 4px 的空隙）。鼠标从球
+       往下走到面板时必然穿过这条空隙，若两个元素的 enter/leave 各自独立
+       计时，就会在穿越瞬间先关后开——面板一闪，读不了数。
+       故两者共用**同一个延时器**：只要在任一侧，就取消关闭。
+
+    ② 【关闭要延迟，并给键盘留位】
+       鼠标斜向离开时会短暂扫过其他元素，立即关闭会让面板乱闪；
+       延迟 120ms 后若确实不在任一侧再关。
+       同时保留点击触发（PopoverTrigger）：只靠悬停则触屏与键盘用户
+       完全无法打开——WCAG 2.1 的 2.1.1 要求所有功能可经键盘达成。
+       用户要求的是「不用点也能看」，不是「不许点」。
+   */
+  /*
+    【为何需要自己镜像一份开合态】
+    onToggle 是**翻转**语义（父级拿它做三元切换），但悬停要的是**设为打开**。
+    只靠 props 的 active 不够：它要等父级 setState + 重渲染才更新，同一个 tick
+    内连续两次事件读到的都是旧值。
+
+    所以用 opened 镜子记录「我们认为现在开着吗」：每个事件先把它推到目标态、
+    再决定要不要发 onToggle。这样悬停与点击不会互相抵消——userEvent.click()
+    会先派发 mouseenter 再派发 click，若两者都无条件翻一下，用户点一下什么
+    都看不到（真实鼠标点击与触屏 tap 同样如此）。
+   */
+  const opened = useRef(active)
+  // props 变化时同步（父级可能从外部关闭，如切到 AI 首页）
+  useEffect(() => { opened.current = active }, [active])
+
+  /*
+    【悬停开的与点击开的分开记】
+    鼠标只是路过一个「用户点击打开」的面板时，不该把它关掉。
+    只有本次打开确实由悬停发起，移开才收起。
+   */
+  const openedByHover = useRef(false)
+
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** 取消待执行的关闭：两个触发器任一侧 enter 都要调，否则穿越空隙时面板会闪。 */
+  const cancelHoverClose = (): void => {
+    if (hoverTimer.current !== null) {
+      clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
+    }
+  }
+
+  /** 设为打开（幂等）：已开着就不再翻一下。 */
+  const setOpen = (next: boolean): void => {
+    if (opened.current === next) return
+    opened.current = next
+    onToggle()
+  }
+
+  /**
+    点击 / 外部点击 / Escape 走这里。
+
+    【为何点击在悬停打开时要「钉住」而不是关闭】
+    鼠标点击必然先触发 mouseenter 再触发 click。悬停已经把面板打开了，
+    此时 Radix 接到 click 会请求 onOpenChange(false)——直接照做的话，
+    用户“移上去 + 点一下”看到的是面板一闪就消失，触屏 tap 更是完全打不开
+    （tap 同样派发 mouseenter）。
+
+    所以把「悬停开着的时候点一下」理解为**钉住**：保持打开、取消悬停归属，
+    之后鼠标移开也不会收。再点一下（此时已非悬停打开）才真正关闭，
+    与改动前「点击开关」的手感一致。
+   */
+  const handleOpenChange = (next: boolean): void => {
+    if (!next && openedByHover.current) {
+      // 悬停开着时点击 = 钉住：保持打开，但不再随鼠标移开而关。
+      openedByHover.current = false
+      return
+    }
+    if (next === opened.current) return
+    opened.current = next
+    openedByHover.current = false
+    onToggle()
+  }
+
+  /**
+    悬停进入：只负责打开。
+    不在这里算关闭——关闭要走 scheduleHoverClose 的延时，
+    否则鼠标从球移到面板、穿过 4px sideOffset 的瞬间就会先关后开。
+   */
+  const handleHoverEnter = (): void => {
+    cancelHoverClose()
+    if (!opened.current) {
+      openedByHover.current = true
+      setOpen(true)
+    }
+  }
+
+  /** 离开任一侧：延迟关闭，给「移到另一侧」留出穿越空隙的时间。 */
+  const scheduleHoverClose = (): void => {
+    cancelHoverClose()
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null
+      // 非悬停打开的面板（如用户点击开的）不因鼠标路过而关
+      if (!openedByHover.current) return
+      openedByHover.current = false
+      setOpen(false)
+    }, 120)
+  }
+
+  // 卸载时清掉未执行的计时器，否则组件已卸载仍会调 onToggle。
+  useEffect(() => () => cancelHoverClose(), [])
+
   return (
     <Panel bodyClassName="relative flex items-center justify-center py-3">
       {/*
@@ -427,15 +540,18 @@ export function GaugeAttributionTooltip({
         点击外部/ Escape 关闭、焦点归还全部由原语托管，本视图只保留「开合态上报」。
         受控：容器据开合态决定是否发起归因请求（enabled），故 open 必须由 props 驱动。
       */}
-      <Popover open={active} onOpenChange={(next) => { if (next !== active) onToggle() }}>
+      <Popover open={active} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
           {/* 仪表卡整块是归因浮层的触发区：外观为零、只承载可点区域，
-              故取 invisible + auto；asChild 让 Button 把样式与键盘语义一并交给触发器。 */}
+              故取 invisible + auto；asChild 让 Button 把样式与键盘语义一并交给触发器。
+              悬停也由这里承接：onMouseEnter 即展开，onMouseLeave 延时关闭。 */}
           <Button
             type="button"
             variant="invisible"
             size="auto"
             aria-label={t('dashboard.resourceAttributionLabel', { label })}
+            onMouseEnter={handleHoverEnter}
+            onMouseLeave={scheduleHoverClose}
             /* 
               【悬停反馈：不动背景色，改提亮环 + 轻微抬起】
               用户要求保留 hover 反馈，但原先的 `hover:bg-accent/40` 是整块卡变浅底——
@@ -456,6 +572,10 @@ export function GaugeAttributionTooltip({
           side="bottom"
           data-testid="overview-resource-attribution"
           className="w-[min(22rem,calc(100vw-2rem))] text-left text-xs"
+          /* 与球共用同一个延时器：进来就取消关闭，离开才计时，
+             否则鼠标从球移到面板、穿过 4px 空隙时面板会闪一下。 */
+          onMouseEnter={cancelHoverClose}
+          onMouseLeave={scheduleHoverClose}
         >
           {isLoading && <p className="text-muted-foreground">{t('dashboard.resourceAttributionLoading')}</p>}
           {isError && <p className="text-muted-foreground">{t('dashboard.resourceAttributionUnavailable')}</p>}
