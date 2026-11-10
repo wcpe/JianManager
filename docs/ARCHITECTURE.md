@@ -427,15 +427,15 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 | 层 | 包 / 资产 | 对应 FR | 当前实现与验收边界 |
 |---|---|---|---|
-| 共享类型与账本 | `internal/worker/logs/{logtypes,ledger}` | FR-473/474 | 增量保存物理映射、绑定指纹、独立请求证据与恢复审计协议；跨适配/采集联合修复中 |
-| 事件体存储 | `internal/worker/logs/eventstore` | FR-484 | 新目录采用完整源键摘要，严格末行损坏分类与冻结读取字节界已落地；合法注册/三启定向回归已过，完整 race 与最终联合验收待，历史容量见 [受控记录](specs/worker-log-canonical-eventstore/acceptance-real.md) |
-| 采集通道 | `internal/worker/logs/{acquire,pipeline,ingest}` | FR-474/475 | tail/stdio/archive→WAL→VL 已接线；**投递路径已于 2026-11-02 简化**（`deliverCtx` 只做去重→规范化→写段→写 VL→异步登记缺口核对，见 §13.7），发布/物化/代次机制仅保留在**重建与对账**路径上 |
+| 共享类型与账本 | `internal/worker/logs/logtypes` | FR-473/474 | 共享类型与事件契约。原并列的 `ledger` 包已随旧采集链路删除 |
+| 事件体存储 | ~~`internal/worker/logs/eventstore`~~ | FR-484 | **已删除（2026-11-03 退废）**：canonical 事件体（tmpfs 段 + MANIFEST + 重建写入链）整体移除，VictoriaLogs 成为唯一事实源。当前不存在“本地事件副本”这一层，详见 [日志说明书](LOGS.md) |
+| 采集通道 | `internal/worker/logs/{tailer,logtail}` | FR-474/475 | **当前采集实现**：`tailer` 做路径发现与 registry 位点，`logtail` 做逐行解析/多行归并/归一与 NDJSON sink。旧的 `{acquire,pipeline,ingest}` 三包已于 2026-11 前整体删除（WAL → VL 直投）；旧述“`deliverCtx` 只做去重→规范化→写段→写 VL”已不存在。详见 [日志说明书](LOGS.md) |
 | 归一化 | `internal/worker/logs/normalize` + 生产 pipeline | FR-475 | 既有归一化与事件身份/内容哈希契约不变；逻辑 Multiline 字节/行数有限默认修复中，独立库零值与显式合法限制保持 |
 | 采集侧成本策略 | `internal/worker/logs/sampling` | FR-498 配套 | 四类策略默认关，抑制折叠为汇总事件，不变量 R 与 default-deny 缺口判据不放宽；历史变异见 [成本规格](specs/log-cost-governance/spec.md) |
 | 保留与分层策略 | ~~`internal/worker/logs/retention` + `apps/worker/log_retention.go`~~ | ~~FR-477/501~~ | **已删除（2026-11-10）**：执行器移除。到期由 VL 自治（`-retentionPeriod=180d`）；纯数据模型迁至 `internal/worker/logutil` |
 | VL 运行时 | `internal/worker/logs/vlsup` | FR-476 | 既有资产/localhost/auth/supervisor 保留；typed 资源模型、诊断脱敏与退出事实、固定客户端/readiness 恢复及实际准入正在联合接线复验 |
 | Partition Catalog | `internal/worker/logs/catalog` | FR-477 | permit/lease/pin 保留；~~lifecycle 迁移状态机~~ 已删除（2026-11-10） |
-| Deep Archive | ~~`internal/worker/logs/archive`~~ | ~~FR-478~~ | **已删除（2026-11-10）**：整包移除 |
+| Deep Archive | ~~`internal/worker/logs/archive`~~ | ~~FR-478~~ | **已删除（2026-11-10）**：整包移除（含 `archive_copy` 的 Provider 抽象）。旧述「Registry/Rehydrate 保留」与早前的「已退役」均已被本次删除取代 |
 | Worker 查询 | `internal/worker/logs/query` + `grpcmap/grpcsvc` | FR-479 | 既有 Log RPC 已接线；完整逐源固定 view、真实租约/TTL/read pin、故障分页和全请求预算联合修复中 |
 | CP 联邦协调 | `internal/controlplane/logcoord` + 反向隧道适配 | FR-480 | 既有 Assemble 与授权保留；真实首屏 Worker view、顶层覆盖/截断、整请求预算与当前页导出修复中 |
 | 入库切换 | ~~`log_cutover.go` + `log_legacy.go` + DualPath 门面~~ | FR-481 | **已下线（2026-10-29）**：随 CP `logs` 表废弃删除，切换的两侧不再存在 |
@@ -461,7 +461,7 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 **归档发现的缺省口径（FR-503）**：显式 `archive_glob`（规则表下发或 `worker.yml` 写死）**逐字使用**、不做扩展——写了 `logs/*.gz` 就只发现 `*.gz`。缺省（空）时在历史的「活文件同目录 `*.gz`」之外，再发现**与活文件同前缀的无扩展名数字轮转**（`proxy.log.1`、`proxy.log.2`……）：BungeeCord 的轮转产物正是纯文本无扩展名，导入侧早已按文件头识别（`DetectArchiveFormat` 分流到纯文本、账本登记 `rotated_text`）；规则表的 `bungee` 条目已显式给出 `proxy.log.[1-9]*`，故实例绑定的 bungee 源一直可达，**落到缺省分支的源**（`worker.yml` 的 `log_sources` 条目等）此前却只有 `*.gz` ⇒ 该形态**永远进不了候选**，形成「能力已有、发现不到」的静默缺口。判据为「同前缀 + 纯数字后缀 + 普通文件 + 路径 ≠ 活文件」：同前缀把范围收敛到同一逻辑源的轮转族（不纳入同目录其它 `*.log`，避免与实时 tail 抢同一份字节），纯数字后缀天然排除 `proxy.log.0.lck`、`.bak` 与日期名而不必另立黑名单；活文件按**路径**排除（log4j 形态活跃文件是 `proxy.log`、java.util.logging 形态活跃文件就是 `proxy.log.0`），活文件名本身不带数字后缀时再排除 `proxy.log.0`（那是 JUL 的当前文件）。目录不存在按「没有归档」处理，只有目录真正不可读才登记 `ARCHIVE_DISCOVERY_FAILED` 缺口。
 
-**采集索引与查询一致性**：旧 JSON 迁移绑定原始字节 SHA-256、映射版本与 meta 进度凭据，分块数据/进度同事务提交；启动循环续跑 `Incomplete`，全量逐值校验及来源复核后才归档旧 JSON，非空无凭据不一致库拒绝覆盖。全表读取共用一个只读事务的 WAL 快照。锁外持久化计划携快照顺序令牌，提交门内整份拒绝过期计划（包括根行及剪枝），部分提交同样推进接纳门槛。本地 SQLite 新增 `recovery_audit` 与 `materialization_attempt`：后者保留按源/日/窗/代次核算的物化预留、失败和实际成本，不随活动引用裁剪归零（**2026-10-29**：前者已随受管恢复分段废除而删除 —— `Open` 会幂等 `DROP TABLE recovery_audit`；同批 `source_wal` 表也已删除，WAL 改纯内存队列，reclaim 改按 `REQUEST_DONE` 证据推进）。物理映射、已确认指纹与实际 ACK 证明的持久化模型见 [索引规格](specs/log-index-sqlite/spec.md)。只读 JSON 导出不含这两张历史表，不是完整备份；旧 JSON 回退仅为备份时间点受控恢复，不能承诺旧二进制直接读取新元数据或迁移后增量无损降级。
+**采集索引与查询一致性**：旧 JSON 迁移绑定原始字节 SHA-256、映射版本与 meta 进度凭据，分块数据/进度同事务提交；启动循环续跑 `Incomplete`，全量逐值校验及来源复核后才归档旧 JSON，非空无凭据不一致库拒绝覆盖。全表读取共用一个只读事务的 WAL 快照。锁外持久化计划携快照顺序令牌，提交门内整份拒绝过期计划（包括根行及剪枝），部分提交同样推进接纳门槛。本地 SQLite 新增 `recovery_audit` 与 `materialization_attempt`：后者保留按源/日/窗/代次核算的物化预留、失败和实际成本，不随活动引用裁剪归零（**2026-10-29**：前者已随受管恢复分段废除而删除 —— `Open` 会幂等 `DROP TABLE recovery_audit`；同批 `source_wal` 表也已删除，WAL 改纯内存队列，reclaim 改按 `REQUEST_DONE` 证据推进）。物理映射、已确认指纹与实际 ACK 证明的持久化模型原见 FR-496 索引规格；**该规格连同 SQLite 索引库已整体退废（索引改 `:memory:`，FR-496 已废弃）**。只读 JSON 导出不含这两张历史表，不是完整备份；旧 JSON 回退仅为备份时间点受控恢复，不能承诺旧二进制直接读取新元数据或迁移后增量无损降级。
 
 > **2026-10-30 重大变更：索引库改纯内存（`:memory:`），事件段改 tmpfs。**
 >
@@ -481,20 +481,20 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 > 只读 JSON 导出 / 旧 JSON 回退」**全部失去对象**（磁盘上已没有索引库）。
 > `worker log-index-export` 子命令保留但**总是返回说明性错误**，不再假装成功。
 > 上述迁移与快照语义仅作**历史参考**，现行细节见
-> [索引规格](specs/log-index-sqlite/spec.md) 的 2026-10-30 修订节。
+> 索引规格已随 FR-496 退废而归档（原 `log-index-sqlite` spec 已删除）。
 >
 > **代价（必须知道）**：进程重启后索引、事件段、WAL 全部归零。
 > 「VL 数据根丢失后从事件段重建 projection」这个能力**不再存在**（详见 ADR-095 追记）。
 
-**续读物理/逻辑定位（模型已扩展，适配与采集复验中）**：`Segment.PhysicalStart` 与 `PhysicalMappingKnown` 把逻辑 `StartPos` 映射到文件偏移，真实 0 与旧状态缺证据分开。`ConfirmedFingerprint` 绑定分段身份、逻辑/物理采点、窗口与摘要；旧 `PositionsFingerprint/PositionsFingerprintAt` 保留兼容，但不能自动升级成可信绑定，更不能把逻辑投递水位直接用于物理 Seek。新增字段须经索引双向映射并在二启/三启保持，不造兼容证据；旧缺证据的具体续读/重锚路径仍在联合修复验收。准确字段、读取字节限与归档三态见 [采集规格](specs/worker-log-acquisition/spec.md)。
+**续读物理/逻辑定位（模型已扩展，适配与采集复验中）**：`Segment.PhysicalStart` 与 `PhysicalMappingKnown` 把逻辑 `StartPos` 映射到文件偏移，真实 0 与旧状态缺证据分开。`ConfirmedFingerprint` 绑定分段身份、逻辑/物理采点、窗口与摘要；旧 `PositionsFingerprint/PositionsFingerprintAt` 保留兼容，但不能自动升级成可信绑定，更不能把逻辑投递水位直接用于物理 Seek。新增字段须经索引双向映射并在二启/三启保持，不造兼容证据；旧缺证据的具体续读/重锚路径仍在联合修复验收。准确字段、读取字节限与归档三态原见 FR-474 采集规格；**该规格已随旧采集链路删除而归档**，当前采集实现见 [日志说明书](LOGS.md)。
 
 **纯截断重写按 reanchor 处置（不是轮转）**：`copytruncate` 这类「同 inode、前缀仍是已投递字节、size 回退到游标之前」的重写，此前走轮转语义（游标归零、登记 `latest→latest.1` 关联、不记缺口）⇒ 已投递内容被重新赋予更高的逻辑位置、以不同 `event_id` 二次投递，而账本显示零缺口（查询侧看不出重复、账本也自认一致）。现改走 reanchor 同族：锚到 EOF、禁止回头重读，缺口按**真实损失** `[Durable, logicalPos)` 登记（照搬 `[cursor, size)` 会被夹平成零长度），已全部确认落库时不记缺口——否则一次无损截断会因 `FILE_REWRITTEN` 不在自动消解名单内把源永久阻塞。四条判据须同时成立才判为截断，否则仍走轮转：size 回退、非 inode 替换（inode 变了是真正的同名替换，旧内容还在轮转目标上）、**没有可接管的轮转目标**（copytruncate 的未读尾部已被复制到 `rotateTo`、由 ArchiveImporter 接管，此时按缺口报就是假缺口）、残留前缀与首次观察到的身份前缀逐字节相同（前缀已变是「换内容从头写」，跳过即静默丢内容）；拿不到物理身份时不判定，宁可沿用轮转语义，也不把真轮转的新文件当旧内容静默跳过。同尺寸的「保头吞尾」重写仍由进程内尾窗指纹链负责。
 
-**发布恢复边界**：静默遗留 pending 由常驻对账按实际 UTC 日内容级确认或预算化续修，不依赖新日志；全部日未确认时保持 pending，清除须复核发布版本/authority/attempt，旧完成不能清新尝试。微投影 64 代阈值按本批实际日检查，到限单代 Replace 写完整 canonical 日集，保留旧历史。既有处理游标逐源完成后推进，不能按候选数抢先跨过未处理源；详细语义与回归见 [采集规格](specs/worker-log-acquisition/spec.md)。
+**发布恢复边界**：静默遗留 pending 由常驻对账按实际 UTC 日内容级确认或预算化续修，不依赖新日志；全部日未确认时保持 pending，清除须复核发布版本/authority/attempt，旧完成不能清新尝试。微投影 64 代阈值按本批实际日检查，到限单代 Replace 写完整 canonical 日集，保留旧历史。既有处理游标逐源完成后推进，不能按候选数抢先跨过未处理源；详细语义原见采集规格（已归档）；当前链路见 [日志说明书](LOGS.md)。
 
 **热层可发布窗口（2026-10-21 生产缺陷修复）**：VL 对**超出 `-retentionPeriod` 的数据点返回 HTTP 200 但静默丢弃**（已实测：写 45 天前数据得 `200`、随后查询 `0` 行；写当天数据得 `200`、查询 `1` 行）。若不设窗口，重建会把历史天重放成「`status:200, verified:N` 的假成功」，随后逐字段校验恒 `rows:0` ⇒ `not fully visible before deadline` ⇒ `PublicationPending` 永久为真 ⇒ 重试到上限后「已停止自动重试」，且对账每轮又把该天判成 `observed < expected` ⇒ 无限重新登记重建。故新增集中判定（`ingest/hot_retention_window.go`），判据保守：**只有该天整天都早于 `now - retention` 才判超窗口**，跨越边界当天仍按可发布处理；`retention<=0`/空串/脏串一律不启用过滤（零值保持改动前行为，避免「没配就误滤正常数据」）。窗口在**四处**统一应用：重建面（不写、不校验、不计入已发布）、对账期望集（不计入 `MissingDays`，如实进 `Report.BeyondHotRetention`）、pending 确认的缺失天、**投递路径**（`writeProjectionDay` 入口单天阑，适用于归档导入批次）。全部天超窗口时给明确终态：清 `PublicationPending` + WARN，**绝不解算缺口**（缺口继续对用户可见）。**发布语义（2026-11-02 简化后）**：投递路径只做到「写段 → 写 VL」，不再有逐字段校验与 publish（以 VL 的 HTTP 结果为准）；而**重建路径仍保持**「写 VL → 逐字段校验 → 通过才 publish」——不这样重建会把历史天重放成永久 pending。超窗口天既不生成代次也不宣称已发布。保留期由 `log_vl.retention_period` 经 `Options.HotRetention` 注入（空串回退 `vlsup.DefaultRetentionPeriod`）。**已知边界**：若 VL 由外部部署且 retention 与配置不一致，窗口会偏大或偏小（偏小 ⇒ 多发几次无用重建；偏大 ⇒ 少量仍会被继续重试），属配置一致性风险，不引入数据错误。
 
-**日志投递路径简化（2026-11-02，用户裁定）**：按「边读边扔 VL，`event_id` 做幂等」重写投递路径。`deliverCtx` 从 335 行/179 分支降到约 60 行，只剩：投递守卫 → 批内 `event_id` 去重 → **按稳定摄取时间规范化**（Raw 事件） → 写本地磁盘段 → 写 VL → 异步登记缺口核对。查询侧同步去掉 `projection_generation` 过滤。
+**日志投递路径（2026-11-02 简化后现状）**：当前实现是 `tailer` 发现路径 + `logtail` 逐行读取与归一 → NDJSON → `InsertJSONLines` 直写 VL。**本段旧述已全部失真，保留仅作历史对照**：`deliverCtx`（335 行/179 分支）已随旧链路整体删除；“写本地磁盘段”已不存在（无事件副本）；`projection_generation` 过滤已去掉。
 
 **已删除**（投递路径上永久不再运行）：代次取名/预留与 `projection_generation` 标签、发布快照 `publishSnapshot`、`PublicationPending` 发布确认链、整窗重发与 `replace` 分支、增量尾部快路径、物化预算 `reserveMaterialization`、`activeTails` 活跃代次簿记、投递路径上的逐字段校验，以及 closed/debt/verified 三层账。
 
@@ -522,8 +522,8 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | 到期动作 | 默认动作=搬运 COLD（复用 `ROUTING_FROZEN→…→CLEANED`），搬运失败=保留原物+告警、零删除；删除需 `discard` + `sweep.vl_sweep` 双闸且受管 VL 需 `-delete.enable`，**默认全关**。次序固定为 `move_to_cold → archive_copy → discard → blocked`（导出判在删除之前）。次选 `archive_copy` **已闭环**：导出+三重校验通过且三闸全开时，先把 Catalog 权威态迁到 `ARCHIVED`（`Owner=archive` + 归档证据：provider kind / object prefix / manifest 回读 sha256 / coverage / 归档时刻 / 迁移前快照），**再**由生产 `Remover`（`lifecycle.RemoveArchivedPartition`：先 detach 再删日分区目录）回收热层；删除失败回滚为 HOT 并恢复原投影（查询能力不丢）；删除前 Catalog 复核「该日无 HOT 残留 + 证据完整 + 无在途写许可 + 无活跃读取」。查询面：未恢复的归档分区显式降级 `LOG_COVERAGE_ARCHIVE_MISSING`/`ARCHIVE_NOT_RESTORED`，无可读 range 时返回 `LOG_ARCHIVE_MISSING`（不是空成功）；已恢复（对齐投影）按 `archive` tier 走 Rehydrate 客户端。导出目的地支持 `local`（默认）/`s3`/`minio`（配置 `log_retention.archive_copy.{provider,root,endpoint,bucket,region,prefix,access_key,secret_key,use_ssl}`，目的地不完整则启动即拒）：s3/minio 复用 FR-478 已真机验过的 SigV4 `archive.RemoteS3Provider`（纯标准库 path-style，底层 `internal/worker/storage/s3.go`），对象键布局与本地完全同构，不新造协议也不新造凭证模型；构造失败只降级导出器（不装出口 ⇒ 到期分区落 blocked 保留原物）而不让 Worker 启动失败。**归档对象保留** **已接线**（ADR-098 第 7 条决策）：`log_retention.archive_object_retention.{enabled,retention,sweep_at_hour}`，默认关/空/3；启用但保留期为空 ⇒ 启动即拒。次序与热层回收同构：`MarkArchiveObjectPurgeRequested`（落 journal）→ 逐对象 `Delete` → 全部成功才 `MarkArchiveObjectsPurged`，任一失败 `RollbackArchiveObjectPurge`（尝试次数不清零）。**复用同一套三闸**（未全开时连候选都不枚举）。清除前置：证据完整 + 热层已回收 + 无待恢复标记 + 无活跃租约 + 无本地已恢复投影。终态取 `ArchiveEvidence.Purged/PurgedAt/PurgeReason`（**不新增 Owner 取值**：那会让十余处 `Owner == hot/cold/archive` 的 switch 落 default，把「数据不在」伪装成「另一个存储层」）。查询面用**新**原因 `ARCHIVE_PURGED` + 新错误码 `LOG_ARCHIVE_PURGED`，不复用 `LOG_ARCHIVE_MISSING`（那是「去 rehydrate」，已清除后是死路），也不返回空成功。**未做**：长期吸存；真机长窗与 S3/MinIO 目的地的对象删除未验 |
 
 | 分层驱动 | `retention.Driver` **每日固定时刻调度**（`log_retention.trigger.sweep_at_hour`，默认 3 点、进程本地时区）+ 启动首轮立即执行；触发口径年龄 + 磁盘水位**取先到**（磁盘触发 min_age=7d）；`log_retention.trigger.*` 配置面 **已接线** | 不变（即目标形态） |
-| 实例本地 gz | 无吸存能力；平台不删实例本地任何 `.gz`（轮转尾部由 ArchiveImporter 解析，仅用于接管；同目录的**纯文本轮转**归档——如 BungeeCord 的 `proxy.log.N`——同样由该导入器按形态分流后接管） | 以**文件身份、压缩态**吸存到冷层：只归档文件、不解析、不入事件流；幂等去重由系统负责；**本地 gz 一律不动** |
-| 对象存储 | FR-478 已有 S3 Provider / Rehydrate 能力（真机 RustFS 验收通过），当前未作为必需组件 | **第一阶段不上**；作为第 3 档（异地/超长期/合规）能力位与后续评估位 |
+| 实例本地 gz | 无吸存能力；平台不删实例本地任何 `.gz`。**旧述“轮转尾部由 ArchiveImporter 解析”已失真**：ArchiveImporter 已整体删除（2026-11-03），当前由 `tailer` 路径发现 + `logtail` 直接读取（含 BungeeCord 式纯文本 `proxy.log.N`；能否采到历史取决于 `read_from_head`，见 [日志说明书](LOGS.md)） | 以**文件身份、压缩态**吸存到冷层：只归档文件、不解析、不入事件流；幂等去重由系统负责；**本地 gz 一律不动** |
+| 对象存储 | ~~FR-478 Deep Archive / Rehydrate~~ **已删除（2026-11-10，整包移除）**；真机 RustFS 验收记录属历史 | **第一阶段不上**；作为第 3 档（异地/超长期/合规）能力位与后续评估位 |
 | 采集侧成本 | `Config.SamplingPolicy → ingest.Options.Sampling → Manager → 每源 Pipeline` 已接线，四类策略**默认全关**；抑制以汇总事件承接（不变量 R），恢复重投不重复采样 | 不变（默认关即目标姿态） |
 | 单位成本 | 投递路径 O(段总行数) 遍历已消除（−82% 批耗时 / +68% 吞吐 / 达成率 0.555→0.93）；新鲜度换成本的分段批拉经实测收益为零、**不做** | 成本可见性平台化（每源 GB/天、ms/行），供预算化运营 |
 | 平台配额 | 机制侧有"每源预算"（默认关）；`GroupQuota` 无日志量维度 | **先可见性、后强制**：用量报表先落地，强制档位（复用 `EnforceMode` 三档）后置 |
@@ -537,7 +537,9 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
-- **Worker 日志平台 Log RPC（FR-473～484，消息已冻结 / 生产装配已落地）**：`GetLogCapabilities`、`LogCreateView`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`、`LogMigratePartition`、`LogCutoverReadiness`、`LogResolveIngestGaps`、`LogImportArchives`（手动触发归档导入扫描：源被暂停时自动发现不再跑，此入口复用同一条导入管道与归属闸，强制携带操作人；**支持两种归档形态**——`.gz` 压缩归档与 BungeeCord 式**纯文本轮转**（后者见下条），形态按文件头判定、`.gz` 名保持「坏归档必须可见」的既有契约）、`LogClearIdentityConflicts`（人工确认并清空身份冲突记录以消除查询面质量标记，强制携带操作人 + 理由）。受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。节点级 runtime/ingest 管理面的 HTTP 端点（`resolve-gaps` / `clear-identity-conflicts` / `import-archives`）见 API.md「Worker 日志平台」；`LogImportArchives` 的手动入口经 CP `POST /nodes/:id/log-runtime/ingest/import-archives` 转发（FR-504 补齐——此前只有 Worker gRPC 入口，运维实际不可达）。
+- **Worker 日志平台 Log RPC（FR-473～484，消息已冻结；**生产装配仅部分落地，见下**）**：已实现的 11 个：`GetLogCapabilities`、`LogCreateView`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogStreams`、`LogStreamFieldNames`、`LogStreamFieldValues`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`、`LogMigratePartition`。
+  **⚠ proto 已声明但 Worker 无实现（调用得 Unimplemented）的 4 个**：`LogCutoverReadiness`、`LogResolveIngestGaps`、`LogImportArchives`、`LogClearIdentityConflicts`——它们随对应能力下线（cutover 下线 / ArchiveImporter 删除）而失去运维对象，proto 声明作为历史保留。CP 侧零生产调用（仅测试替身）。**下文关于 `LogImportArchives` 形态与 HTTP 转发的描述属已下线能力的历史记录，不要当作现役功能。**
+  受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。节点级 runtime 管理面的 HTTP 端点见 API.md「Worker 日志平台」。
 - 生命周期：Register, Heartbeat (双向 stream), FetchBotWorkerArchive
   - `Register` 的身份匹配经 gRPC metadata 携带 `node-uuid`/`node-secret`（重注册必须同时出示）或 `enroll-token`（新节点准入），均不改 proto；Host 和名称不再作为身份凭据（ADR-081）。
   - `RegisterResponse` 携带 `ws_token_secret`（FR-275，见 ADR-061）：CP↔Worker 专用 **WS 令牌密钥**（只签终端/插件桥令牌，与签用户会话的 `jwt.secret` 隔离，Worker 永不持有后者）。首注册与重注册均下发；Worker 持久化到 `etc/node-identity.json` 并热应用到 WS 校验。CP 侧密钥三轨：显式 `jwt.ws_secret` > 生产 autogen 持久化 `<dataRoot>/etc/ws-token-secret.key`（0600）> dev 回退 `dev-secret-change-me`；若既无本地持久化值也未收到响应值，Worker 拒绝启动 WS 服务。

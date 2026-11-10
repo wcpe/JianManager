@@ -2,7 +2,7 @@
 
 - **日期**: 2026-10-02
 - **状态**: accepted
-- **关联**: FR-473（契约 §4.3 回收证明 / §9 验收条款"未确认数据不被静默删除"）· FR-474（缺口登记与自愈）· [ADR-099](099-log-cost-governance-and-invariant-r.md)（不变量 R：抑制不得造洞）· [ADR-100](100-archive-generation-ownership-enforcement.md)（代次归属：拒绝后交人工补账）· `docs/specs/worker-log-acquisition/spec.md` §3.3 · `docs/specs/worker-log-query-federation/spec.md`
+- **关联**: FR-473（契约 §4.3 回收证明 / §9 验收条款"未确认数据不被静默删除"）· FR-474（缺口登记与自愈）· [ADR-099](099-log-cost-governance-and-invariant-r.md)（不变量 R：抑制不得造洞）· [ADR-100](100-archive-generation-ownership-enforcement.md)（代次归属：拒绝后交人工补账）· `docs/specs/worker-log-acquisition/spec.md`（**已归档删除**）§3.3 · `docs/specs/worker-log-query-federation/spec.md`
 
 ## 上下文
 

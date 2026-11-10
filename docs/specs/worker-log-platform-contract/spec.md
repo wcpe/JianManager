@@ -497,6 +497,9 @@ Export 是 CP Coordinator 的业务操作，不新增 Worker Export RPC：CP 使
 - [ ] 实现 canonical projection 与冲突状态，证明 Search/Stats/Facets/Export 消费同一投影版本。
 - [ ] 为 Query View 实现 `ingest_seq`/`closed_visible_seq`/generation/租约约束；覆盖空洞、回灌、重放、迁移、清理、Rehydrate 完成、重启和权限撤销。
 - [ ] 将已确认公共规则分别落入 `worker-log-acquisition`、`worker-log-normalizer`、`worker-log-lifecycle`、`cp-log-query-coordinator`、`log-ingest-cutover`、`logs-center-tiered-ui`，并在各 spec 引用本规格：Legacy 保留边界、Export 共用 view、历史/实时来源分界。
+  > **⚠ 本条已无对象（2026-11-09）**：其中 `worker-log-acquisition`（FR-474）与 `log-ingest-cutover`（FR-481）的 spec 已随能力退役而删除；
+  > 剩余四个 spec 仍存在。因此本条不可能被完整勾选，**保留仅作历史记录**，不得当作待办追赶。
+  > `Legacy 保留边界`与`历史/实时来源分界`两项的前提（CP `logs` 表与 cutover）已不存在；只有 `Export 共用 view` 仍适用于 `cp-log-query-coordinator`。
 - [ ] 文档同步：PRD、ARCHITECTURE、API、CHANGELOG 与 FR-483。
 
 ## 9. 验收标准

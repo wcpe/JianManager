@@ -2,7 +2,7 @@
 
 - **日期**: 2026-10-02
 - **状态**: accepted
-- **关联**: FR-474（采集与持久化通道：源分段身份与 `latest.log→轮转→.gz` 关联）· FR-475（归一化：文件名推导的 `event_time`）· FR-473（事件身份契约 §3.1 `source_generation`）· [ADR-094](094-worker-log-local-data-plane.md) · [ADR-095](095-canonical-event-store-on-disk.md) · [ADR-099](099-log-cost-governance-and-invariant-r.md)（不变量 R 与缺口判据）· `docs/specs/worker-log-acquisition/spec.md` · `docs/specs/worker-log-normalizer/spec.md`
+- **关联**: FR-474（采集与持久化通道：源分段身份与 `latest.log→轮转→.gz` 关联）· FR-475（归一化：文件名推导的 `event_time`）· FR-473（事件身份契约 §3.1 `source_generation`）· [ADR-094](094-worker-log-local-data-plane.md) · [ADR-095](095-canonical-event-store-on-disk.md) · [ADR-099](099-log-cost-governance-and-invariant-r.md)（不变量 R 与缺口判据）· `docs/specs/worker-log-acquisition/spec.md`（**该规格已归档删除**；ADRs 遵循“只追加不删”，此处保留原始引用） · `docs/specs/worker-log-normalizer/spec.md`
 
 ## 上下文
 

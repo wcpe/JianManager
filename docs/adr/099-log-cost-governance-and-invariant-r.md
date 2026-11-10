@@ -2,7 +2,7 @@
 
 - **日期**: 2026-10-02
 - **状态**: accepted
-- **关联**: FR-498（单机 60 实例压测与容量基线、采集侧成本攻坚）· [ADR-094](094-worker-log-local-data-plane.md) · [ADR-095](095-canonical-event-store-on-disk.md) · [ADR-098](098-log-retention-tiering-and-archive.md)（保留与分层）· `docs/specs/log-cost-governance/spec.md` · `docs/specs/log-verify-chunking/spec.md` · `docs/specs/log-index-sqlite/spec.md` · `docs/specs/worker-log-platform-contract/spec.md` §4.3/§9
+- **关联**: FR-498（单机 60 实例压测与容量基线、采集侧成本攻坚）· [ADR-094](094-worker-log-local-data-plane.md) · [ADR-095](095-canonical-event-store-on-disk.md) · [ADR-098](098-log-retention-tiering-and-archive.md)（保留与分层）· `docs/specs/log-cost-governance/spec.md` · `docs/specs/log-verify-chunking/spec.md` · `docs/specs/log-index-sqlite/spec.md`（**该规格已归档删除**；ADRs 遵循“只追加不删”，此处保留原始引用） · `docs/specs/worker-log-platform-contract/spec.md` §4.3/§9
 
 ## 上下文
 

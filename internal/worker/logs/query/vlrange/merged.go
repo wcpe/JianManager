@@ -29,21 +29,29 @@ const (
 )
 
 // searchMaxWindow 是合并粗筛单次 VL 查询的时间窗口上限，必须不大于 VL 启动参数
-// `-search.maxQueryTimeRange`（当前 31d，见 vlsup.BuildArgs）：超过即被 VL 以 400
-// `too big time range selected` 拒绝。31d 覆盖 retention 30d 场景下的一切并集窗口
-// （"all"=30 天窗最多跨 31 个 UTC 天 ⇒ 31×24h），故常态下
-// **单次查询**即完成——VL 的 sort+limit top-K 从最新分区早停，实测 30 天窗 1.2-1.3s。
-// 仅当窗口超过 31d（保留期外的防御路径）才切分为滑动段。
+// `-search.maxQueryTimeRange`：超过即被 VL 以 400 `too big time range selected` 拒绝。
 //
-// **边界比较符已在本机实测确证**（VictoriaLogs v1.52.0，起本地实例逐点探测）：
+// ⚠ **上界不是字面量，而是 retention 的函数**（2026-11-09 纠正）：该参数在
+// vlsup.BuildArgs 里由 retention 派生（retention + 24h）。默认 retention 180d
+// ⇒ 生产实测 **4344h ≈ 181d**；历史默认 retention 30d 时它是 744h = 31d。
+// 本注释曾写「当前 31d」，那是旧默认值下的读数，已不再成立。
+//
+// 为何常量仍取 31d（**刻意远小于上界**，不是取满）：
+//   - retention 30d 场景下“all”窗最多跨 31 个 UTC 天 ⇒ 单次查询即可完成；
+//   - VL 的 sort+limit top-K 从最新分区早停，实测 30 天窗 1.2-1.3s。
+// 代价已知：retention 180d 时，180d 窗会切成 6 段——这是**性能项，不是正确性问题**。
+//
+// **边界比较符已在本机实测确证**（VictoriaLogs v1.52.0，起本地实例逐点探测；
+// 当参数为 744h 时测得）：
 //   - 窗口恰好 744h（=31d）⇒ HTTP 200，**不被拒**；
 //   - 744h + 10ns / 1µs / 1s ⇒ HTTP 400 `too big time range selected`
 //     （`it cannot exceed -search.maxQueryTimeRange=744h0m0s`）；
-//   - ⇒ VL 的判定是**严格大于**（`window > 744h` 才拒），恰好取 31d 是**被接受**的。
+//   - ⇒ VL 的判定是**严格大于**（`window > 上限` 才拒）。
+// 该判定规则与参数具体取值无关，换 retention 后仍成立。
 //
-// 因此"恰好 31d"是可用且有意取满的（retention 30d + 1d 余量，见 vlsup.BuildArgs 的同款注释），
-// 不需要为了"避开边界"而收窄。改动此常量前必须同步改 `-search.maxQueryTimeRange`，否则
-// 窗口一旦真的超过 VL 上限，代次占用探测与合并粗筛会整组失败。
+// 改动此常量前先确认它仍**不大于** `-search.maxQueryTimeRange`，否则代次占用探测
+// 与合并粗筛会整组失败。把窗口调到 31d 以上是**安全的**（上界现在是 4344h），
+// 但要把“切成几段”的性能影响一并考虑。
 const searchMaxWindow = 31 * 24 * time.Hour
 
 // mergedScanRows 返回合并粗筛的 VL 行预算（页预算 × 系数，钳制在上下限内）。

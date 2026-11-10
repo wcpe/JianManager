@@ -41,7 +41,7 @@ proto/                  # Protobuf 定义
 
 ### 日志数据面配置与证据
 
-- Worker 本地 SQLite 只存日志元数据，不存 CP 业务数据或全文查询库；迁移/字段扩展必须与 [索引规格](specs/log-index-sqlite/spec.md) 逐字段往返和旧状态兼容要求一致。
+- Worker 本地 SQLite 只存日志元数据，不存 CP 业务数据或全文查询库；迁移/字段扩展必须有逐字段往返与旧状态兼容性证据。
 - 持久提交资格、请求结果前缀、真实 ACK、逐字段可见性凭据和恢复责任分开建模；后台交办或内存 durable 标记不能当提交成功。`CLEANED` 活动引用必须先取得有界持久审计回执、再短锁复核消费者/hold 后裁剪；IO 不跨共享锁。
 - 日志运行时默认值只由实现的公共默认入口产生，配置层只绑定、校验与兼容回退；时长复用批准版本解析，不能在不同装配层各自解释月份或舍入精度。准确键、默认、非法值与启层条件见 [运行时规格](specs/worker-victorialogs-runtime/spec.md) 和 [成本治理规格](specs/log-cost-governance/spec.md)；本批新增键在实现核对前只属于修复目标。
 - **生效时点必须标明**：`worker.yml`/环境变量的启动期键（包括 `log.level`/`log.format`）修改后需重启 Worker，不因使用 `LevelVar` 就声称支持热更新。CP 注册/心跳下发的 `log.acq.*` 仅按其已实现白名单动态应用；namespace 启停/健康恢复不等于任意 YAML 配置热加载。
