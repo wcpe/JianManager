@@ -293,3 +293,42 @@ type eventRing struct {
 
 ✅ 代码完成+真机验收（2026-10-25）：`service/business_stream_buffer.go`（环形缓冲 20 万条/30 秒双阈值，预渲染 SSE 字节使序列化移出扇出热路径）+ `business_stream.go`（订阅扇出/过滤/连接治理）+ `router/business_stream.go`。**真机**：SSE 心跳按 20s 到达、`id` 承载 CP 全局 `streamSeq`（与探针 per-domain `seq` 分离，spec §2.1 已澄清）。
 
+
+---
+
+## 10. FR-545 业务事件位点账本与缺口查询（补登取证）
+
+> 补登说明：本节于 2026-11-10 建立。此前 FR-545 只在 PRD 有一行、全仓无任何取证落点，
+> 而 ADR-107 描述的 `business_event_cursors` 表与 `GET /business/cursor` 端点的需求锚点正是本 FR。
+
+### 10.1 为什么要位点账本
+
+纯透传（FR-522）解决了「JM 不持有业务语义」，但业务台重启后**不知道自己漏了哪些事件**——
+SSE 的 `streamSeq` 只在内存环形缓冲里存在，进程重启即失。位点账本就是
+「不落 payload 的可恢复投递」：只记录**投递到了哪**（位点），不记录**内容**。
+位点是传输元数据，payload 才是业务数据——ADR-107 据此把它与 ADR-106「JM 不持有业务数据」划清边界。
+
+### 10.2 实现
+
+| 组件 | 职责 |
+|---|---|
+| `internal/controlplane/model/business_event_cursor.go` | 位点表模型（**无 payload 列**） |
+| `service/business_cursor_writer.go` | 有界环 + 批量 500 / 1s 刷盘 + 丢最旧计数 + `Close` flush |
+| `service/business_cursor.go` | 缺口查询 + 保留期裁剪 |
+| `router/business_cursor.go` | `GET /business/cursor` |
+| `business_stream.go` 的 `Ingest` | **仅在投递之后**追加一次非阻塞入队，原投递语义与性能零改动 |
+
+契约已进 `docs/openapi`（`check-openapi.sh` 17/17 一致）。
+
+### 10.3 交付状态
+
+✅ 已交付@v0.24.0。
+
+**实测修掉一个真实缺陷**：GORM 在 SQLite 上会静默忽略 `Delete` 的 `Limit`
+（生成无 LIMIT 的 DELETE），原「分批删除」形同虚设、一次删整段过期数据即长事务锁库
+→ 改为「先查 id 再按 id 批删」，并补一条超过单批上限的用例盯着。
+
+**未验证（如实登记）**：
+- 真实 MySQL 上的裁剪行为与批量写吞吐；
+- 真机 100 实例 × 20 事件/秒压力下的表体量与写入延迟
+  （估算 7 天约 12 亿行，ADR-107 已指出需分区/归档，本轮未做）。

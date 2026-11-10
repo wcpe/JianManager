@@ -361,4 +361,10 @@ header 规则要求取值 ≥8 位，而 `Bearer` 恰好 6 位，天然被排除
 
 **需求补充**：`docs/specs/ai-provider-models/spec.md` + `api.md`，契约：`docs/specs/ai-assistant/shared-contracts.md`，**ADR-105**）：管理员配置供应商、模型与默认模型，支持 OpenAI 兼容 Chat Completions、Responses 和 Anthropic Messages；凭据由 CP 受控保存且不回显，提供显式连接/单模型测试与能力校验。验收：真实三协议聊天可用、非管理员不能改配置或读取密钥、配置与凭据跨重启有效、未配置时明确引导。
 
-**交付状态**：✅ 已交付@v0.24.0
+**交付状态**：✅ 已交付@v0.24.0（spec §11 全部 13 项已关闭，2026-10-29 收口）
+
+收口取证：三协议用本地真 HTTP + 真 SSE 假供应商各实跑通过（文本增量 / 工具参数 / usage / 探测）；
+审计流水 9 个动作齐全且白名单逐字段拼、本轮补 `baseUrl` 留痕；跨重启凭据 `TestCredentialSurvivesRestart`
+与换密钥保密文 `TestCredentialKeyChangeKeepsCiphertext`；三启回读 `default_model_id` 新增
+`TestSettingSurvivesThreeStarts`。**边界**：真实商业厂商验证按 §11 #13 由用户确认关闭——
+仓库内无该次验证的日志/截图留痕。

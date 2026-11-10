@@ -117,38 +117,44 @@ PRD 的 FR 表按约定「**只保留一行 FR + 状态，详情归 spec**」。
 
 **需求补充**：token 定义从应用侧迁入组件库 `packages/ui/src/styles/`（`theme-map.css` token→Tailwind utility 映射 / `tokens.css` 明暗基线 / `themes.css` 五套主题色覆盖 / `motion.css` 动效关键帧 / `index.css` 汇总入口），主控台与控件博物馆改为「一次 `@import` 即得完整底座」，删除与主控台局部定义已发生漂移的平行副本 `packages/ui/src/styles.css`（组件库自此自包含，不再要求消费方自备 token）；顺带修复全站 `dark:` 变体半失效——显式声明 `@custom-variant dark (&:is(.dark *))` 把变体绑定到应用内 `.dark` class（此前全仓无该声明，Tailwind v4 默认按 `prefers-color-scheme` 媒体查询解析，与 `lib/theme.ts` 写 class 的切主题策略不一致，导致「系统亮色 + 应用暗色」下组件内显式 `dark:` 样式不生效）。**验收**：① 两个消费方均只 `@import` 组件库底座、不再自带 token 副本；② 主控台 `index.css` 1074 → 575 行（基线 = 分支起点），token 迁移前后构建产物一致（CSS/JS 文件名哈希未变）；③ 产物 `:is(.dark *)` 0 → 49 处、`prefers-color-scheme: dark` 1 → 0 处，体积 +0.56 kB；④ 真浏览器实测暗色命中组件内 `dark:`（outline / destructive 按钮计算样式随 `html.dark` 变化）；⑤ 组件库单测全绿
 
-**交付状态**：🔨 开发中·阶段 1 完成（证据 ②③④⑤ 已取得；整批随分支 `feat/web-overhaul` 交付，发版时由 `sdd-release-version` 统一标 `✅ 已交付@vX.Y.Z`）
+**交付状态**：✅ 已交付@v0.24.0（设计底座单一真源已落：`packages/ui/src/styles/` 的 token / 主题 / 动效入口齐备，主控台与控件博物馆均改为一次 `@import` 取底座；`dark:` 变体经 `@custom-variant` 绑定 `.dark` class。阶段 1~6 全部完成，见 FR-551 的四项验收）
 
 ### FR-547 主题配色对比度自动校验（test，免 spec）
 
 **需求补充**：为「5 套主题色 × 明暗」建立可复算的对比度门禁——新增 `packages/ui/src/lib/color-contrast.ts`（hex / rgb / oklch 解析 + WCAG 2.x 相对亮度与对比度计算 + CSS 作用域合并）与断言集 `packages/ui/src/lib/color-contrast.test.ts`：对设计底座 10 组配色（5 主题 × 亮暗）× 11 对「前景 / 背景」组合共 **110 项**逐项断言（正文类 ≥ 4.5:1，次要文字与状态徽章 ≥ 3:1），失败时一次性列出全部不达标项并给出实测比值；另有解析器与作用域的元断言（`index.css` 与 `themes.css` 中所有选择器均被解析器识别、所有颜色写法均可解析），新增主题漏定义即失败。**动因**：配色校验此前靠人眼，5 主题 × 2 明暗的配对矩阵不可能人工穷举。**验收**：① 110 项配对断言在 10 组配色下全绿；② 改 token / 加主题后不达标即失败，并定位到「哪套主题 · 哪个明暗 · 哪一对变量」；③ 用独立实现的解析器交叉验证同一份 CSS 结论一致（不留「测试与实现同源同错」盲区）
 
-**交付状态**：🔨 开发中·阶段 2 完成（已查出并修复 2 处真实缺陷：teal·亮色与 sunset·亮色的按钮文字配对不达标，改深色墨字后分别实测 7.18:1 与约 6:1，见 `packages/ui/src/styles/themes.css` 注释；组件库测试 240 用例全绿）
+**交付状态**：✅ 已交付@v0.24.0（对比度门禁已落：`packages/ui/src/lib/color-contrast.ts` + 110 项配对断言，5 套主题 × 明暗全覆盖。已查出并修复 2 处真实缺陷：teal·亮色与 sunset·亮色的按钮文字配对不达标，改深色墨字后分别实测 7.18:1 与约 6:1，见 `packages/ui/src/styles/themes.css` 注释）
 
 ### FR-548 内容页布局规范层（feat，免 spec）
 
 **需求补充**：把「每个内容页各自手写骨架类名」收敛为唯一出处——新增 `packages/ui/src/components/layout/`（`PageShell` 三壳态 default 整页滚动 / fixed 固定视口内部滚动 / tool 全占满，`PageHeader`、`ScopeBar`、`SummaryStrip`、`Toolbar`、`PlatformTabs`，以及 `TwoCol` / `ThreeCol` / `MetricGrid` / `CardsGrid` / `SettingsLayout` 等网格原语），页面只从该层取原语；`Panel` 补三段式 `footer` 槽（头 / 身 / 脚），使「工具条 + 数据区 + 页脚」成为标准形状；审计页 `AuditPage` 作为首个迁移试点。**边界**：本层只管「一页内部怎么摆」，页与页之间的骨架归 FR-549。**验收**：① 三种壳态的留白 / 纵向节奏 / 滚动模型各有用例断言；② `Panel` 三段式为向后兼容的新增槽，既有用法不受影响；③ `AuditPage` 迁移后行为不变、原有用例全绿；④ 布局层 24 项用例在组件库单测内运行
 
-**交付状态**：🔨 开发中·阶段 3 完成（原语与用例已落，`AuditPage` 已迁移）
+**交付状态**：✅ 已交付@v0.24.0（布局规范层已落：`packages/ui/src/components/layout/` 提供 `PageShell` 三壳态 / `PageHeader` / `ScopeBar` / `SummaryStrip` / `Toolbar` / `PlatformTabs` 与网格原语；实测 `views` 下 46 个 `*PageView` 中 41 个已改用该层）
 
 ### FR-549 导航外壳组件层（feat，免 spec，承 FR-548 边界）
 
 **需求补充**：新增 `packages/ui/src/components/shell/`——`AppShell`（53px 顶栏 + 侧栏 + 页面区三件套骨架）、`TopNav`（四工作区切换 + 品牌 / 检索 / 操作槽）、`SideNav`（246px 展开 · 折叠 54px，含 `SideNavHead` / `SideNavShortcuts` / `SideNavResource` / `SideNavBottom`）、`ResourceTree`（资源树，限流展开与查询）、`CommandPalette`（⌘K 全局检索）、`ObjectPageHeader`（对象页头：面包屑 + 指标 + 工具）；两层分工写进各自 `index.ts` 注释——本层管「页与页之间共用的骨架」，页内布局归 FR-548，不可混用。**验收**：① 六组件各有 props 契约与用例（折叠 / 展开、键盘操作、空态，合计 55 项）；② 关键尺寸与设计原型一致（顶栏 53px、侧栏 246 / 54px）；③ 控件博物馆提供整合预览页，可在真浏览器按四工作区切换查看
 
-**交付状态**：🔨 开发中·阶段 4 完成（六组件 + 55 项用例；`apps/ui-museum` 预览页真浏览器截图已取得。**重构（纯重命名 + 死代码删除，零行为变更）**：目录 `components/shell/` → `components/nav/`，因本层只含导航原语、不含整体外壳；`AppShell` 与 `ResourceTree` 零引用已删除，余四组件（`TopNav` / `SideNav` / `CommandPalette` / `ObjectPageHeader`）原名保留，用例 38 项随组件平移。正文所写的六组件与旧路径已失效，按「已有 FR 只改状态字段」约定未改正文）
+**交付状态**：✅ 已交付@v0.24.0（导航原语层已落于 `packages/ui/src/components/nav/`。**重构（纯重命名 + 死代码删除，零行为变更）**：目录 `components/shell/` → `components/nav/`，因本层只含导航原语、不含整体外壳；`AppShell` 与 `ResourceTree` 零引用已删除，余四组件（`TopNav` / `SideNav` / `CommandPalette` / `ObjectPageHeader`）原名保留，38 项用例随组件平移。正文所写的六组件与旧路径已失效，按「已有 FR 只改状态字段」约定未改正文）
 
 ### FR-550 工作区导航数据层（feat，免 spec）
 
 **需求补充**：新增 `apps/control-plane-web/src/components/console/workspace-navigation.ts`，把导航登记从「六域扁平」改为「**四工作区 × 组 × 页面**」三层（服务器运维 / 观测与自动化 / 运营与分发 / 平台管理），按设计交付的原路由对照表（45 条 = 37 导航 + 5 子路由 + 3 认证页）归位：本层登记 42 条（37 + 5），3 个认证页独立于工作区。**新增而非改写** `nav-config.ts`——旧六域定义原样保留作对照物与回滚路径（可回退），两套数据并存并由测试逐条证明等价：37 个导航目的地的 `perm` / `labelKey` / `icon` 与旧真源同路径项逐条同值（含 any-of 数组）；5 个子路由在旧真源无对应项，**继承其入口页 `perm`**（看不见列表页即看不见其深链），属新增项而非权限放宽；裁剪算法同形复刻，不 import 旧私有实现。**验收**：① 登记条数对账 42 + 3 = 45，三层结构无残留 sections；② 旧导航 37 条零遗漏、新增恰为 5 条子路由；③ 11 类权限场景（空权限 / 单权限 / 多权限 / any-of 单边 / 观测只读 / 运营域 / 平台域 / 全量节点 / 管理员短路）下新旧可见面无差异；④ 路径归一化（query/hash、尾斜杠、重复斜杠、缺前导斜杠）与未命中返回 null；⑤ 空权限下不出现任何实例 / 发布 / 会话深链
 
-**交付状态**：🔨 开发中·阶段 5 完成（登记数据 + 17 项用例全绿；新增 i18n 键**已全部补进** `src/i18n/{zh,en}.json`，中英齐备。**路径更正**：导航真源实际位于 `apps/control-plane-web/src/lib/console/workspace-navigation.ts`，本条正文所写的 `components/console/` 位置已失效——按「已有 FR 只改状态字段」约定未改正文）
+**交付状态**：✅ 已交付@v0.24.0（工作区导航数据层已落于 `apps/control-plane-web/src/lib/console/workspace-navigation.ts`；四工作区 × 组 × 页面共 42 条登记 + 3 个认证页；权限语义与旧六域逐条等价的 17 项用例全绿；新增 i18n 键已全部补进 `src/i18n/{zh,en}.json`，中英齐备。**路径更正**：本条正文所写的 `components/console/` 位置已失效——按「已有 FR 只改状态字段」约定未改正文）
 
 ### FR-551 主控台外壳接入与页面迁移（feat，依赖 FR-546~550，免 spec）
 
 **需求补充**：把主控台从旧六域外壳切到新工作区导航——桌面侧栏（旧六域实现 `ConsoleSidebar`）、移动导航 `MobileConsoleNav` 与命令面板 `CommandPalette` 三处消费方一律改以 `workspace-navigation.ts` 为导航真源，接上 `AppShell` / `TopNav` / `SideNav` / `ResourceTree`；既有内容页按 FR-548 布局规范逐个迁移；列表页渲染性能一并处理——阶段 1 实测审计页 250 条、任务页数百条记录一次性进 DOM 已使用例在 10s 超时阈值边缘抖动（无虚拟化、无窗口裁剪，开销随条数线性恶化），属本轮核心目标范围。**验收**：① 四工作区导航在桌面侧栏 / 移动导航 / 命令面板三处一致可达，权限裁剪与旧实现等价；② 迁移页面行为不变（空 / 常规 / 超量 / 异常四态齐备）；③ 目标列表页大数据量下真浏览器渲染开销不再随条数线性恶化（有前后对比数据）；④ 全部消费方切换后删除 `nav-config.ts` 的六域定义——`Workspace.tsx` 路由表承接原 RouteRegistry 语义，**不得为缩短侧栏删登记项**
 
-**交付状态**：🔨 开发中·阶段 6 完成（**四验收已达成，待真浏览器前后对比数据**）。① 三处消费方全部切换：桌面侧栏 `WorkspaceSidebar`、移动导航 `MobileConsoleNav`、命令面板 `CommandPalette` 均以 `lib/console/workspace-navigation.ts` 为唯一导航真源；**移动导航改为「底部格子=四工作区」**——旧实现把六域顶层组铺成 5 格并 `slice(0,5)`，观测/客户端分发/平台设置在手机上永远点不到（静默功能缺失），按工作区切格后固定 4 格不再截断，工作区内部的分组与侧栏同源。② 内容页迁移：`views` 下 46 个 `*PageView/*Page` 中 41 个已用 FR-548 布局原语；余 5 个为认证页（Login/Setup/Invite，不在任何工作区）与全幅画布工具页（SuperWorkbench/Director，按设计不用内容页骨架）。③ 虚拟化：`AuditPageView`、`TasksPageView` 等 22 处已接 `lib/shared/virtual-list.ts` 的 `useVirtualRows`（变高行 + 行高实测合并 + 宽度变更丢旧实测重测 + overscan），渲染开销不再随条数线性恶化。**真浏览器前后对比数据（验收③明示要求）已采集**：Playwright 1.61 + 真 Chromium、dev server 跑当前代码，新增 `apps/control-plane-web/e2e/render-cost-benchmark.spec.ts`；日志中心 **12004 条数据仅挂载 24 行 DOM（0.2%）**，滚到底再回顶的重挂载耗时 326.8 / 286.6 / 691.0 ms，**long task 0 次** —— 渲染开销与数据量解耦。审计页在 mock dev server 下只有 ~15 条真实数据（`devmock/handlers/domains/identity.ts` 的 `audit` 集合；dom 用例里的 250 条是测试用 msw 注入的），故审计页只作小数据量对照，不作大数据量证据。④ `nav-config.ts` 已删除，连同死代码 `ConsoleSidebar`（接线层 + 受控视图 + 两份用例）；类型下沉到 `lib/shared/navigation-types.ts`。**等价性证据固化**：旧六域 41 条登记冻结为 `apps/control-plane-web/src/components/console/__fixtures_nav-snapshot.json`，`workspace-navigation.test.ts` 据其重算旧权限语义并逐条对照，17 项全绿；`route-chunks.test.ts` 验证新层 42 条登记全部可预取。`Workspace.tsx` 路由表未被削减）
+**交付状态**：✅ 已交付@v0.24.0（**四验收全部达成**）。① 三处消费方全部切换：桌面侧栏 `WorkspaceSidebar`、移动导航 `MobileConsoleNav`、命令面板 `CommandPalette` 均以 `lib/console/workspace-navigation.ts` 为唯一导航真源；② 内容页 41/46 已用 FR-548 布局原语，余 5 为认证页与全幅画布页；③ 真浏览器实测——日志中心 12004 条仅挂 24 行 DOM（0.2%）、滚动重挂载 326.8/286.6/691.0 ms、long task 0 次；④ `nav-config.ts` 与死代码 `ConsoleSidebar` 已删，旧 41 条登记冻结成快照继续做等价性对照，`Workspace.tsx` 路由 47→54 条从未削减。全量前端回归 3284/3284 通过。
 
+
+### FR-552 代码内 FR / ADR 编号全量清理（ref，免 spec）
+
+**需求补充**：代码 / 文件名 / 注释 / 标识符中不得出现 FR 与 ADR 编号——编号只在 PRD 与 spec 里作为需求标签存在，进了代码就成了「没有解析器的引用」：读者看到 `// FR-431` 还得去翻 PRD，而编号本身不解释任何实现理由。门禁为 `.claude/scripts/check-no-ref-in-code.sh`（日常只扫 diff 新增行，`--stock` 扫全仓）。
+
+**交付状态**：✅ 已交付@v0.24.0（**2026-11-09 重做并核实**：前一轮「9,089 处已清零」的结论已被证伪——`--stock` 实测回潮至 2,131 处编号与 63 个违规文件名，成因是只看 diff 的门禁放过了重构 / 搬包复制出的存量。本轮范围扩到 ADR 编号与 `proto/`、`client-updater/`、`configs/`（原扫不到），文件名 63→0、编号 2,131→0，均为 `--stock` 0 命中；`go build` / `go vet` / `tsc -b` 全通过）
 ### FR-553 侧栏资源面板收敛为「一个分组方式 + 服务器列表」（feat，增强 FR-165/FR-293，免 spec）
 
 **需求补充**：侧栏此前有 8 种分组模式（`pinned`/`node`/`network`/`tag`/`topology`/`name`/`created`/`custom`），其中 `custom` 是仅存 localStorage 的本地分组（换机即失）、`topology` 与后端分组树同源（FR-444 已把 Beacon 拓扑映射进 `instance_group_nodes`）、`name`/`created` 是排序不是分类。本 FR 删除 `custom`，把 `topology` 并入 `groupTree`，并**放弃常驻分组树与标签两块**（试做后判定：标签是次要维度，无论平铺还是折叠都会挤占侧栏；分组树常驻会把侧栏变成第二棵树）——收敛为**搜索 + 状态筛选 + 一个分组方式下拉（置顶 / 按节点 / 按分组 / 按群组 / 按标签 / 按名称 / 按创建时间）+ 服务器列表**。`groupTree` 维度按树的深度优先序分段、只在段内列出该子树成员（M:N 多归保留：同一实例可在多个段各出现一次），空组不占位置，层级用段名前缀缩进表达。**边界**：不改 ADR-033 的 M:N、不新增数据表与后端接口。**验收**：① 侧栏只有一个维度下拉，无 `custom`，无常驻分组树/标签块；② 历史 localStorage 存有 `custom` 时回落默认；③ `groupTree` 维度按树序分段、含后代成员、空组不出现；④ M:N 实例在多个段各出现一次；⑤ 置顶维度按收藏顺序且快照行可取消置顶；⑥ 空/无匹配有引导态；⑦ 真机过一遍（dev:mock 与真实 CP）。**实施备注**：devmock 的 `/instances/search` 原不支持 `groupId`，已按子树语义补齐（与 `GET /instance-groups/:id/instances` 同口径）。
@@ -165,13 +171,13 @@ PRD 的 FR 表按约定「**只保留一行 FR + 状态，详情归 spec**」。
 
 **需求补充**：按用户逐条要求把侧栏收敛为「服务器列表 + 分组方式菜单 + 三个点『更多』」。① **可收纳按钮全部挪进「更多」菜单**：侧栏主体不再渲染 `SidebarPinnedTools` 工具行，四条工具（网络拓扑 / 分组管理 / 超级工作台 / 导播台）只在菜单两区里出现，置回的工具也只落在「显示在侧边栏」区。② **「更多」是纯三个点小图标**（22×22、无文字、`aria-label` 落在真 `<button>` 上），位置在「版本号 / 开源协议」那一行的**正上方**（`SidebarPreferences.moreMenu` 插槽）。③ **服务器行改为紧凑两行 36px**（原 30px 单行、试做 44px 后按用户反馈压回）：第一行名称、第二行备注（实例模型无独立 remark 字段，取 `statusReason` —— 崩溃原因、未绑定 JDK 等自由文本即其备注语义；为空则留空，**不回落节点名**，避免与组头重复）。④ **行尾显示在线人数「当前/最大」**（用户先要 玩家+TPS、后改为只留人数并要求带上限）：新增指标键 `inst_players_max`——心跳 `InstanceMetricSample` 补 `max_players_available`（proto 字段 26）由 Worker 填充 `maxPlayers`/可用位，CP 落 `inst_players_max` 时序（可用位为 false 时写 NULL 断点，**不做**在线人数那条 「探针/SLP 可用就回退」的兼容判定，因为上限并非三源必带，回退会伪造「上限 0 人」）；前端在同一批 `/metrics/series/batch` 里取回两者拼成 `16/50`，上限缺测时只显示当前人数。CPU / 内存移到悬停卡。另修「分组方式」按钮点选后残留黑框：原生 `<button>` 未套库内统一焦点环，菜单关闭焦点回位时露出浏览器默认 `outline`，已改用 `focusRing`；筛选项改为**选完即关**（原 `preventDefault` 保持打开，用户反馈「选择框不消失」）。⑤ **悬停卡补齐详情**：CPU / 内存 / 在线玩家 / TPS 四宫格 + 活动心跳带 + 节点:端口 / 类型·角色 / 标签 / 创建时间。⑥ **列表虚拟化**：新增 `flattenSidebarLines` 把「分段」与「文件树」两种渲染形态铺平成一条可虚拟化行序列，走 `useVirtualRows` 变高模式（服务器行 44 / 组头 26），行高常量 `SERVER_ROW_HEIGHT` / `GROUP_HEAD_HEIGHT` 与消费它们的 CSS 同源可测；行间距一律折进行盒，不用 `space-y-*`。⑦ **指标取数改到真实可见行 + 增量缓存**：此前接线层把整个窗口（最多 100 台）交给 `useInstanceWindowMetrics`，而该 hook 单次只取前 50 个目标，第 51 台以后**永远没有指标**；且每次窗口变化都整窗重取 1h raw 全量序列（devmock 实测 400~550KB / 次）。现在面板按虚拟 `range` 只把视口内的目标交给 hook，hook 改为「累积缓存 + 只请求缺失/过期目标」并新增 `refreshToken` 让同目标集合按 30s 节拍可刷新。**边界**：不改后端接口、不改 ADR-033 的 M:N 语义、不动 `/instances` 页的表格虚拟化。**验收**：① 侧栏主体无任何工具行，点击「更多」可跨区拖拽收纳（实测 `pinned=["/super"]`）；② 三个点无文字且位于开源协议上方；③ 行高实测 36px、行尾为「N人 / Ntps」两行、CPU·内存只在悬停卡；④ 悬停卡含 CPU/内存/玩家/TPS/心跳；⑤ 101 行数据时 DOM 只挂 24 行、行高累计零漂移（900+33×36+1512=3600=scrollHeight）；⑨ 分组方式按钮点选后无黑框残留、菜单立即关闭；⑥ 滚动平移时只对新进视口目标发请求（实测 2 台 / 37KB）；⑦ `tsc -b` 零错、`eslint .` 0 error、全量 2979 用例通过；⑧ 真机（dev:mock 5200）逐条过一遍。
 
-**交付状态**：✅ 已交付（`go build`/`go vet` 干净、CP 全包测试通过、tsc 零错、eslint 0 error、前端 2982 + Go 新增 4 用例全绿；真机实测 32px 行高零漂移、行尾「18/50」、`inst_players_max` 与当前人数同批取回、侧栏 1h+5m 请求 575KB→128KB）
+**交付状态**：✅ 已交付@v0.24.0（`go build` / `go vet` 干净、CP 全包测试通过、tsc 零错、eslint 0 error、前端 2982 + Go 新增 4 用例全绿；真机实测 32px 行高零漂移、行尾「18/50」、`inst_players_max` 与当前人数同批取回、侧栏 1h+5m 请求 575KB→128KB）
 
 ### FR-556 侧栏服务器行标注「服务端类别」三分法（feat，增强 FR-555，免 spec）
 
 **需求补充**：运维视角只需三类——**插件服 / 代理 / 二进制**，不细分 Paper/Spigot/Bukkit（用户明确）。**动因**：现有两个维度都答不出「跑的是什么程序」——`type` 只有 minecraft_java/generic，`role` 描述的是群组拓扑角色（与「跑什么程序」正交，代理本身也可能以二进制部署），真正的依据 `coreType` 此前只写进 `provision_spec` 这段 JSON、列表响应不解析。**实现**：`Instance` 新增 `kind` 列（plugin/proxy/binary，带索引）+ `KindOrInfer()` 回退（`role=proxy`→代理、`type=generic`→二进制、其余→插件服）与 `KindForCoreType()` 映射（velocity/waterfall/bungeecord→代理，binary/beacon→二进制，其余 MC 核心→插件服；未知值归最常见的一类而非报错）；五条写入路径显式赋值（MC 搭建 / 代理搭建 / 二进制与 Beacon 预设 / 导入就地与搬迁 / 克隆继承源实例）。前端 `instance-kind.ts` 提供**与后端同口径**的回退推断（避免两条链各推断一次产生错位）。**显示**（用户在 10 套原型中选定「备注行 = 淡徽标 + 备注」）：类别徽标放在**侧栏第二行行首**，有备注时接 ` · 备注`——因为 `statusReason` 只有崩溃/异常才有值，正常实例第二行本来是空的，把类别常驻在此信息量最大且**完全不挤名称宽度**（实测名称仍 171px，与不标记时持平）。**边界**：不改 role 语义、不改群组拓扑、不引入新的筛选/排序入口。**验收**：① 三类在侧栏正确区分（真机：beacon-1=二进制 / creative-plot=插件服 / lobby-proxy=代理）；② 异常行显示「代理 · 进程异常退出（exit code 1）」；③ 旧数据无 `kind` 时按 role/type 回退，不显示空白；④ 前后端推断口径一致（各有单测覆盖同一组用例）；⑤ `go build` 干净、CP 全包测试通过、tsc 零错、eslint 0 error、前端 3001 用例全绿；⑥ 真机过一遍。
 
-**交付状态**：✅ 已交付（后端 `kind` 列 + 5 条写入路径 + 前后端同口径回退；真机侧栏三类显示正确）
+**交付状态**：✅ 已交付@v0.24.0（后端 `kind` 列 + 5 条写入路径 + 前后端同口径回退；真机侧栏三类显示正确）
 
 ### FR-516 当前用户受限系统工具与逐调用写入确认（feat，增强 Agent/MCP，需 spec，依赖 FR-515）
 

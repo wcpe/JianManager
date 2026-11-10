@@ -605,7 +605,7 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-497 | 常驻运行期分源×天条数对账补缺与PID/属主校验收养（校验不过不杀） [规格][s167] [规格][s168] | P0 | ✅ 已交付@v0.24.0·**2026-11-01 收口**：常驻对账生产实测连续 6 轮（05:51~07:06）周期精确 15 分钟、8 源/轮、errors=0；计数口径已由测试钉住（pending 分支只计源不计天）。原论证：**2026-10-31 标题修订**：「**重启**对账」这半已无对象——启动对账的输入是「权威集合」，它原先从索引库/事件段重建，而两者改内存后重启即空 ⇒ 启动那一刻没有「应有条数」可比。仍有效的是**常驻对账**（15 分钟一轮，从当前进程内事件段重建）与收养链路。原记录保留：连续强杀零丢失、60源重启≤60s、收养T7四臂已满足；开关关闭时对未纳管活进程对的处置降级（auto_adopt=false 不再被 dispose_policy=auto 误杀）已补并留痕。**2026-10-27 三项缺口已补**（详见 [收养规格][s168]）：① T7 的 Java 分支负例已端到端构造，并顺带修掉一个真缺陷（`processEnvMatchesInstance` 按 NUL 切条目 + UUID 自成 token）；② 心跳/巡检/Stop 改用真实 java 夹具验证；③ Windows 仅到代码层契约与交叉编译通过，**真机未验** |
 | FR-498 | 60源CPU/RSS/VL内存/查询容量基线与错峰建议 [规格][s169] | P0 | ⏸️ 已延后·**2026-10-31 标题修订**：删「持久化」——索引库改 `:memory:` 后不再落盘，原验收线「索引持久化 p95≤50ms」（p95=98–100ms 超线）已无对象。保留 Worker CPU/内存、VL 内存、查询 p95 四条基线。原记录保留：ACKLoss 与 Worker 静默 766 已达标；2026-10-27 降强度重开取证（60源×30行/s×120s，paused=0/gap=0）；fileCPU 分列 `%usr` p50=191 / `%wait` **3** ⇒ Worker 不是在等盘而是在算；机械盘量化 `aqu-sz` 50–76、`w_await`≈56ms、`%util`≈92%。**2026-11-01 容量基线已成文**（spec §8，本机真实环境 60源×4档×2口径）：真机读数 Worker RSS p95 50.2→70.5MB、CPU p95 个位数，内存不随吞吐线性增长。**2026-11-04 进展**：① ~~harness 需用当前 HEAD 重建重跑~~ → **已固化并实测**：负载发生器曾入库为 `scripts/capacity-load/`（`go run ./scripts/capacity-load/ -sources 60 -rate 30 -duration 120s`），自检实测 29.97 行/s/源（目标 30，误差 0.1%）、零写失败——读数从此可复算、不再依赖 `.tmp/`（gitignore）；**该目录已于 2026-11-08 随一次性取证工具清理删除**，读数保留为历史证据（见 [s169] §5.1）；② **当前 HEAD 短窗读数**（`TestCapabilityBaselineShortWindow`，60 源×60 行）：HeapAlloc **8.4 MiB**、每源常驻 **142.6 KiB**（判据 <1 MiB，留 7 倍余量）、3 轮 poll 300ms。这个数字是「事件段删除后每源不再持有事件正文」的直接证据（旧架构该项为生产 77 MB 段占用）——见 [s169] §5.1；③ **2026-11-04 长稳窗已跑通（PASS）**：`TestSoakWindow60Sources` 60 源 × 900 轮 × 真 VL v1.52.0，每 MiB WAL 积压的堆成本 **13.0 → 10.9 MiB/MiB（比值 0.84，在降）**、裸堆 9.6 → 14.3 MiB 且 100% 可由 WAL 积压解释（回归 `heap = 4.58×WAL + 8.01`，残差 std 2.89 MiB 即 GC 噪声）⇒ **不是慢泄漏**。过程中修掉**两个夹具缺陷**（后者曾把夹具行为误读成产品缺陷）：① 从未启动 `Manager.Start`，`DeferredDelivery` 下投递/回收全在后台环 ⇒ 只采不投、WAL 从不回收（WAL 条数 == 60×轮次）；② `newTestManager` 的 `deliverWriteHook` 自己累积 54000 个事件占 3.85 MiB。判据同步改写：裸堆比值必然误报（WAL 是有界缓存，积压震荡就带着堆涨），改为「单位积压成本不得上升 + 积压不得撞跌顶」。详见 [s169] §7。④ **2026-11-09 真机基线（/srv/jm，6 台真实服务器口径，用户明确不做 60 源）**：部署 VL v1.52.0 后首次跑通全链路，再做 4.5h 长稳窗（270 采样点）。**吞吐**：注入 60 行/s，采集 **58.4 行/s**（齐平），累计 99.1 万行 / 169.7 万条写入 VL，`failedTotal` **0→0**。**内存**：Worker 51.3→52.8MB（**1.03×，平台**）；VL 365→434MB（1.19×，但逐点为 327/356/538/460/462/403/453/465 的**震荡**、有下降段，非泄漏）；CP 149.8→235.3MB（1.57×，压测期间单调上升；**压测后另做 30 分钟观测已判定为非泄漏**：223–307MB 锯齿震荡、p50=248、首末 10 点均值 257→264MB（Δ+7）、斜率仅 +0.43MB/min，且有 288→223 这种 60MB 级回落——典型 Go GC 形态，不是慢泄漏）。**磁盘**：VL 数据 5.3→18.1MB（+12.8MB，**2.84 MB/h**，约 7.5KB/千条；180d 粗算 ~12GB，宿主余 40GB）。**gaps 1→3 的 2 次是本测试方法造成的**（注入脚本用 `open(...,'a')` 追写真实 latest.log，而 MC 进程同时也在写同一文件，双写导致 inode 被替换；另一次是我 `cp -a` 覆盖同名文件）——非采集器丢数据，正是 `RecordGap` 设计要捕捉的形态。**边界**：6 实例 / 60 行/s / 4.5h，**不是 60 源**，不得外推为 60 源容量基线。详见 `docs/specs/_evidence/2026-11-09-srv-jm-live-acceptance.md`。**2026-11-04 分段长稳窗（1 行/s/源 真实节奏）段 1–3 已完成，均 PASS**：堆前1/3→后1/3 = 5.7→6.1 / 5.9→6.2 / 5.8→6.3 MiB（比值 1.08/1.05/1.08），poll p50 145–156ms，VL 总数跳段单调递增 331k→439k→547k（投递确实在跑）；**跨段无抬高**——若存在跨重启常驻增长它会表现为每段起点更高，实测没有。执行器曾入库 `scripts/soak-window/run.sh`（先编单一二进制由 9 段共享，带并发检测；**已于 2026-11-08 随一次性取证工具清理删除**，要补跑需按 spec §7.4 描述重建）。**段 4–9 未跑**（用户叫停收尾），故完整 4.5h 墙钟仍未全程覆盖，补跑需先重建执行器。宿主非独占（load 13.7–16.4/40 核 + 其它工程 Java 占 50%+ CPU）⇒ 趋势可信、绝对值不可与静默机比。详见 [s169] §7.4/§7.5。⑤ **仍缺**：250ms 门限（**仍无法判定，卡在环境不是卡在代码**）。2026-11-04 查明口径曾被搞混：250ms 原口径是 **FAST 联邦查询 p95**（`docs/specs/log-acquire-concurrency` §10），**不是**浏览器冷导航；后者在 §10.4 被明确列为「另一个更严、当前无门限」的指标。三个读数不得互相外推：① 生产 CP 空闲无新日志时 p95 = **30.1ms**（达标，但数据集不代表负载，§10.3）；② 本机高负载同口径四次 p95 = 93 / 680 / 1259 / **2486ms**（极差 26.7 倍 ⇒ 本机测不出可信值，HANDOFF 给出 A 换空闲机 / B 接受本机无法判定 / C 立项查长尾三选项，均未选）；③ 本轮生产构建浏览器冷导航 p50 = 2291 / 2735 / 2654ms（**不属此门限**，是另一个指标，三次重跑可复现；分解显示成本在「就绪选择器挂在数据上」——`/api/v1/instances` 单次 921KB、首页 8 接口各 ~740ms，而客户端内路由跳转仅 113–922ms）。e2e 改为默认只记录、`FIRSTPAINT_ENFORCE=1` 才断言，理由是它测的不是那个门限。**2026-11-04 用户裁定选项 B：接受「本机无法判定」为正式记录，250ms 维持未达标状态**（不选 A 换空闲机重跑、不选 C 查长尾）；因此不再在该指标上投入优化——缩 921KB 响应/首页预取/骨架屏都是为了凑一个不可判定的指标。测量工具曾抢救入库 `scripts/search-p95/`（原在 gitignore 的 `.tmp/`，**已于 2026-11-08 随一次性取证工具清理删除**；口径完整记在 [s169] §10，将来走 A 或 C 时照此重写）。详见 [s169] §5.2/§5.2a）、错峰策略认证。详见 [s169] §5.1/§5.2/§7/§8 |
 | FR-499 | 采集登记与长周期锁解耦，同步建管道/绑定，持久化有界尽力 [规格][s171] | P1 | ✅ 已交付@v0.24.0·**2026-11-01 补端到端计时**：dev 环境真实 CP→Worker 隧道实测 Worker 侧登记本体 `elapsedMs=6.99`、HTTP 全链路 26-39ms；入口埋点超 100ms 走 Warn。原记录：**生产复验产物已补**（2026-10-27，spec §7）：高负载（40 核 / load≈170 / 机械盘）下重测，整轮采集墙钟 11.95s 时登记仍 1.246ms 返回（`idempotent_rebind` 0.518ms），解算 385ms 内采集轮最坏单轮 11.9ms，`m.mu` 单次最长 1.298ms——事故面（登记被长轮次拖死）已有直接回归且读数强化。**2026-11-01 已补端到端计时**（dev 环境 fr504dev，真实 CP→Worker 隧道链路）：Worker 侧 CreateInstance 埋点实测 `elapsedMs=6.99`（登记本体），HTTP 端到端 26-39ms（含 CP 鉴权、DB 写入、gRPC 往返）。埋点超阈 100ms 时用 Warn，正常走 Debug。注意：正常快路径日志在 INFO 级别下不打印，需 `/debug/log-level` 临时开 debug 才能看到。 |
-| FR-500 | daemon自迁及接管后代cgroup隔离；Worker只断连，显式停止照旧 [规格][s170] | P0 | ✅ 已交付·**形式化验收全链完成**（2026-10-27）：三臂实验重做并修正平凡通过缺陷（重做前误将「进程未启动」判为 red PASS，已加前置守卫），red=双双DEAD、fixed-adopt/fixed-self=双双ALIVE 均实测通过；生产实机取证 19/19 实例已在 `jianmanager-daemons/<uuid>` 隔离、单元 cgroup 内零游戏服 java；**主动重启生产单元实测已完成**（spec §4.6，2026-10-27 18:51）：`jm-prod-worker.service`（KillMode=process）重启后 1s 内恢复 active，**19/19 实例的 java PID 与启动时刻均未变**（启动时刻比对比 PID 更有力）。部署形态漂移已收口（CP/Worker 已回到各自 `jm-prod-*.service`）。**2026-11-04 订正**：~~CP `SIGKILL` 臂未测~~ 实为**已实测**——spec §4.4（2026-10-09 生产实机复验）第三条承诺「CP 崩溃不牵连服务器」即该臂：对生产 CP 发 `SIGKILL`（等价 panic/OOM），结果 worker 存活、**21/21 实例存活**，CP 重启后反向隧道自动重建、实例状态自动对账。此前 PRD 记为「未测」是状态列未与 spec 同步所致（该 spec 头部另有一处同类订正记录）。**本项无剩余缺口** |
+| FR-500 | daemon自迁及接管后代cgroup隔离；Worker只断连，显式停止照旧 [规格][s170] | P0 | ✅ 已交付@v0.24.0·形式化验收全链完成 |
 | FR-501 | 采样与保留策略；抑制汇总事件必须保持区间守恒 R [规格][s172] | P1 | ✅ 已交付@v0.24.0·**2026-11-01 重写**：删「**删前归档硬规则**」与「冷搬运」——单 VL 架构下到期即按 `retention_period`（180d）删除，`archive_copy` 是**可选**导出（默认关），不是删除前置。保留：四类采样策略（默认关）、抑制汇总事件必须保持区间守恒 R、不得绕过缺口 default-deny。**2026-10-31 标题修订**：删「冷搬运」——`retention.NewDriver` 第三个参数 mover 生产传的是 `nil`，冷热分层已废除，`move_to_cold` 不再执行；计划因此直接落到「配了导出 → archive_copy；否则 → blocked（保留原物）」两条路，这正是单 VL 想要的语义。archive_copy 已实现（导出→gzip→manifest 三重校验，次序判在 discard 之前）；热层回收已打通（Catalog ARCHIVED 权威态 + 归档证据，先迁权威态再删热层，删失败回滚 HOT）；查询面显式降级为 `LOG_ARCHIVE_MISSING`/`ARCHIVE_NOT_RESTORED`；导出目的地 local/s3/minio 已接线；删除三闸默认全关；归档对象回收已实现（`log_retention.archive_object_retention.*`，默认关）。**2026-11-01 收口**：删除「长期吸存验证」项——它是**验收活动**不是功能缺口，不该挂在 FR 上当作未完成能力。剩余真实缺口：S3/MinIO 目的地上的归档对象删除未接（装配处如实拒绝而非用 stub 冒充）。 |
 
 | FR-502 | 四核心采集规则/轮转/实例路径覆盖，Velocity用logs/latest.log [规格][s173] | P1 | ✅ 已交付@v0.24.0·既有代码/回归/真机归真，不冒新增生产验收 |
@@ -618,48 +618,48 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-510 | VL 不可用时的磁盘缓冲（有界环形，面向机械盘顺序写优化） | P0 | ❌ **已废弃（2026-11-06 整体删除）**·删除原因：`spool` 包**只有写端、没有读端**——`Peek`/`PeekEvents`/`Ack` 在包外零调用（全仓只有它自己的测试在用），所以写进去的事件**永远不会被重投**。那不是缓冲，是「换个地方丢」，而且比直接丢更坏：缺口 detail 会显得数据得救了（误导排障方向），磁盘上还会堆着永远不会被读的数据。代码里 `spoolConsumerReady` 本就是 `false` 的编译期常量，装配层会拒绝挂载——生产配置却写着 `enabled: true`，导致**每次 Worker 启动白报一条 ERROR**。删除范围：`internal/worker/logs/spool/` 整包、`acquire/wal_spool.go`、`ingest/entry_spool_attach.go`、`ingest/entry_spool_metrics.go`、`LogSpoolConfig` 全套配置与 SetDefault、`apps/worker/metrics_compose.go` 的 spoolAdapter、生产 `worker.yml` 的 `log_spool` 段，以及磁盘上的 `ingest.spool`（100MB 预分配文件）。**原始交付记录保留如下**（该 FR 编号不得复用）：✅ 已交付@v0.24.0·**2026-10-31 新立，2026-11-01 交付并生产启用**（但读端从未接线，见上）。动机：当前 VL 不可用时只有纯内存 WAL，满了丢最旧——官方 vlagent 用 `-remoteWrite.tmpDataPath` 磁盘缓冲保投。**边界必须说清**：它只能把「VL 重启几分钟」从丢日志变成不丢；VL 挂很久且缓冲满仍会丢。设计（针对机械盘 `sda` ROTA=1，实测顺序写 **274MB/s**、随机写差一个量级）：① **只 append 不覆盖写**（单文件环形，写头优于随机重建）；② **不 fsync**（用户红线）；③ 定长记录 + CRC 校验（识别掉电导致的截断尾部）；④ 容量 100MB 可配，写满丢最旧（对齐官方 `-remoteWrite.maxDiskUsagePerURL`）；⑤ VL 恢复后顺序读回重投，成功才推进读位。**验收**：VL 断开 3 分钟不丢；掉电后截断尾能被识别且不影响已写记录；顺序写路径 p99 < 5ms |
 | FR-511 | Worker 内置 HTTP 日志接收入口（官方推荐接入方式） | P1 | ✅ 已交付@v0.24.0·**2026-10-31 新立，2026-11-01 交付**（默认无 PUSH_ONLY 源即不生效）。官方明确：非 K8s 环境的文件采集推荐用 Vector/Fluent Bit/Filebeat，然后**推给 VL/vlagent**；VL 支持 `/insert/jsonline`、`/insert/elasticsearch/_bulk`、`/insert/loki/api/v1/push`、`/insert/opentelemetry/v1/logs`。本项让 Worker 自己也能当接收端（便于游戏服进程外推送、其他进程写日志）。**复用现有 pipeline**（不走独立存储），继承攒批/gzip/流标签/背压语义。鉴权与 CP 已有 Worker 鉴权体系一致，不新造凭证模型。边界：不新建日志存储模型，只做「接收 → 归一 → 入同一条管道」 |
 | FR-512 | 采集模式对齐官方：按进程/容器/文件三类来源统一抽象，减少丢日志 | P1 | ✅ 已交付@v0.24.0·**2026-10-31 新立，2026-11-01 交付**。现状：生产 19 个源全部 `FILE_PRIMARY`（tail 活文件），`STDIO_PRIMARY` 有实现未使用；无 HTTP 入口、无 journald、无 syslog。目标（按官方 vlagent 的输入矩阵）：**文件（现有）/ 进程 stdout-stderr（现有，待接）/ HTTP（FR-511）/ journald（可选）** 四类统一为一个 source 抽象，共享同一套 WAL / 攒批 / 投递 / 游标语义。**明确不做**：不恢复 gz 归档回读（2026-10-30 已裁定删）、不引入 Loki/CH 作为第二套存储 |
-| FR-513 | 节点主机级观测采集补全 → `docs/specs/inflight-backlog/spec.md` | — | ✅ 已交付@v0.24.0（实现与真机取证均已完成：Worker `hostobs` 采集 → 心跳 → CP 入库 → 首页悬浮卡四处新版式：负载三档 / CPU 构成含 iowait / 分挂载点磁盘 / 整机 Top 进程+进程数。§6 四个待定项已在实现中定案：不含 guest、进程计数读 `/proc` 走独立 goroutine、挂载点进快照表。**真机截图取证已完成**：`docs/screenshots/fr513-host-obs/` 5 张，实测渲染出负载 42.5/58.7/71.2%、iowait 19.3%（总占用仅 32% 的 IO 瓶颈）、`/var` 95% 而 `/` 14.4%、整机 Top 含 `rsync`/`mysqld` 等非受管进程。取证中一并补齐 `api/metrics.ts` 缺失的 6 个主机级字段契约与 devmock 缺失的 `/metrics/resource-attribution` 端点） |
-| FR-514 | AI 供应商、模型与平台配置 | P0 | ✅ 已交付@v0.24.0（spec §11 全部 13 项已关闭，2026-10-29 收口：三协议用本地真 HTTP + 真 SSE 假供应商各实跑通过（文本增量 / 工具参数 / usage / 探测）；审计流水 9 个动作齐全且白名单逐字段拼、本轮补 baseUrl 留痕；跨重启凭据 `TestCredentialSurvivesRestart` 与换密钥保密文 `TestCredentialKeyChangeKeepsCiphertext`；三启回读 `default_model_id` 新增 `TestSettingSurvivesThreeStarts`。真实商业厂商验证按 §11 #13 由用户确认关闭——**仓库内无该次验证的日志/截图留痕**） |
-| FR-515 | Go 内置轻量 Agent 与私有会话 | P0 | ✅ 已交付@v0.24.0 |
-| FR-516 | 当前用户受限系统工具与逐调用写入确认 | P0 | ✅ 已交付@v0.24.0 |
-| FR-517 | 外部 Streamable HTTP MCP 客户端与连接治理 [规格][s180] | P0 | ✅ 已交付@v0.24.0·**2026-11-09 核实归真**：spec 状态行早已写明「已实现（2026-10-25 闭环）」——出站前置 + 客户端 + 管理面 + 助手侧调用闭环均已落地，并用独立进程的真 MCP 服务器跑通「探测→发现→逐工具设风险启用→模型调用→结果回灌」，读工具自动执行、写工具经确认后真落盘。**能力边界（spec 明示，非缺口）**：不接入 MCP OAuth 2.1，认证只保留 none/header/bearer 三种静态凭据（ADR-105 决策 6）；厂商非标准扩展不覆盖。此前 PRD 写「状态行待同步」是过时表述。 |
-| FR-518 | 类型化页面上下文与实体选择 | P1 | ✅ 已交付@v0.24.0 |
-| FR-519 | 共享聊天界面与全局上下文面板 | P1 | ✅ 已交付@v0.24.0 |
-| FR-520 | AI Dashboard 默认首页与经典首页切换 | P1 | ✅ 已交付@v0.24.0 |
-| FR-521 | 退役 JM 业务能力 | P0 | ✅ 已交付@v0.24.0 |
-| FR-522 | 业务事件纯透传 + SSE 事件流 | P0 | ✅ 已交付@v0.24.0 |
-| FR-523 | 业务批量命令接口 | P0 | ✅ 已交付@v0.24.0 |
-| FR-524 | 写穿与离线禁改 | P0 | ✅ 已交付@v0.24.0 |
-| FR-525 | 对账协调接口 | P1 | ✅ 已交付@v0.24.0 |
-| FR-526 | 桥能力接入 | P1 | ✅ 已交付@v0.24.0 |
-| FR-527 | 对外只读统计契约 | P1 | ✅ 已交付@v0.24.0 |
+| FR-513 | 节点主机级观测采集补全 [规格][s177] | — | ✅ 已交付@v0.24.0·真机截图取证 |
+| FR-514 | AI 供应商、模型与平台配置 [规格][s178] | P0 | ✅ 已交付@v0.24.0·spec §11 全关闭 |
+| FR-515 | Go 内置轻量 Agent 与私有会话 [规格][s179] | P0 | ✅ 已交付@v0.24.0 |
+| FR-516 | 当前用户受限系统工具与逐调用写入确认 [规格][s180] | P0 | ✅ 已交付@v0.24.0 |
+| FR-517 | 外部 Streamable HTTP MCP 客户端与连接治理 [规格][s181] | P0 | ✅ 已交付@v0.24.0·真机闭环 |
+| FR-518 | 类型化页面上下文与实体选择 [规格][s182] | P1 | ✅ 已交付@v0.24.0 |
+| FR-519 | 共享聊天界面与全局上下文面板 [规格][s183] | P1 | ✅ 已交付@v0.24.0 |
+| FR-520 | AI Dashboard 默认首页与经典首页切换 [规格][s184] | P1 | ✅ 已交付@v0.24.0 |
+| FR-521 | 退役 JM 业务能力 [规格][s185] | P0 | ✅ 已交付@v0.24.0 |
+| FR-522 | 业务事件纯透传 + SSE 事件流 [规格][s186] | P0 | ✅ 已交付@v0.24.0 |
+| FR-523 | 业务批量命令接口 [规格][s187] | P0 | ✅ 已交付@v0.24.0 |
+| FR-524 | 写穿与离线禁改 [规格][s188] | P0 | ✅ 已交付@v0.24.0 |
+| FR-525 | 对账协调接口 [规格][s188] | P1 | ✅ 已交付@v0.24.0 |
+| FR-526 | 桥能力接入 [规格][s188] | P1 | ✅ 已交付@v0.24.0 |
+| FR-527 | 对外只读统计契约 [规格][s189] | P1 | ✅ 已交付@v0.24.0 |
 | FR-528 | 对外 API 规范与错误码统一 | P1 | ✅ 已交付@v0.24.0 |
-| FR-529 | 配置分层覆盖与有效值解析 | P0 | ✅ 已交付@v0.24.0 |
-| FR-530 | 配置写入经 Worker 落盘 + 读回校验 | P0 | ✅ 已交付@v0.24.0 |
-| FR-531 | 配置分批灰度与编排 | P0 | ✅ 已交付@v0.24.0 |
-| FR-532 | 配置生效编排 | P0 | ✅ 已交付@v0.24.0 |
-| FR-533 | Beacon 配置纳管 | P1 | ✅ 已交付@v0.24.0 |
-| FR-534 | 业务插件面板 | P1 | ✅ 已交付@v0.24.0 |
-| FR-535 | 批量目标解析与跨区二次确认 | P0 | ✅ 已交付@v0.24.0 |
-| FR-536 | SSE 连接治理与慢消费者保护 | P0 | ✅ 已交付@v0.24.0 |
-| FR-537 | 批量命令流式进度 | P1 | ✅ 已交付@v0.24.0 |
-| FR-538 | 供应商协议三选与模型自动发现 | P0 | ✅ 已交付@v0.24.0·**2026-11-09 补齐契约补测**：供应商协议三选（`openai-chat` / `openai-responses` / `anthropic`）与模型自动发现的实现早已落地，但 `assistant_discover.go` 的 4 个函数（DiscoverModels / discoverModelsURL / applyDiscoverAuth / parseDiscoveredModels）此前**零测试覆盖**——PRD 说的「需契约补测」就是这块。现已补 8 条回归（`assistant_discover_test.go`）：两种响应形状（`{data:[{id}]}` / 裸数组）、解析不出**报错而非空**（空结果与协议不兼容对调用方看起来一样但处置不同）、非 200 **不得返回空列表**（否则鉴权失败会被误读成「供应商没模型」）、上游回显密钥必须脱敏、Anthropic 用 x-api-key+版本头而 OpenAI 系用 Bearer、已配置标记/去重/超长跳过/200 条截断如实反映。 |
-| FR-539 | 供应商级出站代理 | P0 | ✅ 已交付@v0.24.0 |
-| FR-540 | 助手默认启用平台自带 MCP 工具 | P0 | ✅ 已交付@v0.24.0 |
-| FR-541 | 系统提示词、Skill 目录与思考强度 | P1 | ✅ 已交付@v0.24.0·**2026-11-09 核实归真**：`service/assistant_skill.go`（10 个函数 + 10 条测试）、`systemPromptWithSkills` 已接入 `assistant_chat.go` 的聊天链路、`assistant_models.reasoning_effort` 字段与前端下拉均落地。此前引用 spec 状态行「实现中」是过时表述。 |
-| FR-542 | 对话历史独立页面与检索 | P1 | ✅ 已交付@v0.24.0 |
-| FR-543 | 历史消息编辑与回退 | P1 | ✅ 已交付@v0.24.0 |
-| FR-544 | 助手工具渐进式披露与执行路径统一 | P0 | ✅ 已交付@v0.24.0 |
-| FR-545 | 业务事件位点账本与缺口查询 | P1 | ✅ 已交付@v0.24.0 |
-| FR-546 | 前端设计底座单一真源与 `dark:` 变体修复（ref，免 spec） | P1 | ✅ 已交付@v0.24.0（设计底座单一真源已落：`packages/ui/src/styles/` 的 token/主题/动效入口齐备，主控台与控件博物馆均改为一次 `@import` 取底座；`dark:` 变体经 `@custom-variant` 绑定 `.dark` class。明细见 `docs/specs/unspecced-fr-records/spec.md`；阶段 1~6 全部完成，见 FR-551 的四项验收） |
-| FR-547 | 主题配色对比度自动校验（test，免 spec） | P1 | ✅ 已交付@v0.24.0（对比度门禁已落：`packages/ui/src/lib/color-contrast.ts` + 110 项配对断言，5 套主题 × 明暗全覆盖。明细见免 spec 记录） |
-| FR-548 | 内容页布局规范层 | P1 | ✅ 已交付@v0.24.0（布局规范层已落：`packages/ui/src/components/layout/` 提供 PageShell 三壳态 / PageHeader / ScopeBar / SummaryStrip / Toolbar / PlatformTabs 与网格原语；实测 views 下 46 个 `*PageView` 中 41 个已改用该层） |
-| FR-549 | 导航外壳组件层 | P1 | ✅ 已交付@v0.24.0（导航原语层已落于 `packages/ui/src/components/nav/`；正文所述 `shell/` 路径与 AppShell/ResourceTree 已按「零引用删除」重构，按「已有 FR 只改状态字段」约定未改正文） |
-| FR-550 | 工作区导航数据层 | P1 | ✅ 已交付@v0.24.0（工作区导航数据层已落于 `apps/control-plane-web/src/lib/console/workspace-navigation.ts`；四工作区 × 组 × 页面共 42 条登记 + 3 认证页；权限语义与旧六域逐条等价的 17 项用例全绿） |
-| FR-551 | 主控台外壳接入与页面迁移 | P1 | ✅ 已交付@v0.24.0（**四验收全部达成**：①桌面侧栏/移动导航/命令面板三处消费方统一以 `workspace-navigation.ts` 为真源；②内容页 41/46 已用 FR-548 原语，余 5 为认证页与全幅画布页；③真浏览器实测——日志中心 12004 条仅挂 24 行 DOM（0.2%）、滚动重挂载 326.8/286.6/691.0 ms、long task 0 次；④`nav-config.ts` 与死代码 `ConsoleSidebar` 已删，旧 41 条登记冻结成快照继续做等价性对照，`Workspace.tsx` 路由 47→54 条从未削减。全量前端回归 3284/3284 通过） |
-| FR-552 | 代码内 FR / ADR 编号全量清理 | P1 | ✅ 已交付@v0.24.0（**2026-11-09 重做并核实**：前一轮「9,089 处已清零」的结论已被证伪——`--stock` 实测回潮至 2,131 处编号与 63 个违规文件名，成因是只看 diff 的门禁放过了重构/搬包复制出的存量。本轮范围扩到 ADR 编号与 `proto/`、`client-updater/`、`configs/`（原扫不到），文件名 63→0、编号 2,131→0，均为 `--stock` 0 命中；`go build`/`go vet`/`tsc -b` 全通过） |
+| FR-529 | 配置分层覆盖与有效值解析 [规格][s190] | P0 | ✅ 已交付@v0.24.0 |
+| FR-530 | 配置写入经 Worker 落盘 + 读回校验 [规格][s191] | P0 | ✅ 已交付@v0.24.0 |
+| FR-531 | 配置分批灰度与编排 [规格][s191] | P0 | ✅ 已交付@v0.24.0 |
+| FR-532 | 配置生效编排 [规格][s191] | P0 | ✅ 已交付@v0.24.0 |
+| FR-533 | Beacon 配置纳管 [规格][s192] | P1 | ✅ 已交付@v0.24.0 |
+| FR-534 | 业务插件面板 [规格][s193] | P1 | ✅ 已交付@v0.24.0 |
+| FR-535 | 批量目标解析与跨区二次确认 [规格][s187] | P0 | ✅ 已交付@v0.24.0 |
+| FR-536 | SSE 连接治理与慢消费者保护 [规格][s194] | P0 | ✅ 已交付@v0.24.0 |
+| FR-537 | 批量命令流式进度 [规格][s194] | P1 | ✅ 已交付@v0.24.0 |
+| FR-538 | 供应商协议三选与模型自动发现 [规格][s195] | P0 | ✅ 已交付@v0.24.0·契约补测 |
+| FR-539 | 供应商级出站代理 [规格][s195] | P0 | ✅ 已交付@v0.24.0 |
+| FR-540 | 助手默认启用平台自带 MCP 工具 [规格][s195] | P0 | ✅ 已交付@v0.24.0 |
+| FR-541 | 系统提示词、Skill 目录与思考强度 [规格][s195] | P1 | ✅ 已交付@v0.24.0·核实归真 |
+| FR-542 | 对话历史独立页面与检索 [规格][s195] | P1 | ✅ 已交付@v0.24.0 |
+| FR-543 | 历史消息编辑与回退 [规格][s195] | P1 | ✅ 已交付@v0.24.0 |
+| FR-544 | 助手工具渐进式披露与执行路径统一 [规格][s195] | P0 | ✅ 已交付@v0.24.0 |
+| FR-545 | 业务事件位点账本与缺口查询 [规格][s186] | P1 | ✅ 已交付@v0.24.0 |
+| FR-546 | 前端设计底座单一真源与 `dark:` 变体修复 | P1 | ✅ 已交付@v0.24.0 |
+| FR-547 | 主题配色对比度自动校验 | P1 | ✅ 已交付@v0.24.0 |
+| FR-548 | 内容页布局规范层 | P1 | ✅ 已交付@v0.24.0 |
+| FR-549 | 导航外壳组件层 | P1 | ✅ 已交付@v0.24.0 |
+| FR-550 | 工作区导航数据层 | P1 | ✅ 已交付@v0.24.0 |
+| FR-551 | 主控台外壳接入与页面迁移 | P1 | ✅ 已交付@v0.24.0·四项验收达成 |
+| FR-552 | 代码内 FR / ADR 编号全量清理 | P1 | ✅ 已交付@v0.24.0·存量归零 |
 | FR-553 | 侧栏资源面板收敛为「一个分组方式 + 服务器列表」 | — | ✅ 已交付@v0.24.0 |
-| FR-554 | 删除侧栏本地自定义分组并清掉其类型错误（ref，免 spec，与 FR-553 同批交付） | P1 | ✅ 已交付@v0.24.0 |
+| FR-554 | 删除侧栏本地自定义分组并清掉其类型错误 | P1 | ✅ 已交付@v0.24.0 |
 | FR-555 | 侧栏服务器列表精简与虚拟化 | — | ✅ 已交付@v0.24.0 |
 | FR-556 | 侧栏服务器行标注「服务端类别」三分法 | — | ✅ 已交付@v0.24.0 |
 
@@ -880,7 +880,7 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 [s003]: specs/plugin-batch-deploy/spec.md
 [s004]: specs/serverprobe-ops-inflight/spec.md
 [s005]: specs/probe-dependency-cache/spec.md
-[s006]: specs/business-integration/fr-124-127-inventory.md
+[s006]: specs/archive/business-integration/fr-124-127-inventory.md
 [s007]: specs/console-ux-enhancement/spec.md
 [s008]: specs/ui-redesign/design.md
 [s009]: specs/process-metrics/spec.md
@@ -1051,3 +1051,22 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 [s174]: specs/log-config-delivery/spec.md
 [s175]: specs/log-collection-switches/spec.md
 [s176]: specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项
+[s177]: specs/node-host-observability/spec.md
+[s178]: specs/ai-provider-models/spec.md
+[s179]: specs/ai-assistant/fr-515-agent-runtime.md
+[s180]: specs/ai-assistant/fr-516-tools-and-confirmation.md
+[s181]: specs/ai-assistant/fr-517-external-mcp.md
+[s182]: specs/ai-assistant/fr-518-page-context.md
+[s183]: specs/ai-assistant/fr-519-chat-ui.md
+[s184]: specs/ai-assistant/fr-520-ai-home.md
+[s185]: specs/business-capability-retirement/spec.md
+[s186]: specs/business-event-passthrough/spec.md
+[s187]: specs/business-batch-and-confirmation/spec.md
+[s188]: specs/business-write-reconcile-bridge/spec.md
+[s189]: specs/external-stats-contract/spec.md
+[s190]: specs/config-layered-override/spec.md
+[s191]: specs/config-write-grayscale-activation/spec.md
+[s192]: specs/config-beacon-migration/spec.md
+[s193]: specs/business-plugin-panel/spec.md
+[s194]: specs/sse-governance-and-streaming/spec.md
+[s195]: specs/ai-assistant/fr-538-543-provider-skill-history.md
