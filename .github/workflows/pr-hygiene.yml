@@ -181,7 +181,7 @@ $hits"
           echo "::group::新增行中的绝对路径"
           # 【为何要逐 token 而不是整行 grep -v】整行豁免正是本仓已经修过一次的 bug 类：
           # 一行里只要含 /tmp/（或 /opt/app/ 等白名单路径），同行的
-          # `/home/bob/work/x` 会被 `grep -v` 整行丢掉 → 真实用户名漏放。
+          # `/home/<非白名单用户名>/...` 会被 `grep -v` 整行丢掉 → 真实用户名漏放。
           # 改成：先抽每个路径 token，再逐条判白名单（与 IP 检查同一手法）。
           PATH_HITS=$(printf '%s\n' "$ADDED" \
             | grep -aoE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\' \
