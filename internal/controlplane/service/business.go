@@ -174,10 +174,23 @@ func (s *BusinessService) DispatchWrite(instanceID uint, domain, action, payload
 
 // resolveTarget 解析实例与节点，构造初始结果。
 //
-// 三种返回：
+// 四种返回：
 //   - 硬错误（实例不存在 / 查询失败）→ (_, _, nil, err)，调用方以 error 返回供路由分流；
-//   - 软降级（实例的节点记录不存在）→ (_, _, result(Error 已填), nil)，调用方直接回传 200+available=false；
+//   - 软降级（实例未运行 / 节点记录不存在）→ (_, _, result(Error 已填), nil)，
+//     调用方直接回传 200+available=false；
 //   - 正常 → (inst, node, result(Error 空), nil)，调用方继续下发。
+//
+// # 为什么先查实例状态
+//
+// 探针（ServerProbe）跑在游戏服进程内：实例一停，进程没了，探针也随之中断。
+// 所以即使不做这道检查，业务数据也写不进去——“写不进去”是安全的。
+//
+// 但**错误文案会骗人**：不下发就直接看节点，探针不在时得到的是
+// “节点未连接”——运维会去查网络/Worker，实际原因是这台服根本没开。
+// 两者处置完全不同，巡检脚本也无法据此区分，会把已停服的预期状态报成故障。
+//
+// 对账路径（business_reconcile.go）一直有这道检查，写穿与只读路径漏了，
+// 导致同一个离线实例在两条路上得到不同结论。此处在源头统一。
 func (s *BusinessService) resolveTarget(instanceID uint, domain, action string) (model.Instance, model.Node, *BusinessResult, error) {
 	var inst model.Instance
 	if err := s.db.First(&inst, instanceID).Error; err != nil {
@@ -187,6 +200,14 @@ func (s *BusinessService) resolveTarget(instanceID uint, domain, action string) 
 		return inst, model.Node{}, nil, fmt.Errorf("查询实例失败: %w", err)
 	}
 	result := &BusinessResult{InstanceID: instanceID, Domain: domain, Action: action}
+
+	// 实例未运行 → 直接给出可机器识别的错误码，不假装是链路故障。
+	// 用与对账路径一致的 INSTANCE_OFFLINE 前缀（同一错误语义，两条路不应各叫一个名）。
+	if inst.Status != model.InstanceStatusRunning {
+		result.Error = fmt.Sprintf("INSTANCE_OFFLINE: 实例未运行（当前状态 %s）", inst.Status)
+		return inst, model.Node{}, result, nil
+	}
+
 	var node model.Node
 	if err := s.db.First(&node, inst.NodeID).Error; err != nil {
 		result.Error = "节点不存在"

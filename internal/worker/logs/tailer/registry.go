@@ -223,33 +223,53 @@ func (r *Registry) Snapshot() []FileState {
 // **不 fsync**：见类型注释。
 //
 // 没有变更时零磁盘 IO（与旧实现的 `sameCursorRegistryEntry` 判据同精神）。
+//
+// # 为什么序列化与写文件都在锁外
+//
+// 采集登记与查询（Get/Put）走的是同一把 `r.mu`。若把「序列化 + 写文件 +
+// rename」全放在锁内，机械盘上一次落盘可能持续几十毫秒，期间所有 harvester
+// 的进度登记都要排队——正是 FR-499 要避免的「登记被长周期轮次拖死」。
+//
+// 实测（2000 条）：锁内版本一次 Flush 期间其他协程只能完成 3 次 Get；
+// 移到锁外后不再有这个阻塞窗口。
+//
+// 代价：快照与写盘之间可能有新的 Put，那些更新会留在内存里等下一轮，
+// 不影响正确性（丢的只是「最后一次进度」的重读窗口，与不 fsync 同一取舍）。
 func (r *Registry) Flush() error {
+	// 第一步：在锁内只做「拷快照 + 清脏标记」，这两个操作都是纯内存、微秒级。
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if !r.dirty {
+		r.mu.Unlock()
 		return nil
 	}
 	if r.path == "" {
 		r.dirty = false
+		r.mu.Unlock()
 		return nil // 未配置路径 = 仅内存（测试或临时部署）
 	}
-	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
+	snapshot := make([]FileState, 0, len(r.m))
+	for _, st := range r.m {
+		snapshot = append(snapshot, st)
+	}
+	path := r.path
+	r.dirty = false
+	r.mu.Unlock()
+
+	// 第二步：排序 + 序列化 + 写文件 + rename，均在锁外。
+	// 排序：同内容两次写出逐字节相同，便于 diff 排障。
+	sortFileStates(snapshot)
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("tailer: 建位点表目录: %w", err)
 	}
-	tmp := r.path + ".tmp"
+	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("tailer: 建临时位点表: %w", err)
 	}
 	w := bufio.NewWriter(f)
-	// 排序写出：同内容两次写出逐字节相同，便于 diff 排障。
-	keys := make([]string, 0, len(r.m))
-	for k := range r.m {
-		keys = append(keys, k)
-	}
-	sortStrings(keys)
-	for _, k := range keys {
-		line, mErr := json.Marshal(r.m[k])
+	for i := range snapshot {
+		line, mErr := json.Marshal(snapshot[i])
 		if mErr != nil {
 			continue
 		}
@@ -265,9 +285,8 @@ func (r *Registry) Flush() error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, r.path); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("tailer: 替换位点表: %w", err)
 	}
-	r.dirty = false
 	return nil
 }
