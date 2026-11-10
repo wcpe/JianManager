@@ -265,10 +265,21 @@ func (s *anthropicStreamer) Stream(ctx context.Context, req Request, emit Emit) 
 				}
 			}
 		case "message_delta":
-			if ev.Message != nil && ev.Message.StopReason != nil {
+			// 官方线上格式（anthropic-sdk-python 的 RawMessageDeltaEvent）：
+			//   {"type":"message_delta", "delta":{"stop_reason":"end_turn", ...},
+			//    "usage":{...}}
+			// stop_reason 与 usage **都在顶层**，不在 message 里。
+			// 之前读 ev.Message.* 会得到 nil，表现为“结束原因为空、用量丢失”，
+			// 且因为不报错而无法被测试发现（旧用例的夹具恰好是错的形状）。
+			//
+			// 兼容处理：两种形状都读，先取顶层（官方），再回退到 message（少数网关）。
+			if ev.Delta != nil && ev.Delta.StopReason != "" {
+				stopReason = ev.Delta.StopReason
+			}
+			if stopReason == "" && ev.Message != nil && ev.Message.StopReason != nil {
 				stopReason = *ev.Message.StopReason
 			}
-			if uerr := emitAnthropicUsage(ev.Message, emit); uerr != nil {
+			if uerr := emitAnthropicUsage(ev, emit); uerr != nil {
 				return uerr
 			}
 		case "message_start":
@@ -302,21 +313,26 @@ func (s *anthropicStreamer) Stream(ctx context.Context, req Request, emit Emit) 
 	return emit(Event{Kind: EventEnd, FinishReason: stopReason})
 }
 
-// emitAnthropicUsage 从 message_delta 里取用量（两处形状都兼容）。
-func emitAnthropicUsage(msg *struct {
-	StopReason *string `json:"stop_reason"`
-	Usage      *struct {
-		InputTokens  *int `json:"input_tokens"`
-		OutputTokens *int `json:"output_tokens"`
-	} `json:"usage"`
-}, emit Emit) error {
-	if msg == nil || msg.Usage == nil {
-		return nil
+// emitAnthropicUsage 从 message_delta 取用量。
+//
+// 官方形状（anthropic-sdk-python 的 RawMessageDeltaEvent）：usage 在**事件顶层**，
+// 与 delta 并列；不在 message 内部。少数兼容网关会包在 message 里，故两者都读。
+func emitAnthropicUsage(ev anthropicStreamEvent, emit Emit) error {
+	// 优先顶层 usage（官方）
+	if ev.Usage != nil {
+		return emit(Event{Kind: EventUsage, Usage: &Usage{
+			InputTokens:  ev.Usage.InputTokens,
+			OutputTokens: ev.Usage.OutputTokens,
+		}})
 	}
-	return emit(Event{Kind: EventUsage, Usage: &Usage{
-		InputTokens:  msg.Usage.InputTokens,
-		OutputTokens: msg.Usage.OutputTokens,
-	}})
+	// 回退：部分网关把 usage 包在 message 里
+	if ev.Message != nil && ev.Message.Usage != nil {
+		return emit(Event{Kind: EventUsage, Usage: &Usage{
+			InputTokens:  ev.Message.Usage.InputTokens,
+			OutputTokens: ev.Message.Usage.OutputTokens,
+		}})
+	}
+	return nil
 }
 
 // buildAnthropicMessages 把内部消息转成 Messages API 形状。

@@ -368,3 +368,72 @@ header 规则要求取值 ≥8 位，而 `Bearer` 恰好 6 位，天然被排除
 与换密钥保密文 `TestCredentialKeyChangeKeepsCiphertext`；三启回读 `default_model_id` 新增
 `TestSettingSurvivesThreeStarts`。**边界**：真实商业厂商验证按 §11 #13 由用户确认关闭——
 仓库内无该次验证的日志/截图留痕。
+
+## 2026-11-10 真机验收：Anthropic 协议字段位置缺陷（已修）
+
+### 发现
+
+用外部 Python 模拟供应商（`scripts/fr-acceptance/mock_ai_provider.py`）
+按**官方格式**吐数据时，`anthropic` 协议的 finish_reason 为空、usage 丢失。
+
+### 真因
+
+`internal/controlplane/ai/anthropic.go` 的 `message_delta` 处理读错了字段位置。
+
+**官方格式**（`anthropic-sdk-python` 的 `RawMessageDeltaEvent`，直接读 SDK 源码确认）：
+
+```python
+class RawMessageDeltaEvent(BaseModel):
+    delta: Delta                    # stop_reason 在 delta 里
+    type: Literal["message_delta"]
+    usage: MessageDeltaUsage        # usage 在顶层，不在 message 里
+
+class Delta(BaseModel):
+    stop_reason: Optional[StopReason] = None
+    stop_sequence: Optional[str] = None
+```
+
+原实现读的是 `ev.Message.StopReason` 与 `ev.Message.Usage`，两者恒为 nil。
+后果：接真实 Anthropic API 时 finish_reason 永远为空、token 用量永远丢失，
+且不报错——表现为「回答正常但用量面板全 0」。
+
+### 为何既有测试没抓到（重要）
+
+本节上方记的「三协议用本地真 SSE 假供应商各实跑通过」，
+其中假供应商的 `message_delta` 夹具**本身就是错的**：
+
+```json
+{"type":"message_delta","message":{"stop_reason":"end_turn","usage":{...}}}
+```
+
+测试与实现犯了同一个错误，于是互相验证「通过」。**夹具错了，测试就是自欺。**
+
+### 修复
+
+两处都改成「优先官方顶层，回退 message 内部」的兼容写法（兼顾少数网关旧形状）。
+同时修正了 `adapters_test.go` 的错误夹具为官方格式，让既有用例今后能真正防守。
+
+### 验收证据
+
+`internal/controlplane/ai/adapters_mock_live_test.go` 与 `discover_mock_test.go`，
+对打外部 Python 模拟服务（TLS + 自签证书 + 显式 RootCAs）：
+
+| 用例 | 结果 |
+|---|---|
+| 三协议端到端文本增量 | PASS |
+| anthropic finish_reason = end_turn | PASS（修复前 FAIL）|
+| anthropic usage 11/7 | PASS（修复前空）|
+| 上游 401/429 被分类且不回显凭据 | PASS |
+| 上游 500 不静默成功、不残留半截文本 | PASS |
+| 三协议模型发现均成功 | PASS |
+| 无凭据时返回错误而非空列表 | PASS |
+| baseURL 尾部斜杠正确处理 | PASS |
+
+### 顺带发现的独立缺口（未修）
+
+`httpclient.GuardOptions.TLSRootCAs` 有定义、有注释说明用途，
+但**生产装配从未注入**（全仓只有定义处与其自身使用处）。
+
+实际影响：使用自签证书或私有 CA 的自托管 AI 网关目前接不进来——
+出站准入只认系统根证书，且刻意不提供 InsecureSkipVerify。
+这属于需产品决策的独立缺口，不在本次修复范围。
