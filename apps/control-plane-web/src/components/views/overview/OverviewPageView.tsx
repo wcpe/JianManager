@@ -553,7 +553,7 @@ export function GaugeAttributionTooltip({
             onMouseEnter={handleHoverEnter}
             onMouseLeave={scheduleHoverClose}
             /* 
-              【悬停反馈：不动背景色，改提亮环 + 轻微抬起】
+              【悬停 / 聚焦反馈：不动背景色，改提亮环 + 轻微抬起】
               用户要求保留 hover 反馈，但原先的 `hover:bg-accent/40` 是整块卡变浅底——
               三个球并排时鼠标扫过会轮流闪一下，反而干扰读数。
 
@@ -561,8 +561,21 @@ export function GaugeAttributionTooltip({
               - 整块轻微上浮 1px（translate 不参与布局，不会推动三卡高度）；
               - 环的描边加粗（`[&_circle]` 选择器命中 ResourceGauge 的进度环），
                 提亮但不遮挡数值，也不改变卡片底色。
+
+              【为何要把默认的焦点环拆掉】
+              Button 基类带 `focus-visible:ring-2 ring-ring/40` + `focus-visible:border-ring`，
+              而 `--ring` 取品牌绿（#158053）。球本身就是个圆环，因此键盘聚焦
+              （或点过一下之后）会被套上一个 2px 绿色圆角方框——看起来像
+              「球被框住」，与旁边两个球不一致，即用户报的「绿色边框」。
+
+              球的功能是「看」，不是「按」：它没有按钮形状，焦点环在这里意义不大。
+              所以把外部焦点环换掉，用与悬停同一套信号（进度环描边加粗）表达键盘焦点：
+              键盘用户仍能看出焦点在哪（WCAG 2.4.7），但不再多出与球形状无关的方框。
+
+              注意 `focus-visible:border-transparent` 不能省：基类还有
+              `focus-visible:border-ring`，只去 ring 会留下一条绿色边线。
             */
-            className="group rounded-sm transition-transform duration-[var(--motion-duration-fast)] ease-ios hover:-translate-y-px [&_svg:not([class*='size-'])]:size-auto [&_svg_circle:last-child]:transition-[stroke-width] [&_svg_circle:last-child]:duration-[var(--motion-duration-fast)] hover:[&_svg_circle:last-child]:stroke-[10] focus-visible:[&_svg_circle:last-child]:stroke-[10]"
+            className="group rounded-sm transition-transform duration-[var(--motion-duration-fast)] ease-ios hover:-translate-y-px [&_svg:not([class*='size-'])]:size-auto [&_svg_circle:last-child]:transition-[stroke-width] [&_svg_circle:last-child]:duration-[var(--motion-duration-fast)] hover:[&_svg_circle:last-child]:stroke-[10] focus-visible:outline-none focus-visible:ring-0 focus-visible:border-transparent focus-visible:[&_svg_circle:last-child]:stroke-[10]"
           >
             {children}
           </Button>
