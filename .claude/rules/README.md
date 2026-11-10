@@ -24,6 +24,7 @@
 | [decision-alignment.md](decision-alignment.md) | 代码必须和 ADR 决策一致 |
 | [doc-sync.md](doc-sync.md) | 代码变更时文档必须同步更新 |
 | [doc-evolution.md](doc-evolution.md) | 文档演进方式（增量/原地/追加） |
+| [docs-registry.md](docs-registry.md) | **docs/ 只放已登记的文档**：禁止自建子目录（如 `_evidence`）；验收记录归并入对应 spec，不另设证据库 |
 | [git-commit.md](git-commit.md) | Git 提交 / 分支 / 合并规范（单主干 master，禁直推，rebase+ff 优先） |
 | [no-ref-in-code.md](no-ref-in-code.md) | 代码 / 文件名 / 注释 / 标识符禁止出现 FR 与 ADR 编号；代码写理由本身（存量豁免，门禁只扫 diff 新增行） |
 | [no-hash-in-docs.md](no-hash-in-docs.md) | 文档禁止写 git commit hash——squash merge 后必然悬空；改用「提交标题 + 日期」定位 |

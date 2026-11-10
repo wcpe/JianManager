@@ -22,6 +22,7 @@
 - [ ] Go 源码格式合规：`sh .claude/scripts/check-gofmt.sh` 通过（见 [code-format.md](code-format.md)）
 - [ ] 新增 / 修改的代码里没有 FR / ADR 编号：`sh .claude/scripts/check-no-ref-in-code.sh` 通过（存量豁免见 [no-ref-in-code.md](no-ref-in-code.md)）
 - [ ] 新增 / 修改的**文档**里没有 git commit hash：`sh .claude/scripts/check-no-hash-in-docs.sh` 通过（squash merge 后 hash 必悬空，见 [no-hash-in-docs.md](no-hash-in-docs.md)）
+- [ ] `docs/` 下没有未登记的新增目录 / 文件：`sh .claude/scripts/check-docs-registry.sh` 通过（禁止自建子目录如 `_evidence`；验收记录必须归并入对应 spec，见 [docs-registry.md](docs-registry.md)）
 - [ ] 核心逻辑有测试覆盖
 - [ ] 状态 / 迁移类变更已按 [testing-and-quality.md](testing-and-quality.md)「状态 / 迁移类变更」跑通「迁移 → 首启 → 停 → 二启 → 三启」（含脏环境），并附逐轮记录
 - [ ] 长临界区审计：按本文「长临界区审计」清单逐条核对（无共享锁跨越 Poll / 投递 / 持久化，锁获取点标注锁序与最坏持有量，跨进程调用不在持锁区内）
