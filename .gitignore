@@ -95,3 +95,10 @@ vantaloom.md
 # Vantaloom 本地运行时产物（技能副本 / 私有记忆副本），不属于工程源码
 .vantaloom/
 /.vantaloom/
+
+# Python 运行缓存（验收脚本 scripts/fr-acceptance/ 会产生，不入库）
+__pycache__/
+*.pyc
+
+# 验收脚本的运行产物（一次性输出，不入库；脚本本身 scripts/fr-acceptance/*.py 要入库）
+scripts/fr-acceptance/evidence/
