@@ -1,6 +1,6 @@
 package service
 
-// FR-544 渐进式披露验收：量化常驻体积，并验证「与工具总数无关」的真实边界。
+// 渐进式披露验收：量化常驻体积，并验证「与工具总数无关」的真实边界。
 //
 // 已有 assistant_tool_disclosure_test.go 守了「三个元工具」「≤4KB」与搜索行为。
 // 本文件补三件它没盖的：
@@ -18,7 +18,7 @@ import (
 
 // TestMetaToolSize_MeasuredAgainstFullCatalog 实测常驻体积与全量目录的比值。
 //
-// 这是 FR-544 声称的「1350 字节 vs 45088 字节 = 3%」的直接验证。
+// 这是该功能声称的「1350 字节 vs 45088 字节 = 3%」的直接验证。
 // 数字不写死：目录规模会变，比值才是意义所在。
 func TestMetaToolSize_MeasuredAgainstFullCatalog(t *testing.T) {
 	metaBlob, err := json.Marshal(assistantMetaToolSpecs())

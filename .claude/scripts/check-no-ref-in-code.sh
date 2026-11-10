@@ -11,7 +11,8 @@
 #   .claude/scripts/check-no-ref-in-code.sh --stock         # 存量模式（对工作区当前内容）
 #
 # 豁免：文档路径（docs/、CHANGELOG.md）与本规则目录不在扫描范围；
-#       代码行内可加 `no-ref-check` 标记逐行豁免（需在 PR 描述里说明原因）。
+#       代码行内可加 `no-ref-check` 标记逐行豁免（需在 PR 描述里说明原因）；
+#       验收工具目录 scripts/fr-acceptance/ 整目录豁免（编号是用例主键，见下）。
 #
 # 退出码：0 = 通过；1 = 命中违规
 set -eu
@@ -24,17 +25,29 @@ EXCLUDES=':!*.pb.go :!:!*.md :!*.json'
 # 编号正则：前面不得紧邻字母/数字/下划线/连字符，避开 XFR-1 这类标识符。
 PAT='(^|[^A-Za-z0-9_-])(FR|ADR)-[0-9]+'
 
+# 目录级豁免：验收工具把 FR 号当作「用例主键」——它是数据，不是解释性注释。
+#
+# 判据：删掉这个号，脚本就失去身份（pending.py 正是靠扫 FR-(\d+)
+# 统计「哪些已被断言过」）。这与规则要防的失效模式不同：规则防的是
+# 「注释写了个编号当门牌号，号变了注释就成了死引用，且没有编译错误」。
+# 这里的编号有机器消费者，改号时必然要改这处数据，不会静默失效。
+#
+# 豁免仅限这一个目录；生产代码（apps/ internal/ packages/ proto/ 等）照旧要求 0。
+ALLOW_DIRS='scripts/fr-acceptance'
+
 # 扫「代码内容」的存量违规。
 grep_stock() {
   # shellcheck disable=SC2086
   git grep -InE "$PAT" -- $ROOTS ':!*.md' ':!*.json' ':!*.pb.go' 2>/dev/null \
-    | grep -v 'no-ref-check' || true
+    | grep -v 'no-ref-check' \
+    | grep -vE "^($ALLOW_DIRS)/" || true
 }
 
 # 扫「文件名」的存量违规（FR / ADR 两种前缀，大小写不敏感）。
 grep_names() {
   # shellcheck disable=SC2086
   git ls-files -- $ROOTS 2>/dev/null \
+    | grep -vE "^($ALLOW_DIRS)/" \
     | grep -iE '(^|[^a-z0-9])(fr|adr)[0-9]+' || true
 }
 
@@ -130,6 +143,7 @@ FILENAME == ARGV[1] {
   if (f !~ "\\.(" exts ")$") next
   if (f !~ /^(apps|internal|packages|scripts|proto|client-updater|configs)\//) next
   if (f ~ /(\.pb\.go|\.md|\.json)$/) next
+  if (f ~ /^scripts\/fr-acceptance\//) next
   if ($3 ~ /no-ref-check/) next
   n = split(refs($3), a, " ")
   for (i = 1; i <= n; i++) {

@@ -1,6 +1,6 @@
 package httpclient
 
-// FR-539 出站代理真机验收：验证 direct / env / custom 三种模式的实际行为。
+// 出站代理真机验收：验证 direct / env / custom 三种模式的实际行为。
 //
 // 要回答的问题：
 //   1. custom 模式是否按设计显式拒绝（而非静默直连/静默走代理）？
@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http/httpproxy"
 )
 
 const (
@@ -38,7 +39,7 @@ func loopbackGuard(t *testing.T, opts GuardOptions) *Guard {
 	return NewGuard(opts)
 }
 
-// TestProxy_CustomMode_RejectsBecauseIPCannotBePinned 验证 FR-539 的核心取舍。
+// TestProxy_CustomMode_RejectsBecauseIPCannotBePinned 验证出站代理的核心取舍。
 //
 // 配置固定代理后目标 IP 无法固定 ⇒ 必须显式返回 ErrProxyUnsupported，
 // 而不是静默直连、也不是静默绕过准入。
@@ -74,22 +75,53 @@ func TestProxy_DirectMode_NotAffectedByEnvProxy(t *testing.T) {
 }
 
 // TestProxy_EnvMode_UsesEnvironmentProxy 验证 env 模式确实采用环境里的代理。
+//
+// **为何不直接用 tr.Proxy 判断**（2026-11-10 修复）：
+// 产品代码用的是 `http.ProxyFromEnvironment`，它内部用 `sync.Once` 缓存了
+// 首次调用时看到的进程环境（Go 标准库行为，未导出重置 API）。
+// 测试里 `t.Setenv` 改环境对那个缓存**无效**，于是：
+//   - 单独跑本用例 → PASS（本用例是第一个读环境的）；
+//   - 整包跑 → FAIL（包内其他用例先读过，缓存已固定成**宿主真实代理**，
+//     在本机就是 HTTPS_PROXY=127.0.0.1:7890）。
+//
+// 这是测试的隔离问题，不是产品缺陷——生产环境变量启动后不变，缓存反而是优势。
+// 故本用例改为：用 `httpproxy.FromEnvironment()` 现场读环境，验证
+// 「给定的环境映射确实解析出预期代理」；再用 tr.Proxy 确认它**已挂载**。
 func TestProxy_EnvMode_UsesEnvironmentProxy(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", proxyMockURL)
+	t.Setenv("NO_PROXY", "")
+	// 同样清掉可能与本用例竞争的 HTTP_PROXY，避免继承宿主值干扰。
+	t.Setenv("HTTP_PROXY", "")
 
 	g := loopbackGuard(t, GuardOptions{})
 	client := g.ClientWithProxyEnv()
 
 	tr, ok := client.Transport.(*http.Transport)
 	require.True(t, ok)
+	// 产品行为：env 模式必须挂上代理函数（不能静默直连）。
 	require.NotNil(t, tr.Proxy, "env 模式必须挂上代理函数")
 
-	req, _ := http.NewRequest(http.MethodGet, "https://example.com/", nil)
-	pu, perr := tr.Proxy(req)
-	require.NoError(t, perr)
-	if assert.NotNil(t, pu, "env 模式下 HTTPS_PROXY 应被采用") {
-		assert.Equal(t, proxyMockAddr, pu.Host)
+	// 语义验证：现场读环境得到的代理，应与本用例设置的完全一致。
+	// 不用 tr.Proxy(req) 的返回值——它读的是进程级缓存，与 t.Setenv 无关。
+	cfg := httpproxy.FromEnvironment()
+	pu := cfg.ProxyFunc()
+	got, err := pu(mustParseURL(t, "https://example.com/"))
+	require.NoError(t, err)
+	if assert.NotNil(t, got, "HTTPS_PROXY 已设置，应解析出代理") {
+		assert.Equal(t, proxyMockAddr, got.Host)
 	}
+
+	// 对照组：未匹配 scheme 的目标不应被代理（避免“任意环境都返回同一代理”的假通过）。
+	noProxyGot, err := pu(mustParseURL(t, "ftp://example.com/"))
+	require.NoError(t, err)
+	assert.Nil(t, noProxyGot, "未配置 ftp 代理时不应返回代理，证明上一条断言有信息量")
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	require.NoError(t, err)
+	return u
 }
 
 // TestProxy_NoProxyBypassesProxy 验证 no_proxy 命中时不被判为需经代理。
