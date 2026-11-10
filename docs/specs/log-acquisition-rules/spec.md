@@ -107,7 +107,7 @@ role == proxy && coreJar 含 "velocity"    → velocity
 > **字段号选定依据（2026-10-15 实测核对）**：`CreateInstanceRequest` 当前已占用
 > **1–20、22、23、24**（22/23/24 为日志采集增量字段 `log_target_id`/`log_acquire_mode`/
 > `log_source_generation`）。**21 号在本 message 内空缺**，但同文件其他 message
-> （`worker.proto:512`、`1137`）在用 21，且 21 曾出现在提交 `dcb00d56` 的历史中——
+> （`worker.proto:512`、`1137`）在用 21，且 21 曾出现在更早一批提交的历史中——
 > 为规避历史删除字段的 wire 兼容风险，**不复用 21，改用 25/26**。
 > 实现前须再核对一次 `proto/worker.proto` 当前实际占用。
 

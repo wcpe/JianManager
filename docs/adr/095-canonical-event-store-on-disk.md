@@ -42,7 +42,7 @@
 >
 > - 介质：`internal/worker/logs/eventstore/store.go` 的 `MemoryRoot`
 > - 装配：`internal/worker/logs/ingest/runtime.go` 的 `eventstore.Open(eventstore.MemoryRoot(...))`
-> - 落地提交：`7456d716`
+> - 落地（提交见 git log）
 >
 > #### 不变的部分
 > 段格式与 MANIFEST 语义、只增不减、幂等追加、内存上界能力、量测口径的两条硬约束、

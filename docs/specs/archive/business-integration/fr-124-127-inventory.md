@@ -29,7 +29,7 @@ JBIS「一个 ServerProbe = 本服唯一全能 agent」：核心链路 CP/Worker
 
 #### FR-125: 背包 Provider
 - **优先级**: P2 | **依赖**: FR-117, FR-124 | **关联 ADR**: JM ADR-026 / ServerProbe ADR-0016
-- **状态备注**: ServerProbe 子模块 platform-bukkit 已实现+单测+落地（初版 commit `f2b50c2`+`0f86ed4`）。**AllinInventorySync 2.0.0 发布后随其 api 重对接**——`compileOnly` 升 `2.0.0`、DTO 纯 Java 化（Kotlin 侧构造改位置参）、物品写 `writeInventory/writeEnderChest` 暂降级不进 manifest（其门面入参退回分区字节，ServerProbe ADR-0017），读 view / 基础属性写 / 追踪事件保留；`./gradlew build` 全绿。经整链下发读 + 属性写 + 追踪事件汇聚的真机随 FR-126/127 统一收口，同经济域
+- **状态备注**: ServerProbe 子模块 platform-bukkit 已实现+单测+落地（初版与后续修复各一次提交）。**AllinInventorySync 2.0.0 发布后随其 api 重对接**——`compileOnly` 升 `2.0.0`、DTO 纯 Java 化（Kotlin 侧构造改位置参）、物品写 `writeInventory/writeEnderChest` 暂降级不进 manifest（其门面入参退回分区字节，ServerProbe ADR-0017），读 view / 基础属性写 / 追踪事件保留；`./gradlew build` 全绿。经整链下发读 + 属性写 + 追踪事件汇聚的真机随 FR-126/127 统一收口，同经济域
 - **描述**: ServerProbe 背包适配器 `InventoryProvider` wrap AllinInventorySync 2.0.0 api（纯 Java），含读 view + 基础属性写 + 追踪事件订阅 + manifest（物品写暂不提供）；物品过桥契约见 ServerProbe ADR-0017（取代 ADR-0016 决策 1/2）
 - **验收**:
   - [x] `inventory.view`（getPlayerInventory 回源含离线 → 结构化视图，玩家无数据回 exists=false）+ `inventory.writeBasicAttrs`（经写门面 getInventoryWriteApi，WriteResult 回执透传 success/online/newDataVersion/errorCode）+ 背包域 manifest（仅 view + writeBasicAttrs）

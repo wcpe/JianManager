@@ -37,5 +37,5 @@
 - **正面**：跨代次重复的唯一真入口被堵死；拒绝可见、可定位（`ARCHIVE_FOREIGN_GENERATION` + 路径 + 两个代次 + 原因）；首次登记的既有能力（历史归档导入）保持不变。
 - **代价与边界**：查询是 O(同源代次数 × 分段数) 的线性扫描（调用粒度=每个待导入归档一次）；**跨代次命中后必须人工介入**——补账通道尚未实现，在此之前该归档不会入账（宁可缺、不可重复）。
 - **可转红防护**：`internal/worker/logs/acquire/archive_ownership_test.go`（归属闸）、`internal/worker/logs/ingest/runtime_test.go` 的 `ARCHIVE_FOREIGN_GENERATION` 断言；去除 `lookupOwner` 接线或把未命中改成拒绝，回归即转红。
-- **实现**：提交 `792ea9ea`（归档代次归属执行体）、`cc193c0f`（pipeline 注入点接线）。
+- **实现**：归档代次归属执行体 + pipeline 注入点接线（分两批落地）。
 - **后续项**：① **跨代次补账通道**（按原代次人工补账，独立项，见 [ADR-101](101-manual-gap-abandonment-with-audit-trail.md) 的后续清单）；② 常驻对账协程 + per-event 状态位（未来选项，当前不做）。

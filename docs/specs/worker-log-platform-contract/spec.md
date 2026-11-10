@@ -53,7 +53,7 @@ reclaim = min(contiguousCertifiedEnd(entry), max(read_position, durable_position
 - 语义：`internal/worker/logs/ledger/ledger.go` 的 `tryReclaimLocked` / `contiguousCertifiedEnd`
 - 回归：`internal/worker/logs/ledger/reclaim_evidence_test.go`（5 条，含「UNKNOWN 不得被回收」）
 - 完整论证与删除清单：`docs/specs/reclaim-by-delivery/spec.md`
-- 落地提交：`84d3c5e4`（+ `c77b98b7` 删孤儿、`8dd65b12` 回归）
+- 落地：主体 + 删孤儿 + 回归（三批）
 
 #### 不变的部分（明确保留）
 
@@ -126,7 +126,7 @@ reclaim = min(contiguousCertifiedEnd(entry), max(read_position, durable_position
 - 投递路径：`internal/worker/logs/ingest/runtime.go` 的 `writeProjectionDay`（删 `verify` 调用与 `verifyErr` 分支）
 - 进展登记：`internal/worker/logs/ingest/gap_autoresolve.go` 的 `noteDeliveryProgress`
 - 回归：`internal/worker/logs/vlsup/client_compression_test.go`、`client_gzip_fallback_test.go`
-- 落地提交：`c0c132f4`
+- 落地（提交见 git log）
 
 #### 不变的部分（明确保留）
 

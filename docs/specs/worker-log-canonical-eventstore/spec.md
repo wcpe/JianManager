@@ -59,7 +59,7 @@
 
 - 语义：`internal/worker/logs/eventstore/store.go` 的 `MemoryRoot`
 - 接线：`internal/worker/logs/ingest/runtime.go`（`eventstore.Open(MemoryRoot(...))` 与 `logScratch`）
-- 落地提交：`7456d716`
+- 落地（提交见 git log）
 
 #### 不变的部分（明确保留）
 

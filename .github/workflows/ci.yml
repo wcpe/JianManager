@@ -430,3 +430,14 @@ jobs:
         run: |
           set -euo pipefail
           sh .claude/scripts/check-no-ref-in-code.sh --stock
+
+      # 文档里不得出现 git commit hash（.claude/rules/no-hash-in-docs.md）。
+      #
+      # 用 --all 全量比对而不是只看 diff：hash 常整段搬动（spec 重组、PRD 压缩），
+      # 只看 diff 会让存量随搬动重新流入。仓库用 squash merge，分支 hash 合并后
+      # 不会被保留，写进文档就是注定失效的死引用（可读性换取零收益）。
+      - name: 文档内 git hash 检查（--all）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh .claude/scripts/check-no-hash-in-docs.sh --all

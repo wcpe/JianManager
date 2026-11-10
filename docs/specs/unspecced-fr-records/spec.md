@@ -115,7 +115,7 @@ PRD 的 FR 表按约定「**只保留一行 FR + 状态，详情归 spec**」。
 
 ### FR-546 前端设计底座单一真源与 `dark:` 变体修复（ref，免 spec）
 
-**需求补充**：token 定义从应用侧迁入组件库 `packages/ui/src/styles/`（`theme-map.css` token→Tailwind utility 映射 / `tokens.css` 明暗基线 / `themes.css` 五套主题色覆盖 / `motion.css` 动效关键帧 / `index.css` 汇总入口），主控台与控件博物馆改为「一次 `@import` 即得完整底座」，删除与主控台局部定义已发生漂移的平行副本 `packages/ui/src/styles.css`（组件库自此自包含，不再要求消费方自备 token）；顺带修复全站 `dark:` 变体半失效——显式声明 `@custom-variant dark (&:is(.dark *))` 把变体绑定到应用内 `.dark` class（此前全仓无该声明，Tailwind v4 默认按 `prefers-color-scheme` 媒体查询解析，与 `lib/theme.ts` 写 class 的切主题策略不一致，导致「系统亮色 + 应用暗色」下组件内显式 `dark:` 样式不生效）。**验收**：① 两个消费方均只 `@import` 组件库底座、不再自带 token 副本；② 主控台 `index.css` 1074 → 575 行（基线 = 分支起点 `14472681`），token 迁移前后构建产物一致（CSS/JS 文件名哈希未变）；③ 产物 `:is(.dark *)` 0 → 49 处、`prefers-color-scheme: dark` 1 → 0 处，体积 +0.56 kB；④ 真浏览器实测暗色命中组件内 `dark:`（outline / destructive 按钮计算样式随 `html.dark` 变化）；⑤ 组件库单测全绿
+**需求补充**：token 定义从应用侧迁入组件库 `packages/ui/src/styles/`（`theme-map.css` token→Tailwind utility 映射 / `tokens.css` 明暗基线 / `themes.css` 五套主题色覆盖 / `motion.css` 动效关键帧 / `index.css` 汇总入口），主控台与控件博物馆改为「一次 `@import` 即得完整底座」，删除与主控台局部定义已发生漂移的平行副本 `packages/ui/src/styles.css`（组件库自此自包含，不再要求消费方自备 token）；顺带修复全站 `dark:` 变体半失效——显式声明 `@custom-variant dark (&:is(.dark *))` 把变体绑定到应用内 `.dark` class（此前全仓无该声明，Tailwind v4 默认按 `prefers-color-scheme` 媒体查询解析，与 `lib/theme.ts` 写 class 的切主题策略不一致，导致「系统亮色 + 应用暗色」下组件内显式 `dark:` 样式不生效）。**验收**：① 两个消费方均只 `@import` 组件库底座、不再自带 token 副本；② 主控台 `index.css` 1074 → 575 行（基线 = 分支起点），token 迁移前后构建产物一致（CSS/JS 文件名哈希未变）；③ 产物 `:is(.dark *)` 0 → 49 处、`prefers-color-scheme: dark` 1 → 0 处，体积 +0.56 kB；④ 真浏览器实测暗色命中组件内 `dark:`（outline / destructive 按钮计算样式随 `html.dark` 变化）；⑤ 组件库单测全绿
 
 **交付状态**：🔨 开发中·阶段 1 完成（证据 ②③④⑤ 已取得；整批随分支 `feat/web-overhaul` 交付，发版时由 `sdd-release-version` 统一标 `✅ 已交付@vX.Y.Z`）
 
@@ -1359,7 +1359,7 @@ QQ 机器人扫码接入与已发现群列表（feat，增强 FR-494）：终结
 
 ### FR-499 需求原文（优先级 P1 / 状态 🔨 开发中）
 
-采集登记路径与长临界区解耦（fix，事故根因修复；spec：`docs/specs/log-ingest-register-lock/spec.md`）：2026-10-01 生产事故——CP 下发实例规格时 Worker 的「登记实例日志采集」在 07:39/07:46/07:49/08:44 **四次全 DeadlineExceeded**，11 台实例无法启动（同期实例进程侧已能对账，只有这一步挂住）。**根因**：登记以 `cycleMu` 作入口互斥，而该锁被**整轮采集**（逐源 Poll → persist → VL 投递 → 投影校验）在吞吐饱和期连续持有（实测单轮 3.15s，生产可达分钟级），CP 的 10 秒 RPC 截止必然到点。**修法**：登记自成一锁 `registerMu`，与 `cycleMu` 解耦（锁序 `cycleMu → registerMu → pendingMu → mu`），`Stop` 补取 `registerMu` 串行化关库；**登记语义不变**（仍同步、返回即已建管道并提交内存绑定；**落库自 2026-10-03 `0fa2246b` 起为有界尽力**——超持久化门预算即交办后台通道，不再承诺「返回即已落盘」，见 spec §3.5 补充）→ **CP 侧零配套改动**。验收：同一忙期下登记耗时由「1.00s 到点超时（真实需等满 3.1s）」降为 0.1–4.6ms；`new_binding` 与 `idempotent_rebind` 两形态各有可转红回归（逐字还原旧实现实测转红）；`-race` 与 logs 全量测试全绿
+采集登记路径与长临界区解耦（fix，事故根因修复；spec：`docs/specs/log-ingest-register-lock/spec.md`）：2026-10-01 生产事故——CP 下发实例规格时 Worker 的「登记实例日志采集」在 07:39/07:46/07:49/08:44 **四次全 DeadlineExceeded**，11 台实例无法启动（同期实例进程侧已能对账，只有这一步挂住）。**根因**：登记以 `cycleMu` 作入口互斥，而该锁被**整轮采集**（逐源 Poll → persist → VL 投递 → 投影校验）在吞吐饱和期连续持有（实测单轮 3.15s，生产可达分钟级），CP 的 10 秒 RPC 截止必然到点。**修法**：登记自成一锁 `registerMu`，与 `cycleMu` 解耦（锁序 `cycleMu → registerMu → pendingMu → mu`），`Stop` 补取 `registerMu` 串行化关库；**登记语义不变**（仍同步、返回即已建管道并提交内存绑定；**落库自 2026-10-03 起为有界尽力**——超持久化门预算即交办后台通道，不再承诺「返回即已落盘」，见 spec §3.5 补充）→ **CP 侧零配套改动**。验收：同一忙期下登记耗时由「1.00s 到点超时（真实需等满 3.1s）」降为 0.1–4.6ms；`new_binding` 与 `idempotent_rebind` 两形态各有可转红回归（逐字还原旧实现实测转红）；`-race` 与 logs 全量测试全绿
 
 ### FR-500 需求原文（优先级 P0 / 状态 🔨 开发中）
 

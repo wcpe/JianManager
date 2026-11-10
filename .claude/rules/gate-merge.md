@@ -20,6 +20,7 @@
 - [ ] 无编译错误
 - [ ] 无 lint 错误
 - [ ] 新增 / 修改的代码里没有 FR / ADR 编号：`sh .claude/scripts/check-no-ref-in-code.sh` 通过（存量豁免见 [no-ref-in-code.md](no-ref-in-code.md)）
+- [ ] 新增 / 修改的**文档**里没有 git commit hash：`sh .claude/scripts/check-no-hash-in-docs.sh` 通过（squash merge 后 hash 必悬空，见 [no-hash-in-docs.md](no-hash-in-docs.md)）
 - [ ] 核心逻辑有测试覆盖
 - [ ] 状态 / 迁移类变更已按 [testing-and-quality.md](testing-and-quality.md)「状态 / 迁移类变更」跑通「迁移 → 首启 → 停 → 二启 → 三启」（含脏环境），并附逐轮记录
 - [ ] 长临界区审计：按本文「长临界区审计」清单逐条核对（无共享锁跨越 Poll / 投递 / 持久化，锁获取点标注锁序与最坏持有量，跨进程调用不在持锁区内）
@@ -96,7 +97,7 @@
 
 **跑 go test 一律加 `TMPDIR=/tmp`**：若本机默认 `TMPDIR` 指向一个长目录（如 `$HOME/tmpwork`），会让 wrapper 类用例的 unix socket 路径超到 111 字节、超过内核 `sockaddr_un` 的 107 上限，表现为「20 秒后某个产物仍未出现」这种离根因很远的报错。
 
-**2026-10-27 最终验证**（HEAD `6194c8c5`，`TMPDIR=/tmp`）：对四处修复涉及的 4 个包跑
+**2026-10-27 最终验证**（当时 HEAD，`TMPDIR=/tmp`）：对四处修复涉及的 4 个包跑
 `go test -race` —— `retention` / `query` / `vlsup` / `process` **全 ok，`DATA RACE` 计数 = 0**。
 这是「修完之后确实没有竞争」的直接证据，与「全量跑某些包超时」是两回事：
 超时只说明跑不完，不说明有竞争；而定向跑干净也不等于全量无竞争，两个证据都要。

@@ -45,7 +45,7 @@
 - **正面**：永久空洞有了**唯一、可审计**的出口；不会再出现"因为一个补不上的空洞而永久停采 + WAL 永不回落"。自动路径的 default-deny 性质完全未变。
 - **代价与边界**：跨空洞回收会**推进 WAL 回收水位**（数据确实没有补齐，只是被裁定放弃）；该缺失对下游**可见**（`ingest_position_gaps`）。放弃**不可撤销**——凭据只增不删；如需恢复数据，只能重新导入，且受 ADR-100 的代次归属闸约束（不得归到当前代次）。
 - **可转红防护**：`internal/worker/logs/ledger/abandon_test.go`（`TestAbandonGapsThroughRequiresOperator`：去掉操作人空值检查即红；`TestAbandonGapsThroughRecordsStructuredEvidence`：去掉 `Entry.Abandonments` 写入即红；`TestAutoResolveNeverMarksPermanentlyLost`：自动路径守卫）、`internal/worker/logs/query/grpcsvc/service_test.go`（"已放弃位置"标记必须单独回填在 `ingest_position_gaps` 上，**不得污染 coverage 语义**）。
-- **实现**：提交 `afeb5359`（空洞放弃协议批 1：结构化凭据、操作人闸与自动路径守卫）、`792ea9ea`（空洞放弃放行 = ADR-B 批 2）、`22112465`（查询面位置缺失标记：独立 proto 字段，与 coverage 语义分开）。
+- **实现**：分三批落地：① 空洞放弃协议批 1（结构化凭据、操作人闸与自动路径守卫）；② 空洞放弃放行（ADR-B 批 2）；③ 查询面位置缺失标记（独立 proto 字段，与 coverage 语义分开）。
 - **实现注记（2026-10-06，收尾死结出口）**：CP `ingest/resolve-gaps` 本就强制解析操作人并经
   `x-jm-operator` 下传（元数据经隧道还原为 Worker 侧 incoming）；本次把 **Worker 侧 `resolveOneSourceGaps`
   的 `!complete` 分支**接上同一出口：操作人（`x-jm-operator`）＋显式理由（`x-jm-reason`）齐备 ⇒

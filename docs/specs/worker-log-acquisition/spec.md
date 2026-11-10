@@ -55,7 +55,7 @@
   的实际调用段、`backfillArchiveUnderOwner/commitBackfill`
 - 保留：`acquire/content_identity.go`（inode 复用防护与 tailer 活文件身份仍需要，且必须与历史数据
   用同一个 512 字节窗口才能逐字匹配）、`ImportArchivesNow` 空实现、`RunArchiveScan` 壳
-- 落地提交：`6ff9ca49`
+- 落地（提交见 git log）
 
 #### 不变的部分（明确保留）
 
@@ -98,7 +98,7 @@ Worker 组合根内部 `Options.DeferredDelivery=true`，独立 Manager 默认 `
 - `Entry.ConfirmedFingerprint` 绑定 `SegmentPath/SegmentStartPos/SegmentIdentityBytes/SegmentIdentitySHA256/LogicalPos/PhysicalOffset/WindowBytes/SHA256`；登记经 `SetConfirmedFingerprint` 核对现存分段映射与身份，相同证据幂等，旧平面摘要不会自动升级成绑定证据。文件替换时先 PrepareRotation 并校验旧凭据，再刷新确认线，不能先采样新文件再给旧段贴指纹；新增真实反例已红转绿。
 - `RequestDoneRanges/DeliveryEvidence/FoldSpansUnknown` 字段已落地；本批最终证据契约要求真实请求完成 ACK 独立且最高，诊断按 State 精确归并并保留跨 State 重叠，UNKNOWN 优先旧 NOT_SENT，不能吞掉后续未知结果，也不从 Delivery/Reclaim 反造 ACK；混合态、相邻折叠、粗化失精度与 JSON 三启定向回归已过，完整长跑/SQLite 消费及最终门禁仍待。旧已裁且无证据的区间诚实为 no_evidence/UNKNOWN。任何折叠精度缺失（旧缺字段或超精确子区间上限后粗化）标记 `FoldSpansUnknown` 并让人工永久放弃整批拒绝，不能把凸包内健康字节标成丢失；旧粗化状态三启不能洗白为精确。
 - 已冻结 `acquire.ReadLimits{MaxLineBytes, MaxBytesPerPoll}` 与 `pipeline.Options.ReadLimits`：零字段沿 `DefaultReadLimits()`，默认物理行 256KiB、每轮 4MiB，包含换行且独立于 WAL 限额；归并后每轮额度至少比单行上限多 1 字节。超长行以 `ReadLimitError`/`READ_LINE_TOO_LONG` 留可见责任，停在原行首，放宽配置后续读而非拆成普通事件；acquire/pipeline 同内容末轮正式定向、完整包 test/race/vet 均退出码 0。此采集/管道绿不代替 Manager 持久完成门、交办/Incomplete 零外发与整 Worker 联合验收。
-- ~~归档三态接口冻结为 `ArchiveCovered/ArchiveTail/ArchiveUnknown`；发现层使用 `Pipeline.AssessArchive`，未知对象保留原物与旧身份并稳定隔离，不能仅用 `!Import` 把未知当“已覆盖”。~~ **2026-10-30 删**：归档采集整体删除（`6ff9ca49`），`AssessArchive`/`ImportArchive`/三态接口已下线。
+- ~~归档三态接口冻结为 `ArchiveCovered/ArchiveTail/ArchiveUnknown`；发现层使用 `Pipeline.AssessArchive`，未知对象保留原物与旧身份并稳定隔离，不能仅用 `!Import` 把未知当“已覆盖”。~~ **2026-10-30 删**：归档采集整体删除，`AssessArchive`/`ImportArchive`/三态接口已下线。
 - `Options.MaterializationLimits` 的 rebuild 内部默认为每稳定内容窗口 4 次、同源/UTC 日滚动 1h 内 8 次；本批另已批准 live_compaction 每窗口/小时各 4 次，所有 Class 共享默认 1GiB 小时 wire 硬顶，并在生产显式为必要压缩保留其中 1/4。类别/保留尚在实施复验，准确兼容与安全初始策略见 [索引规格 §2.8](../log-index-sqlite/spec.md#28-物化类别与必要压缩保留已批准实施复验中)。这不是采样/丢弃预算、全 Worker 磁盘/RSS 上限或性能最优值；端到端守门、正常尾采与重启重新资格证据仍待完成。
 - `archiveCleanedRecovery` 每轮最多 `min(16, MaxRows, CycleMaxRows)` 条，超时/仓储失败保留活动责任；`RecoveryArchiveRecord` 携完整 Key/Ref/Fingerprint，回执含 Key/SegmentID/Fingerprint/非空 ArchiveID，`AcquireRecoveryUse` 的幂等释放跟踪实际消费者。实际 SQLite 归档调度及 hold 竞态复验尚未完成。
 - 投递源码已消费 Catalog `AcquireWritePermit/ReleaseWritePermit`，许可目标用于选择固定 owner/目录客户端；完整写入→校验→发布的所有入口覆盖及冻结日零外写仍须联合证明。

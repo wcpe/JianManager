@@ -4,7 +4,7 @@
 - **关联**: ADR-081（仅反向隧道与节点认证，取代 ADR-066 的双模式决定）、ADR-039（节点 UUID 身份）、ADR-061（WS 令牌密钥）、ADR-050（重连 resync）、FR-278（内嵌 Worker 版本一致）
 - **用户拍板**: 仅允许 Worker 主动建立的反向隧道；删除所有 CP→Worker 直拨路径。
 - **里程碑**: M1 反向指令隧道（✅）→ M2 终端中转（✅）→ 仅隧道与节点身份收紧（开发中）
-- **落地 commit**: M1 `80b9712`（CP 隧道注册+池两级）/ `9e98a89`（Worker 隧道 Runner）/ `29c6867`（隧道状态观测）；M2 `e98e882`（TerminalSession 回环桥）/ `23c329c`（CP 代理 gRPC 优先桥）
+- **落地**: M1 分三步（CP 隧道注册+池两级 / Worker 隧道 Runner / 隧道状态观测）；M2 分两步（TerminalSession 回环桥 / CP 代理 gRPC 优先桥）。提交见 git log
 
 ## 1. 目标与非目标
 

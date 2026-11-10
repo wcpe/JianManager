@@ -48,7 +48,7 @@
   在重启后同样归零**——它们随索引一起消失，不是被裁剪。
 - 「崩溃不丢索引」这条原承诺**不再成立**：进程崩溃与正常重启等价，索引一起消失。
 
-#### 一个真机坑（`f5b882f0` 修的，必须留档）
+#### 一个真机坑（后续修复，必须留档）
 
 赋值型 PRAGMA（`PRAGMA foreign_keys=ON`、`PRAGMA cache_size=-65536`）**不返回结果集**，
 必须用 `ExecContext` 执行。原实现复用了面向查询型 PRAGMA 的 `execPragma`
@@ -84,7 +84,7 @@ stateindex: 设置 PRAGMA foreign_keys=ON 失败: sql: no rows in result set
 - 接线：`internal/worker/logs/ingest/index_store.go`（`Manager.openIndex`）与 `ingest/runtime.go`（`New` 及测试路径的按需打开）
 - 回归：`internal/worker/logs/ingest/stateindex/open_in_memory_test.go`
 - 采集游标（跨重启唯一幸存者）：`internal/worker/logs/ingest/cursor_registry.go`、`cursor_registry_flush.go`
-- 落地提交：`7456d716`（P1 切断全部落盘）＋ `f5b882f0`（PRAGMA 修复 + 采集游标持久化）
+- 落地：分两批——P1 切断全部落盘；随后 PRAGMA 修复 + 采集游标持久化
 - **已知遗留口径（未改代码，如实登记）**：离线只读入口 `ExportIndexJSON` 与 `log-event-status`
   仍按磁盘路径 `var/log/ingest.index.db` 打开索引库 ⇒ 内存架构下必然「库不存在」。
   它不再是回滚/排障的可用面，去留待后续决定。
@@ -383,7 +383,7 @@ p50 ≈ 12.5 ms / p95 ≈ 40.6 ms；1024 行时 p95 已达 47 ms（独立探针�
    **实测（真进程夹具：60 源 × 60 行/s × 180 s，同一 harness/同一机器；三个分钟窗口）**：
    （原始产物落在 `.tmp/`，该目录**不入库**（`.gitignore`）⇒ 外部读者不可复算；此处只保留夹具参数与判据口径。）
 
-   | 指标 | before（快照二进制 `f8c1e254`） | 仅切分（1024 行/单元） | **切分 512 + 归并外移**（定稿） |
+   | 指标 | before（快照二进制） | 仅切分（1024 行/单元） | **切分 512 + 归并外移**（定稿） |
    |---|---|---|---|
    | 单提交单元 p50 | 32 / 36 / 40 ms | 13 / 14 / 14 ms | **13 / 14 / 14 ms** |
    | 单提交单元 p95 | 205 / 223 / 213 ms | 58 / 63 / 64 ms | **28 / 30 / 31 ms** ✅ |
