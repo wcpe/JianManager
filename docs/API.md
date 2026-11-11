@@ -3117,9 +3117,10 @@
 
 ## 日志中心（FR-049 / FR-403）
 
-> 实例运行日志（stdout/stderr）与 Worker 日志经受管 VictoriaLogs 联邦检索（`/logs/federation`，见下文 Worker 日志平台节）；
-> 平台（CP 自身）日志落自轮转文件，面板只读尾部（`GET /api/v1/diagnostics/log`）。
-> **CP `logs` 表已废弃（2026-10-29）**：`GET /api/v1/logs`、`/logs/export`、`/logs/legacy`、`/logs/cutover` 全部下线（一律 404）。
+> **按日志来源分流**：只有实例日志进入 Worker 受管 VictoriaLogs，经 `/logs/federation` 提供检索、分析、导出和实例原生尾流；节点 Worker 与平台 CP 自身日志使用各自的普通轮转文件。
+> 平台文件窗口走 `GET /api/v1/diagnostics/log`，节点文件窗口走 `GET /api/v1/nodes/:id/diagnostics/log`，两者均不接入 VL。
+> `/logs` 页面把三类来源放在同一工作台中，但文件模式只筛选已加载的有限窗口，不提供全历史检索、精确总量、游标分页或联邦导出。
+> **CP `logs` 表已废弃（2026-10-29）**：`GET /api/v1/logs`、`/logs/export`、`/logs/legacy`、`/logs/cutover` 全部下线（一律 404）。这里的下线指 API，不是前端 `/logs` 页面。
 
 ### ~~GET /api/v1/logs~~（已下线 2026-10-29）
 
@@ -3167,16 +3168,16 @@
 
 ---
 
-## 进程日志诊断（2026-10-29，非日志检索）
+## 进程日志文件窗口（CP / Worker）
 
-> **不是日志中心。** 这两个端点只回答「某个进程最近发生了什么」：不做关键字检索、时间窗、分页、多目标聚合。
-> 需要按条件检索请用日志中心的联邦查询；这里只用于排障时看几百行。
-> 存在理由：CP / Worker 的进程日志此前只写 stdout/stderr（systemd journald 或外部重定向），CP 读不到 Worker 的 journald，节点出问题时只能 SSH。
+> 两个端点只读取对应进程最近的文件尾部，不接受服务端关键字、级别、时间窗、分页或多目标聚合参数。它们同时供日志中心的文本模式与诊断入口使用。
+> 日志中心可在**已加载窗口内**筛选关键字和级别、原生拖选复制、手动刷新；开启跟随后每 3 秒重取窗口，回看或存在文本选区时暂停替换正文。它是文件快照刷新，不是 VL 原生流，也不是完整历史检索。
+> 窗口可选 50 / 100 / 200 行；CP 与 Worker 共用 `taillog`，硬上限为 **200 行 / 64 KiB**，字节限制可能使实际行数更少。
 
 ### GET /api/v1/diagnostics/log
 - **描述**: 读 CP **自身**进程日志文件的尾部（`<data>/var/log/control-plane.log`）
 - **权限**: 平台管理员（路由 `system.update` + handler 内再判）
-- **Query**: `lines`（目标行数，默认 200；页面上可选 100/200/500）
+- **Query**: `lines`（目标行数，默认 200；日志工作台可选 50/100/200）。不传、非正数使用默认；超过 200 夹紧为 200，不能放宽 64 KiB 读取上限。
 - **响应**:
 ```json
 {
@@ -3192,20 +3193,21 @@
   - `fileBytes`：文件总大小，让运维知道「还有多少没看到」。
   - `path`：实际读取的文件路径，供 UI 展示可复制的 `tail -n N <path>` 命令。
   - `note`：读取失败/文件尚未创建时的说明；非空时 `content` 通常为空。
-- **与日志中心的关系**: 严格分开。平台日志**不进** VictoriaLogs，不参与联邦查询、不参与检索/聚合/导出——文件是唯一来源。
+- **与实例检索的边界**: 文件是平台与节点进程日志的来源；界面展示已加载行数、文件大小、更新时间、截断与读取说明，不把这些读数称为日志总量。窗口筛选无命中只说明此窗口未命中。文件未创建以 `note` 说明，读取失败显式报错；不回退 CP `logs` 表或 VL。
+- **错误**: 403 `FORBIDDEN`（非平台管理员）；503 `LOG_FILE_DISABLED`（文件日志未初始化）；500 `LOG_READ_FAILED`（读取失败）。文件尚未创建返回 200、空 `content` 和明确的 `note`，不能当作已证明全历史为空。
 
 ### GET /api/v1/nodes/:id/diagnostics/log
 - **描述**: 读**节点 Worker** 进程日志文件的尾部，经反向隧道调 Worker 的 `PullSelfLog` RPC 拉取
-- **权限**: `node.manage`（路由）+ 目标节点存在性校验
-- **Query**: 同 CP 版（`lines`，默认 200）
+- **权限**: `node.manage`（路由）+ handler 内**仅平台管理员** + 目标节点存在性校验；组内实例权限不等于读取 Worker 进程日志的权限。
+- **Query**: 同 CP 版（`lines`，默认及硬上限 200，字节硬上限 64 KiB）
 - **响应**: 同 CP 版（`content` / `truncated` / `fileBytes` / `path` / `note`）；`path` 是**该节点本机**的路径，命令需在该节点上执行
-- **失败语义**: 节点离线 / 隧道未建立 / Worker 过旧无此 RPC ⇒ 明确错误，**不得返回空 content 冒充「没有日志」**
+- **失败语义**: 节点离线 / 隧道未建立 ⇒ 503 `WORKER_OFFLINE`；旧 Worker 无此 RPC ⇒ 501 `RPC_UNIMPLEMENTED`；RPC 失败 ⇒ 502 `WORKER_RPC_FAILED`；空 RPC 响应 ⇒ 502 `EMPTY_RESPONSE`。Worker 读取说明放在 `note`，不得用无说明的空 `content` 冒充「没有日志」。
 
 ---
 
 ## Worker 日志平台（FR-473～484，2026-10-22 回归修复中）
 
-> **接线与验收边界（FR-483 对账）**：Shared Contracts 基线已冻结，既有 CP/Worker 联邦、采集、持久 Catalog、受管 VL、RangeClient、归档与管理面已装配，cutover 默认关闭；能力禁用/未就绪须结构化失败，不能空成功。当前页导出和顶层覆盖字段已按实际代码及定向 HTTP→CP→Adapter→Service 回归对账，见下文及 [协调器规格](specs/cp-log-query-coordinator/spec.md)。历史验收见 [受控记录](specs/worker-log-platform-contract/acceptance-record.md)。本节标题日期保留修复批次定位；当前本轮代码修复及已覆盖回归、指定真实 VL/浏览器原 scope 已收口，250ms 首屏、长稳与追加故障覆盖等专项延期且未计通过，范围统一见 [收口声明及验收表](specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)，不外推全部分支或新增生产验收。
+> **当前接线与验收边界**：实例日志使用单个受管 VL 与 CP 联邦查询，节点/平台进程日志使用上文的文件窗口。`logs` 表、legacy 与 cutover 已下线；旧归档/冷热分层不代表当前运行架构。以下只读检索、聚合、导出与原生流契约以实现为准；能力禁用、旧 Worker 或数据面未就绪须显式失败，不能空成功。既有验收记录保留在 [共享规格](specs/worker-log-platform-contract/spec.md)；新工作台、高级查询与浏览器流式的联合验收独立记录，不能用旧回归或组件测试外推为部署、生产或持续性能通过。
 
 ### Worker Log RPC 摘要（gRPC，`proto/worker.proto`）
 
@@ -3215,12 +3217,13 @@
 |---|---|---|---|
 | `GetLogCapabilities` | `GetLogCapabilitiesRequest` → `GetLogCapabilitiesResponse` | 协议版本（`fr433/v1`）、能力位、max_limit、取消语义 | Worker 主进程已委托 `grpcsvc`；RangeClient 未接时 `supported=false` / `LOG_UNSUPPORTED` |
 | `LogSearch` | `LogSearchRequest` → `LogSearchResponse` | Query View 内事件检索；coverage/quality/next_cursor/exhausted | 配置健康 localhost VL 后走 `query/vlrange`，否则 `LOG_UNSUPPORTED` |
-| `LogStats` | `LogStatsRequest` → `LogStatsResponse` | 可合并聚合；`time_bucket` + `group_by` | 同上 |
+| `LogStats` | `LogStatsRequest` → `LogStatsResponse` | `time_bucket` / `group_by` / `metric_field`；count、sum、min、max、avg | 指标字段经 CP→RPC→Worker→VL 传递；未知/不支持不伪造数值 |
 | `LogFields` | `LogFieldsRequest` → `LogFieldsResponse` | 可查询字段 + coverage | 同上 |
 | `LogFacets` | `LogFacetsRequest` → `LogFacetsResponse` | 受控维度 Facets；高基数 `truncated` | 同上 |
-| `LogTail` | `LogTailRequest` → stream `LogEvent` | FOLLOW_LIVE / VIEW_BOUNDED | `VIEW_BOUNDED` 复用固定 view；支持动态读的 RangeClient 可执行有界 `FOLLOW_LIVE`（默认 1 秒、最多 30 秒），不支持者明确 unsupported |
-| `LogRehydrate` | `LogRehydrateRequest` → `LogTaskResponse` | Deep Archive 回灌（FR-478） | Worker Registry/Rehydrate 已接线；CP 节点归档管理面可触发 |
-| `LogArchiveStatus` | `LogArchiveStatusRequest` → `LogArchiveStatusResponse` | 归档对象 available/missing + coverage | Worker 真实 manifest/provider 查询；CP 节点归档管理面可查询 |
+| `LogTail` | `LogTailRequest` → stream `LogEvent` | 兼容的单次尾取；FOLLOW_LIVE / VIEW_BOUNDED | 保留旧有界批次语义，不能当作持续原生订阅 |
+| `LogTailLive` | `LogTailRequest` → stream `LogEvent` | 实例原生持续订阅，mode 为 FOLLOW_LIVE | Worker→VL `/select/logsql/tail` 逐条转发；旧 Worker Unimplemented 明确回报 unsupported |
+| `LogRehydrate` | `LogRehydrateRequest` → `LogTaskResponse` | 兼容协议保留 | 当前单 VL 装配无归档回灌，不能据协议存在推定能力可用 |
+| `LogArchiveStatus` | `LogArchiveStatusRequest` → `LogArchiveStatusResponse` | 兼容协议保留 | 当前无归档后端，能力不可用时显式错误 |
 
 公共请求基座 `LogQueryRequestBase`：`request_id` / `protocol_version` / `time_range`（UTC 闭开）/ `authorized_targets`（CP 计算；`online_only` 仅显式选择）/ `budget`（limit/max_bytes/timeout_ms/max_fanout）/ `view`（view_id/cursor/order_version）/ `filter` / `permission_scope` / `cancellation_token`。Search/Stats 响应携带 `LogCoverage` 与 `LogQuality`；Fields/Facets 当前 proto 只有 coverage、字段/维度值及现有截断证据，没有 `LogQuality`，不得虚构 Worker quality。CP Facets 的统计质量可依据覆盖/截断保守派生，Fields 无独立 quality 字段。
 
@@ -3252,20 +3255,23 @@
 
 - **`GET /api/v1/logs/federation`** — 前端门面（FR-482）：内部调用 Search，返回 `{ok,sourceTag,items,coverage,quality,view,notes,…}`；coverage/quality 为 FR-473 snake_case
 - **`GET /api/v1/logs/federation/search|stats|facets`** / **`POST /api/v1/logs/federation/export`** — FR-480 精确端点；导出 incomplete 时不返回 NDJSON 附件
-- **状态**: 既有 Assemble/门面路由保留；本批真实 Worker view、覆盖和当前页导出已通过定向 HTTP 跨层回归，真实 VL/浏览器与持续性能仍待联合验收。LogsPage 探测门面，404 可降级 legacy `/logs`，不得将其它错误伪装为完整零结果。
+- **状态**: LogsPage 通过 CP 查询实例数据；404、能力未启用或混版不支持均按真实错误/降级状态呈现。旧 `/logs` API 已下线，不能回退到已删除的数据库检索路径；节点/平台模式直接使用文件窗口。
 
 > 服务层真源：`internal/controlplane/logcoord` + `internal/worker/logs/query`。联邦侧经过 Worker-local View、Catalog、coverage 和权限校验；能力不可用时仍返回结构化 not-ready，禁止空成功。**CP 为浏览器唯一入口**；覆盖语义继承 FR-473。
 
 - **`GET /api/v1/logs/federation`** — 跨 Worker 联邦检索（FR-480）
   - **关联 FR**: FR-479, FR-480, FR-482
   - **权限**: 认证用户；资源收敛到授权实例；平台/全量视图仅平台管理员
-  - **Query**: `from`/`to`、`keyword`/`filter`、`level`、`source`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`viewId`、`limit`、`cursor`、`orderVersion`；续页使用原 view 和入页 cursor，固定时间/筛选/授权 scope 不能悄悄改变。
-  - **筛选语义**: `level` 与 `source` 在 CP 侧组合进单一 `filter` 表达式（wire 契约只有该字段），取值走白名单防注入。`source` 取 `instance`/`worker`/`control_plane`，按事件 `log_source_id` 前缀（`inst:`/`node:`）推导——事件结构不含类别字段，前端来源下拉与其不同构，故两侧用同一套前缀约定对齐。`control_plane` 类日志只落 CP 库、不进联邦数据面，该值会诚实返回零结果而非放行全量。
-  - **响应**: `{ view, coverage, quality, items[], next_cursor, exhausted }`；门面另含 `ok/sourceTag/notes`，不把前端内部 camelCase 名称当作原始 HTTP 字段。
+  - **Query**: `from`/`to`（RFC3339/Nano、UTC 闭开区间 `[from,to)`）、`keyword` 或 `advanced=true&logsQL=…`、`level`、`source`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`viewId`、`limit`、`cursor`；续页使用原 view 和复合 cursor，不能以 offset 或毫秒锚点替代。
+  - **筛选语义**: `keyword` 承载兼容的 LogsQL 过滤条件，不是数据库 LIKE；`level` 和来源前缀作为附加过滤相交。新工作台的 VL 路径使用 `source=instance`。兼容 `source=worker` 只过滤 VL 中已有的 `node:` 行，不读取 Worker 日志文件；`source=control_plane` 不会改为文件读取。节点/平台界面分别走文件端点，不把联邦空结果当作进程日志为空。高级模式的范围与限制见下节。
+  - **响应**: `{ view, coverage, quality, items[], next_cursor, exhausted, budget_cut, query_meta? }`；门面另含 `ok/sourceTag/notes`，不把前端内部 camelCase 名称当作原始 HTTP 字段。事件可含 `fields` 结构化字段；旧 Worker 未提供时保持缺省。
   - **状态**: 既有 logcoord + HTTP + Assemble 保留；本批定向跨层回归通过，真实多进程/浏览器联合验收未完成。Fast 首屏以实际 Worker Search 的 view/vector 原子绑定，缓存保留同一引用；任一 Worker 未证明安全页边界时无新 cursor、`exhausted=false`，可见 `PAGE_RETRY_REQUIRED` 供同页重试。
 
 - **`GET /api/v1/logs/federation/stats`** / **`GET /api/v1/logs/federation/facets`**
   - 继承 Search 的 scope/view 与 FR-473/480 语义；Stats 返回独立 coverage/quality，Facets 保留顶层 coverage、`truncated` 与逐维度截断信息，任一来源 partial/截断时 CP `quality.stats_quality=partial`，不能把空桶报为精确 0。
+  - **Stats 参数**：`timeBucket`（如 `1m`、`5m`、`1h`）、`groupBy`（逗号分隔字段）、`metricField`（数值字段）。不传指标字段时统计 count；指定后返回可合并的 count/sum/min/max/avg，`avg` 按全局 sum/count 计算，不做平均值的平均。响应 `points[]` 包含维度、时间桶及 `agg`；缺失/不支持的数值聚合不能显示为 0。
+  - **Facets 参数**：必填 `dimensions`（复数，逗号分隔字段），`dimensionLimit`（每维取值上限，最大 1000）。字段值探索复用 `dimensions=<field>&dimensionLimit=20`；截断、未验证、unsupported 和失败分别展示，值包含/排除动作生成转义后的精确过滤表达式。
+  - **界面分析**：时间图使用当前固定 Query View 的**整个有效时间窗** Stats time bucket，不用当前页的事件时间戳推测全量趋势。按需字段面板复用同一 view 与已应用条件，可查看常见值、选择数值字段、分组和时间桶；数值表最多显示 100 行，显示上限不代表服务端扫描已完整。
   - HTTP 聚合结果可能使用 4s 同参缓存；它不构成点击下载时的新鲜授权/质量证明，当前页导出不借用该缓存。
   - Facets 的维度聚合走 VictoriaLogs 官方 `/select/logsql/field_values`（**不是** `/select/logsql/facets`——后者的语义是「自动发现低基数字段」，会忽略 `field=`，与「按指定维度查」的契约不匹配）。
 
@@ -3298,21 +3304,73 @@
   - **物化预算**：CP `log_export.max_rows/max_bytes` 默认 10000 行/64MiB，请求只能收紧；page limit 仍受固定 view 与配置共同约束，不能以当前页名义绕过预算。
   - **验收边界**：本批已通过定向 HTTP→CP→Adapter→Service 回归和跨 Worker Reader 字节/并发追加验证；不含真实网络、真实 VL 或浏览器下载验收。
 
-- **`GET /api/v1/logs/federation/tail`** — 实时跟随（FR-482）
+- **`GET /api/v1/logs/federation/tail`** — 兼容的单次尾部查询
   - **关联 FR**: FR-479, FR-480, FR-482
-  - **权限**: 认证用户；与 Search 同一套资源收敛（授权实例、平台/全量视图仅平台管理员）
-  - **Query**: 继承 Search 的筛选参数，另加 `mode`
-    - `mode=FOLLOW_LIVE`（默认）— 有界动态窗口，随水位前移返回新事件；LogsPage「实时跟随」即用此档
-    - `mode=VIEW_BOUNDED` — 在既有 view 边界内取尾（不随水位扩展）
-  - **响应**: 同 Search `{ view, coverage, quality, items[], next_cursor, exhausted }`；`coverage.enumeration_state=OPEN` 表示窗口仍在推进
-  - **状态**: 已注册并有路由层测试（`log_federation_test.go` 覆盖 `mode=FOLLOW_LIVE`）；前端 `LOGS_FEDERATION_TAIL_PATH` 按 `follow` 态轮询
+  - **权限**: 与 Search 同一套认证及资源收敛。
+  - **Query**: 继承 Search 的筛选参数，另加 `mode`：`FOLLOW_LIVE`（默认）执行一轮动态尾取；`VIEW_BOUNDED` 在既有 view 边界内取尾。
+  - **响应**: JSON `{ view, coverage, quality, items[], next_cursor, exhausted, query_meta? }`，不是持续 SSE。`coverage.enumeration_state=OPEN` 也不证明完整或无漏。
+  - **兼容**: 原端点与 `LogTail` 保留；不支持新原生流的 Worker 可显式回退到该轮询路径，界面必须显示回退状态。
 
-- **`GET /api/v1/logs/federation/fields`** — 可用字段发现（FR-479）
-  - **关联 FR**: FR-479, FR-480
-  - **权限**: 同 Search
-  - **Query**: 继承 Search 的筛选参数（`from`/`to`、`keyword`、`level`、`nodeId`/`instanceId` 等）
-  - **响应**: `{ view, coverage, fields: string[] }`
-  - **状态**: 已注册并有路由层测试；用于在授权范围内列出可检索字段，能力不可用时同样返回结构化 not-ready（不空成功）
+- **`GET /api/v1/logs/federation/fields`** — 可用字段发现（FR-479/557）
+  - **权限**: 同 Search。
+  - **Query**: 继承 Search 的固定时间、目标、已应用筛选与 `viewId`，包括高级 `advanced/logsQL`。
+  - **响应**: `{ view, coverage, fields: string[] }`；没有独立 quality 字段，不据字段存在推定数值统计受支持。
+  - **状态**: 在授权范围内发现字段；能力不可用时明确 not-ready/unsupported，失败不得显示成“没有字段”。文档字段与 stream 标签不同，后者由 stream-field 端点提供。
+
+### 实例高级过滤查询（FR-558，ADR-109）
+
+适用于门面、Search、兼容 Tail、Fields/Facets/Stats/Streams 和 Export 的同一查询基座，不另设绕开授权的“原始查询”端点。
+
+| 参数 | 语义 |
+|---|---|
+| `advanced=true` | 显式启用高级实例过滤；默认实例工作台与普通授权用户均可使用 |
+| `logsQL` | 必填非空过滤表达式（按 URL query 编码），`*` 表示当前授权与时间范围内的全部；与非空 `keyword` 互斥 |
+| `maxBytes` | 高级请求整请求字节预算，上限 33554432（32 MiB） |
+| `timeoutMs` | 高级请求超时上限 30000（30 秒），沿 HTTP context 与 Worker deadline 传播 |
+| `maxFanout` | 高级请求 Worker 扇出上限 64；不是每路各获一份完整预算 |
+| `limit` | 页面查询结果最多 1000 行；实际页大小可更小。安全游标允许 Worker 多读一条前瞻，不多交付一行 |
+
+- `maxBytes/timeoutMs/maxFanout` 省略使用上述上限，正整数只能收紧，超上限钳制；非法、零或负值返回 400 `INVALID_REQUEST`。整窗导出继续受 `log_export` 配置与本请求字节/时间预算约束，不误套 1000 行页面上限。
+- `logsQL` 与兼容 `keyword` 共用 **8192 UTF-8 字节**的过滤边界：检查引号、括号及半开区间，最大嵌套 64；拒绝未引用的管道、注释及非法控制字符。引号内正则的 `|` 可用；具体字段/函数语法交 VL 解析。`stats/union/stream_context` 等管道不开放，统计走分析接口。
+- 高级模式拒绝 `view=platform` 或显式 `source=worker/control_plane`。省略 source 时服务端仍加实例过滤；授权目标、Principal/PermissionScope、`[from,to)`、封窗和 Query View 独立强制。历史检索的授权 selector 在 VL `query`，用户表达式在独立 `extra_filters`，两者相交；表达式内的 OR、`_time` 或 `log_source_id` 不能扩大授权或时间窗。原生流的授权与表达式也独立，具体见下节。
+- 更换模式、已应用表达式或结构化条件会改变页面 scope identity；聚合、分页和导出复用该已应用身份。高级草稿按 Enter/查询应用，普通输入保持去抖；未应用草稿、请求中、失败或旧占位数据禁止导出。
+- 高级成功响应中，**门面/Search/兼容 Tail**增加可选 `query_meta`；普通响应可省略，聚合、导出和原生 SSE 不承诺该字段：
+
+```json
+{
+  "query_meta": {
+    "elapsed_ms": 12.5,
+    "returned_rows": 100,
+    "limit": 100,
+    "max_bytes": 33554432,
+    "timeout_ms": 30000,
+    "max_fanout": 64
+  }
+}
+```
+
+`elapsed_ms` 为本次处理耗时，`returned_rows` 为实际返回行数；其余是实际采用的预算上限，**不是实际扫描量**。新前端收到缺少高级确认字段的旧 CP 响应时显示 `LOG_ADVANCED_UNSUPPORTED`，不展示可能未经筛选的“高级结果”。400 保留服务端原因；429 沿已有退避，unsupported/超时/取消/预算截断保持独立状态，不转成成功 0 条。高级访问记录只留查询内容摘要与字节数，以及主体、scope、时间、预算、HTTP 状态、耗时与取消，不记表达式原文。
+
+### GET /api/v1/logs/federation/live（FR-559，ADR-110）
+
+- **描述**：实例日志原生持续订阅，链路为 VL `/select/logsql/tail` → Worker `LogTailLive` → CP → 浏览器。它不以周期性 Search/Tail 包装 SSE。
+- **认证**：与 Search 相同的 JWT、`log.read` 和授权实例收敛。浏览器使用 fetch + `Authorization: Bearer <accessToken>`，不把 JWT 放在 query；也不使用无法设置该 header 的裸 EventSource。CP 是浏览器唯一入口。
+- **Query**：复用 `instanceId/nodeId`、`onlineOnly`、`from`、`level`、`keyword` 或 `advanced=true&logsQL=…` 等过滤。source 只用于实例；不接收历史结束时间 `to` 或分页 `cursor`（400 `INVALID_REQUEST`）。浏览器订阅另起身份，不携历史 `viewId/cursor/to`；直接传入 viewId 时仍须通过 CP 身份校验，不会把历史 Worker read pin 传入持续订阅。
+- **权限**：连接内冻结授权实例集合；每 2 秒复核当前用户、角色/授权版本、`log.read` 和目标可访问性，变更即取消下游。新流或新 UTC 日可继续出现；不会自动把新获授权的实例加入旧连接。Worker 以独立 VL `extra_filters` 约束实例前缀与时间下界，并逐条复核返回源；用户 filter 单独解析，不能放宽范围。
+- **响应**：200 `text/event-stream; charset=utf-8`，`Cache-Control: no-cache, no-store`、`X-Accel-Buffering: no`。注释心跳不含业务事件；SSE 记录使用 `event: <type>` 和 `data: <JSON>`，类型如下：
+
+| type | JSON 字段与含义 |
+|---|---|
+| `ready` | `{type,viewId,partial?,replayWindowSeconds:10,message}`；仅说明订阅建立的范围/模式，不证明所有 Worker 支持、已有数据或历史完整 |
+| `event` | `{type,event:{…}}`；事件逐条转发，事件字段沿日志事件契约，含可选结构化 `fields` |
+| `heartbeat` | `{type:"heartbeat"}`；当前 CP 约每 2 秒发送，不能当作日志数据或覆盖证明 |
+| `error` | `{type,code,message}`；流已开始后的失败通过此帧表达并关闭连接，不能再按 HTTP JSON 成功读取 |
+
+- **有界性**：会话最长 **45 秒或 access token 到期（取较早者）**；单连接最多 **10000 行 / 8 MiB / 8 Worker**，请求 limit 可更小；事件队列 **64 条**，单事件 **64 KiB**，HTTP 写入 deadline 3 秒。CP 进程总连接最多 32、每用户最多 2，超并发返回 HTTP 429。慢消费者/预算超限停止订阅，不静默丢队列或无限缓存。
+- **续接**：VL 原生 `start_offset=10s` 只提供有限 **best effort** 回放；不是持久 cursor，可能重复，断线超过窗口可能缺行，不承诺 ExactlyOnce、全历史完整或跨 Worker 严格全局时间排序。历史检索/补查仍走固定 Query View，不拿 ready/heartbeat 冒充 coverage。
+- **错误动作**：`UNSUPPORTED` 可显式回退兼容轮询；`FORBIDDEN` 停止；`SLOW_CONSUMER/BUDGET_EXCEEDED` 停止并提示收窄条件；`SESSION_EXPIRED/STREAM_UNAVAILABLE` 可有界退避重连。连接前 HTTP 400/401/403/429 与流内错误分开；fetch、gRPC、VL HTTP body 共享取消链，切源/暂停/卸载应 Abort。
+- **浏览器消费函数**：`subscribeLiveLogs(params: Record<string, unknown>, options: { signal: AbortSignal; onFrame: (frame: LiveLogFrame) => void }): Promise<void>`。单次连接原语刷新将到期的 token，401 最多刷新重试一次；`parseLiveSSE` 按 UTF-8 跨块解码，多行 data 合并并限制未闭合帧，不把半帧当完整事件。回看/原生选区期间保护正文 DOM，恢复及重连由页面订阅层控制。
+- **验收边界**：原生流后端、RPC、解析器及隔离真实 VL 测试与 Chromium 页面联合验收分别记录；本节不宣称主页面联合验收、部署或长时间容量验收已完成。
 
 ### POST /api/v1/nodes/:id/log-runtime/migrate
 

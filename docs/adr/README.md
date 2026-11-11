@@ -16,6 +16,8 @@
 
 ## 索引（最近新增）
 
+- [ADR-110](110-native-instance-log-tail-stream.md) 实例 VL 原生尾流经反向隧道与认证 HTTP SSE 桥接（兼容新增 `LogTailLive`；有界队列、权限复核、取消与有限回放；节点/平台仍读文件）
+- [ADR-109](109-instance-logs-advanced-query-boundary.md) 实例高级查询使用 filter-only 表达式与独立授权 selector（两输入入口共用语法边界、整请求预算与 Query View，草稿和已应用 scope 分离）
 - [ADR-108](108-release-version-provenance-and-smoke.md) 发布版本溯源、Bot 内嵌与原生烟测（**原 ADR-074，2026-11-09 改号**——与 Bot 分布式压测调度的 ADR-074 重号，按「改引用面小的一方」处置；修订 ADR-036，部分被 ADR-083 取代）
 - [ADR-107](107-business-event-cursor-ledger.md) 业务事件位点账本——不落 payload 的可恢复投递（**精化 ADR-106 边界而非突破**：位点是传输元数据、payload 才是业务数据；新增 `business_event_cursors` 表与 `GET /business/cursor`，只存/只返位点，差集由业务台计算）
 - [ADR-106](106-business-capability-retirement.md) 业务能力退役（JM 不持有任何业务语义与业务数据表，只保留纯透传通道）

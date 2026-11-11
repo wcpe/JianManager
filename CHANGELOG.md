@@ -9,6 +9,9 @@
 > 本段为 `v0.24.0` 开发版归档区；正式发版时整理为新版本段。
 
 ### 新增
+- **实例日志检索分析与高级过滤（FR-557/558）**：接通 Fields、流标签名/值、全有效时间窗 Stats time bucket 与 `metricField`，详情保留结构化字段；按需字段探索支持常见值的包含/排除及 count/sum/min/max/avg 数值分组，保留 pending/partial/truncated/unsupported/失败提示。高级模式使用 `advanced=true&logsQL=…`，普通 `keyword` 与高级输入共用 8 KiB filter-only 边界，授权 selector、时间窗、Query View 和预算独立强制；32 MiB / 30 秒 / 64 Worker，页面结果最多 1000 行。草稿显式应用，与普通输入分离；门面/Search/兼容 Tail 的 `query_meta` 提供耗时、返回行数及实际采用预算，旧 CP 缺确认字段时不展示假高级结果。详见 [ADR-109](docs/adr/109-instance-logs-advanced-query-boundary.md)。
+- **实例 VL 原生实时订阅（FR-559）**：新增兼容 RPC `LogTailLive` 与 Bearer 认证 `GET /api/v1/logs/federation/live`，VL native tail 经 Worker/反向隧道/CP 逐条转发 SSE；浏览器 fetch 分块解码 UTF-8，JWT 不放 URL。会话最长 45 秒且受 token 到期限制，每 2 秒复核权限；单连接最多 8 Worker / 10000 行 / 8 MiB，队列 64 条、单事件 64 KiB，慢消费者和超预算显式停止。10 秒 best-effort 回放可能重复或缺行，不承诺持久续接或跨源全局有序；旧 Worker 可显式轮询回退。详见 [ADR-110](docs/adr/110-native-instance-log-tail-stream.md)。原生流后端、解析器及隔离真实 VL 测试与页面联合验收分开，本条不宣称主页面 Chromium 验收、部署或长稳已完成。
+- **节点/平台有界文本日志工作台**：只有实例接 VL；Worker 与 CP 自身日志继续使用普通轮转文件，在 `/logs` 中按来源分流。文件窗口提供 50/100/200 行选择（硬上限 200 行 / 64 KiB）、窗口内关键字/级别筛选、手动刷新、3 秒快照跟随、截断与文件状态；回看/原生选区时保护正文。无全历史检索、精确总量、历史分页、VL 字段分析或联邦导出，不把有限窗口的空匹配当作历史无数据。
 - **FR 编号与 ADR 编号对账：rebase 丢文档与两处重号（2026-11-09）**：文档核验发现两类编号事故，均已修复。
   **① rebase 丢 44 条 PRD 条目**：那次「同步 master 侧文档更新（PRD 状态滞后 115 条）」的提交用 master 版 PRD 整份覆盖分支版，把分支独有、master 无的条目一并删掉（788 增 / 464 删）。其中 **33 条**（FR-513～545，AI 助手 / 业务退役 / 配置分层 / 主体观测）分支与 master 无编号冲突，已原文补回；另 **11 条**属 Web 重构批，与 master 日志系列在 502～512 号段真重号，见 ②。
   **② Web 重构批改号 502～512 → 546～556**（消除与日志系列跨文件重号）：分支上 Web 批占 502～512，master 上同号是日志系列（四核心采集规则 / 配置基线 / 不落盘架构 / VL 投递 / HTTP 入口 / 采集模式对齐）。两边都不是孤立笔误：日志系列**已被代码引用**（`log_rule_derive.go`、`instance.go`、`launch.go`、`worker.pb.go` 等 20+ 处），Web 批仅存于 `unspecced-fr-records/spec.md` 与 PRD，已无代码引用后。按「改引用面小的一方」整体平移 +44 号。内部交叉引用同步（`FR-504 内容页布局原语` → `FR-548`、`FR-509 同批` → `FR-553`、`依赖 FR-502~506` → `FR-546~550`）。功能代码未动，仅改编号。
@@ -35,6 +38,7 @@
     见 `internal/controlplane/database/business_retirement_restart_cycle_test.go`。
 
 ### 修复
+- **日志工作台一屏布局与原生复制**：将 `/logs` 纳入 Workspace 固定视口高度链，日志区域内部滚动、分页 footer 常驻；洞察/筛选/覆盖和结果壳保留稳定槽位，减少筛选、加载、失败和跟随切换的位移。删除自定义多选、复制快捷键接管和按滚动卸载的虚拟行，当前页 100 行保留 DOM，浏览器可跨行原生拖选复制；来源显示具体名称或可辨识 ID。PageHeader 页面说明统一改为点击式 PageHelp，显式帮助内容优先，单行动作提示仍可使用 Tooltip。
 - **删除冷热分层旧架构残留（约 1.86 万行）**：`archive` / `retention` / `lifecycle` 三个包自单 VL 改造后已无执行对象，但代码与装配路径一直保留。本轮彻底移除。
   **删掉的**：`internal/worker/logs/archive`（6733 行，Deep Archive + Rehydrate + Provider/Registry）、`retention`（8332 行，Driver/Mover/Sweeper/ArchivePurge/VLDeleter）、`lifecycle`（1003 行，冷热迁移状态机）以及 `apps/worker/` 下 10 个装配文件。
   **为何这是真的死代码**：① `retention.NewDriver` 的生产调用第三个参数（Mover）恒为 `nil`，冷层搬运从未执行；② 真机 metrics `jm_log_retention_driver_enabled` 为 **0**；③ 真机 `worker.yml` 完全没有 `log_retention` 与 `log_archive` 配置段；④ 代码注释自己写着「单实例下 Hot ≡ Cold，这条链的净效果是把日分区抄到自己身上、再把自己删掉」。

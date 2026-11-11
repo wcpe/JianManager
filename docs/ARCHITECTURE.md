@@ -330,11 +330,11 @@ internal/worker/
 
 ##### 数据面边界
 
-- **CP 不存任何日志行**：`logs` 表已删（2026-10-29）。CP 只有授权与联邦查询两件事。
+- **CP 业务库不存日志行**：`logs` 表已删（2026-10-29）。实例行由 Worker 的单 VL 持有，CP 负责授权、联邦查询和流桥接；CP 自身进程日志另落本机轮转文件。
 - **Worker/VL 只监听 localhost**，CP→Worker 只走 ADR-081 反向隧道；浏览器**不得**直连 Worker/VL。
-- 查询面：Search/Stats/Fields/Facets/Tail/**Rehydrate**/Export 使用 FR-473 Query View、Catalog owner、
-  PublishedProjection 与 coverage。~~Runbook A/B/C 分别归属 FR-474/476/477~~ **2026-11-01 改**：
-  FR-474 已退役（编号不得复用，见 `docs/PRD.md` 规格导航段的退役索引），现存只余 FR-476/477。
+- **实例历史查询**：Search/Stats/Fields/Facets/Streams/兼容 Tail/Export 使用 Query View、Catalog owner、PublishedProjection 与 coverage/quality，原始用户过滤不能扩大授权目标与 `[from,to)`。
+- **实例持续订阅**：独立 `LogTailLive` → CP `/logs/federation/live` → fetch SSE，冻结授权实例集合，持续接纳其新流与新 UTC 日；不持有历史 Worker view/read pin，不用实时流证明历史完整性，见 [ADR-110](adr/110-native-instance-log-tail-stream.md)。
+- **节点/平台进程日志**：只读普通文件尾部（最多 200 行 / 64 KiB），日志中心复用文件窗口，不接 VL；窗口内筛选与快照刷新不能冒充全历史检索、精确总量或实例原生流。
 
 ##### 落地包与边界（2026-11-01 现状）
 
@@ -348,12 +348,12 @@ internal/worker/
 | VL 运行时 | `internal/worker/logs/vlsup` | FR-476 | 资产 v1.52.0、localhost、auth、supervisor + 15s 看护（见下一小节） |
 | Partition Catalog | `internal/worker/logs/catalog` | FR-477 | 纯逻辑 + **内存 journal**；permit/lease/pin 保留。~~lifecycle 迁移状态机~~ 已删除（2026-11-10） |
 | Deep Archive | ~~`internal/worker/logs/archive`~~ | ~~FR-478~~ | **已删除（2026-11-10）**：整包移除，无残留 |
-| Worker 查询 | `internal/worker/logs/query` + `grpcmap/grpcsvc` | FR-479 | 逐源固定 view + budget + read pin |
-| CP 联邦协调 | `internal/controlplane/logcoord` + 反向隧道适配 | FR-480 | 扇出 → 合并 → 游标分页 → 覆盖/质量聚合 → HTTP |
+| Worker 查询 | `internal/worker/logs/query` + `grpcmap/grpcsvc` | FR-479/557/559 | 历史查询逐源固定 view + budget + read pin；新增兼容 `LogTailLive` 逐条桥接 VL 原生尾流，结构化 fields 贯通 wire |
+| CP 联邦协调 | `internal/controlplane/logcoord` + 反向隧道适配 | FR-480/558/559 | 扇出、合并、复合游标、覆盖/质量；高级 filter-only 预算与认证 SSE 有独立约束 |
 | 入库切换 | ~~`log_cutover.go` + `log_legacy.go` + DualPath 门面~~ | ~~FR-481~~ | **已下线（2026-10-29）**，**FR-481 已退役（2026-11-01）**：随 CP `logs` 表删除，切换两侧不再存在。残留的 `model.LogCutoverState` 表与 `LogCutoverReadiness` RPC 只是**兼容壳**，无任何开关消费者 |
-| 进程日志诊断 | `apps/*/process_log.go` + `router/diagnostics_log.go` + Worker `PullSelfLog` | — | 自轮转落盘，面板只读尾部；不存储、不检索 |
-| 前端日志面板 | LogsPage、联邦 API/helper、运行时与停机历史 | FR-482 | 前端 DOM/mock/类型/lint/build/Chromium 通过；真后端 Chromium 已验证 1800 行 scope 的分页/三范围、半开窗、abort/失败；**非生产/性能完成** |
-| proto | `proto/worker.proto` Log* | FR-473 | 消息契约不变；兼容 RPC（如 `LogCutoverReadiness`）不再有产品语义 |
+| 进程日志文件窗口 | `apps/*/process_log.go` + `taillog` + 诊断 HTTP / Worker `PullSelfLog` | — | CP/Worker 各自轮转落盘；仅平台管理员读取最多 200 行 / 64 KiB，窗口内筛选，无 VL 查询 |
+| 前端日志工作台 | LogsPage、LogTimeline、TextLogWorkbench、LogFieldExplorer | FR-482/557/558/559 | 固定视口、原生选区、字段/数值分析、高级过滤和有界跟随；组件/自动化证据与真实浏览器、部署、性能验收分开 |
+| proto | `proto/worker.proto` Log* | FR-473/557/559 | 加性 `metric_field`、结构化 fields 与 `LogTailLive`；原 `LogTail` 及兼容壳保留 |
 
 ##### durable outbox r4 / r8d 私有轮尾
 
@@ -443,7 +443,7 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | 前端日志面板 | LogsPage、联邦 API/helper、运行时与停机历史 | FR-482 | 前端 DOM/mock/类型/lint/build/Chromium 与独立复核通过；后续 Go 同源正式资产的真后端 Chromium 已验证 1800 行 scope 的分页/三范围、半开窗、abort/失败及迁移 409 不假成功，非生产/性能完成 |
 | proto | `proto/worker.proto` Log* | FR-473 | 既有消息契约不变，本批不新增 Worker Export 或跨节点即时释放 RPC |
 
-**数据面边界**：CP 业务库**不再保存任何日志行**（`logs` 表已删，2026-10-29）。实例/Worker 日志只存在于 Worker 的受管 VictoriaLogs，平台日志只存在于本地自轮转文件；CP 对前者只做授权与联邦查询，对后者只读尾部。禁止把测试全绿当作真 Worker/VL/浏览器验收。
+**数据面边界**：CP 业务库不保存日志行（`logs` 表已删）。实例日志使用 Worker 单 VL；平台 CP 与节点 Worker 自身日志使用各自的普通轮转文件。CP 对实例只做授权、联邦查询与原生流转发，对进程文件只拉有界尾部；日志中心不把文件源转存 VL。历史 VL 中的静态 `node:` 源不作为当前 Worker 文件窗口的真源。禁止把组件测试全绿当作真实 Worker/VL/浏览器联合验收。
 
 **受管 VL 的运行期自愈（`internal/worker/logs/vlsup/guardian.go`）**：Supervisor 过去只在**启动路径**做一次孤儿回收，运行期没有探活——`reconcileExitedLocked` 只把账面改成 FAILED，不会拉起进程，于是 VL 因 OOM 或段损坏崩溃后采集与查询长期降级，直到人工重启 Worker。看护协程按 15s 周期判活（只读进程退出状态，不碰磁盘也不发 HTTP），仅重启「此前健康」的实例：本代进程须已稳定存活超过 30s 稳定窗口，启动即崩/秒退按启动失败处理、不进重启循环（那属于启动路径的存活窗口与资产校验，放进来会自激成「启动失败 → 看护重启 → 再失败」）。失败按 5s→10s→20s→40s→80s 指数退避、单次封顶 5min，连续 5 次即熔断并 ERROR 告警 + 状态暴露（`RestartAttempts`/`RestartsSuspended`/`LastRestartError`），只有「重启后稳定存活超过窗口」才清零计数——启动成功不清零，否则「启动即崩」的循环永远打不满上限。显式 Start/Stop 与看护重启共享一把操作锁并以 epoch 判先后：人工动过实例即放弃本轮自愈，人工 Start 一次则重新武装已熔断的实例。默认开启，`JIANMANAGER_DISABLE_LOG_VL_GUARDIAN=1` 关闭（与 `JIANMANAGER_DISABLE_JDK` 同口径，不为开关扩配置结构）。**判据只看进程存活、不把 HTTP `/health` 纳入重启条件**：健康语义与「进程活着」是两件事（契约 §5.3），把健康探测塞进重启判据会让「进程活着、正在重建索引」被误判成崩溃并杀掉——宁可晚一点恢复，也不放大故障。
 
@@ -537,7 +537,7 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
-- **Worker 日志平台 Log RPC（FR-473～484，消息已冻结；**生产装配仅部分落地，见下**）**：已实现的 11 个：`GetLogCapabilities`、`LogCreateView`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogStreams`、`LogStreamFieldNames`、`LogStreamFieldValues`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`、`LogMigratePartition`。
+- **Worker 日志 RPC**：历史查询包含 `GetLogCapabilities`、`LogCreateView`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogStreams`、`LogStreamFieldNames`、`LogStreamFieldValues` 和兼容 `LogTail`。新增 `LogTailLive(LogTailRequest) returns (stream LogEvent)` 专供 VL 原生持续尾流，保留旧 LogTail 的有界批次行为以兼容混版。`LogStatsRequest.metric_field` 与事件结构化 fields 加性传递，不新增 Worker Export RPC。runtime 管理与已退役的归档/迁移兼容声明不表示对应运行能力仍存在。
   **⚠ proto 已声明但 Worker 无实现（调用得 Unimplemented）的 4 个**：`LogCutoverReadiness`、`LogResolveIngestGaps`、`LogImportArchives`、`LogClearIdentityConflicts`——它们随对应能力下线（cutover 下线 / ArchiveImporter 删除）而失去运维对象，proto 声明作为历史保留。CP 侧零生产调用（仅测试替身）。**下文关于 `LogImportArchives` 形态与 HTTP 转发的描述属已下线能力的历史记录，不要当作现役功能。**
   受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。节点级 runtime 管理面的 HTTP 端点见 API.md「Worker 日志平台」。
 - 生命周期：Register, Heartbeat (双向 stream), FetchBotWorkerArchive
@@ -1335,6 +1335,16 @@ tmux 前缀键或键盘复制模式**。它与 `/super` 的鼠标画布、`/dire
 └──────────────────────────────────────────────────────┘
 ```
 
+#### 日志工作台 `/logs`
+
+Workspace 将 `/logs` 纳入固定视口路由，`PageShell fixed`、内容区的 `min-h-0` 与日志区内部滚动共同约束高度；分页/状态 footer 留在屏内。顶部洞察、筛选、覆盖状态和结果壳使用稳定槽位，加载、错误、刷新、跟随不因整块卸载挤动日志列表。来源名称优先展示实际实例/节点名，无法解析时保留可辨认的 ID。
+
+实例分页时 `LogTimeline` 保留当前页 100 行 DOM（进程文件窗口最多 200 行），取消整行按钮、自定义多选、虚拟卸载与 Ctrl/Cmd+A/C 接管，正文使用浏览器原生拖选和复制；详情箭头独立展开结构化 fields。实例流式缓冲、节点/平台文件窗口在回看或存在原生选区时保护当前正文，恢复跟随后再应用更新，不用不断重建 DOM 打断阅读。
+
+实例 VL 工作台提供全窗口时间桶、级别/来源概览、Fields 与流标签发现；`LogFieldExplorer` 在按需浮层中复用同一已应用 scope/view 查询常见值和数值分组（count/sum/min/max/avg），明确加载、unsupported、失败、pending、partial 与 truncated。高级输入使用 `advanced/logsQL` 草稿与已应用表达式分离，未应用或失败的旧数据不得导出。节点/平台使用 `TextLogWorkbench`，只显示和筛选最多 200 行 / 64 KiB 文件窗口，手动刷新或 3 秒跟随刷新，不伪造历史分页、精确总量或 VL 分析。
+
+页面说明统一由 `PageHeader` 的点击式 `PageHelp` 承载，显式 `help` 优先于 `description`；问号浮层可键盘操作且内部滚动。它供页面帮助使用，单行动作 Tooltip 仍可保留。上述页面能力的 DOM/单元测试、真实 VL 流测试与 Chromium 联合验收分别记证，不因文档同步宣称已部署或完成性能验收。
+
 #### 其他页面
 
 - **备份 `/backups`**: 按实例分组的备份列表，支持创建/恢复/删除
@@ -1478,26 +1488,49 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 
 | 通路 | 产生者 | 存哪 | 谁读 | 能做什么 | 不能做什么 |
 |---|---|---|---|---|---|
-| **实例/Worker 运行日志** | 游戏服进程 stdout/stderr、Worker 采集器 | Worker 本地**受管 VictoriaLogs（单 VL）**（ADR-094；~~HOT/COLD/Rehydrate 三命名空间~~ 2026-10-29 废，现 180d/100GiB） | CP 经反向隧道联邦查询；浏览器**不得**直连 Worker/VL | Search / Stats / Fields / Facets / Tail / Export | CP 业务库**不存任何日志行**（`logs` 表已删） |
-| **平台（CP 自身）进程日志** | CP 进程 slog（含 `middleware.ErrorLog` 的 API 失败响应） | CP 数据根自轮转文件 `<data>/var/log/control-plane.log`（`internal/platform/rollog`） | 面板只读尾部（`GET /diagnostics/log`） | 最近 N 行 + 关键字/级别可见性 + 可复制的 `tail`/`grep` 命令 | **不进** VL、不进联邦查询、无分页/总数/时间窗/导出 |
-| **Worker 进程日志** | Worker 进程 slog | Worker 数据根自轮转文件 `<data>/var/log/worker.log` | CP 经反向隧道 `PullSelfLog` RPC 拉尾部，面板入口在节点页 | 同平台日志 | 同上；也**不是**日志中心的 `node:` 目标（那是该节点上的实例日志） |
+| **实例日志** | 游戏服进程 stdout/stderr、实例日志文件 | Worker 本地**单个受管 VictoriaLogs**（ADR-094/102；180d/100GiB） | CP 经反向隧道查询；浏览器只连 CP | Search / Stats / Fields / Facets / Streams / Tail / Export / 原生 Live | CP 业务库不存日志行；实时流不证明历史完整或全局有序 |
+| **平台（CP 自身）进程日志** | CP slog（含 API 失败响应） | CP 数据根轮转文件 `<data>/var/log/control-plane.log` | 仅平台管理员，`GET /diagnostics/log` | 最多 200 行 / 64 KiB 窗口、窗口内关键字/级别筛选、刷新和原生复制 | 不进 VL；无服务端全历史检索、精确总量、分页、聚合、联邦导出 |
+| **节点（Worker 自身）进程日志** | Worker slog | Worker 数据根轮转文件 `<data>/var/log/worker.log` | 仅平台管理员，CP 经 `PullSelfLog` 拉取 `GET /nodes/:id/diagnostics/log` | 同平台文件窗口；选择具体节点后读取 | 同平台边界；节点离线、旧 RPC 和读取说明显式呈现，不空成功 |
 
 ### 关键语义（容易读错的地方）
 
-- **`node:<id>` ≠ Worker 进程日志**。联邦查询里它指“该节点上各实例的日志”。要看 Worker 自己的日志走节点页的『查看诊断日志』。
+- **目标范围与行来源不同**。`nodeId` / 授权目标 `node:<id>` 是查询资源约束；实际日志行来源由 `log_source_id` 表示。历史静态采集可能产生 `node:<id>/file`，不能据此把 Worker 文件窗口接回 VL；看 Worker 自身当前日志走文件端点。
 - **实例停机 ≠ Worker 停机**。MC 进程停了，Worker 仍在跑、VL 数据仍在，所以停机态照样能回放历史（`StoppedLogsView`）。
-- **平台日志跨重启连续**。rollog 用 `O_APPEND` 打开已有文件，运维 `tail -f` 不断档；并发删文件时由 1s 采样自愈重建 fd。
-- **诊断不是检索**。`/diagnostics/log` 系端点刻意没有关键字检索、时间窗、分页、多目标聚合——需要这些能力请走联邦查询。
+- **平台日志跨重启追加**。rollog 用 `O_APPEND` 打开已有文件，轮转与保留按文件策略执行；并发删文件时由 1s 采样自愈重建 fd，不构成永久历史保证。
+- **文件窗口内筛选 ≠ 全文件检索**。文件端点只接受 `lines`，前端按已加载快照筛选。显示“0 个匹配”不能推断历史无该内容，更早记录需在对应机器查看轮转文件。
 
 ### 前端三个视图与站点
 
-| 视图 | 数据源 | 分页 | 导出 |
+| 视图 | 数据源与边界 | 分页 | 导出 |
 |---|---|---|---|
-| 平台日志 | `/diagnostics/log`（文件尾部） | 无（文件上本就没有） | 禁用 |
-| 节点/实例日志 | `/logs/federation` | 游标 | 有（带覆盖/质量门禁） |
-| 全部日志 | `/logs/federation`（平台管理员） | 游标 | 同上 |
+| 平台日志（管理员） | `/diagnostics/log`，CP 文件窗口 | 无 | 禁用 |
+| 节点/实例日志（默认） | 实例 VL 工作台；普通用户仅授权实例 | 固定 view + 复合游标，每页 100 行 | 有，带新鲜授权/覆盖/质量门禁 |
+| 全部日志（管理员） | 按来源切换：实例→VL，节点→所选 Worker 文件，平台→CP 文件；不是三源混成统一统计 | 仅实例来源有 | 仅实例来源有 |
+
+文件窗口支持 50/100/200 行、级别与关键字筛选；跟随是 3 秒重取尾部，与实例原生 Live 分开。两者在回看或选区期间暂停应用正文更新。
 
 `legacy` 视图（CP `logs` 表的切换前存量）已于 2026-10-29 随表删除而下线，并从 `LOG_VIEWS` 取值域中移除；旧的 `?view=legacy` 深链现按非法值回退默认视图。
+
+### 高级过滤与实例原生流的独立边界
+
+高级 LogsQL 遵循 [ADR-109](adr/109-instance-logs-advanced-query-boundary.md)：`advanced=true&logsQL=…` 与 `keyword` 互斥，两入口同受 8192 UTF-8 字节、引号/分组/半开区间和 filter-only 限制。授权 selector、时间窗、Principal/PermissionScope 与 Query View 独立于用户表达式，OR/源字段/时间表达式只能缩小交集；不把括号检查当成授权。普通用户可在其授权实例使用高级模式，节点/平台文本窗口不提供该入口。
+
+高级整请求上限 32 MiB / 30 秒 / 64 Worker，页面结果最多 1000 行（工作台分页为 100）；`maxBytes/timeoutMs/maxFanout` 只能收紧。整窗导出保留配置闸门。门面/Search/兼容 Tail 可返回 `query_meta`（实际耗时、返回行数、采用的预算）；预算不是实际扫描量，旧 CP 无确认字段时高级前端拒绝假结果。草稿与已应用输入分离，未应用/失败/请求中/旧占位数据禁止导出，取消沿 AbortSignal→HTTP context→Worker→VL 传播。
+
+实例原生 Live 遵循 [ADR-110](adr/110-native-instance-log-tail-stream.md)：
+
+```text
+浏览器 fetch（Bearer header + AbortSignal）
+  ↔ CP GET /logs/federation/live（SSE ready / event / heartbeat / error）
+  ↔ ADR-081 反向隧道：Worker LogTailLive RPC
+  ↔ localhost VL /select/logsql/tail（用户 filter 与授权 extra_filters 独立）
+```
+
+- 会话最长 45 秒或 token 到期，每 2 秒复核权限；进程最多 32 连接、每用户 2、每连接最多 8 Worker。
+- 单连接最多 10000 行 / 8 MiB，事件队列 64 条、单事件 64 KiB、HTTP 写入 deadline 3 秒；慢消费者或预算超限终止，显式错误不伪装成完整尾流。
+- 连接内实例成员固定，新增流/UTC 日可跟随；历史 Worker view/cursor 不传给实时读取。`ready` 不证明全 Worker 支持或历史完整，实时数据不参与历史导出门禁。
+- 10 秒 best-effort 回放可能重复，断线超过窗口可能缺行，不承诺持久 cursor、ExactlyOnce 或跨 Worker 严格全局顺序。`UNSUPPORTED` 可显式轮询回退；撤权停止；会话到期/暂时不可用可有界退避重连。
+- `api/logLive.ts` 负责 Bearer 刷新、UTF-8 分块 SSE 解码与取消；页面控制回看、选区、有限缓冲和恢复，不接管浏览器复制。新页面的 Chromium 联合验收、部署与长稳仍单独记证。
 
 ### 代码入口索引
 
@@ -1508,12 +1541,18 @@ apps/control-plane/process_log.go   # installPlatformLogger / platformLogPath
 apps/worker/process_log.go          # installProcessLogger / ProcessLogPath
 internal/controlplane/router/diagnostics_log.go   # GET /diagnostics/log
 internal/controlplane/router/node_diagnostics.go  # GET /nodes/:id/diagnostics/log（经 PullSelfLog）
-internal/controlplane/logcoord/     # 联邦协调：扇出、合并、游标分页、覆盖/质量聚合
-internal/worker/logs/               # 采集 / 归一化 / 事件体 / Catalog / 保留 / 归档 / 查询 / VL 运行时
-apps/control-plane-web/src/pages/LogsPage.tsx      # 日志中心
-apps/control-plane-web/src/components/console/StoppedLogsView.tsx  # 停机实例历史回放
-apps/control-plane-web/src/lib/console-history.ts  # 控制台上漂（游标翻页）
-apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断日志 Modal
+internal/controlplane/logcoord/     # 历史联邦与有界原生流协调
+internal/controlplane/router/log_query_{filter,budget}.go # 高级过滤边界、预算、访问记录
+internal/controlplane/router/log_live_stream.go  # 认证 SSE、权限复核、连接与写入上限
+internal/worker/logs/               # 采集 / 归一化 / Catalog / 查询 / 单 VL 运行时
+internal/worker/logs/query/vlrange/live_stream.go # 原生 VL tail、独立 scope 与逐行源复核
+apps/control-plane-web/src/api/logLive.ts        # Bearer fetch、SSE 解码与取消
+apps/control-plane-web/src/pages/LogsPage.tsx    # 固定视口日志中心与来源分流
+apps/control-plane-web/src/components/logs/TextLogWorkbench.tsx # CP/Worker 有界文件窗口
+apps/control-plane-web/src/components/logs/LogFieldExplorer.tsx # 按需字段值与数值分析
+apps/control-plane-web/src/components/console/StoppedLogsView.tsx # 停机实例历史回放
+apps/control-plane-web/src/lib/console/console-history.ts # 控制台上漂（游标翻页）
+apps/control-plane-web/src/components/logs/DiagnosticsLogDialog.tsx # 节点诊断日志浮层
 ```
 
 ### 实例日志的端到端数据流（`internal/worker/logs/` 跨包）
@@ -1675,8 +1714,7 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 ### 已知遗留（不影响使用，但别当成已完成）
 
 - ~~rollog 的轮转阈值与保留档数仍是**编译期默认**（1 GiB / 5 档），未配置化；要改需重新编译。~~（2026-11-07 已消）`log.max_size_mb` / `log.max_backups` / `log.max_age_days` / `log.compress` 已开放，零值回退默认；同时补齐**按天保留**（此前只有份数上限，份数在不同负载下代表的时长差很多）。
-- 联邦 tail 的 `coverage.complete` 现为 `true`（实时流没有“完整边界”这回事，且它不可分页/导出）；
-  若后续要给 tail 加“覆盖已追平”的语义，需在契约里单独定义，**不要**再次借用 Search 的枚举状态。
+- 历史 JSON Tail 的 coverage 与实时订阅状态不相互替代。新 `/live` 不声称历史覆盖完整；`ready/heartbeat` 不证明无漏，10 秒回放与有限缓冲不构成持久恢复保证。联合浏览器与长稳验证须另记，不能据旧 Tail 的 `coverage.complete=true` 宣称新流完整。
 
 ## 11. 配置
 
@@ -1690,7 +1728,7 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 
 删除该表的理由（不是“换个介质”）：它与业务数据（用户/权限/实例）同库——备份被日志撑大、VACUUM 被日志行拖住、库损坏会连累登录与实例管理；检索是 `message LIKE '%kw%'` 全表扫（生产 109 万行实测）；保留靠“先归档 NDJSON、再 DELETE 行”维持，而 DELETE 大表不回收空间。
 
-两处**能力降级是刻意的**（不伪装成能力）：平台日志视图不再提供分页、总条数、任意时间窗——文件上做不到，也不该假装能；要看更早的走面板给出的 `grep` 命令。联邦视图仍保有 Search/Stats/Facets/Tail/Export。
+**文件与实例检索的边界是刻意的**：平台/节点文件窗口无历史分页、精确总量、任意时间窗或数值聚合；筛选只作用于已加载的最多 200 行 / 64 KiB，更早记录到相应机器查轮转文件。实例联邦保有 Search/Stats/Fields/Facets/Streams/Tail/Export，并提供有独立预算的原生 Live；两类来源不混为一个“全部日志总量”。
 
 轮转形态：进程内 `rename`（O(1)、零字节复制）→ 后台异步 gzip → 保留 `MaxBackups` 个档。这取代了旧形态下的 logrotate `copytruncate`（每次轮转要读写整个文件；2026-10-27 现场 35GB 就是该风险的实证）。**轮转只有这一处实现**：项目不再随包分发外部 logrotate 片段，也没有第二套阈值或外部兜底档需要与之对齐。
 
@@ -1710,11 +1748,8 @@ log_export:
 
 **API 错误统一落平台日志（FR-320）**：全局 gin 中间件 `middleware.ErrorLog` 把 API 失败响应（4xx 业务拒绝=warn、5xx=error，401/404/429 噪音跳过）连同路径/状态码/响应体/用户/IP slog 化，经进程 slog 直接写入自轮转平台日志文件（`<data>/var/log/control-plane.log`）——`/logs` 页的「平台日志」视图读它的尾部即可追查「某操作为什么报错」。此前错误只回 HTTP 响应，平台日志恒空、失败随连接断开进黑洞（FR-319 真机事故的观测性根因）。
 
-**日志视图分流（2026-10-29 重构后）**：`/logs` 与 `/logs/export` / `/logs/legacy` / `/logs/cutover` 均已随 CP `logs` 表删除而下线。现在只有两条来源：
-  - `platform` 视图 → 进程日志文件尾部（`GET /diagnostics/log`，最近 N 行，无分页/总数/时间窗）；
-  - `node_instance` / `all` 视图 → VL 联邦（`GET /logs/federation`，Search/Stats/Facets/Tail/Export）。
-  - `legacy` 视图已于本次一并从 `LOG_VIEWS` 取值域删除（入口按钮与菜单项同时移除）——留着它只会得到一个「点了没反应」的死入口：视图名还在，数据源已不存在。旧的 `?view=legacy` 深链现在按非法值回退默认视图。
-  停机实例历史与客户端底部预览同样改走联邦——**实例停机 ≠ Worker 停机**，VL 数据仍在。
+**日志视图分流**：旧 API `/logs`、`/logs/export`、`/logs/legacy`、`/logs/cutover` 随 CP `logs` 表下线，前端 `/logs` 工作台仍保留。默认 `node_instance` 为实例 VL 查询；平台视图读 CP 文件，管理员全部视图按来源在实例 VL、Worker 文件、CP 文件之间切换，详见 §10.1，不进行跨三类源的全量统计或导出。旧 `?view=legacy` 深链回退默认实例视图。
+停机实例历史与客户端预览仍走 VL 联邦——**实例停机 ≠ Worker 停机**，保留期内 VL 数据仍可查询。
 
 ### 11.1 项目自包含数据根（FHS 布局，ADR-010）
 
