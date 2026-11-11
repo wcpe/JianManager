@@ -365,7 +365,7 @@ func (c *Client) searchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 					}
 				}
 				return false
-			})
+			}, mergedHydrationSelector(rngs, q))
 			out.Bytes += segment.Bytes
 			out.CoverageReasons = append(out.CoverageReasons, segment.CoverageReasons...)
 			if segment.SafeBeforeUTC != "" {

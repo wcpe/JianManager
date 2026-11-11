@@ -184,8 +184,10 @@ func TestSearchMergedFiltersDedupesAndAttributes(t *testing.T) {
 	var seenLimit string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/select/logsql/query", r.URL.Path)
-		seenQuery = r.URL.Query().Get("query")
-		seenLimit = r.URL.Query().Get("limit")
+		if !isSearchHydrationRequest(r) {
+			seenQuery = r.URL.Query().Get("query")
+			seenLimit = r.URL.Query().Get("limit")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		// 返回顺序为 VL 的 _time desc 语义：
 		// 1. src-a 当前代次（命中）
@@ -194,14 +196,14 @@ func TestSearchMergedFiltersDedupesAndAttributes(t *testing.T) {
 		// 4. src-a 同 id 异 hash（保留 + 质量降级）
 		// 5. src-b 命中
 		// 6. src-a 超水位（应被过滤）
-		w.Write([]byte(
-			`{"_time":"2026-09-22T03:00:05Z","_msg":"a1","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}` + "\n" +
-				`{"_time":"2026-09-22T03:00:04Z","_msg":"a-old","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-OLD","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}` + "\n" +
-				`{"_time":"2026-09-22T03:00:03Z","_msg":"a1-dup","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}` + "\n" +
-				`{"_time":"2026-09-22T03:00:02Z","_msg":"a1-conflict","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h2"}` + "\n" +
-				`{"_time":"2026-09-22T03:00:01Z","_msg":"b1","event_id":"e2","log_source_id":"src-b","source_generation":"gen-b","projection_generation":"pgen-B","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h3"}` + "\n" +
-				`{"_time":"2026-09-22T03:00:00Z","_msg":"a-beyond","event_id":"e3","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"101","record_end":"102","level":"INFO","stream":"stdout","canonical_content_hash":"h4"}` + "\n",
-		))
+		writeSearchFixtureNDJSON(t, w, r,
+			`{"_time":"2026-09-22T03:00:05Z","_msg":"a1","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}`+"\n"+
+				`{"_time":"2026-09-22T03:00:04Z","_msg":"a-old","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-OLD","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}`+"\n"+
+				`{"_time":"2026-09-22T03:00:03Z","_msg":"a1-dup","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}`+"\n"+
+				`{"_time":"2026-09-22T03:00:02Z","_msg":"a1-conflict","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h2"}`+"\n"+
+				`{"_time":"2026-09-22T03:00:01Z","_msg":"b1","event_id":"e2","log_source_id":"src-b","source_generation":"gen-b","projection_generation":"pgen-B","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h3"}`+"\n"+
+				`{"_time":"2026-09-22T03:00:00Z","_msg":"a-beyond","event_id":"e3","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"101","record_end":"102","level":"INFO","stream":"stdout","canonical_content_hash":"h4"}`+"\n",
+		)
 	}))
 	defer srv.Close()
 
@@ -254,15 +256,17 @@ func TestSearchMergedAcrossDaysUsesUnionWindow(t *testing.T) {
 	type win struct{ start, end string }
 	var wins []win
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		wins = append(wins, win{r.URL.Query().Get("start"), r.URL.Query().Get("end")})
-		mu.Unlock()
+		if !isSearchHydrationRequest(r) {
+			mu.Lock()
+			wins = append(wins, win{r.URL.Query().Get("start"), r.URL.Query().Get("end")})
+			mu.Unlock()
+		}
 		w.Header().Set("Content-Type", "application/json")
 		// 两行分属两天（09-22 与 09-23），各自由对应 rng 的谓词接受。
-		w.Write([]byte(
-			`{"_time":"2026-09-22T20:00:00Z","_msg":"d1","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}` + "\n" +
-				`{"_time":"2026-09-23T05:00:00Z","_msg":"d2","event_id":"e2","log_source_id":"src-b","source_generation":"gen-b","projection_generation":"pgen-B-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h2"}` + "\n",
-		))
+		writeSearchFixtureNDJSON(t, w, r,
+			`{"_time":"2026-09-22T20:00:00Z","_msg":"d1","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}`+"\n"+
+				`{"_time":"2026-09-23T05:00:00Z","_msg":"d2","event_id":"e2","log_source_id":"src-b","source_generation":"gen-b","projection_generation":"pgen-B-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h2"}`+"\n",
+		)
 	}))
 	defer srv.Close()
 
@@ -299,9 +303,11 @@ func TestSearchMergedSegmentsBeyondVLLimitAndStopsWhenEnoughRows(t *testing.T) {
 	type win struct{ start, end string }
 	var wins []win
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		wins = append(wins, win{r.URL.Query().Get("start"), r.URL.Query().Get("end")})
-		mu.Unlock()
+		if !isSearchHydrationRequest(r) {
+			mu.Lock()
+			wins = append(wins, win{r.URL.Query().Get("start"), r.URL.Query().Get("end")})
+			mu.Unlock()
+		}
 		w.Header().Set("Content-Type", "application/json")
 		// 150 行同源不同 id：第一段即够页（needRows = 101）。
 		var b strings.Builder
@@ -309,7 +315,7 @@ func TestSearchMergedSegmentsBeyondVLLimitAndStopsWhenEnoughRows(t *testing.T) {
 			fmt.Fprintf(&b, `{"_time":"2026-10-10T05:%02d:%02dZ","_msg":"m%d","event_id":"e%d","log_source_id":"src-c","source_generation":"gen-c","projection_generation":"pgen-C-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h%d"}`+"\n",
 				i/60, i%60, i, i, i)
 		}
-		w.Write([]byte(b.String()))
+		writeSearchFixtureNDJSON(t, w, r, b.String())
 	}))
 	defer srv.Close()
 
@@ -332,7 +338,7 @@ func TestSearchMergedSegmentsBeyondVLLimitAndStopsWhenEnoughRows(t *testing.T) {
 		Budget: query.Budget{Limit: 100, MaxBytes: 1 << 20},
 	})
 	require.NoError(t, err)
-	require.Len(t, res.Items, 150, "第一段返回的行全部保留")
+	require.Len(t, res.Items, 101, "第一段候选只保留页内100行与前瞻，hydration不读取将被裁掉的49行")
 	require.False(t, res.Exhausted, "早停后更老段未查，不得宣称读完")
 	mu.Lock()
 	defer mu.Unlock()
@@ -351,10 +357,12 @@ func TestSearchMergedSalvagesItemsWhenLaterSegmentFails(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		calls++
+		if !isSearchHydrationRequest(r) {
+			calls++
+		}
 		n := calls
 		mu.Unlock()
-		if n > 1 {
+		if n > 1 && !isSearchHydrationRequest(r) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -365,7 +373,7 @@ func TestSearchMergedSalvagesItemsWhenLaterSegmentFails(t *testing.T) {
 			fmt.Fprintf(&b, `{"_time":"2026-10-10T05:%02d:%02dZ","_msg":"m%d","event_id":"e%d","log_source_id":"src-c","source_generation":"gen-c","projection_generation":"pgen-C-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h%d"}`+"\n",
 				i/60, i%60, i, i, i)
 		}
-		w.Write([]byte(b.String()))
+		writeSearchFixtureNDJSON(t, w, r, b.String())
 	}))
 	defer srv.Close()
 

@@ -85,7 +85,7 @@ func newMergedDupClient(t *testing.T, rows []mergedDupRow) *Client {
 		sort.SliceStable(hits, func(i, j int) bool { return hits[i].at.After(hits[j].at) })
 		w.Header().Set("Content-Type", "application/json")
 		for _, hit := range hits {
-			_, _ = w.Write([]byte(hit.line + "\n"))
+			writeSearchFixtureNDJSON(t, w, r, hit.line)
 		}
 	}))
 	t.Cleanup(srv.Close)

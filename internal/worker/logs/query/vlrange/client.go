@@ -560,7 +560,7 @@ func statsPipe(q query.RangeQuery) (string, error) {
 		if !validField(q.MetricField) {
 			return "", fmt.Errorf("vlrange: invalid metric field %q", q.MetricField)
 		}
-		b.WriteString(" sum(")
+		b.WriteString(", sum(")
 		b.WriteString(q.MetricField)
 		b.WriteString(") as _jm_sum, min(")
 		b.WriteString(q.MetricField)
@@ -575,7 +575,7 @@ func statsPipe(q query.RangeQuery) (string, error) {
 
 // searchPage 只在页边界组未被更旧时间证明完整时补取该时间组，不改变整窗时间 top-K。
 // 补查与向更旧窗口续读共用同一字节额度；不完整组只公布严格更新的安全前缀。
-func (c *Client) searchPage(ctx context.Context, params url.Values, q query.RangeQuery, rows uint64, matches func(logtypes.Event) bool) (query.RangeResult, error) {
+func (c *Client) searchPage(ctx context.Context, params url.Values, q query.RangeQuery, rows uint64, matches func(logtypes.Event) bool, hydrationSelectors ...func(logtypes.Event) string) (query.RangeResult, error) {
 	out := query.RangeResult{DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}
 	maxBytes := scanLimit(q.Budget)
 	// seen 按「id+哈希」去重：同一事件被重复写入时只保留一条。
@@ -708,6 +708,15 @@ func (c *Client) searchPage(ctx context.Context, params url.Values, q query.Rang
 		}
 	}
 	query.SortEvents(out.Items)
+	// Boundary groups can contain many projected candidates. Only the bounded
+	// return prefix (including lookahead) needs full structured fields.
+	if limit := int(lookaheadRows(q)); len(out.Items) > limit {
+		out.Items = out.Items[:limit]
+		out.Exhausted = false
+	}
+	if err := c.hydrateSearchItems(ctx, params, q, &out, matches, hydrationSelectors...); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 

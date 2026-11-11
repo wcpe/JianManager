@@ -67,16 +67,29 @@ func pr61BoundaryService(t *testing.T, n int, merged, reverse bool) (*query.Serv
 		require.NoError(t, err)
 		end, err := time.Parse(time.RFC3339Nano, p.Get("end"))
 		require.NoError(t, err)
-		require.Contains(t, p.Get("query"), "| fields")
-		require.Contains(t, p.Get("query"), "| sort by (_time desc)")
-		require.NotContains(t, p.Get("query"), "sort by (_time desc,")
+		if !isSearchHydrationRequest(r) {
+			require.Contains(t, p.Get("query"), "| fields")
+			require.Contains(t, p.Get("query"), "| sort by (_time desc)")
+			require.NotContains(t, p.Get("query"), "sort by (_time desc,")
+		}
 		limit, err := strconv.Atoi(p.Get("limit"))
 		require.NoError(t, err)
 		mu.Lock()
 		ordinal := len(windows)
-		windows = append(windows, fakeVLWindow{start: start, end: end, limit: limit})
+		if !isSearchHydrationRequest(r) {
+			windows = append(windows, fakeVLWindow{start: start, end: end, limit: limit})
+		}
 		mu.Unlock()
 		matched := append([]logtypes.Event(nil), rows...)
+		if isSearchHydrationRequest(r) {
+			ids := searchFixtureHydrationIDs(t, r)
+			matched = nil
+			for _, ev := range rows {
+				if ids[ev.EventID] {
+					matched = append(matched, ev)
+				}
+			}
+		}
 		if reverse != (ordinal%2 == 0) {
 			sort.SliceStable(matched, func(i, j int) bool {
 				return query.LessSortKey(query.SortKeyOf(matched[i]), query.SortKeyOf(matched[j]))
@@ -86,7 +99,6 @@ func pr61BoundaryService(t *testing.T, n int, merged, reverse bool) (*query.Serv
 				return query.LessSortKey(query.SortKeyOf(matched[j]), query.SortKeyOf(matched[i]))
 			})
 		}
-		enc := json.NewEncoder(w)
 		for _, ev := range matched {
 			et, _ := time.Parse(time.RFC3339Nano, ev.EventTimeUTC)
 			if et.Before(start) || !et.Before(end) {
@@ -95,8 +107,13 @@ func pr61BoundaryService(t *testing.T, n int, merged, reverse bool) (*query.Serv
 			if limit == 0 {
 				break
 			}
+			line, encodeErr := json.Marshal(map[string]string{"_time": ev.EventTimeUTC, "_msg": "message", "event_id": ev.EventID, "log_source_id": ev.Source.LogSourceID, "source_generation": ev.Source.SourceGeneration, "record_start": fmt.Sprint(ev.Record.Start), "record_end": fmt.Sprint(ev.Record.End), "canonical_content_hash": ev.CanonicalHash, projectionGenerationField: ev.Fields[projectionGenerationField]})
+			require.NoError(t, encodeErr)
+			if !searchFixtureLineMatches(t, r, line) {
+				continue
+			}
 			limit--
-			require.NoError(t, enc.Encode(map[string]string{"_time": ev.EventTimeUTC, "_msg": "message", "event_id": ev.EventID, "log_source_id": ev.Source.LogSourceID, "source_generation": ev.Source.SourceGeneration, "record_start": fmt.Sprint(ev.Record.Start), "record_end": fmt.Sprint(ev.Record.End), "canonical_content_hash": ev.CanonicalHash, projectionGenerationField: ev.Fields[projectionGenerationField]}))
+			_, _ = w.Write(append(line, '\n'))
 		}
 	}))
 	t.Cleanup(srv.Close)
