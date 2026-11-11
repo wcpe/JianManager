@@ -358,6 +358,7 @@ func (h *LogFederationHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/logs/federation", h.FacadeSearch)
 	rg.GET("/logs/federation/search", h.Search)
 	rg.GET("/logs/federation/tail", h.Tail)
+	rg.GET("/logs/federation/live", h.Live)
 	rg.GET("/logs/federation/stats", h.Stats)
 	rg.GET("/logs/federation/fields", h.Fields)
 	rg.GET("/logs/federation/facets", h.Facets)

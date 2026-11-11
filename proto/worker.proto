@@ -105,6 +105,8 @@ service WorkerService {
   rpc LogStreamFieldValues(LogStreamFieldValuesRequest) returns (LogStreamFieldValuesResponse);
   // Tail 的 FOLLOW_LIVE 与 VIEW_BOUNDED 语义必须由 mode 明确区分。
   rpc LogTail(LogTailRequest) returns (stream LogEvent);
+  // 持续读取 VL 原生 tail；与旧有界 LogTail 分离，老 Worker 明确 Unimplemented。
+  rpc LogTailLive(LogTailRequest) returns (stream LogEvent);
   rpc LogRehydrate(LogRehydrateRequest) returns (LogTaskResponse);
   rpc LogArchiveStatus(LogArchiveStatusRequest) returns (LogArchiveStatusResponse);
   // CP 经反向隧道查看/控制 Worker 受管 VL namespace。
@@ -2948,6 +2950,8 @@ message LogEvent {
   string stream = 9;
   string message = 10;
   string canonical_content_hash = 11;
+  // 结构化字段按原值透传，旧客户端可忽略该兼容字段。
+  map<string, string> fields = 12;
 }
 
 message LogQueryRequestBase {

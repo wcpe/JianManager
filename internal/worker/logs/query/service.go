@@ -276,6 +276,9 @@ func (s *Service) GetCapabilities(req CapabilitiesRequest) CapabilitiesResponse 
 		if _, ok := s.client.(FollowLiveRangeClient); ok {
 			caps = append(caps, "tail_follow_live")
 		}
+		if _, ok := s.client.(NativeLiveClient); ok {
+			caps = append(caps, "tail_native_stream")
+		}
 	}
 	return CapabilitiesResponse{
 		Supported:       true,

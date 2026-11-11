@@ -134,4 +134,8 @@ export async function ensureFreshToken(): Promise<string | null> {
   return token
 }
 
+export async function refreshAccessToken(): Promise<string> {
+  return refreshTokens()
+}
+
 export default api

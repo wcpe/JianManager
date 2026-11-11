@@ -50,6 +50,7 @@ const (
 	WorkerService_LogStreamFieldNames_FullMethodName         = "/worker.WorkerService/LogStreamFieldNames"
 	WorkerService_LogStreamFieldValues_FullMethodName        = "/worker.WorkerService/LogStreamFieldValues"
 	WorkerService_LogTail_FullMethodName                     = "/worker.WorkerService/LogTail"
+	WorkerService_LogTailLive_FullMethodName                 = "/worker.WorkerService/LogTailLive"
 	WorkerService_LogRehydrate_FullMethodName                = "/worker.WorkerService/LogRehydrate"
 	WorkerService_LogArchiveStatus_FullMethodName            = "/worker.WorkerService/LogArchiveStatus"
 	WorkerService_LogRuntimeStatus_FullMethodName            = "/worker.WorkerService/LogRuntimeStatus"
@@ -251,6 +252,8 @@ type WorkerServiceClient interface {
 	LogStreamFieldValues(ctx context.Context, in *LogStreamFieldValuesRequest, opts ...grpc.CallOption) (*LogStreamFieldValuesResponse, error)
 	// Tail 的 FOLLOW_LIVE 与 VIEW_BOUNDED 语义必须由 mode 明确区分。
 	LogTail(ctx context.Context, in *LogTailRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEvent], error)
+	// 持续读取 VL 原生 tail；与旧有界 LogTail 分离，老 Worker 明确 Unimplemented。
+	LogTailLive(ctx context.Context, in *LogTailRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEvent], error)
 	LogRehydrate(ctx context.Context, in *LogRehydrateRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
 	LogArchiveStatus(ctx context.Context, in *LogArchiveStatusRequest, opts ...grpc.CallOption) (*LogArchiveStatusResponse, error)
 	// CP 经反向隧道查看/控制 Worker 受管 VL namespace。
@@ -835,6 +838,25 @@ func (c *workerServiceClient) LogTail(ctx context.Context, in *LogTailRequest, o
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_LogTailClient = grpc.ServerStreamingClient[LogEvent]
 
+func (c *workerServiceClient) LogTailLive(ctx context.Context, in *LogTailRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[3], WorkerService_LogTailLive_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[LogTailRequest, LogEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_LogTailLiveClient = grpc.ServerStreamingClient[LogEvent]
+
 func (c *workerServiceClient) LogRehydrate(ctx context.Context, in *LogRehydrateRequest, opts ...grpc.CallOption) (*LogTaskResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LogTaskResponse)
@@ -1017,7 +1039,7 @@ func (c *workerServiceClient) ChmodPath(ctx context.Context, in *ChmodPathReques
 
 func (c *workerServiceClient) DownloadArchive(ctx context.Context, in *DownloadArchiveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadArchiveChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[3], WorkerService_DownloadArchive_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[4], WorkerService_DownloadArchive_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1036,7 +1058,7 @@ type WorkerService_DownloadArchiveClient = grpc.ServerStreamingClient[DownloadAr
 
 func (c *workerServiceClient) DownloadFile(ctx context.Context, in *DownloadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadFileChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[4], WorkerService_DownloadFile_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[5], WorkerService_DownloadFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1055,7 +1077,7 @@ type WorkerService_DownloadFileClient = grpc.ServerStreamingClient[DownloadFileC
 
 func (c *workerServiceClient) UploadFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UploadFileChunk, UploadFileResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[5], WorkerService_UploadFile_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[6], WorkerService_UploadFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1348,7 +1370,7 @@ func (c *workerServiceClient) InstallForgeServer(ctx context.Context, in *Instal
 
 func (c *workerServiceClient) FetchBinary(ctx context.Context, in *FetchBinaryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FetchBinaryProgress], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[6], WorkerService_FetchBinary_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[7], WorkerService_FetchBinary_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1577,7 +1599,7 @@ func (c *workerServiceClient) RunBotScript(ctx context.Context, in *RunBotScript
 
 func (c *workerServiceClient) StreamBotEvents(ctx context.Context, in *StreamBotEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[7], WorkerService_StreamBotEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[8], WorkerService_StreamBotEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1626,7 +1648,7 @@ func (c *workerServiceClient) GetBotFleetSnapshot(ctx context.Context, in *GetBo
 
 func (c *workerServiceClient) StreamBotFleetEvents(ctx context.Context, in *StreamBotFleetEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotFleetEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[8], WorkerService_StreamBotFleetEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[9], WorkerService_StreamBotFleetEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1685,7 +1707,7 @@ func (c *workerServiceClient) CancelBotCommandSchedules(ctx context.Context, in 
 
 func (c *workerServiceClient) StreamPluginEvents(ctx context.Context, in *StreamPluginEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[9], WorkerService_StreamPluginEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[10], WorkerService_StreamPluginEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1794,7 +1816,7 @@ func (c *workerServiceClient) UpgradeWorker(ctx context.Context, in *UpgradeWork
 
 func (c *workerServiceClient) TerminalSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalFrame, TerminalFrame], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[10], WorkerService_TerminalSession_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[11], WorkerService_TerminalSession_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1940,6 +1962,8 @@ type WorkerServiceServer interface {
 	LogStreamFieldValues(context.Context, *LogStreamFieldValuesRequest) (*LogStreamFieldValuesResponse, error)
 	// Tail 的 FOLLOW_LIVE 与 VIEW_BOUNDED 语义必须由 mode 明确区分。
 	LogTail(*LogTailRequest, grpc.ServerStreamingServer[LogEvent]) error
+	// 持续读取 VL 原生 tail；与旧有界 LogTail 分离，老 Worker 明确 Unimplemented。
+	LogTailLive(*LogTailRequest, grpc.ServerStreamingServer[LogEvent]) error
 	LogRehydrate(context.Context, *LogRehydrateRequest) (*LogTaskResponse, error)
 	LogArchiveStatus(context.Context, *LogArchiveStatusRequest) (*LogArchiveStatusResponse, error)
 	// CP 经反向隧道查看/控制 Worker 受管 VL namespace。
@@ -2285,6 +2309,9 @@ func (UnimplementedWorkerServiceServer) LogStreamFieldValues(context.Context, *L
 }
 func (UnimplementedWorkerServiceServer) LogTail(*LogTailRequest, grpc.ServerStreamingServer[LogEvent]) error {
 	return status.Errorf(codes.Unimplemented, "method LogTail not implemented")
+}
+func (UnimplementedWorkerServiceServer) LogTailLive(*LogTailRequest, grpc.ServerStreamingServer[LogEvent]) error {
+	return status.Errorf(codes.Unimplemented, "method LogTailLive not implemented")
 }
 func (UnimplementedWorkerServiceServer) LogRehydrate(context.Context, *LogRehydrateRequest) (*LogTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LogRehydrate not implemented")
@@ -3121,6 +3148,17 @@ func _WorkerService_LogTail_Handler(srv interface{}, stream grpc.ServerStream) e
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_LogTailServer = grpc.ServerStreamingServer[LogEvent]
+
+func _WorkerService_LogTailLive_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(LogTailRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(WorkerServiceServer).LogTailLive(m, &grpc.GenericServerStream[LogTailRequest, LogEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_LogTailLiveServer = grpc.ServerStreamingServer[LogEvent]
 
 func _WorkerService_LogRehydrate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(LogRehydrateRequest)
@@ -5229,6 +5267,11 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "LogTail",
 			Handler:       _WorkerService_LogTail_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "LogTailLive",
+			Handler:       _WorkerService_LogTailLive_Handler,
 			ServerStreams: true,
 		},
 		{

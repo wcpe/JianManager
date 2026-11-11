@@ -192,6 +192,8 @@ type Event struct {
 	Stream           string `json:"stream,omitempty"`
 	Message          string `json:"message,omitempty"`
 	CanonicalHash    string `json:"canonical_content_hash,omitempty"`
+	// Fields carries structured values through both historical search and native tail.
+	Fields map[string]string `json:"fields,omitempty"`
 	// TargetID 合并时标注来源目标（便于覆盖侧信道审计，不参与排序）。
 	TargetID string `json:"target_id,omitempty"`
 	// WorkerID 来源 Worker。
@@ -220,6 +222,9 @@ func (e Event) ApproxBytes() uint64 {
 		len(e.EventTimeUTC) + len(e.IngestTimeUTC) + len(e.Level) +
 		len(e.Stream) + len(e.Message) + len(e.CanonicalHash) +
 		len(e.TargetID) + len(e.WorkerID) + 32
+	for key, value := range e.Fields {
+		n += len(key) + len(value) + 6
+	}
 	if n < 0 {
 		return 0
 	}

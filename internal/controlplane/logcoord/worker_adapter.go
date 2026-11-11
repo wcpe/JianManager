@@ -153,11 +153,12 @@ func (a *WorkerClientAdapter) Stats(ctx context.Context, req WorkerSearchRequest
 		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
 	}
 	base := toProtoQueryBase(req)
-	// metric_field 无独立 proto 字段时经 filter 旁路传递不安全；Stats 预聚合由 Worker 按契约字段处理。
+	// 指标字段独立传递，不能嵌入 filter 改写查询含义。
 	resp, err := a.client.LogStats(ctx, &workerpb.LogStatsRequest{
-		Query:      base,
-		GroupBy:    append([]string(nil), groupBy...),
-		TimeBucket: timeBucket,
+		Query:       base,
+		GroupBy:     append([]string(nil), groupBy...),
+		TimeBucket:  timeBucket,
+		MetricField: req.MetricField,
 	})
 	return mapStatsResponse(resp, err)
 }
@@ -639,6 +640,13 @@ func eventFromProto(e *workerpb.LogEvent) Event {
 	if e == nil {
 		return Event{}
 	}
+	var fields map[string]string
+	if len(e.GetFields()) > 0 {
+		fields = make(map[string]string, len(e.GetFields()))
+		for key, value := range e.GetFields() {
+			fields[key] = value
+		}
+	}
 	return Event{
 		EventID:          e.GetEventId(),
 		LogSourceID:      e.GetLogSourceId(),
@@ -651,6 +659,7 @@ func eventFromProto(e *workerpb.LogEvent) Event {
 		Stream:           e.GetStream(),
 		Message:          e.GetMessage(),
 		CanonicalHash:    e.GetCanonicalContentHash(),
+		Fields:           fields,
 	}
 }
 
