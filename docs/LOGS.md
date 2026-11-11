@@ -119,10 +119,14 @@ CP logcoord（联邦、合并、授权收敛、导出）
 | `internal/worker/logs/query` | Worker 本地查询面（固定 view 快照、预算、租约） |
 | `internal/worker/logs/vlsup` | 受管 VictoriaLogs 进程的资产分发、启动、健康与保留 |
 | `internal/worker/logs/catalog` | 分区（namespace + UTC 日）唯一 owner 与可查询性判定 |
-| `internal/worker/logs/retention` | 保留策略与 Sweeper（**这是实例日志的保留，不是进程日志**） |
-| `internal/worker/logs/archive` | 归档导出用的 Provider 抽象（local/S3/MinIO） |
+| `internal/worker/logutil` | 运行期调级 `/debug/log-level` 与 TTL 解析（2026-11-10 从已删包中抽出的存活部分） |
 | `internal/controlplane/logcoord` | CP 侧联邦协调：扇出、合并、覆盖与质量门禁、导出预算 |
 | `internal/controlplane/router/log_federation.go` | 联邦 HTTP 端点 |
+
+> **已删除的包**（2026-11-10，净删 18556 行）：`logs/archive`、`logs/retention`、`logs/lifecycle` 及 `apps/worker/` 下 10 个装配文件。
+> 删除依据是真机实证——`retention.NewDriver` 的 Mover 参数恒为 nil（冷层搬运从未执行）、
+> 指标 `jm_log_retention_driver_enabled` 为 0、`worker.yml` 根本没有 `log_retention`/`log_archive` 段。
+> 它们曾经负责的「实例日志保留」现在完全由 VL 自身的 `retention_period` + 磁盘上限承担（见下文）。
 
 ### 路径发现与 `read_from_head`（一个反直觉的点）
 
