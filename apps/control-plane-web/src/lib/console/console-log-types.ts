@@ -47,6 +47,10 @@ export interface LogQueryParams {
   nodeId?: number
   /** 关键字，匹配 message。 */
   keyword?: string
+  /** 启用实例日志高级 LogsQL 过滤模式。节点/平台文本日志不使用。 */
+  advanced?: boolean
+  /** 高级过滤表达式（filter-only LogsQL，不允许 pipe）。 */
+  logsQL?: string
   /** 起始时间（RFC3339）。 */
   from?: string
   /** 结束时间（RFC3339）。 */

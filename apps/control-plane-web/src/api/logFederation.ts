@@ -61,6 +61,16 @@ export interface FederationCoverageBody {
   notes?: string[]
 }
 
+/** 实际执行的查询预算与耗时；缺失表示旧 CP，前端不得自行猜测。 */
+export interface FederationQueryMetadata {
+  elapsed_ms: number
+  returned_rows: number
+  limit: number
+  max_bytes: number
+  timeout_ms: number
+  max_fanout: number
+}
+
 /** 双路径查询 envelope（同时接受门面 envelope 与SearchResponse snake_case）。 */
 export interface LogsFederationEnvelope {
   ok?: boolean
@@ -88,6 +98,7 @@ export interface LogsFederationEnvelope {
   budget_cut?: boolean
   next_cursor?: string
   view?: { view_id?: string; viewId?: string }
+  query_meta?: FederationQueryMetadata
 }
 
 /** LogsPage 消费的联邦 UI 结果。 */
@@ -118,6 +129,7 @@ export interface LogsFederationResult {
    * 而区分「无权」与「超时」靠的就是这里保留的原始错误。
    */
   failure?: unknown
+  queryMeta?: FederationQueryMetadata
 }
 
 /** axios / fetch 风格 404 判定。 */
@@ -452,6 +464,19 @@ export function legacyDegradeEnvelope(notReady = false): LogsFederationEnvelope 
   }
 }
 
+/** 保留服务端可行动的查询错误；不把 400 的语法/预算原因改成 axios 泛化文案。 */
+export function logQueryErrorMessage(error: unknown): string | undefined {
+  if (error == null || isLogRequestCanceled(error)) return undefined
+  const response = (error as { response?: { data?: unknown } }).response
+  if (response?.data && typeof response.data === 'object' && !(response.data instanceof Blob)) {
+    const data = response.data as Record<string, unknown>
+    const reason = asString(data.message) ?? asString(data.errorMessage) ?? asString(data.error)
+    if (reason) return reason
+  }
+  if (error instanceof Error) return error.message
+  return typeof error === 'string' ? error : undefined
+}
+
 /** 传输失败信封：ok=false 语义，禁止空成功。 */
 export function transportFailureEnvelope(message?: string): LogsFederationEnvelope {
   return {
@@ -513,6 +538,7 @@ export function buildFederationResult(
     response: mapped.response,
     // 只对降级保留：正常结果不需要这份原始错误。
     ...(options.failure !== undefined ? { failure: options.failure } : {}),
+    ...(envelope.query_meta ? { queryMeta: envelope.query_meta } : {}),
   })
 }
 
@@ -633,6 +659,12 @@ export function useLogsFederation(
           signal,
         })
         const envelope = data && typeof data === 'object' ? data : {}
+        // Older CP versions silently ignore advanced/logsQL and would return
+        // unfiltered rows. Do not present those rows as an advanced result.
+        if ((params.advanced === true || params.advanced === 'true') && !envelope.query_meta) {
+          const unsupported = new Error('LOG_ADVANCED_UNSUPPORTED')
+          return buildFederationResult(transportFailureEnvelope(unsupported.message), { failure: unsupported })
+        }
         // 日志查询引擎未就绪（受管 VL 未配置/未启动）时降级到经典 `/logs` 路径：
         // 平台日志与切换前的实例日志本就能从 CP 库直接读，不应因为新引擎没开就让
         // 用户连这些日志都看不到。
@@ -641,7 +673,10 @@ export function useLogsFederation(
         // 日志平台时日志中心整体不可用（含平台日志本身）。这里复用同一判定（它已覆盖
         // notes / errorCode / federatedReady=false / duplicate 未决）来决定降级。
         if (mapFederationEnvelope(envelope).federatedNotReady) {
-          return buildFederationResult(legacyDegradeEnvelope(true), { degraded: true })
+          return buildFederationResult(legacyDegradeEnvelope(true), {
+            degraded: true,
+            failure: new Error(envelope.errorMessage ?? ((envelope.notes ?? []).join(', ') || FEDERATED_NOT_READY_MESSAGE)),
+          })
         }
         return buildFederationResult(envelope, { degraded: false })
       } catch (error) {
@@ -660,10 +695,8 @@ export function useLogsFederation(
           return buildFederationResult(legacyDegradeEnvelope(), { degraded: true, failure: error })
         }
         return buildFederationResult(
-          transportFailureEnvelope(
-            error instanceof Error ? error.message : String(error),
-          ),
-          { degraded: false },
+          transportFailureEnvelope(logQueryErrorMessage(error)),
+          { degraded: false, failure: error },
         )
       }
     },

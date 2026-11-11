@@ -352,6 +352,7 @@ func (h *LogFederationHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	if h == nil || h.coord == nil {
 		return
 	}
+	rg = rg.Group("", auditAdvancedLogQuery)
 	// 门面：LogsPage/双路径客户端探测 GET /logs/federation。
 	// 语义 = Search + envelope（ok/sourceTag/coverage/quality/items/notes）。
 	rg.GET("/logs/federation", h.FacadeSearch)
@@ -413,6 +414,9 @@ func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 	if len(resp.IngestPositionGaps) > 0 {
 		body["ingest_position_gaps"] = resp.IngestPositionGaps
 	}
+	if meta := queryMetadata(c, q, len(resp.Items)); meta != nil {
+		body["query_meta"] = meta
+	}
 	c.JSON(http.StatusOK, body)
 }
 
@@ -456,99 +460,6 @@ func federationPermissionScope(access *service.UserAccess, targets []string) str
 		kind, access.RoleKey, access.AuthVersion, nsum[:6], tsum[:6])
 }
 
-// federationFilter 把结构化筛选参数组合为 LogsQL 过滤表达式。
-//
-// 背景：wire 契约（LogQueryRequestBase）只有单一 filter 表达式字段，没有结构化的
-// level / source 等参数。经典 /logs 路径支持按级别与来源筛选（log.go 的 buildFilter），
-// 联邦路径若不在此组合，用户在联邦视图点「错误」或选「来源」不会有任何反应——
-// 同一界面两条路径行为不一致。
-//
-// 组合时必须给 keyword 加括号：LogsQL 中 AND 优先级高于 OR，`a OR b AND level:X`
-// 会被解析为 `a OR (b AND level:X)`，使级别筛选对含 OR 的关键词失效。实测
-// `LIVE-TEST OR Notch AND level:INFO` 命中 4 条，而 `(LIVE-TEST OR Notch) AND level:INFO`
-// 命中 2 条——故存在结构化约束时把 keyword 包成 `(keyword) AND ...`。
-//
-// level 与 source 均走白名单：它们来自用户输入，直接拼进表达式会引入注入面。
-//
-// # keyword 为什么要做平衡性校验（2026-11-09）
-//
-// 把 keyword 包成 `(keyword) AND ...` 的前提是 **keyword 自身括号与引号配对**。
-// 否则用户传 `keyword=a) OR (b` 会得到：
-//
-//	(a) OR (b) AND level:WARN
-//
-// 括号被提前闭合，`AND level:WARN` 只约束 `b` 分支，`a` 那段完全不受级别约束。
-// 真机实测（2026-11-09）：库里 2872 条全是 INFO，`pinged AND level:WARN` 正确得到 0 条；
-// 而 `(InitialHandler) OR (pinged) AND level:WARN` 得到 **2872 条**——级别筛选彻底失效，
-// 用户点「只看 WARN」却拿到全量 INFO。
-//
-// 处理选择：不平衡就**拒绝**（交给调用方返 400），而不是自作聪明地转义或重排——
-// 后者会静默改变用户意图；而「括号平衡」是 LogsQL 自由布尔表达式仍能正常使用的下限。
-// 返回 ok=false 时，调用方必须中止本次请求。
-func federationFilter(c *gin.Context) (string, bool) {
-	keyword := strings.TrimSpace(c.Query("keyword"))
-
-	terms := make([]string, 0, 2)
-	if level := strings.ToLower(strings.TrimSpace(c.Query("level"))); isFederationLevel(level) {
-		// VL 中级别以大写存储（ERROR/INFO/WARN）；LogsQL 大小写敏感，故统一转大写。
-		terms = append(terms, "level:"+strings.ToUpper(level))
-	}
-	if prefix, ok := federationSourcePrefix(strings.ToLower(strings.TrimSpace(c.Query("source")))); ok {
-		terms = append(terms, `log_source_id:"`+prefix+`"`)
-	}
-
-	if len(terms) == 0 {
-		// 无结构化约束：保持既有行为，keyword 原样下发（其内部布尔结构由用户自负）。
-		// 此时不包括号，也就不存在括号被提前闭合的问题。
-		return keyword, true
-	}
-	joined := strings.Join(terms, " AND ")
-	if keyword == "" {
-		return joined, true
-	}
-	if !balancedFilterExpr(keyword) {
-		return "", false
-	}
-	return "(" + keyword + ") AND " + joined, true
-}
-
-// balancedFilterExpr 判断一段 LogsQL 过滤表达式的括号与双引号是否配对。
-//
-// 只做「把它整体包进 ( ) 不会改变结构」所需的最小检查：
-//   - 括号深度不得中途转负（`a)b(` 不是合法分组）；
-//   - 扫描结束深度必须回到 0；
-//   - 双引号必须成对，且**引号内的括号不计入深度**——否则 `_msg:"a)"` 会被误判。
-//
-// 单引号/反引号不处理：LogsQL 字段值用双引号。宁可只守括号平衡这条底线，
-// 也不为了“更严”把合法表达式判成非法（那会让用户的关键词筛选直接不可用）。
-func balancedFilterExpr(s string) bool {
-	depth := 0
-	inQuote := false
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '\\':
-			// 跳过转义的下一个字符（含转义引号），避免 `\"` 被当成引号边界。
-			if inQuote && i+1 < len(s) {
-				i++
-			}
-		case '"':
-			inQuote = !inQuote
-		case '(':
-			if !inQuote {
-				depth++
-			}
-		case ')':
-			if !inQuote {
-				depth--
-				if depth < 0 {
-					return false
-				}
-			}
-		}
-	}
-	return depth == 0 && !inQuote
-}
-
 // isFederationLevel 白名单校验：仅接受契约登记的四个级别。
 func isFederationLevel(v string) bool {
 	switch v {
@@ -589,6 +500,7 @@ func federationSourcePrefix(v string) (string, bool) {
 // buildQuery 从查询参数构造 logcoord.Query，并完成授权目标收敛。
 // 返回 (query, ok)；ok=false 表示已写出错误响应。
 func (h *LogFederationHandler) buildQuery(c *gin.Context) (logcoord.Query, bool) {
+	c.Set(logQueryStartedContext, time.Now())
 	access := getAccess(c)
 	if access == nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
@@ -600,14 +512,11 @@ func (h *LogFederationHandler) buildQuery(c *gin.Context) (logcoord.Query, bool)
 		return logcoord.Query{}, false
 	}
 
-	filter, ok := federationFilter(c)
-	if !ok {
-		// keyword 的括号/引号不配对时不能包进 ( )。放行会让结构化约束（级别/来源）
-		// 只作用于 keyword 的某一条 OR 分支，用户点「只看 WARN」却拿到全量 INFO。
-		// 拒绝而非静默转义：静默改变用户表达式的含义比报错更难排查。
+	filter, filterErr := federationFilter(c)
+	if filterErr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "INVALID_REQUEST",
-			"message": "keyword 的括号或双引号不配对，无法与级别/来源筛选组合",
+			"message": filterErr.Error(),
 		})
 		return logcoord.Query{}, false
 	}
@@ -629,6 +538,15 @@ func (h *LogFederationHandler) buildQuery(c *gin.Context) (logcoord.Query, bool)
 	q.Budget.Limit = parseIntDefault(c.Query("limit"), 0)
 	if q.Budget.Limit < 0 {
 		q.Budget.Limit = 0
+	}
+	if parseBoolParam(c.Query("advanced")) {
+		budget, err := advancedQueryBudget(c, q.Budget)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+			return logcoord.Query{}, false
+		}
+		q.Budget = budget
+		c.Set("logs.query.scope", q)
 	}
 	return q, true
 }
@@ -754,7 +672,10 @@ func (h *LogFederationHandler) Search(c *gin.Context) {
 		writeFederationError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, struct {
+		*logcoord.SearchResponse
+		QueryMeta *logQueryMetadata `json:"query_meta,omitempty"`
+	}{resp, queryMetadata(c, q, len(resp.Items))})
 }
 
 func (h *LogFederationHandler) Tail(c *gin.Context) {
@@ -768,7 +689,10 @@ func (h *LogFederationHandler) Tail(c *gin.Context) {
 		writeFederationError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, struct {
+		*logcoord.SearchResponse
+		QueryMeta *logQueryMetadata `json:"query_meta,omitempty"`
+	}{resp, queryMetadata(c, q, len(resp.Items))})
 }
 
 func (h *LogFederationHandler) Fields(c *gin.Context) {

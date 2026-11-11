@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -7,6 +8,7 @@ import { type LogQueryParams } from '@/api/logs'
 import {
 	buildFederationResult,
   describeLogAggregate,
+  logQueryErrorMessage,
   isLogRequestCanceled,
 	exportFederatedLogs,
 	FederatedExportIncompleteError,
@@ -251,6 +253,8 @@ function escapeLogsQLString(value: string): string {
  */
 export default function LogsPage() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [cancelledQueryKey, setCancelledQueryKey] = useState<string | null>(null)
   const { data: nodes } = useNodes()
   const { data: instances } = useInstances()
   const [searchParams] = useSearchParams()
@@ -278,6 +282,9 @@ export default function LogsPage() {
     return Number.isFinite(n) && n > 0 ? n : null
   })
   const [keyword, setKeyword] = useState('')
+  const [advancedMode, setAdvancedMode] = useState(false)
+  const [advancedQuery, setAdvancedQuery] = useState('*')
+  const [appliedAdvancedQuery, setAppliedAdvancedQuery] = useState('*')
   const debouncedKeyword = useDebounced(keyword.trim(), 250)
     // 默认 24h（2026-09-30 实测依据）：默认「全部时间」会让每个目标的全部分区参与查询——
     // 默认窗＝**15 分钟**（w21 快首屏 ✗）：搜索页首屏走 CP 快路径（Query.Fast ⇒ resolveForQueryFast，
@@ -319,13 +326,27 @@ export default function LogsPage() {
     follow ? new Date(followAnchorMs) : new Date(rangeAnchor),
     follow,
   )
+  // Default node_instance is the authorized-instance workbench, including for
+  // non-admin users. Text sources never expose the advanced input.
+  const advancedAllowed = view !== 'platform' && (view !== 'all' || source === '' || source === 'instance')
+  const activeAdvanced = advancedMode && advancedAllowed
+  const queryDraftDirty = activeAdvanced
+    ? advancedQuery.trim() !== appliedAdvancedQuery
+    : keyword.trim() !== debouncedKeyword
+  const queryInputError = activeAdvanced && advancedQuery.trim() === ''
+    ? t('logs.advancedEmpty')
+    : activeAdvanced && new TextEncoder().encode(advancedQuery.trim()).length > 8192
+      ? t('logs.advancedTooLong')
+      : undefined
   const scope = normalizeLogScope({
     view,
     source: 'instance',
     level,
     ...(nodeId !== null ? { nodeId } : {}),
     ...(instanceId !== null ? { instanceId } : {}),
-    keyword: debouncedKeyword,
+    ...(activeAdvanced
+      ? { advanced: true, logsQL: appliedAdvancedQuery }
+      : { keyword: debouncedKeyword }),
     ...(view !== 'platform' && onlineOnly ? { onlineOnly: true } : {}),
     ...timeParams,
     ...(!follow && page > 1 ? { from: federationCursors[page]?.from, to: federationCursors[page]?.to } : {}),
@@ -424,6 +445,35 @@ export default function LogsPage() {
   // 供标题区状态提示使用（与横幅同源，避免两处判定漂移）。
   const federationDegraded = federation?.degraded === true
   const federationNotReady = federation?.federatedNotReady === true
+  const requestFailure = federation?.failure ?? federationQuery.error
+  const queryFailureStatus = (requestFailure as { response?: { status?: number } } | null)?.response?.status
+  const rawQueryFailure = !federationQuery.isPlaceholderData && (activeAdvanced || queryFailureStatus === 400)
+    ? logQueryErrorMessage(requestFailure)
+    : undefined
+  const queryFailure = rawQueryFailure === 'LOG_ADVANCED_UNSUPPORTED' ? t('logs.advancedUnsupported') : rawQueryFailure
+  const queryMeta = !federationQuery.isPlaceholderData ? federationQuery.data?.queryMeta : undefined
+  const queryCancelled = cancelledQueryKey === filterKey
+  const applyAdvancedQuery = () => {
+    if (queryInputError) return
+    exportRequest.current?.abort()
+    setCancelledQueryKey(null)
+    setAppliedAdvancedQuery(advancedQuery.trim())
+    setPage(1)
+    setFederationCursors({})
+    if (advancedQuery.trim() === appliedAdvancedQuery) void federationQuery.refetch()
+  }
+  const toggleAdvancedQuery = () => {
+    exportRequest.current?.abort()
+    setCancelledQueryKey(null)
+    setAdvancedMode((current) => !current)
+    setPage(1)
+    setFederationCursors({})
+  }
+  const cancelQuery = () => {
+    setCancelledQueryKey(filterKey)
+    setFollow(false)
+    void queryClient.cancelQueries({ queryKey: ['logsFederation', federationParams], exact: true })
+  }
   /**
    * 质量标记（与横幅同源）：**身份冲突**与**未对账重复**是两个不同状态。
    * 只有 CONFLICT 曾可由人工清空诊断记录；UNRESOLVED（重复事件无法对账）从来没有
@@ -685,13 +735,20 @@ export default function LogsPage() {
     const trimmed = expression.trim()
     if (!trimmed) return
     exportRequest.current?.abort()
-    setKeyword((current) => {
-      const previous = current.trim()
-      return previous ? `(${previous}) AND ${trimmed}` : trimmed
-    })
+    if (activeAdvanced) {
+      setAdvancedQuery((current) => {
+        const previous = current.trim()
+        return previous ? `(${previous}) AND ${trimmed}` : trimmed
+      })
+    } else {
+      setKeyword((current) => {
+        const previous = current.trim()
+        return previous ? `(${previous}) AND ${trimmed}` : trimmed
+      })
+    }
     setPage(1)
     setFederationCursors({})
-  }, [])
+  }, [activeAdvanced])
 
   /**
    * 切换视图：只重置分页状态，**保留** nodeId / instanceId 等筛选。
@@ -721,7 +778,7 @@ export default function LogsPage() {
   const exportBlockedByFederation =
     !!federation && !classicExportAllowed && !federation.exportAffordance.showDownload
   const exportDisabled = platformView || exporting || total === 0 || exportBlockedByFederation
-    || keyword.trim() !== debouncedKeyword
+    || queryDraftDirty || !!queryInputError
     || (federationEnabled ? federationQuery.isFetching || federationQuery.isPlaceholderData || federationQuery.isError
       : true)
 	// federated 探测未落地前，items 可能暂时为空——此时不得判为「空结果」，
@@ -930,6 +987,10 @@ export default function LogsPage() {
                 title: t('logs.helpShortcutTitle'),
                 body: t('logs.helpShortcutBody'),
               },
+              {
+                title: t('logs.helpQueryTitle'),
+                body: t('logs.helpQueryBody'),
+              },
             ]}
           />
         )}
@@ -1105,12 +1166,63 @@ export default function LogsPage() {
           ))}
         </div>
 
-        <Input
-          value={keyword}
-          onChange={(e) => { exportRequest.current?.abort(); setKeyword(e.target.value) }}
-          placeholder={t('logs.searchPlaceholder')}
-          className="h-9 w-52"
-        />
+        <div className="flex h-9 min-w-52 items-center gap-1" data-testid="logs-query-controls">
+          {advancedAllowed && (
+            <Button
+              type="button"
+              variant={activeAdvanced ? 'default' : 'outline'}
+              size="sm"
+              className="w-16 shrink-0"
+              data-testid="logs-advanced-toggle"
+              aria-pressed={activeAdvanced}
+              onClick={toggleAdvancedQuery}
+            >
+              LogsQL
+            </Button>
+          )}
+          <Input
+            data-testid="logs-query-input"
+            value={activeAdvanced ? advancedQuery : keyword}
+            onChange={(event) => {
+              exportRequest.current?.abort()
+              if (activeAdvanced) setAdvancedQuery(event.target.value)
+              else setKeyword(event.target.value)
+            }}
+            onKeyDown={(event) => {
+              if (activeAdvanced && event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                applyAdvancedQuery()
+              }
+            }}
+            aria-label={t(activeAdvanced ? 'logs.advancedLabel' : 'logs.searchPlaceholder')}
+            aria-invalid={!!queryInputError}
+            placeholder={t(activeAdvanced ? 'logs.advancedPlaceholder' : 'logs.searchPlaceholder')}
+            className={cn('h-9 w-52', activeAdvanced && 'font-mono')}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={cn('w-14 shrink-0', !activeAdvanced && 'invisible')}
+            data-testid="logs-query-apply"
+            disabled={!activeAdvanced || !!queryInputError}
+            onClick={applyAdvancedQuery}
+          >
+            {t('logs.queryApply')}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={cn('w-14 shrink-0', !federationQuery.isFetching && 'invisible')}
+            disabled={!federationQuery.isFetching}
+            data-testid="logs-query-cancel"
+            aria-label={t('logs.queryCancel')}
+            onClick={cancelQuery}
+          >
+            {t('common.cancel')}
+          </Button>
+        </div>
         <Select
           value={range}
           onValueChange={(v: string) => {
@@ -1275,7 +1387,13 @@ export default function LogsPage() {
         data-testid="logs-coverage-slot"
         className="flex min-h-11 shrink-0 items-center"
       >
-        {federation ? (
+        {queryInputError || queryFailure ? (
+          <p role="alert" data-testid="logs-query-error" className="min-w-0 truncate text-xs text-destructive" title={queryInputError ?? queryFailure}>
+            {queryInputError ?? queryFailure}
+          </p>
+        ) : queryCancelled ? (
+          <p role="status" data-testid="logs-query-cancelled" className="text-xs text-muted-foreground">{t('logs.queryCancelled')}</p>
+        ) : federation ? (
           <CoverageBanner
             federation={federation}
             onAction={handleFederationAction}
@@ -1285,6 +1403,15 @@ export default function LogsPage() {
             }}
           />
         ) : null}
+        {activeAdvanced && queryMeta && !queryFailure && !queryInputError && (
+          <span data-testid="logs-query-meta" className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
+            {t('logs.queryMeta', {
+              ms: Math.round(queryMeta.elapsed_ms), rows: queryMeta.returned_rows,
+              limit: queryMeta.limit, bytes: Math.round(queryMeta.max_bytes / (1024 * 1024)),
+              seconds: queryMeta.timeout_ms / 1000,
+            })}
+          </span>
+        )}
       </div>
 
       <Panel
@@ -1293,7 +1420,7 @@ export default function LogsPage() {
       >
         {isError ? (
           <div
-            data-testid="logs-query-error"
+            data-testid="logs-panel-error"
             className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-destructive"
           >
             {t('logs.loadError')}

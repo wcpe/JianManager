@@ -93,7 +93,9 @@ export function normalizeLogScope(params: LogQueryScope): LogQueryScope {
     ...(params.level ? { level: params.level } : {}),
     ...(params.nodeId ? { nodeId: params.nodeId } : {}),
     ...(params.instanceId ? { instanceId: params.instanceId } : {}),
-    ...(params.keyword?.trim() ? { keyword: params.keyword.trim() } : {}),
+    ...(params.advanced
+      ? { advanced: true, logsQL: params.logsQL?.trim() ?? '' }
+      : params.keyword?.trim() ? { keyword: params.keyword.trim() } : {}),
     ...(params.onlineOnly ? { onlineOnly: true } : {}),
     ...(params.from ? { from: params.from } : {}),
     ...(params.to ? { to: params.to } : {}),

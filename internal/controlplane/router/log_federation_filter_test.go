@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -106,12 +107,13 @@ func TestFederationFilter_NoStructuredFilterKeepsKeywordAsIs(t *testing.T) {
 	r, _ := setupFederationRouter(t, coord)
 	token := getAdminToken(t, r)
 
-	// 即使括号不配对也原样下发（这是既有契约：用户自负表达式的布尔结构）。
+	// 无结构化条件仍保留合法布尔表达式，不将字段查询转义成纯文本。
+	// 不配对/管道表达式现在对两个入口统一拒绝，见 log_advanced_query_test.go。
 	w := makeRequest(r, "GET",
-		"/api/v1/logs/federation/search?limit=100&keyword="+url.QueryEscape("a) OR (b"),
+		"/api/v1/logs/federation/search?limit=100&keyword="+url.QueryEscape("a OR (b)"),
 		nil, token)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	assert.Equal(t, "a) OR (b", w1.lastFilter)
+	assert.Equal(t, "a OR (b)", w1.lastFilter)
 }
 
 // TestFederationFacets_DimensionLimitClamped 守护每维上限不被负值/超限值绕过。
@@ -151,6 +153,69 @@ func TestFederationFacets_DimensionLimitClamped(t *testing.T) {
 			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 			assert.Equal(t, tc.want, w1.lastFacetLimit,
 				"每维上限必须钳制后下发；直接 uint32(用户输入) 会让负值溢出成 4294967295")
+		})
+	}
+}
+
+func TestFederationFilter_AdvancedLogsQL_IsScopedAndBounded(t *testing.T) {
+	tests := []struct {
+		name       string
+		logsQL     string
+		query      string
+		wantStatus int
+		wantFilter string
+	}{
+		{
+			name:       "advanced expression is combined with structured filters",
+			logsQL:     `(error OR level:WARN)`,
+			query:      "level=warn&source=instance",
+			wantStatus: http.StatusOK,
+			wantFilter: `((error OR level:WARN)) AND level:WARN AND log_source_id:"inst:"`,
+		},
+		{
+			name:       "pipes are rejected because search endpoint expects event rows",
+			logsQL:     `error | stats by (level) count()`,
+			query:      "",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "unbalanced advanced expression is rejected",
+			logsQL:     `(error OR warn`,
+			query:      "",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "oversized advanced expression is rejected",
+			logsQL:     strings.Repeat("error ", 2048),
+			query:      "",
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w1 := &fedWorker{
+				items:   []logcoord.Event{fedEvent("e1", "inst:1/file", "g", 1, "2026-09-20T12:00:00Z", "WARN", "error")},
+				targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "inst:1/file", "1")},
+			}
+			resolver := &fedResolver{targets: []logcoord.TargetInfo{{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline}}}
+			coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+			r, _ := setupFederationRouter(t, coord)
+			token := getAdminToken(t, r)
+			path := "/api/v1/logs/federation/search?limit=100&advanced=true&logsQL=" + url.QueryEscape(tc.logsQL)
+			if tc.query != "" {
+				path += "&" + tc.query
+			}
+			w := makeRequest(r, "GET", path, nil, token)
+			require.Equal(t, tc.wantStatus, w.Code, "body=%s", w.Body.String())
+			if tc.wantStatus == http.StatusOK {
+				assert.Equal(t, tc.wantFilter, w1.lastFilter)
+				// The filter is separate from the authorized target selector; an expression
+				// must never become a way to broaden the target set.
+				assert.Equal(t, []string{"inst:1"}, w1.lastTargets)
+			} else {
+				assert.Contains(t, w.Body.String(), "INVALID_REQUEST")
+				assert.Empty(t, w1.lastFilter)
+			}
 		})
 	}
 }

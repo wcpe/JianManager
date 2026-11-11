@@ -128,6 +128,8 @@ type fedWorker struct {
 	streamN int
 	// lastFilter 记录最近一次 Search 收到的过滤表达式，供断言结构化筛选是否已组合下发。
 	lastFilter string
+	// lastTargets 记录最近一次 Search 的授权目标，确认高级表达式不能扩大 scope。
+	lastTargets []string
 	// lastFacetLimit 记录最近一次 Facets 收到的每维上限，供断言 CP 侧钳制是否生效。
 	// DimensionLimit 是 uint32：用户传负值未钳制时会溢出成 4294967295，
 	// 使下游裁剪与 Truncated 标记一并失效（本地裁剪是 field_values 的唯一体积闸）。
@@ -150,6 +152,7 @@ func (w *fedWorker) OpenView(ctx context.Context, req logcoord.WorkerSearchReque
 func (w *fedWorker) Search(_ context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerSearchResponse, error) {
 	w.searchN++
 	w.lastFilter = req.Filter
+	w.lastTargets = append([]string(nil), req.TargetIDs...)
 	quality := logcoord.Quality{
 		DuplicateQuality: logcoord.DupExact,
 		StatsQuality:     logcoord.StatsQExact,
