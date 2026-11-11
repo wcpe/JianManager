@@ -419,6 +419,9 @@ func (s *Supervisor) start(ctx context.Context, ns Namespace) error {
 		return err
 	}
 
+	if err := ctx.Err(); err != nil {
+		return fail(fmt.Errorf("vlsup: start %s: %w", ns, err))
+	}
 	if err := VerifyAsset(s.binPath, s.assetSHA); err != nil {
 		return fail(err)
 	}
@@ -433,12 +436,18 @@ func (s *Supervisor) start(ctx context.Context, ns Namespace) error {
 	if err != nil {
 		return fail(err)
 	}
+	if err := ctx.Err(); err != nil {
+		return fail(fmt.Errorf("vlsup: start %s: %w", ns, err))
+	}
+	// 请求 ctx 只约束本次启动操作；成功后长驻进程由 Stop/StopAll 回收，
+	// 不得因 RPC 返回或看护 ctx 结束被 CommandContext 误杀。仍保留调用方的值。
+	processCtx := context.WithoutCancel(ctx)
 	var proc Process
 	startedAt := time.Now()
 	if factory, ok := s.factory.(namespaceCmdFactory); ok {
-		proc, err = factory.StartNamespace(ctx, ns, s.binPath, args)
+		proc, err = factory.StartNamespace(processCtx, ns, s.binPath, args)
 	} else {
-		proc, err = s.factory.Start(ctx, s.binPath, args)
+		proc, err = s.factory.Start(processCtx, s.binPath, args)
 	}
 	if err != nil {
 		return fail(fmt.Errorf("vlsup: start %s: %w", ns, err))
@@ -458,7 +467,10 @@ func (s *Supervisor) start(ctx context.Context, ns Namespace) error {
 	if exited, waitErr := waitStartupLiveness(ctx, proc, startLivenessWindow); exited || waitErr != nil {
 		_ = proc.Stop(DefaultStopGrace)
 		detail := processExitDetail(proc)
-		return fail(fmt.Errorf("vlsup: %s exited immediately after start%s%s", ns, detailSuffix(waitErr), detail))
+		if waitErr != nil {
+			return fail(fmt.Errorf("vlsup: %s startup observation: %w%s", ns, waitErr, detail))
+		}
+		return fail(fmt.Errorf("vlsup: %s exited immediately after start%s", ns, detail))
 	}
 
 	s.mu.Lock()
@@ -499,6 +511,9 @@ func waitStartupLiveness(ctx context.Context, proc Process, window time.Duration
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if proc.Exited() {
 			return true, nil
 		}
@@ -506,17 +521,10 @@ func waitStartupLiveness(ctx context.Context, proc Process, window time.Duration
 		case <-ctx.Done():
 			return false, ctx.Err()
 		case <-timer.C:
-			return proc.Exited(), nil
+			return proc.Exited(), ctx.Err()
 		case <-tick.C:
 		}
 	}
-}
-
-func detailSuffix(err error) string {
-	if err == nil {
-		return ""
-	}
-	return ": " + err.Error()
 }
 
 // Stop 停止指定 namespace 实例（显式操作）。
@@ -602,13 +610,8 @@ func (s *Supervisor) stop(ctx context.Context, ns Namespace) error {
 // 下次启动时新 VL 因端口被占而立即退出，采集面长期降级。
 func (s *Supervisor) StopAll(ctx context.Context) {
 	for _, ns := range managedNamespaces() {
-		s.mu.Lock()
-		inst, ok := s.instances[ns]
-		running := ok && (inst.state == StateRunning || inst.proc != nil)
-		s.mu.Unlock()
-		if !running {
-			continue
-		}
+		// 必须经 Stop 的操作锁确认归属：在途 Start 可能尚未登记 proc，
+		// 此时按状态快照跳过会漏掉随后启动的长驻进程。
 		if err := s.Stop(ctx, ns); err != nil {
 			// 单个 namespace 回收失败不应阻断其余，交由上层日志记录。
 			continue
