@@ -1,4 +1,4 @@
-import { type Page, expect } from '@playwright/test'
+import { type Locator, type Page, expect } from '@playwright/test'
 
 /**
  * 经 mock 登录页用种子管理员（admin/admin123）登录，等待**控制台外壳**就绪。
@@ -17,8 +17,8 @@ import { type Page, expect } from '@playwright/test'
 export async function login(page: Page, username = 'admin', password = 'admin123'): Promise<void> {
   await page.goto('/login')
   await waitForMockReady(page)
-  await page.getByLabel('用户名', { exact: true }).fill(username)
-  await page.getByLabel('密码', { exact: true }).fill(password)
+  await fillStable(page.getByLabel('用户名', { exact: true }), username)
+  await fillStable(page.getByLabel('密码', { exact: true }), password)
   await page.getByRole('button', { name: '登录', exact: true }).click()
   // 【为何是 45s】登录后要拉 /auth/me + 权限节点 + 首屏路由 chunk；shard 的**第一个**用例
   // 还要等 vite 依赖预构建（首例几十秒很正常）。实测 ops-console-layout / bots-load-wizard
@@ -47,6 +47,39 @@ async function waitForMockReady(page: Page): Promise<void> {
     undefined,
     { timeout: 90_000 },
   )
+}
+
+/**
+ * 往登录表单的**受控**输入框里填值，并确认值真的留住了才继续。
+ *
+ * 【为何不能只 `fill()` 一次】登录页是 React 受控表单（`value` + `onChange` →
+ * `LoginPageView` 的 `useState`）。`fill()` 是「一次性写入整串 + 派发一个 input 事件」，
+ * 与人类逐字输入不同：它只有**一次** state 更新机会。
+ *
+ * mock 就绪后 `main.tsx` 会 `invalidateQueries()`，让 `/setup/status` 等查询重来一次，
+ * 于是 `LoginPage` 重渲染；CI runner 上主线程常被 vite 编译大 chunk 占住，这条 state 更新
+ * 会排在重渲染之后。React 重渲染时按**旧 state（空串）**写回受控 value，DOM 里刚填进去的
+ * 密码就被抹掉了。
+ *
+ * 后果不是「登录失败」而是**根本没登录**：点「登录」时浏览器原生 `required` 校验拦下表单
+ * （trace 截图里那句 “Please fill out this field”），请求一个都没发，页面停在登录页，
+ * 45 秒后报的却是 `[data-slot="console-shell"]` 不可见 —— 与真因毫无关系，极难定位。
+ * 实测 trace：用户名（先填，多出 280ms 给 React 处理）保住了，密码（后填，紧跟着点击）被清空。
+ *
+ * 所以：填 → 等一拍 → 回读，被冲掉就重填，连续两次读数都正确才算稳。
+ */
+async function fillStable(locator: Locator, value: string): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await locator.fill(value)
+    // 给「可能排队的重渲染」一个把值冲掉的机会；冲掉了下一轮就重填。
+    await locator.page().waitForTimeout(50)
+    if ((await locator.inputValue()) !== value) continue
+    // 连续两次读都正确，才认为这次填进去的值已经落到 React state 上。
+    await locator.page().waitForTimeout(50)
+    if ((await locator.inputValue()) === value) return
+  }
+  // 十轮都没稳住：交给断言给出可读的失败（而不是带着空字段去点登录，报成别的错）。
+  await expect(locator).toHaveValue(value)
 }
 
 /**

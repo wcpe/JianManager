@@ -271,7 +271,12 @@ export function ConfigFileEditor({
             </Button>
           </div>
           {readData && (
-            <Badge variant={readData.validation.valid ? 'secondary' : 'destructive'}>
+            // data-testid 供 e2e 精确定位：页面上别处也有一模一样的 “valid” 文案
+            // （资源列表等），用 getByText 会命中多个元素而触发严格模式报错。
+            <Badge
+              data-testid="config-validation-badge"
+              variant={readData.validation.valid ? 'secondary' : 'destructive'}
+            >
               {readData.validation.valid ? 'valid' : 'invalid'}
             </Badge>
           )}

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { login } from './helpers'
+import { login, pinClassicHome } from './helpers'
 
 /**
  * 首屏性能测量（250ms 端到端门限）。
@@ -65,6 +65,10 @@ async function measureOnce(page: Page, route: Route): Promise<number> {
 test.describe('首屏性能（250ms 门限）', () => {
   test('关键页面首屏 p50 ≤ 250ms', async ({ page }) => {
     test.setTimeout(180_000)
+    // `/` 的默认首页已改为 AI 首页，而本文件的首页那一条用 `[data-page="overview"]`
+    // （经典首页）作就绪信号——不钉住模式就永远等不到它，报的却是「首屏超时」，
+    // 会让人以为是性能不达标。必须在登录（任何导航）之前调。
+    await pinClassicHome(page)
     await login(page)
 
     const report: Array<{ label: string; samples: number[]; p50: number }> = []
