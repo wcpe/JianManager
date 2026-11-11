@@ -138,7 +138,14 @@ async function prepareBrowserLogs(page: Page) {
   await page.getByTestId('logs-range-select').click()
   await page.getByRole('option', { name: '最近 15 分钟', exact: true }).click()
   await expect(page.getByText('浏览器六项-0', { exact: true })).toBeVisible()
-  expect(await page.getByTestId('log-row').count()).toBeLessThanOrEqual(24)
+  // 一页 100 条（LogsPage 的 PAGE_SIZE）——163 条夹具里 161 条落在「最近15分钟」窗口内，
+  // 所以当前页渲染满 100 行。
+  //
+  // 早前这里写的是 `<= 24`，与现在的分页尺寸对不上（24 是更早实现遗留的常数），
+  // 已在日志中心重构后失效；真正需要守的是「不多于页尺寸」与「不少于一页」。
+  const rendered = await page.getByTestId('log-row').count()
+  expect(rendered).toBeLessThanOrEqual(100)
+  expect(rendered).toBeGreaterThan(24)
   return { rows, seen }
 }
 
