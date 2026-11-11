@@ -96,8 +96,6 @@ paths:
     $ref: './paths/stats.yaml#/paths/~1stats~1instances'
   /stats/nodes:
     $ref: './paths/stats.yaml#/paths/~1stats~1nodes'
-  /stats/logs:
-    $ref: './paths/stats.yaml#/paths/~1stats~1logs'
   /stats/crashes:
     $ref: './paths/stats.yaml#/paths/~1stats~1crashes'
   /stats/changes:

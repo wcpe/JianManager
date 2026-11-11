@@ -4,6 +4,7 @@ import { cn } from '@jianmanager/ui'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@jianmanager/ui/components/tooltip'
 import type { FederationStreamItem } from '@/api/logFederation'
 import { parseLogSource, type SourceNameLookup } from '@/lib/logs/logs-source-label'
+import { levelColorClass, type LevelCount } from './insight-card-tokens'
 
 /**
  * 日志洞察卡片（表格之外顶部）：事件总量、级别分布、主要来源、时间分布。
@@ -20,37 +21,6 @@ import { parseLogSource, type SourceNameLookup } from '@/lib/logs/logs-source-la
  * 这里要的是堆叠条 / 横向条形 / 迷你柱阵——三者都是「宽高 = 比例」的简单矩形，
  * 手写几十行就能精控颜色 token 与无障碍语义。引一张图表引擎代价不成比例。
  */
-
-/** 一个维度值及其计数。 */
-export interface FacetValue {
-  value: string
-  count: number
-}
-
-export interface LevelCount {
-  level: string
-  count: number
-}
-
-/**
- * 日志级别 → 颜色 token。
- *
- * 与日志行左侧色条、告警页、标签页同一套 `status-*` token，不另造颜色体系。
- */
-export function levelColorClass(level: string): string {
-  switch (level.toLowerCase()) {
-    case 'error':
-    case 'fatal':
-      return 'bg-status-danger'
-    case 'warn':
-    case 'warning':
-      return 'bg-status-warning'
-    case 'info':
-      return 'bg-status-info'
-    default:
-      return 'bg-muted-foreground/50'
-  }
-}
 
 /** 严重度序：堆叠条与图例按固定顺序排，不随后端返回顺序跳。 */
 const LEVEL_ORDER = ['error', 'fatal', 'warn', 'warning', 'info', 'debug']

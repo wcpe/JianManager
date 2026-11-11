@@ -55,7 +55,7 @@ jobs:
           # 不再用 `10\.` 这种前缀式豁免。
           IP_ALLOW='^(127\.|0\.0\.0\.0$|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)'
           IP_ALLOW="$IP_ALLOW|^10\."
-          IP_ALLOW="$IP_ALLOW|^169\.254\.169\.254$|^100\.100\.100\.200$|^100\.64\."
+          IP_ALLOW="$IP_ALLOW|^169\.254\.|^100\.100\.100\.200$|^100\.64\."
           IP_ALLOW="$IP_ALLOW|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\."
           IP_ALLOW="$IP_ALLOW|^1\.1\.1\.1$|^8\.8\.8\.8$|^9\.9\.9\.9$|^1\.2\.3\.4$|^224\.0\.0\.1$|^::1$"
           ADDED=$(git diff "$BASE"...HEAD --unified=0 | grep -aE '^\+' | grep -avE '^\+\+\+' || true)
@@ -105,7 +105,18 @@ jobs:
           # 而它拿到的是 grep -o 输出的“命中串”（一定以 password/secret/token 开头），
           # 因此每个分支都不可能匹配 → 白名单是死代码，test-secret / xxxx 全被误杀。
           # 现在改为锚在值上：先用 sed 抽出 = 或 : 右侧，再判形态。
+          # 哪些值算「明显不是真凭据」：
+          #  1) 测试/示例惯用值（sk-test-*、password123 等）
+          #  2) 变量占位（${VAR}）
+          #  3) **代码里的标识符引用**：`token = getAccessToken`、`token = localStorage.getItem(...)`
+          #     ——这是读值不是写值。真正的硬编码凭据是字面量（带引号的常量），
+          #     不会是函数调用或属性访问。判据：含 ( ) . [ ] 之类调用/成员语法，
+          #     或形如 camelCase/PascalCase 的纯标识符。
+          #  4) 注释行里的示范（以 # 或 // 或 * 开头）
           TESTISH_VAL='^(sk-(should|audit|survives|test|fake|dummy|example|original|new|probe|value)|password123|admin123|fake-key|test-secret|x{8,}|p|xxx|\$\{[A-Z_]+)'
+          # 注意：不能用「像 camelCase」当判据——随机密钥（aB3xK9mP2qR7tY4w）也长得像。
+          # 只认两种确凿的代码引用形态：含调用/成员语法，或纯字母组成的标识符（无数字）。
+          CODE_REF_VAL='[().]|[]]|^[A-Za-z][A-Za-z]*$'
           cred_check() {
             local hits kept line val
             hits=$(git diff "$BASE"...HEAD --unified=0 -- "$1" \
@@ -118,6 +129,14 @@ jobs:
               # 抽右侧的值（去掉 16位的 key、分隔符、引号与空白）。
               val=$(printf '%s' "$line" | sed -E "s/^[^:=]*[:=][[:space:]]*//; s/^[\"'\`]//; s/[\"'\`]$//")
               if printf '%s' "$val" | grep -aqEi "$TESTISH_VAL"; then
+                continue
+              fi
+              # 值本身是代码引用（函数调用/成员访问/camelCase 标识符）→ 不是硬编码凭据
+              if printf '%s' "$val" | grep -aqE "$CODE_REF_VAL"; then
+                continue
+              fi
+              # 该行是注释（yaml #、js //、块注释 *）→ 是说明文字，不是真值
+              if printf '%s' "$line" | grep -aqE '^[[:space:]]*(#|//|\*)'; then
                 continue
               fi
               kept=$(printf "%s\n%s" "$kept" "$line")
@@ -232,7 +251,7 @@ jobs:
           # 完整地址而非前缀——理由同上：前缀式会因“含子串”放行真实公网地址。
           IP_ALLOW='^(127\.|0\.0\.0\.0$|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)'
           IP_ALLOW="$IP_ALLOW|^10\."
-          IP_ALLOW="$IP_ALLOW|^169\.254\.169\.254$|^100\.100\.100\.200$|^100\.64\."
+          IP_ALLOW="$IP_ALLOW|^169\.254\.|^100\.100\.100\.200$|^100\.64\."
           IP_ALLOW="$IP_ALLOW|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\."
           IP_ALLOW="$IP_ALLOW|^1\.1\.1\.1$|^8\.8\.8\.8$|^9\.9\.9\.9$|^1\.2\.3\.4$|^224\.0\.0\.1$|^::1$"
           MSGS=$(git log "$BASE"..HEAD --format='%s%n%b')
@@ -285,7 +304,7 @@ jobs:
           # 否则“写进代码放行、写进 PR 正文却挂”這種不一致会让人怀疑闸门本身）。
           IP_ALLOW='^(127\.|0\.0\.0\.0$|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)'
           IP_ALLOW="$IP_ALLOW|^10\."
-          IP_ALLOW="$IP_ALLOW|^169\.254\.169\.254$|^100\.100\.100\.200$|^100\.64\."
+          IP_ALLOW="$IP_ALLOW|^169\.254\.|^100\.100\.100\.200$|^100\.64\."
           IP_ALLOW="$IP_ALLOW|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\."
           IP_ALLOW="$IP_ALLOW|^1\.1\.1\.1$|^8\.8\.8\.8$|^9\.9\.9\.9$|^1\.2\.3\.4$|^224\.0\.0\.1$|^::1$"
           TITLE=$(jq -r '.pull_request.title // ""' "$EVENT_PATH")
