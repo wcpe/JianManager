@@ -222,10 +222,16 @@ jobs:
           # 一行里只要含 /tmp/（或 /opt/app/ 等白名单路径），同行的
           # `/home/<非白名单用户名>/...` 会被 `grep -v` 整行丢掉 → 真实用户名漏放。
           # 改成：先抽每个路径 token，再逐条判白名单（与 IP 检查同一手法）。
+          # 已知误报：`Users/Groups` 是功能名（「Users/Groups/Templates 页面 i18n 化」
+          # 里的页面清单），形态上恰好命中 `/Users/<名字>/`。它不是路径——
+          # 判据是它后面跟的是另一个功能名（Groups/Templates/Audit 这类），
+          # 而不是文件/目录（不会有 .ts/.go 之类后缀或再套一层具体文件名）。
+          FALSE_POSITIVE_PATH='^/Users/(Groups|Templates|Audit|Roles|Users)/$'
           PATH_HITS=$(printf '%s\n' "$ADDED" \
             | grep -aoE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\' \
             | sort -u \
-            | grep -vE "$ALLOW" || true)
+            | grep -vE "$ALLOW" \
+            | grep -vE "$FALSE_POSITIVE_PATH" || true)
           # 上面已放行 /home/user/ 等占位用户名。但如果某个真实用户名与仓库作者
           # 同名，它不在 ALLOW 里会被整条拦下——包括它后面本就该拦的目录结构，
           # 也会被误报成「用户名泄漏」，掩盖真正的问题。
