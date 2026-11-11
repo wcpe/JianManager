@@ -12,6 +12,7 @@ import type {
 } from '@jianmanager/devmock/contracts'
 import { mockDataScaleProfile } from '@jianmanager/devmock/runtime-control'
 import { nodeIdByUuid, nodeUuidById } from '@jianmanager/devmock/handlers/domains/node'
+import { MockLogQueryError, mockLogFields, mockLogFacets, mockLogStats, mockLogStreams, mockLogStreamValues } from './mock-log-query'
 
 /** 
  * 可观测与日志域 mock handler：metrics / alerts / notifications / tasks / logs。
@@ -678,6 +679,7 @@ function selectLogRows(url: URL, exclusiveTo = false): LogRow[] {
 
 interface MockLogView {
   id: string
+  principal: string
   scope: string
   items: LogRow[]
   limit: number
@@ -691,10 +693,21 @@ function mockLogScope(url: URL): string {
   return JSON.stringify(['view', 'source', 'level', 'nodeId', 'instanceId', 'keyword', 'onlineOnly', 'from', 'to']
     .map((key) => [key, key === 'keyword' ? (url.searchParams.get(key) ?? '').trim() : url.searchParams.get(key) ?? '']))
 }
-function mockLogView(url: URL, required = false): MockLogView | HttpResponse {
+function unsupportedLogExpression(url: URL): HttpResponse | null {
+  const keyword = url.searchParams.get('keyword') ?? ''
+  if (url.searchParams.get('advanced') === 'true' || url.searchParams.get('query')?.trim() || /\b(?:AND|OR|NOT)\b|\||(?:^|[\s(])[A-Za-z_][A-Za-z0-9_]*:/.test(keyword)) {
+    return HttpResponse.json({ error: 'UNSUPPORTED', message: 'mock 仅支持普通关键词；高级 LogsQL 请连接真实后端验证' }, { status: 501 })
+  }
+  return null
+}
+function mockLogView(url: URL, request: Request, required = false): MockLogView | HttpResponse {
+  const unsupported = unsupportedLogExpression(url)
+  if (unsupported) return unsupported
+  const principal = request.headers.get('Authorization') ?? ''
   const id = url.searchParams.get('viewId')
   if (id) {
     const stored = logViews.get(id)
+    if (stored && stored.principal !== principal) return HttpResponse.json({ error: 'FORBIDDEN', message: '不能复用另一主体的日志视图' }, { status: 403 })
     if (!stored || stored.expiresAt <= Date.now() || stored.scope !== mockLogScope(url)) {
       return HttpResponse.json({ error: 'VIEW_STALE' }, { status: 409 })
     }
@@ -702,7 +715,7 @@ function mockLogView(url: URL, required = false): MockLogView | HttpResponse {
   }
   if (required) return HttpResponse.json({ error: 'VIEW_REQUIRED' }, { status: 400 })
   const created: MockLogView = {
-    id: `mock-log-view-${++logViewSequence}`, scope: mockLogScope(url),
+    id: `mock-log-view-${++logViewSequence}`, principal, scope: mockLogScope(url),
     items: structuredClone(selectLogRows(url, true)), limit: Number(url.searchParams.get('limit') ?? '100'), expiresAt: Date.now() + 60_000,
   }
   if (logViews.size >= 64) logViews.delete(logViews.keys().next().value!)
@@ -722,6 +735,22 @@ function mockLogPage(url: URL, view: MockLogView): { start: number; items: LogRo
   return { start, items: view.items.slice(start, start + view.limit) }
 }
 const exactLogSummary = { coverage: { complete: true, targets: [], partial_reasons: [] }, quality: { duplicate_quality: 'exact', stats_quality: 'exact' }, truncated: false }
+
+function mockLogOperation(request: Request, operation: (rows: LogRow[], url: URL) => Record<string, unknown>): HttpResponse {
+  const url = new URL(request.url)
+  const view = mockLogView(url, request)
+  if (view instanceof HttpResponse) return view
+  try {
+    const result = operation(view.items, url)
+    const summary = result.truncated === true
+      ? { ...exactLogSummary, coverage: { complete: false, targets: [], partial_reasons: ['BUDGET_EXCEEDED'] }, quality: { duplicate_quality: 'exact', stats_quality: 'partial' } }
+      : exactLogSummary
+    return HttpResponse.json({ ...summary, ...result, view: { view_id: view.id } })
+  } catch (error) {
+    if (error instanceof MockLogQueryError) return HttpResponse.json({ error: error.code, message: error.message }, { status: error.status })
+    throw error
+  }
+}
 
 /** 日志分页参数（经典 / 联邦两条路径共用；缺省 1 / 100，与前端 PAGE_SIZE 一致）。 */
 function logPageParams(url: URL): { page: number; pageSize: number } {
@@ -2494,14 +2523,14 @@ export const handlers = [
 
   // ===== logs 联邦查询 =====
   //
-  // 假后端只提供**正常可用**的联邦信封（ok:true + available:true）：前端「查询服务不可用」
-  // 的各种降级态由测试按需用 server.use 覆写（404/失败/partial 各有专门用例），
-  // mock 自身不模拟降级——否则默认路径不再是生产同款，页面用例会跑在一条生产不存在的分支上。
+  // 可从种子行忠实计算的查询返回正常信封；不支持的 LogsQL/native live 明确返回 501。
+  // 固定视图、主体和 scope 必须匹配；聚合超上限如实标记 partial/truncated。
+  // 其余故障场景仍由测试按需 server.use 覆写，不借成功空对象掩盖能力缺口。
   domainRoute('get', '/logs/federation', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
-    const view = mockLogView(url)
+    const view = mockLogView(url, info.request)
     if (view instanceof HttpResponse) return view
     const page = mockLogPage(url, view)
     if (page instanceof HttpResponse) return page
@@ -2518,26 +2547,58 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
+    const unsupported = unsupportedLogExpression(url)
+    if (unsupported) return unsupported
     return HttpResponse.json({ ok: true, sourceTag: 'federated', items: selectLogRows(url, true).slice(0, Number(url.searchParams.get('limit') ?? 100)), ...exactLogSummary })
   }),
 
-  // 聚合与导出必须复用同条件的固定视图；错配或到期明确拒绝。
+  // 聚合与元数据读取复用冻结行投影；能力不足明确拒绝，不返回成功空对象。
   domainRoute('get', '/logs/federation/stats', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    const view = mockLogView(new URL(info.request.url))
-    if (view instanceof HttpResponse) return view
-    return HttpResponse.json({ points: [{ agg: { count: view.items.length } }], ...exactLogSummary, view: { view_id: view.id } })
+    return mockLogOperation(info.request, mockLogStats)
   }),
 
   domainRoute('get', '/logs/federation/facets', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    const view = mockLogView(new URL(info.request.url))
-    if (view instanceof HttpResponse) return view
-    const counts = new Map<string, number>()
-    for (const row of view.items) counts.set(row.level.toUpperCase(), (counts.get(row.level.toUpperCase()) ?? 0) + 1)
-    return HttpResponse.json({ dimensions: [{ dimension: 'level', values: [...counts].map(([value, count]) => ({ value, count })), truncated: false }], ...exactLogSummary, view: { view_id: view.id } })
+    return mockLogOperation(info.request, mockLogFacets)
+  }),
+
+  domainRoute('get', '/logs/federation/fields', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return mockLogOperation(info.request, (rows) => ({ fields: mockLogFields(rows) }))
+  }),
+
+  domainRoute('get', '/logs/federation/streams', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return mockLogOperation(info.request, mockLogStreams)
+  }),
+
+  domainRoute('get', '/logs/federation/stream-field-names', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return mockLogOperation(info.request, (rows) => ({ fields: mockLogFields(rows).filter((name) => name === 'log_source_id' || name === 'stream') }))
+  }),
+
+  domainRoute('get', '/logs/federation/stream-field-values', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return mockLogOperation(info.request, mockLogStreamValues)
+  }),
+
+  domainRoute('get', '/logs/federation/live', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ error: 'UNSUPPORTED', message: 'mock 不提供原生 VL 实时流，请使用轮询回退或真实后端' }, { status: 501 })
+  }),
+
+  domainRoute('post', '/logs/federation/live', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ error: 'UNSUPPORTED', message: 'mock 不提供原生 VL 实时流，请使用轮询回退或真实后端' }, { status: 501 })
   }),
 
   /**
@@ -2554,7 +2615,7 @@ export const handlers = [
     const url = new URL(info.request.url)
     const range = url.searchParams.get('range') ?? 'all'
     if (range !== 'all' && range !== 'page') return HttpResponse.json({ error: 'INVALID_EXPORT_RANGE' }, { status: 400 })
-    const view = mockLogView(url, range === 'page')
+    const view = mockLogView(url, info.request, range === 'page')
     if (view instanceof HttpResponse) return view
     const page = range === 'page' ? mockLogPage(url, view) : null
     if (page instanceof HttpResponse) return page
