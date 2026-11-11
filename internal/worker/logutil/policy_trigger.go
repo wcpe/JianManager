@@ -110,7 +110,6 @@ func (t Trigger) Normalize() Trigger {
 // Enabled 报告磁盘水位触发是否可用。
 func (t Trigger) Enabled() bool { return t.Normalize().DiskPercent > 0 }
 
-
 // 反过来，`List` 返回**错误**（读不出来）必须算失败——「读不出来」不等于「里面没东西」。
 
 // ArchiveObjectRetentionPolicy 是归档对象自身回收的策略面。
@@ -144,4 +143,3 @@ func (p ArchiveObjectRetentionPolicy) Normalize() ArchiveObjectRetentionPolicy {
 	}
 	return out
 }
-

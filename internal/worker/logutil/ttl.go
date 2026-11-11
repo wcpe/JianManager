@@ -22,4 +22,3 @@ import (
 func ParseRuntimeTTL(raw string) (time.Duration, error) {
 	return vlruntime.ParseRetention(raw)
 }
-

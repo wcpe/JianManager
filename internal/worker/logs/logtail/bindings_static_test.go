@@ -92,8 +92,8 @@ func TestBindingsAddStatic_Normalize(t *testing.T) {
 
 	b.AddStatic([]StaticSource{
 		{TargetID: "  node:1  ", Path: "  /var/log/a.log  "}, // 空白应被裁掉，stream 缺省为 file
-		{TargetID: "", Path: "/var/log/b.log"},                // 无 target：剔除
-		{TargetID: "node:2", Path: ""},                        // 无 path：剔除
+		{TargetID: "", Path: "/var/log/b.log"},               // 无 target：剔除
+		{TargetID: "node:2", Path: ""},                       // 无 path：剔除
 	})
 
 	got := b.StaticSources()

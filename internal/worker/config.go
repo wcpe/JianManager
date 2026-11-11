@@ -25,9 +25,9 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/hostobs"
 	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
-	"github.com/wcpe/JianManager/internal/worker/logutil"
 	"github.com/wcpe/JianManager/internal/worker/logs/tailer"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
+	"github.com/wcpe/JianManager/internal/worker/logutil"
 	"github.com/wcpe/JianManager/internal/worker/process"
 )
 

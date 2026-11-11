@@ -8,11 +8,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
-	"github.com/wcpe/JianManager/internal/worker/logutil"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
+	"github.com/wcpe/JianManager/internal/worker/logutil"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
