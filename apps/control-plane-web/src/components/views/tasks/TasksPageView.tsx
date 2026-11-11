@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import { ListSkeleton, PageHeader, PageShell, ScopeBar } from '@jianmanager/ui/components/layout'
+import { ListSkeleton, PageHeader, PageHelp, PageShell, ScopeBar } from '@jianmanager/ui/components/layout'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { isNetworkDownloadFailure } from '@/lib/client-dist/download-failure'
 import { isTerminalTask, TASK_KIND_LABEL_KEYS } from '@/lib/tasks/task-status'
@@ -281,7 +281,21 @@ export function TasksPageView({
     // 「共 X 条 · 已加载 Y」挪进 ScopeBar 的说明位：它是随滚动与筛选实时变化的运行时数据，
     // 不属于页面说明。收进页头的问号 tooltip 会变成「不悬停就看不到加载进度」的信息降级。
     <PageShell data-page="tasks">
-      <PageHeader title={t('tasks.title')} description={t('tasks.subtitle')} />
+      <PageHeader
+        title={t('tasks.title')}
+        help={(
+          <PageHelp
+            testId="tasks-help"
+            title={t('tasks.helpTitle')}
+            intro={t('tasks.helpIntro')}
+            sections={[
+              { title: t('tasks.helpKindTitle'), body: t('tasks.helpKindBody') },
+              { title: t('tasks.helpStateTitle'), body: t('tasks.helpStateBody') },
+              { title: t('tasks.helpStopTitle'), body: t('tasks.helpStopBody') },
+            ]}
+          />
+        )}
+      />
 
       {/* 筛选条 */}
       <ScopeBar

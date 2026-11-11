@@ -29,7 +29,27 @@ type Config struct {
 	// 而 dataRoot/var/servers 里 0 个实例目录）。
 	//
 	// 只有需要采**非实例**日志（节点自身日志等）时才需要在这里显式给出。
+	//
+	// ⚠️ 只给路径不给归属是不起作用的：归源靠 Bindings.Resolver，而它只认
+	// 「实例工作目录」与「stdio 桥接目录」。Worker 自身日志两者都不属于，
+	// 于是每轮扫描都会报「文件暂不可采（尚未识别所属源）」、位点不推进，
+	// 一条也采不到。非实例日志必须同时配 StaticSources。
 	Paths []string
+
+	// StaticSources 为 Paths 中的**非实例**文件登记归属。
+	//
+	// # 为何需要它
+	//
+	// 旧链路用 `log_sources` 配这类源（`node:<节点ID>` 等），但新采集器只按绑定表
+	// 推导路径，那段配置被整体忽略（启动时有一条 WARN 声明此事）。结果是：
+	// 运维按文档配了 log_sources，日志却永远采不到，而报错只说「尚未识别所属源」，
+	// 指向不了“你的配置根本没被读”。
+	//
+	// 本字段把那份配置接进来：装配层把每条 log_sources 转成 StaticSource，
+	// Start 为它们登记绑定并参与归源，于是节点自身日志也能采、也能按 node:<id> 查。
+	//
+	// 空值 = 行为不变（仍只靠绑定表推导）。
+	StaticSources []StaticSource
 
 	// Exclude 是排除规则。默认含 .gz（用户明确要求不采归档）。
 	Exclude []string
@@ -165,6 +185,15 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 		if err != nil {
 			return nil, fmt.Errorf("logtail: 打开绑定表: %w", err)
 		}
+	}
+	// 非实例源（节点自身日志等）：装配层从 log_sources 转过来。
+	//
+	// 必须在取 resolver 之前登记——Resolver 是闭包，读的是 Bindings 的当前内容，
+	// 但启动首轮扫描可能在登记前就跑起来，那几秒会把节点日志判成“无法识别源”。
+	if len(cfg.StaticSources) > 0 {
+		bindings.AddStatic(cfg.StaticSources)
+		slog.Info("非实例日志源已登记（节点自身日志等）",
+			"count", len(bindings.StaticSources()))
 	}
 	if resolver == nil {
 		resolver = bindings.Resolver()

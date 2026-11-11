@@ -23,6 +23,15 @@ import { usePlatformDiagnosticsLog } from '@/api/nodeDiagnostics'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { LogExportRangeDialog } from '@/components/logs/LogExportRangeDialog'
+import {
+  EventsTotalCard,
+  LevelDistributionCard,
+  TimeDistributionCard,
+  TopSourcesCard,
+} from '@/components/logs/LogsInsightCards'
+import { LogTimeline } from '@/components/logs/LogTimeline'
+import { PageHeader, PageHelp, PageShell } from '@jianmanager/ui/components/layout'
+import { resolveSourceLabel } from '@/lib/logs/logs-source-label'
 import { useDebounced } from '@/lib/hooks/use-debounced'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -49,7 +58,6 @@ import {
   timeRangeToParams,
   normalizeLogScope,
   logScopeKey,
-  computeVirtualWindow,
   windowForAnchor,
   TIME_RANGE_PRESETS,
   LOG_VIEWS,
@@ -142,6 +150,13 @@ function mapFederationItems(items: unknown[] | null | undefined): LogEntry[] {
           : ''
     const instRaw = o.instance_id ?? o.instanceId
     const nodeRaw = o.node_id ?? o.nodeId
+    // 原始来源串（`inst:2/file`）必须原样留下：展示「具体是哪个实例/节点」
+    // 靠的就是它。`source` 存归一后的类别（instance/worker），两者不可互相替代。
+    const sourceRef = typeof o.log_source_id === 'string'
+      ? o.log_source_id
+      : typeof o.source === 'string'
+        ? o.source
+        : undefined
     return {
       id: typeof o.id === 'number' ? o.id : -(index + 1),
       source: normalizeSource(
@@ -151,6 +166,7 @@ function mapFederationItems(items: unknown[] | null | undefined): LogEntry[] {
             ? o.log_source_id
             : 'instance',
       ),
+      ...(sourceRef ? { sourceRef } : {}),
       level,
       instanceId: typeof instRaw === 'number' ? instRaw : 0,
       instanceUuid: typeof o.instance_uuid === 'string' ? o.instance_uuid : '',
@@ -171,10 +187,7 @@ const ROLE_PLATFORM_ADMIN = 10
 const LEVELS = ['error', 'warn', 'info', 'debug']
 const EXPORT_SCOPES: LogExportScope[] = ['currentPage', 'allMatched', 'range']
 
-// 虚拟滚动：固定行高 + 视口上下各预渲染 8 行。
-const ROW_HEIGHT = 30
-const OVERSCAN = 8
-const VIEWPORT_HEIGHT = 460
+// 虚拟滚动参数已随 LogTimeline 迁入 components/logs/LogTimeline.tsx。
 // 实时跟随轮询间隔（ms）。
 const FOLLOW_INTERVAL = 3000
 
@@ -547,6 +560,41 @@ export default function LogsPage() {
       ? items.length
       : (data?.total ?? 0)
   // 有游标时必须原 view 续页（预算截断空页也可续）；明确结束才移动完整窗口。
+  /**
+   * 当前页的时间戳（毫秒），供时间分布图用。
+   *
+   * 只统计**当前页**：后端 `/stats` 只返回单个聚合值，没有时间序列，
+   * 所以做不了全量直方图。不做假数据，标题也就写「本页」。
+   */
+  const pageTimestamps = useMemo(
+    () =>
+      items
+        .map((it) => new Date(it.time).getTime())
+        .filter((n) => Number.isFinite(n)),
+    [items],
+  )
+
+  /**
+   * 把一行日志映射成「具体是谁」的显示名。
+   *
+   * 直接展示 `inst:2/file` 没人看得懂，而只写「实例」又丢了“到底是哪一个”。
+   * 中间形态是真实名称（`logtest-mc`），拉不到名称时退回带 id 的写法（`实例 #2`）。
+   * 依赖 nodes/instances 列表；列表未到达时先显示带 id 的写法，到达后自动补齐。
+   */
+  const instanceNames = useMemo(() => (instances ?? []).map((it) => ({ id: it.id, name: it.name })), [instances])
+  const nodeNames = useMemo(() => (nodes ?? []).map((n) => ({ id: n.id, name: n.name })), [nodes])
+  const sourceLabelOf = useCallback(
+    (log: LogEntry) => {
+      const resolved = resolveSourceLabel(log, { instances: instanceNames, nodes: nodeNames })
+      if (resolved.name) return resolved.name
+      if (resolved.id !== null && resolved.kind !== 'unknown' && resolved.kind !== 'control_plane') {
+        return `${t(`logs.source_${resolved.kind}`, resolved.kind)} #${resolved.id}`
+      }
+      return t(`logs.source_${resolved.kind}`, resolved.kind)
+    },
+    [instanceNames, nodeNames, t],
+  )
+
   const federationCanContinue = Boolean(federation?.response.nextCursor && federation?.response.viewId)
   const federationCanShift = !federation?.response.nextCursor && federation?.response.exhausted === true
     && items.length > 0 && range !== 'all' && typeof federationParams.from === 'string'
@@ -627,9 +675,46 @@ export default function LogsPage() {
 	// 限流（rate_limited）同样是失败态：emptySuccessAllowed 由 classified 判为 false。
 	// 联邦视图下**没有**「降级即空成功」这条例外了：降级只说明查不到，不允许显示成
 	// 「暂无日志」——那是把未查询说成不存在。平台视图仍按经典路径判定。
-	const emptySuccessAllowed = federationEnabled
+  const emptySuccessAllowed = federationEnabled
 		? (federation?.classified.emptySuccessAllowed ?? false)
 		: (!federation || federation.classified.emptySuccessAllowed)
+
+  /**
+   * 空结果的原因分类：决定空态提示怎么说。
+   *
+   * 三类的**处置完全不同**：
+   *  - `control_plane`：设计如此，重试无效——CP 自身日志只落平台库，
+   *    根本不进联邦数据面（后端 log_federation 把它映射到不可能命中的前缀）。
+   *  - `worker`：需节点登记日志源，属配置问题，不是等。
+   *  - `pending`：覆盖尚未校验，等一下重试即可。
+   *  - `no_data`：真的没匹配，放宽条件。
+   *
+   * 判定顺序有讲究，**不能照搬代码直觉**：
+   *  1. 先判 `control_plane`——它是“永远不可能有”，优先级最高；
+   *  2. 再判 `pending`——未校验时 emptySuccessAllowed 也是 false，
+   *     若先判 not_ready 会把 pending 吞掉（实测踩过）；
+   *  3. 然后 not_ready（真失败）；
+   *  4. 最后才落到具体来源与无数据。
+   */
+  const emptyReason: 'control_plane' | 'worker' | 'pending' | 'no_data' | 'not_ready' =
+    source === 'control_plane'
+      ? 'control_plane'
+      : federation?.response.coverage?.pending
+        ? 'pending'
+        : !emptySuccessAllowed
+          ? 'not_ready'
+          : source === 'worker'
+            ? 'worker'
+            : 'no_data'
+
+  const emptyHint = t(`logs.emptyHint${{
+    control_plane: 'SourceControlPlane',
+    worker: 'SourceWorker',
+    pending: 'Pending',
+    no_data: 'NoData',
+    // not_ready 已有专用文案（logsFederation.emptyNotSuccess），不再叠一层提示。
+    not_ready: 'NoData',
+  }[emptyReason]}`)
 
   const handleExport = async (exportScope: LogExportScope, bounds?: { from: string; to: string }) => {
     if (exportDisabled || exportRequest.current) return
@@ -724,76 +809,122 @@ export default function LogsPage() {
   )
 
   return (
-    <div data-page="logs" className="jm-page-stack flex h-full min-h-0 flex-col gap-4">
-      <div className="jm-page-header">
-        <div className="flex min-w-0 items-center gap-2">
-          <h1 className="jm-page-title">{t('logs.title')}</h1>
-          {/* 状态与提示固定在标题区：不占用列表空间，也不因状态变化推动下方布局。 */}
-          {/* 徽标仅在确有来源标记时渲染：标题行是 flex，空占位只会让测试与读屏
-              多拿到一个空节点，而它本身不承载高度，去掉不影响布局稳定。 */}
-          {federation?.sourceTag && (
-            <span data-testid="logs-source-tag" className="inline-flex shrink-0">
-              <StatusBadge
-                level={federation.sourceTag === 'legacy' ? 'warning' : 'info'}
-                label={t(`logsFederation.sourceTag.${federation.sourceTag}`)}
-              />
-            </span>
-          )}
-          {(federationDegraded || federationNotReady) && (
-            <span
-              data-testid="logs-not-ready-hint"
-              className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
-              // 与横幅同源区分：只有引擎未启用才给「去启用」指引；接口不可达时
-              // 让用户去开启是无效指令，只说可查范围与后续办法。
-              title={
-                federationNotReady
-                  ? t('logsFederation.degradedHint')
-                  : t('logsFederation.degradedUnavailableHint')
-              }
-            >
-              <Info className="size-3.5 shrink-0" />
-              <span className="truncate">
-                {federationNotReady
-                  ? t('logsFederation.degradedTitleShort')
-                  : t('logsFederation.degradedUnavailableTitleShort')}
-              </span>
-            </span>
-          )}
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={exportDisabled}
-              data-testid="logs-export-trigger"
-              title={
-                exportBlockedByFederation && federation?.exportAffordance.blockedKey
-                  ? t(federation.exportAffordance.blockedKey)
-                  : federation && !federation.degraded && federation.exportAffordance.showDownload
-                    ? t(LOGS_FEDERATION_KEYS.exportPermissionRecheckHint)
-                    : undefined
-              }
-            >
-              <Download className="size-3.5" />
-              {exporting ? t('logs.exporting') : t('logs.export')}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {EXPORT_SCOPES.map((scope) => (
-              <DropdownMenuItem
-                key={scope}
-                onSelect={() => void handleExport(scope)}
-              >
-                {t(`logs.exportScope_${scope}`)}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {exporting && (
-          <Button size="sm" variant="outline" onClick={() => exportRequest.current?.abort()}>{t('common.cancel')}</Button>
+    <PageShell variant="fixed" data-page="logs">
+      {/* 页头用布局层 PageHeader：标题 + 帮助浮层 + 右侧操作。
+       *
+       * 为何换成它而不是继续手写 jm-page-header/jm-page-title：
+       * 仓库里 49 个页面已经统一走 PageHeader（标题只出现一次、位于最上、
+       * 说明收进问号里）。日志页是少数还留着手写骨架的，导致标题字号、
+       * 与操作区的对齐都与别处不同——同一产品里两个页面长得不一样，
+       * 用户会以为是不同的东西。
+       *
+       * 帮助用 help（点击展开浮层）而不是 description（悬停 Tooltip）：
+       * 本页要讲清「三种视图的区别」「三类来源」「覆盖完整性」「跟随」
+       * 「多选复制」五件事，一句话装不下；Tooltip 在触摸设备上还展不开。 */}
+      <PageHeader
+        title={t('logs.title')}
+        help={(
+          <PageHelp
+            testId="logs-help"
+            title={t('logs.helpTitle')}
+            intro={t('logs.helpIntro')}
+            sections={[
+              {
+                title: t('logs.helpViewsTitle'),
+                body: t('logs.helpViewsIntro'),
+                items: [
+                  t('logs.helpViewNodeInstance'),
+                  t('logs.helpViewPlatform'),
+                  t('logs.helpViewAll'),
+                ],
+              },
+              {
+                title: t('logs.helpSourceTitle'),
+                body: t('logs.helpSourceIntro'),
+                items: [
+                  t('logs.helpSourceInstance'),
+                  t('logs.helpSourceWorker'),
+                  t('logs.helpSourceCp'),
+                ],
+              },
+              {
+                title: t('logs.helpCoverageTitle'),
+                body: t('logs.helpCoverageBody'),
+              },
+              {
+                title: t('logs.helpFollowTitle'),
+                body: t('logs.helpFollowBody'),
+              },
+              {
+                title: t('logs.helpShortcutTitle'),
+                body: t('logs.helpShortcutBody'),
+              },
+            ]}
+          />
         )}
-      </div>
+        actions={(
+          <>
+            {/* 来源做标（原「联邦」「Legacy」徽标）已删。
+             *
+             * 「联邦」「Legacy」是内部架构词，用户看不懂它们的含义，只知道“头上多了一个徒标”。
+             * 真正的信息已经由页面本身体现：查的是实时日志还是历史日志、覆盖完不完整，
+             * 都在下方覆盖横幅与空态提示里说清楚了。徒标只增加噪音。 */}
+            {(federationDegraded || federationNotReady) && (
+              <span
+                data-testid="logs-not-ready-hint"
+                className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
+                // 与横幅同源区分：只有引擎未启用才给「去启用」指引；接口不可达时
+                // 让用户去开启是无效指令，只说可查范围与后续办法。
+                title={
+                  federationNotReady
+                    ? t('logsFederation.degradedHint')
+                    : t('logsFederation.degradedUnavailableHint')
+                }
+              >
+                <Info className="size-3.5 shrink-0" />
+                <span className="truncate">
+                  {federationNotReady
+                    ? t('logsFederation.degradedTitleShort')
+                    : t('logsFederation.degradedUnavailableTitleShort')}
+                </span>
+              </span>
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={exportDisabled}
+                  data-testid="logs-export-trigger"
+                  title={
+                    exportBlockedByFederation && federation?.exportAffordance.blockedKey
+                      ? t(federation.exportAffordance.blockedKey)
+                      : federation && !federation.degraded && federation.exportAffordance.showDownload
+                        ? t(LOGS_FEDERATION_KEYS.exportPermissionRecheckHint)
+                        : undefined
+                  }
+                >
+                  <Download className="size-3.5" />
+                  {exporting ? t('logs.exporting') : t('logs.export')}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {EXPORT_SCOPES.map((scope) => (
+                  <DropdownMenuItem
+                    key={scope}
+                    onSelect={() => void handleExport(scope)}
+                  >
+                    {t(`logs.exportScope_${scope}`)}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {exporting && (
+              <Button size="sm" variant="outline" onClick={() => exportRequest.current?.abort()}>{t('common.cancel')}</Button>
+            )}
+          </>
+        )}
+      />
       <LogExportRangeDialog
         key={`${scopeKey}|${exportRangeOpen}`}
         open={exportRangeOpen}
@@ -829,6 +960,54 @@ export default function LogsPage() {
           ),
         )}
       </div>
+
+      {/* 洞察卡片区：表格之外的顶部。
+       *
+       * 为何抬到这里而不是留在表格工具栏里：原来它们挤在一行与筛选控件争宽，
+       * 用户看到的是「本次观测到 930 个事件（非精确总量）· 覆盖不完整 · 质量：EXACT / PARTIAL」
+       * 这串读不懂的徒标，连带着把日志面板顶满。拆成卡片后，每块只回答一个问题，
+       * 且表格区只剩日志本身。
+       *
+       * 跟随态不渲染：跟随是“看最新的还在不断进来的那几行”，聚合数字每 3 秒就陈旧，
+       * 展示一个持续跳动的旧快照比不展示更误导。 */}
+      {!follow && insightsVisible && (
+        <div
+          data-testid="logs-federation-insights"
+          className="grid shrink-0 grid-cols-2 gap-2 lg:grid-cols-4"
+        >
+          <EventsTotalCard
+            count={statsCount}
+            exact={statsSummary.exact}
+            partial={statsSummary.partial}
+            pending={statsSummary.pending}
+            truncated={statsSummary.truncated}
+            failed={federationStats.isError}
+            quality={statsSummary.quality}
+            summary={
+              federationFacets.isError
+                ? t('logs.vizSummaryFacetsFailed')
+                : !facetsSummary.exact
+                  ? `${t('logs.aggregateFacets')} · ${t(facetsSummary.partial ? 'logs.aggregatePartial' : facetsSummary.pending ? 'logs.aggregatePending' : 'logs.aggregateUnverified')}`
+                  : facetsTruncated
+                    ? `${t('logs.aggregateFacets')} · ${t('logs.aggregateTruncated')}`
+                    : undefined
+            }
+          />
+          <LevelDistributionCard
+            levels={levelFacets.map((facet) => ({ level: facet.value, count: facet.count }))}
+            uncertain={!facetsSummary.exact || facetsTruncated}
+            failed={federationFacets.isError}
+          />
+          {streamItems.length > 0 && (
+            <TopSourcesCard
+              items={streamItems}
+              lookup={{ instances, nodes }}
+              countsReliable={streamsComplete}
+            />
+          )}
+          <TimeDistributionCard timestamps={pageTimestamps} />
+        </div>
+      )}
 
       {/* 强筛选工具栏 */}
       <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
@@ -959,85 +1138,6 @@ export default function LogsPage() {
         </button>
       </div>
 
-	  {/* 洞察栏固定占位（高度恒为 min-h-8）：此前仅在联邦活跃且有数据时整条插入，
-	      进入页面后会「弹」出一条并把日志列表往下推。现改为始终渲染容器，内容为空时
-	      仅占位不显示任何文字，列表位置保持稳定。
-	      占位容器不挂 testid —— 否则「等洞察栏出现」会立刻命中空容器，读到的
-	      是尚未填充的空文本；挂 testid 的仍是有内容的那一份。 */}
-	  {!follow && (
-		<div
-		  {...(insightsVisible ? { 'data-testid': 'logs-federation-insights' } : {})}
-		  className="flex min-h-8 flex-wrap items-center gap-2 border-y px-1 py-1 text-xs text-muted-foreground"
-		>
-      {insightsVisible && (
-        <>
-          <span data-testid="logs-stats-summary" role={federationStats.isError ? 'alert' : 'status'} title={statsSummary.reasons.join(', ')}>
-            {federationStats.isError ? t('logs.aggregateFailed', { kind: t('logs.aggregateStats') })
-              : statsCount !== undefined ? t(statsSummary.exact ? 'logs.statsEvents' : 'logs.statsObservedEvents', { count: statsCount })
-                : t('logs.aggregateUnknown', { kind: t('logs.aggregateStats') })}
-            {!federationStats.isError && !statsSummary.exact && ` · ${t(statsSummary.partial ? 'logs.aggregatePartial' : statsSummary.pending ? 'logs.aggregatePending' : 'logs.aggregateUnverified')}`}
-            {!federationStats.isError && !statsSummary.qualityExact && ` · ${t('logs.aggregateQuality', { quality: statsSummary.quality })}`}
-            {statsSummary.truncated && ` · ${t('logs.aggregateTruncated')}`}
-          </span>
-          <span data-testid="logs-facets-summary" role={federationFacets.isError ? 'alert' : 'status'} title={facetsSummary.reasons.join(', ')}>
-            {federationFacets.isError ? t('logs.aggregateFailed', { kind: t('logs.aggregateFacets') })
-              : t('logs.aggregateFacets')}
-            {!federationFacets.isError && !facetsSummary.exact && ` · ${t(facetsSummary.partial ? 'logs.aggregatePartial' : facetsSummary.pending ? 'logs.aggregatePending' : 'logs.aggregateUnverified')}`}
-            {!federationFacets.isError && !facetsSummary.qualityExact && ` · ${t('logs.aggregateQuality', { quality: facetsSummary.quality })}`}
-            {facetsTruncated && ` · ${t('logs.aggregateTruncated')}`}
-          </span>
-          {levelFacets.map((facet) => (
-            <StatusBadge key={facet.value} level={logLevelStatus(facet.value.toLowerCase())}
-              label={`${facet.value} ${facet.count}${facetsSummary.exact && !facetsTruncated ? '' : ` (${t('logs.aggregateObserved')})`}`} />
-          ))}
-          {/* 流清单：窗内有哪些源在刷日志、各多少条。
-              这是「哪个实例在刷屏」的直接答案，比 facets 的 stream 维度更全
-              （后者只是 stdout/stderr 两个值，不含源）。
-              条数只能在 complete=true 时当断言：VL 在截断时会把所有 hits 归零。 */}
-          {streamItems.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  data-testid="logs-streams-trigger"
-                  className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground transition-colors duration-200 ease-ios hover:bg-accent"
-                >
-                  {t('logs.streamsCount', { count: streamItems.length })}
-                  {!streamsComplete && ` · ${t('logs.streamsCountsUnreliable')}`}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="max-h-80 w-80 overflow-y-auto">
-                {streamItems.slice(0, 50).map((item) => (
-                  <DropdownMenuItem
-                    key={`${item.log_source_id}\u0000${item.stream}`}
-                    // 只展示不筛选：`source` 参数是**来源类别前缀**（instance/worker），
-                    // 不是具体源 id，拿 log_source_id 去砸它会把查询砸成 0 条。
-                    // 真要做「点一下就筛这个源」得先给后端加一个按 log_source_id 的
-                    // 精确筛选参数，那是另一件事。
-                    disabled
-                    title={item.raw ?? `${item.log_source_id} ${item.stream}`}
-                    className="flex items-center justify-between gap-3 text-xs"
-                  >
-                    <span className="truncate">{item.log_source_id || t('logs.streamsUnknownSource')}
-                      {item.stream ? <span className="ml-1 text-muted-foreground">{item.stream}</span> : null}
-                    </span>
-                    <span className="shrink-0 tabular-nums text-muted-foreground">
-                      {streamsComplete ? item.hits : '?'}
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-                {streamItems.length > 50 && (
-                  <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-                    {t('logs.streamsMore', { count: streamItems.length - 50 })}
-                  </div>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </>
-      )}
-		</div>
-	  )}
 
       {/* 覆盖/失败态横幅：partial/offline/failed 不得当空成功。 */}
       {federation && (
@@ -1073,6 +1173,14 @@ export default function LogsPage() {
             // follow 轮询每 3 秒换桶，不置位以免闪烁。
             loading={isLoading || (!follow && federationQuery.isPlaceholderData)}
             emptySuccessAllowed={emptySuccessAllowed}
+            emptyReason={emptyReason}
+            emptyHint={emptyHint}
+            highlightKeyword={keyword}
+            sourceLabelOf={sourceLabelOf}
+            onCopyResult={(ok, count) => {
+              if (ok) toast.success(t('logs.copySucceeded', { count }))
+              else toast.error(t('logs.copyFailed'))
+            }}
           />
           <LogFooter
             follow={follow}
@@ -1097,7 +1205,7 @@ export default function LogsPage() {
           />
         </Panel>
       )}
-    </div>
+    </PageShell>
   )
 }
 
@@ -1314,125 +1422,6 @@ function LevelPill({
       )}
       {children}
     </button>
-  )
-}
-
-/**
- * 日志时间线（虚拟滚动）：固定行高，仅渲染视口附近的窗口，千行级日志不一次性入 DOM。
- * 跟随态下每次数据更新自动滚到顶部（最新在前）。
- */
-function LogTimeline({
-  items,
-  total,
-  follow,
-  filterKey,
-  loading = false,
-  emptySuccessAllowed = true,
-}: {
-  items: import('@/api/logs').LogEntry[]
-  total: number
-  follow: boolean
-  /**
-   * 筛选身份键（view/来源/在线过滤/实例/节点/级别/关键字/范围；**不含 page** ✗——翻页需保留滚动位置）。
-   * 变化即重置滚动：切实例后新列表更短时，旧 scrollTop 会落在空白区，visible 为空 ⇒
-   * 表现为「点什么都不动/刷不出来」✗✓。
-   * 维度须与参与查询的筛选条件一致（详见调用处 filterKey 的说明），否则会出现
-   * 「筛选已变、滚动与保留项仍按旧身份判定」的不一致。
-   */
-  filterKey: string
-  /** 查询尚未完成：此时不判空态，避免把「未就绪」误报为空结果。 */
-  loading?: boolean
-  /** false 时禁止把空列表呈成「无日志」成功空态。 */
-  emptySuccessAllowed?: boolean
-}) {
-  const { t } = useTranslation()
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [scrollTop, setScrollTop] = useState(0)
-
-  // 跟随态：新数据到来时滚回顶部，保证最新行可见。
-  useEffect(() => {
-    if (follow && containerRef.current) {
-      containerRef.current.scrollTop = 0
-      setScrollTop(0)
-    }
-  }, [follow, items])
-
-  // 筛选变化（非翻页）⇒ 无条件重置滚动到顶部：避免旧偏移落在新列表的空白区 ✗✓。
-  useEffect(() => {
-    if (containerRef.current) {
-      containerRef.current.scrollTop = 0
-    }
-    // 筛选变化需同步把虚拟窗口起点复位（与上面 DOM 的 scrollTop 同一次提交内完成，
-    // 否则窗口仍停在旧 startIndex、首帧渲染错位）——这是「外部系统同步」而非派生 state。
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setScrollTop(0)
-  }, [filterKey])
-
-  const win = computeVirtualWindow({
-    scrollTop,
-    viewportHeight: VIEWPORT_HEIGHT,
-    rowHeight: ROW_HEIGHT,
-    total: items.length,
-    overscan: OVERSCAN,
-  })
-  const visible = items.slice(win.startIndex, win.endIndex)
-
-  // 查询尚未完成时不判空：交由上方 loading 分支呈现，避免把「未就绪」误报为空结果。
-  if (items.length === 0 && !loading) {
-    return (
-      <div
-        data-testid="logs-empty-state"
-        data-empty-success={emptySuccessAllowed ? 'true' : 'false'}
-        className="flex items-center justify-center text-sm text-muted-foreground"
-        style={{ height: VIEWPORT_HEIGHT }}
-      >
-        {emptySuccessAllowed ? t('logs.empty') : t('logsFederation.emptyNotSuccess')}
-      </div>
-    )
-  }
-
-  return (
-    <div
-      ref={containerRef}
-      onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-      data-testid="logs-virtual"
-      data-total-count={total}
-      className="min-h-0 flex-1 overflow-y-auto"
-      style={{ maxHeight: VIEWPORT_HEIGHT }}
-    >
-      <div style={{ height: win.padTop }} />
-      {visible.map((log) => (
-        <LogRow key={log.id} log={log} />
-      ))}
-      <div style={{ height: win.padBottom }} />
-    </div>
-  )
-}
-
-/** 单条日志行（固定高度，等宽内容）：时间 + 级别徽标 + 来源 + 消息，hover 行高亮。 */
-function LogRow({ log }: { log: import('@/api/logs').LogEntry }) {
-  const { t } = useTranslation()
-  return (
-    <div
-      data-testid="log-row"
-      className="flex items-center gap-3 border-b border-border/60 px-3 text-xs transition-colors hover:bg-accent/50"
-      style={{ height: ROW_HEIGHT }}
-    >
-      <span className="w-40 shrink-0 font-mono text-[11px] text-muted-foreground">
-        {new Date(log.time).toLocaleString()}
-      </span>
-      <StatusBadge
-        level={logLevelStatus(log.level)}
-        label={t(`logs.level_${log.level}`, log.level)}
-        className="w-16 shrink-0 justify-center"
-      />
-      <span className="w-14 shrink-0 text-[11px] text-muted-foreground">
-        {t(`logs.source_${log.source}`, log.source)}
-      </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[11px]" title={log.message}>
-        {log.message}
-      </span>
-    </div>
   )
 }
 

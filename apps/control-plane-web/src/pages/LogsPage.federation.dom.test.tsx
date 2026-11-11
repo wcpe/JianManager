@@ -155,9 +155,11 @@ describe('LogsPage × logs-federation', () => {
     )
 
     renderWithProviders(<LogsPage />)
-    expect(await screen.findByTestId('logs-source-tag')).toHaveTextContent('Legacy')
     const banner = await screen.findByTestId('logs-coverage-banner')
     expect(banner.dataset.state).toBe('legacy')
+    // 来源做标（「Legacy」/「联邦」）已删：内部架构词对用户无意义。
+    // 同样的信息由下方横幅标题承载（「含切换前的历史数据」），保留断言以防回潮。
+    expect(screen.queryByTestId('logs-source-tag')).not.toBeInTheDocument()
     expect(screen.getAllByTestId('logs-source-tag-banner').length).toBeGreaterThan(0)
     // 横幅标题改为面向用户的说法（不再出现 Legacy 这类内部术语）。
     expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent('含切换前的历史数据')
@@ -178,7 +180,8 @@ describe('LogsPage × logs-federation', () => {
     const title = screen.getByTestId('logs-coverage-title')
     expect(title).toHaveTextContent('实时日志查询服务暂不可用')
     expect(title).not.toHaveTextContent('未启用')
-    expect(await screen.findByTestId('logs-source-tag')).toHaveTextContent('Legacy')
+    // 来源做标已删（见 ③ 的说明）：此处不再断言其存在。
+    expect(screen.queryByTestId('logs-source-tag')).not.toBeInTheDocument()
     // 查询服务不可用 → 本视图就是没有数据：经典 /logs 的种子行（见 stubBaseHandlers 桩）不得渲染。
     // 若它们出现，用户会把平台/历史日志读成「节点/实例日志」，即静默换源式误导。
     await waitFor(() =>
@@ -507,9 +510,14 @@ describe('LogsPage × logs-federation', () => {
 		)
 		renderWithProviders(<LogsPage />)
 		const insights = await screen.findByTestId('logs-federation-insights')
-		expect(insights).toHaveTextContent('当前视图 42 个事件')
+		// 洞察区已改为卡片：主数字在 -count，不再是一句拼凑的文本。
+		expect(await screen.findByTestId('logs-events-total-count')).toHaveTextContent('42')
 		// facets 串行在 stats 落定之后（统计 → 维度），文本到达需等待。
-		await waitFor(() => expect(insights).toHaveTextContent('ERROR 42'))
+		await waitFor(() =>
+			expect(screen.getByTestId('logs-level-legend')).toHaveAttribute('data-level', 'ERROR'),
+		)
+		expect(screen.getByTestId('logs-level-legend')).toHaveAttribute('data-count', '42')
+		expect(insights).toBeInTheDocument()
 	})
 
 	it('Stats 使用后端真实 wire 形态 agg.count 呈现事件数', async () => {
@@ -529,8 +537,8 @@ describe('LogsPage × logs-federation', () => {
 			),
 		)
 		renderWithProviders(<LogsPage />)
-		const insights = await screen.findByTestId('logs-federation-insights')
-		expect(insights).toHaveTextContent('当前视图 3 个事件')
+		await screen.findByTestId('logs-federation-insights')
+		expect(await screen.findByTestId('logs-events-total-count')).toHaveTextContent('3')
 	})
 
 	it('实时跟随切换到 FOLLOW_LIVE 联邦 Tail', async () => {
@@ -718,9 +726,11 @@ describe('LogsPage × logs-federation', () => {
 		)
 	})
 
-	it('⑭ 来源为原始 log_source_id 时归一显示为可读标签', async () => {
+	it('⑭ 来源列显示具体实例/节点名称，而不再是泛称“实例/节点”', async () => {
 		loginMockUser()
 		server.use(
+			http.get(API('/nodes'), () => HttpResponse.json([{ id: 1, name: 'dev-node', status: 1 }])),
+			http.get(API('/instances'), () => HttpResponse.json([{ id: 144, name: 'logtest-mc', nodeId: 1 }])),
 			http.get(API('/logs/federation'), () => HttpResponse.json({
 				sourceTag: 'federated',
 				items: [
@@ -733,12 +743,33 @@ describe('LogsPage × logs-federation', () => {
 			})),
 		)
 		renderWithProviders(<LogsPage />)
-		// 归一后应显示 i18n 标签（实例/节点），而非原始 inst:144/file
+		// 原始 inst:144/file 不得直接出现在界面上。
 		await screen.findByText('instance-src-line')
 		expect(screen.queryByText('inst:144/file')).toBeNull()
-		expect(screen.getAllByText('实例').length).toBeGreaterThan(0)
+		// 关键：显示具体名称，而不是泛称「实例」「节点」。
+		expect(await screen.findByText('logtest-mc')).toBeInTheDocument()
+		expect(await screen.findByText('dev-node')).toBeInTheDocument()
 		expect(screen.getByText('worker-src-line')).toBeInTheDocument()
-		expect(screen.getAllByText('节点').length).toBeGreaterThan(0)
+	})
+
+	it('⑭b 名称拉不到时退回带 id 的写法，而不是泛称', async () => {
+		loginMockUser()
+		server.use(
+			// 列表为空（或未到达）：不能退回「实例」——那会被读成“某个未指明实例”。
+			http.get(API('/nodes'), () => HttpResponse.json([])),
+			http.get(API('/instances'), () => HttpResponse.json([])),
+			http.get(API('/logs/federation'), () => HttpResponse.json({
+				sourceTag: 'federated',
+				items: [
+					{ id: 1, log_source_id: 'inst:144/file', level: 'info', instanceId: 144, nodeId: 1, message: 'orphan-src-line', time: '2026-07-18T12:00:00Z' },
+				],
+				coverage: { complete: true, partial_reasons: [], targets: [] },
+				quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+			})),
+		)
+		renderWithProviders(<LogsPage />)
+		await screen.findByText('orphan-src-line')
+		expect(await screen.findByText('实例 #144')).toBeInTheDocument()
 	})
 
 	it('⑮ 选择来源后 source 参数下发到联邦请求', async () => {

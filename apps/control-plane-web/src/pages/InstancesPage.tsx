@@ -41,7 +41,7 @@ import {
   type InstanceOptionalColumn,
   type SavedInstanceView,
 } from '@/lib/instances/instance-view-prefs'
-import { DataPanelSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { DataPanelSkeleton, PageHeader, PageHelp, PageShell } from '@jianmanager/ui/components/layout'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { ViewToggle } from '@jianmanager/ui/components/view-toggle'
@@ -990,7 +990,19 @@ export default function InstancesPage() {
       <PageHeader
         className="[&_[data-slot=page-header]]:gap-0"
         title={t('instances.title')}
-        description={t('instances.subtitle')}
+        help={(
+          <PageHelp
+            testId="instances-help"
+            title={t('instances.helpTitle')}
+            intro={t('instances.helpIntro')}
+            sections={[
+              { title: t('instances.helpKpiTitle'), body: t('instances.helpKpiBody') },
+              { title: t('instances.helpStateTitle'), body: t('instances.helpStateBody') },
+              { title: t('instances.helpBulkTitle'), body: t('instances.helpBulkBody') },
+              { title: t('instances.helpCreateTitle'), body: t('instances.helpCreateBody') },
+            ]}
+          />
+        )}
         actions={
           /* 
             【四种新建入口收成一个分裂按钮】

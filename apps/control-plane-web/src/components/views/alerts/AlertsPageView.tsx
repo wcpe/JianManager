@@ -16,7 +16,7 @@ import { AlertTriangle, Bell, Inbox, Plus } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Input } from '@jianmanager/ui/components/input'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { PageHeader, PageHelp, PageShell } from '@jianmanager/ui/components/layout'
 import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import { Panel } from '@jianmanager/ui/components/panel'
 import {
@@ -751,7 +751,21 @@ export function AlertsPageView({
     // 阶段 6 页面迁移：外壳与页头改用布局层原语。
     // 标题字号由 text-2xl 统一到布局规范的 text-xl（PageHeader 的固定字号）。
     <PageShell data-page="alerts">
-      <PageHeader title={t('alerts.title')} description={t('alerts.subtitle')} />
+      <PageHeader
+        title={t('alerts.title')}
+        help={(
+          <PageHelp
+            testId="alerts-help"
+            title={t('alerts.helpTitle')}
+            intro={t('alerts.helpIntro')}
+            sections={[
+              { title: t('alerts.helpRuleTitle'), body: t('alerts.helpRuleBody') },
+              { title: t('alerts.helpNotifyTitle'), body: t('alerts.helpNotifyBody') },
+              { title: t('alerts.helpStateTitle'), body: t('alerts.helpStateBody') },
+            ]}
+          />
+        )}
+      />
 
       <Tabs value={tab} onValueChange={(v) => onTabChange(v as AlertTab)} className="w-full">
         <TabsList className="mb-4">

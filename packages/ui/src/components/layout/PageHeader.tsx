@@ -40,6 +40,7 @@ export function PageHeader({
   title,
   count,
   description,
+  help,
   actions,
   breadcrumbs,
   className,
@@ -49,12 +50,21 @@ export function PageHeader({
   /** 标题右侧计数；数字自动按 zh-CN 千分位。 */
   count?: number | string
   /** 
-   * 页面说明。不再渲染为标题下方的整行小字，而是收进标题右侧的问号图标里，
-   * 悬停/聚焦时以 Tooltip 呈现（见文件头注释）。
+   * 一句话页面说明。收进标题右侧问号里，以 Tooltip 呈现（见文件头注释）。
    *
    * 传字符串时会同时用作图标的可访问名，读屏直接念出说明内容。
+   *
+   * 【何时改用 help】一句话说不完（需要分点、需要分类讲清楚）时用 `help`：
+   * Tooltip 只能装单行纯文本，塞长内容在触摸设备上还展不开。
    */
   description?: React.ReactNode
+  /**
+   * 结构化帮助浮层内容（点击问号展开）。
+   *
+   * 与 `description` 互斥：同时给时以 `help` 为准（浮层能装下的内容一定能装下一句话），
+   * 避免标题旁出现两个问号。
+   */
+  help?: React.ReactNode
   /** 右侧操作区（按钮组等）。 */
   actions?: React.ReactNode
   /** 面包屑层级；通常只由多步流程页传。 */
@@ -63,6 +73,8 @@ export function PageHeader({
   const crumbs = breadcrumbs ?? []
   // 单级面包屑（如「实例」）不提供层级信息，直接不渲染这一行——与 ObjectPageHeader 同判据。
   const showBreadcrumbs = crumbs.length > 1
+  // help 优先：两者同时给时只渲染点击浮层，不叠一个 Tooltip 问号。
+  const helpPopover = help
 
   return (
     <div data-slot="page-header" className={cn('flex shrink-0 flex-col', className)} {...props}>
@@ -107,7 +119,8 @@ export function PageHeader({
               </span>
             )}
           </h1>
-          {description && (
+          {helpPopover}
+          {description && !helpPopover && (
             /* 
               说明收进问号图标：信息仍可取，但不再占用标题下方整行。
 

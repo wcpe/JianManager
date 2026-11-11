@@ -20,6 +20,8 @@
  */
 export { PageShell } from './PageShell'
 export { PageHeader, type PageBreadcrumb } from './PageHeader'
+// 页面帮助浮层：点击问号展开分节说明（与 PageHeader 的 Tooltip 单行说明分工，见头注）。
+export { PageHelp, type PageHelpSection } from './PageHelp'
 // 骨架（阶段 6 补丁）：路由 fallback 与页内数据区的统一占位，见 PageSkeleton.tsx 头注。
 export { PageSkeleton, DataPanelSkeleton, ListSkeleton, type PageSkeletonVariant } from './PageSkeleton'
 export { ScopeBar } from './ScopeBar'

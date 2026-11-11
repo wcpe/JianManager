@@ -9,6 +9,7 @@ import {
   type ApprovalTicketInfo,
 } from '@/api/approvals'
 import { Button } from '@jianmanager/ui/components/button'
+import { PageHelp } from '@jianmanager/ui/components/layout'
 import { ApprovalListView } from '@/components/views/approvals/ApprovalListView'
 
 type ErrResp = { response?: { data?: { message?: string }; status?: number } }
@@ -66,9 +67,24 @@ export default function ApprovalsPage() {
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
+        {/* 审批页原先手写 h1 + 一行副标题。改为 PageHelp 点击浮层：
+            审批的「冻结参数 / 漂移 / 幂等」三点必须讲清楚，否则审批人只能凭感觉点通过；
+            但又不常读，占一整行副标题不值得。标题样式保持本页既有字号。 */}
         <div>
-          <h1 className="text-lg font-semibold">{t('approvals.title')}</h1>
-          <p className="text-sm text-muted-foreground">{t('approvals.subtitle')}</p>
+          <div className="flex items-center gap-1.5">
+            <h1 className="text-lg font-semibold">{t('approvals.title')}</h1>
+            <PageHelp
+              testId="approvals-help"
+              title={t('approvals.helpTitle')}
+              intro={t('approvals.helpIntro')}
+              sections={[
+                { title: t('approvals.helpWhyTitle'), body: t('approvals.helpWhyBody') },
+                { title: t('approvals.helpFreezeTitle'), body: t('approvals.helpFreezeBody') },
+                { title: t('approvals.helpExpireTitle'), body: t('approvals.helpExpireBody') },
+                { title: t('approvals.helpWithdrawTitle'), body: t('approvals.helpWithdrawBody') },
+              ]}
+            />
+          </div>
         </div>
         {/* 状态筛选只有两个高频取值：待办与全部。其余 5 态是结果，不该混进筛选主路径。 */}
         <div className="flex gap-2">
