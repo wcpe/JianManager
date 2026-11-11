@@ -164,7 +164,17 @@ log_vl:
 
 - **授权收敛在 CP**：非平台管理员强制收敛到 `AccessibleInstanceIDs`；显式 `instanceId` 必须落在授权集合内；`nodeId` 对非管理员直接 403（越权侧信道）。**没有回落到 `*` 的分支**。
 - **Worker 纵深防御**：`authorizeScope` 拒绝「空授权 + 无 View」；复用路径再按本次授权收窄。
-- **LogsQL 作用域隔离**：用户过滤全部走 `extra_filters`，**绝不拼进 `query`**；namespace selector 用 `/` 收口，避免 `inst:3` 命中 `inst:31`。
+- **LogsQL 作用域隔离**：历史检索把用户过滤放在 `extra_filters`，与授权 selector 分开；原生 tail 的用户表达式在 `query`，授权来源与时间下界独立放在 `extra_filters`，并逐行复核来源。两条路径都不让用户表达式扩大授权 selector；namespace 使用精确 ID 与 `/` 边界，避免 `inst:3` 命中 `inst:31`。
+
+### 日志工作台
+
+- **实例日志**使用 VL 的历史检索与分析。列表、时间桶、字段、常见值、流和导出共用授权目标、时间窗、过滤表达式与 Query View；字段分析只在展开并选择字段后发起。数值 count 仅计有效数值样本，缺失与非数值不进入 avg 分母。
+- **节点与平台日志**读取各自进程的普通文件尾部，窗口为 50/100/200 行，另受 64 KiB 限制。窗口内搜索与级别筛选、刷新、3 秒文件快照跟随均不表示全历史查询；不提供 VL 字段分析、全量总数或历史分页。
+- **高级过滤**通过 `advanced=true&logsQL=…` 显式应用草稿，使用字段、布尔与正则表达式；普通 keyword 同样受到 8 KiB 和 filter-only 词法边界约束。未引用的管道、注释与控制字符拒绝，授权 selector、HTTP 时间与用户过滤独立下发。高级历史查询最多 1000 行 / 32 MiB / 30 秒 / 64 Worker，请求只能收紧；`query_meta` 来自服务端实际执行。
+- **实例实时跟随**通过兼容 RPC `LogTailLive` 读取 VL 原生 tail，再经 CP Bearer SSE 到浏览器；浏览器不直连 VL 或 Worker，JWT 不进入 URL。会话最多 45 秒 / 10000 行 / 8 MiB / 8 Worker，且受 token 到期和更小请求预算约束；每 2 秒复核权限。旧能力显式回退轮询，权限、慢消费者和资源超限明确停止。
+- **交互与完整性**：显示最多 100 行实时窗口，原生拖选和复制不接管 Ctrl/Cmd+A/C；回看与选区暂停连接并保留正文，显式恢复回到顶部并清除本窗口选区。重连只尝试最近约 10 秒回放，可能缺行，不提供持久游标或无漏承诺。时间图只使用全窗 Stats 桶；只有完整统计可补零，未知空隙保留未知，最多 256 柱。
+
+详细契约见 [API](API.md)、[高级查询边界 ADR](adr/109-instance-logs-advanced-query-boundary.md) 与 [原生尾流 ADR](adr/110-native-instance-log-tail-stream.md)。验收记录分别归入 [检索分析规格](specs/logs-query-workbench/spec.md)、[高级过滤规格](specs/logs-advanced-query/spec.md) 和 [实时流规格](specs/logs-live-streaming/spec.md)。
 
 ### 结构化筛选的组合规则（容易出错）
 

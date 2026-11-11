@@ -221,6 +221,7 @@ CI 在 PR 与分支 push 上跑 `web-quality`（lint + vitest + 构建 + E2E）�
 | [DEPLOY.md](docs/DEPLOY.md) | 部署与运维手册（发布产物 / systemd / 网络与密钥 / 排障） |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构（进程模型 / 通信协议 / 数据模型） |
 | [API.md](docs/API.md) | REST API 参考 |
+| [LOGS.md](docs/LOGS.md) | 日志系统说明书（进程文本 / 实例检索分析 / 实时跟随 / 排障） |
 | [PRD.md](docs/PRD.md) | 产品需求与功能索引 |
 | [CONVENTIONS.md](docs/CONVENTIONS.md) | 编码与协作规范 |
 | [docs/adr/](docs/adr/) | 全部架构决策记录（ADR） |

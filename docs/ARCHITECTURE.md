@@ -1339,9 +1339,11 @@ tmux 前缀键或键盘复制模式**。它与 `/super` 的鼠标画布、`/dire
 
 Workspace 将 `/logs` 纳入固定视口路由，`PageShell fixed`、内容区的 `min-h-0` 与日志区内部滚动共同约束高度；分页/状态 footer 留在屏内。顶部洞察、筛选、覆盖状态和结果壳使用稳定槽位，加载、错误、刷新、跟随不因整块卸载挤动日志列表。来源名称优先展示实际实例/节点名，无法解析时保留可辨认的 ID。
 
-实例分页时 `LogTimeline` 保留当前页 100 行 DOM（进程文件窗口最多 200 行），取消整行按钮、自定义多选、虚拟卸载与 Ctrl/Cmd+A/C 接管，正文使用浏览器原生拖选和复制；详情箭头独立展开结构化 fields。实例流式缓冲、节点/平台文件窗口在回看或存在原生选区时保护当前正文，恢复跟随后再应用更新，不用不断重建 DOM 打断阅读。
+实例分页时 `LogTimeline` 保留当前页 100 行 DOM（进程文件窗口最多 200 行），取消整行按钮、自定义多选、虚拟卸载与 Ctrl/Cmd+A/C 接管，正文使用浏览器原生拖选和复制；详情箭头独立展开结构化 fields。实例流式缓冲、节点/平台文件窗口在回看或存在原生选区时保护当前正文；用户显式恢复实例跟随时仅清除本窗口选区并回到顶部，不用不断重建 DOM 打断阅读。
 
-实例 VL 工作台提供全窗口时间桶、级别/来源概览、Fields 与流标签发现；`LogFieldExplorer` 在按需浮层中复用同一已应用 scope/view 查询常见值和数值分组（count/sum/min/max/avg），明确加载、unsupported、失败、pending、partial 与 truncated。高级输入使用 `advanced/logsQL` 草稿与已应用表达式分离，未应用或失败的旧数据不得导出。节点/平台使用 `TextLogWorkbench`，只显示和筛选最多 200 行 / 64 KiB 文件窗口，手动刷新或 3 秒跟随刷新，不伪造历史分页、精确总量或 VL 分析。
+历史 Search 在 VL 中保留固定 canonical 字段的 `fields → sort(_time desc) → limit` 路径，避免对全宽行排序物化。安全同戳组与页前缀确定后才按完整事件身份补查字段；来源分片可补其局部有界前缀，但所有阶段共享原时间/授权/过滤条件、总 bytes 与物理请求预算。字段身份或内容不匹配、缺失、超限均显式降为 partial/error。
+
+实例 VL 工作台提供全窗口时间桶、级别/来源概览、Fields 与流标签发现；`LogFieldExplorer` 在按需浮层中复用同一已应用 scope/view 查询常见值和数值分组（count/sum/min/max/avg），明确加载、unsupported、失败、pending、partial 与 truncated。文档字段探索使用显式 `explore=true`，保留旧受控维度默认策略；候选字段需经同作用域存在性证实，元数据、验证和取值共用 1 MiB / 5 秒 / 16 次物理读取预算。Worker/CP 两层执行确认防止混版静默忽略参数。高级输入使用 `advanced/logsQL` 草稿与已应用表达式分离，未应用或失败的旧数据不得导出。节点/平台使用 `TextLogWorkbench`，只显示和筛选最多 200 行 / 64 KiB 文件窗口，手动刷新或 3 秒跟随刷新，不伪造历史分页、精确总量或 VL 分析。
 
 页面说明统一由 `PageHeader` 的点击式 `PageHelp` 承载，显式 `help` 优先于 `description`；问号浮层可键盘操作且内部滚动。它供页面帮助使用，单行动作 Tooltip 仍可保留。上述页面能力的 DOM/单元测试、真实 VL 流测试与 Chromium 联合验收分别记证，不因文档同步宣称已部署或完成性能验收。
 

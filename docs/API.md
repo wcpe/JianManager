@@ -3265,15 +3265,22 @@
   - **Query**: `from`/`to`（RFC3339/Nano、UTC 闭开区间 `[from,to)`）、`keyword` 或 `advanced=true&logsQL=…`、`level`、`source`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`viewId`、`limit`、`cursor`；续页使用原 view 和复合 cursor，不能以 offset 或毫秒锚点替代。
   - **筛选语义**: `keyword` 承载兼容的 LogsQL 过滤条件，不是数据库 LIKE；`level` 和来源前缀作为附加过滤相交。新工作台的 VL 路径使用 `source=instance`。兼容 `source=worker` 只过滤 VL 中已有的 `node:` 行，不读取 Worker 日志文件；`source=control_plane` 不会改为文件读取。节点/平台界面分别走文件端点，不把联邦空结果当作进程日志为空。高级模式的范围与限制见下节。
   - **响应**: `{ view, coverage, quality, items[], next_cursor, exhausted, budget_cut, query_meta? }`；门面另含 `ok/sourceTag/notes`，不把前端内部 camelCase 名称当作原始 HTTP 字段。事件可含 `fields` 结构化字段；旧 Worker 未提供时保持缺省。
-  - **状态**: 既有 logcoord + HTTP + Assemble 保留；本批定向跨层回归通过，真实多进程/浏览器联合验收未完成。Fast 首屏以实际 Worker Search 的 view/vector 原子绑定，缓存保留同一引用；任一 Worker 未证明安全页边界时无新 cursor、`exhausted=false`，可见 `PAGE_RETRY_REQUIRED` 供同页重试。
+  - **历史结构化字段读取**：保留 canonical 字段的时间 top-K 查询；只对安全页边界确定后的有界返回前缀补查全字段，不对全历史做全宽排序。补查复用原授权 selector、用户过滤、时间窗口及总字节/物理请求预算，按完整事件身份和正文/级别/流复核；字段补查失败、身份不一致或预算不足明确 partial/error，不把缺字段伪装成完整响应。
+  - **状态**: 已在隔离开发环境用真实 CP、Worker、受管 VL v1.52.0 与 Chromium 联合验证；详细样本、故障与界面记录见 [查询工作台规格](specs/logs-query-workbench/spec.md)。Fast 首屏以实际 Worker Search 的 view/vector 原子绑定，缓存保留同一引用；任一 Worker 未证明安全页边界时无新 cursor、`exhausted=false`，可见 `PAGE_RETRY_REQUIRED` 供同页重试。
 
 - **`GET /api/v1/logs/federation/stats`** / **`GET /api/v1/logs/federation/facets`**
   - 继承 Search 的 scope/view 与 FR-473/480 语义；Stats 返回独立 coverage/quality，Facets 保留顶层 coverage、`truncated` 与逐维度截断信息，任一来源 partial/截断时 CP `quality.stats_quality=partial`，不能把空桶报为精确 0。
   - **Stats 参数**：`timeBucket`（如 `1m`、`5m`、`1h`）、`groupBy`（逗号分隔字段）、`metricField`（数值字段）。不传指标字段时统计 count；指定后返回可合并的 count/sum/min/max/avg，`avg` 按全局 sum/count 计算，不做平均值的平均。响应 `points[]` 包含维度、时间桶及 `agg`；缺失/不支持的数值聚合不能显示为 0。
-  - **Facets 参数**：必填 `dimensions`（复数，逗号分隔字段），`dimensionLimit`（每维取值上限，最大 1000）。字段值探索复用 `dimensions=<field>&dimensionLimit=20`；截断、未验证、unsupported 和失败分别展示，值包含/排除动作生成转义后的精确过滤表达式。
+  - **Facets 参数**：必填 `dimensions`（复数，逗号分隔字段），`dimensionLimit`（默认受控维度模式每维最大 1000）。自定义文档字段值探索必须显式 `explore=true&dimensions=<field>&dimensionLimit=20`，只接受一个字段、上限 1–20，并先在相同授权 View/Filter/时间窗证实字段存在；不修改原模式的低基数白名单。截断、未验证、unsupported 和失败分别展示，值包含/排除动作生成安全字段名与转义值的精确过滤表达式。
   - **界面分析**：时间图使用当前固定 Query View 的**整个有效时间窗** Stats time bucket，不用当前页的事件时间戳推测全量趋势。按需字段面板复用同一 view 与已应用条件，可查看常见值、选择数值字段、分组和时间桶；数值表最多显示 100 行，显示上限不代表服务端扫描已完整。
   - HTTP 聚合结果可能使用 4s 同参缓存；它不构成点击下载时的新鲜授权/质量证明，当前页导出不借用该缓存。
   - Facets 的维度聚合走 VictoriaLogs 官方 `/select/logsql/field_values`（**不是** `/select/logsql/facets`——后者的语义是「自动发现低基数字段」，会忽略 `field=`，与「按指定维度查」的契约不匹配）。
+
+- **`GET /api/v1/logs/federation/fields`** — 固定查询视图中的字段名
+  - 默认仅返回原有受控字段；工作台通过 `explore=true` 请求有界文档字段发现。探索必须使用有限绝对时间范围（可继承已存在 View 的冻结窗口），仍按当前授权目标与已应用 Filter 读取。
+  - 探索模式最多 256 个安全字段名、单名最多 128 字节；支持字母或下划线开头、后续为字母/数字/下划线/点号/连字符，点号与连字符字段在过滤、分面和数值统计的 QL 字段位置安全引用。内部身份、正文和时间列不作为探索维度。VL v1.52 的 `field_names` 只提供块级候选，不能直接证明字段在匹配行中存在；服务器按同一 selector/filter/time 的批量条件计数证实非空值后才暴露名称。
+  - **探索共享预算**：Fields 与 Facets 的每次请求最多 1 MiB、5 秒、16 次物理读取，包含候选元数据、存在性补查和取值；跨 Worker 分摊，父预算只能收紧，不能通过补查或重定向重置。超限/截断保留明确 coverage/错误状态，缩小实例或时间范围后可重试。
+  - **执行确认**：探索响应带 `explore_applied: true`，只证明协议被理解，不代表完整/成功；仍检查 coverage、quality、truncated。新 CP 拒绝旧 Worker 缺少执行确认的旧结果，新前端也拒绝旧 CP 缺标记的伪探索；不把静态字段列表当作完整发现。
 
 - **`GET /api/v1/logs/federation/streams`** — 窗内流清单
   - **关联 FR**: FR-479, FR-480

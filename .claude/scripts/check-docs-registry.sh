@@ -18,7 +18,7 @@ VERBOSE=0
 [ -d "$DOCS" ] || { echo "docs/ 不存在，跳过"; exit 0; }
 
 # ── 1. 允许的顶层条目（对应 doc-evolution.md 的文档类型表） ──
-ALLOWED_TOP="PRD.md ARCHITECTURE.md API.md CONVENTIONS.md DEPLOY.md LIFECYCLE.md CONTRIBUTING.md README.md"
+ALLOWED_TOP="PRD.md ARCHITECTURE.md API.md LOGS.md CONVENTIONS.md DEPLOY.md LIFECYCLE.md CONTRIBUTING.md README.md"
 ALLOWED_DIRS="adr specs openapi screenshots"
 
 # ── 2. 登记判定 ──

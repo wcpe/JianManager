@@ -14,6 +14,7 @@
 | PRD | `docs/PRD.md` |
 | ARCHITECTURE | `docs/ARCHITECTURE.md` |
 | API | `docs/API.md` |
+| 日志说明书 | `docs/LOGS.md` |
 | CHANGELOG | `CHANGELOG.md`（仓根） |
 | Conventions | `docs/CONVENTIONS.md` |
 | ADR | `docs/adr/*.md` + 索引 `docs/adr/README.md` |
