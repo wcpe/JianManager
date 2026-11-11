@@ -308,7 +308,24 @@ jobs:
           # 而真实路径是单反斜杠形式（如 C:\Users\某个占位名\）—— 于是该分支永远不命中，形同不存在。
           # 与下方“内容检查”同一写法（那里一直是单层，是对的）。
           MSG_PATH_ALLOW='(/home/(user|example|runner|app|node|ubuntu|assistant)/)|(/Users/(user|example|runner|shared)/)|(/opt/(app|jm|jianmanager)/)|(/tmp/)|(/var/(log|lib|run)/)|(/usr/)|(/etc/)|(C:\\Users\\(user|example|runner)\\)'
-          if printf '%s\n' "$MSGS" | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\' | grep -vE "$MSG_PATH_ALLOW"; then
+          # 【门禁语境豁免】说明门禁规则本身的提交（写反例、证白名单）必须能写出示例路径，
+          # 否则规则连「哪些算泄漏」都说不清。本仓已被这个惖论伤过两次：修「示例路径改占位」
+          # 时把反例原文抄进了提交正文，说明「用户名段放行」时又写了真实家目录。
+          # 规则本身没错，但拦的是**规则的说明**——这与内容检查里「安全测试必须能引用
+          # 它所防护的目标」是同一回事。
+          #
+          # 判据：该行出现门禁术语即视为「在讲规则」。只豁免**路径**，不豁免 IP 与凭据——
+          # 后两者没有「说明规则」的必要，且一旦泄漏后果更重。
+          #
+          # 已知取舍：有人可以故意把真实路径包装成「白名单 /home/<名>/…」混过去。
+          # 接受它的理由：提交信息不是产品内容，泄漏面远小于代码与文档；而过度收紧会让
+          # 规则自身无法被讨论。逐**行**判定（不是整段豁免）：同一提交里另外那些不带
+          # 门禁术语的行，真实路径依旧会被拦下。
+          MSG_RULE_CONTEXT='放行|拦截|白名单|反例|占位|判定|路径检查|门禁'
+          if printf '%s\n' "$MSGS" \
+            | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\' \
+            | grep -vE "$MSG_PATH_ALLOW" \
+            | grep -vE "$MSG_RULE_CONTEXT"; then
             echo "::error::提交信息含真实绝对路径（泄露用户名/目录结构）；请改成占位路径或只说「本机」"
             fail=1
           fi
