@@ -34,6 +34,7 @@ import {
   TopSourcesCard,
 } from '@/components/logs/LogsInsightCards'
 import { LogTimeline } from '@/components/logs/LogTimeline'
+import { TextLogWorkbench } from '@/components/logs/TextLogWorkbench'
 import { PageHeader, PageHelp, PageShell } from '@jianmanager/ui/components/layout'
 import { resolveSourceLabel } from '@/lib/logs/logs-source-label'
 import { useDebounced } from '@/lib/hooks/use-debounced'
@@ -320,7 +321,7 @@ export default function LogsPage() {
   )
   const scope = normalizeLogScope({
     view,
-    ...(view === 'all' && source ? { source } : {}),
+    source: 'instance',
     level,
     ...(nodeId !== null ? { nodeId } : {}),
     ...(instanceId !== null ? { instanceId } : {}),
@@ -332,8 +333,10 @@ export default function LogsPage() {
   const params: LogQueryParams = { ...scope, page: follow ? 1 : page, pageSize: PAGE_SIZE }
   const scopeKey = logScopeKey(scope)
 
-  // 平台视图读进程日志文件尾部；联邦数据覆盖节点/实例日志。
-  const federationEnabled = view !== 'platform'
+  // Platform and Worker process logs use bounded file windows, never VL.
+  const textKind = isPlatformAdmin && (view === 'platform' || (view === 'all' && source === 'control_plane'))
+    ? 'control_plane' : isPlatformAdmin && view === 'all' && source === 'worker' ? 'worker' : null
+  const federationEnabled = !textKind && view !== 'platform'
   // 可选联邦覆盖探测。与 useLogs 同筛选参数；API 404 → degraded legacy。
 	const federationParams: Record<string, unknown> = {
 		...params,
@@ -472,7 +475,7 @@ export default function LogsPage() {
   // 新形态是诚实的降级：平台日志只提供“最近 N 行 + 时间/级别/关键字可见性”，
   // **不提供**分页、总条数、任意时间窗——那些能力在文件上实现不了，也不该假装能。
   // 要看完整历史请直接在该机器上 grep（面板会给出可复制的命令）。
-  const platformLogQuery = usePlatformDiagnosticsLog(view === 'platform', 500)
+  const platformLogQuery = usePlatformDiagnosticsLog(false, 500) // File mode is owned by TextLogWorkbench.
   const platformLogLines = useMemo<LogEntry[]>(() => {
     const content = platformLogQuery.data?.content
     if (!content) return []
@@ -869,6 +872,13 @@ export default function LogsPage() {
     [navigate, federationQuery, t],
   )
 
+  const sourceControl = (
+    <Select disabled={view !== 'all'} value={view === 'platform' ? 'control_plane' : source || 'instance'} onValueChange={(value: string) => resetTo(setSource)(value)}>
+      <SelectTrigger size="sm" className="w-32" data-testid="logs-source-select"><SelectValue /></SelectTrigger>
+      <SelectContent>{SOURCES.map((value) => <SelectItem key={value} value={value}>{t(`logs.source_${value}`)}</SelectItem>)}</SelectContent>
+    </Select>
+  )
+
   return (
     <PageShell variant="fixed" data-page="logs">
       {/* 页头用布局层 PageHeader：标题 + 帮助浮层 + 右侧操作。
@@ -1022,6 +1032,7 @@ export default function LogsPage() {
         )}
       </div>
 
+      {textKind ? <TextLogWorkbench key={textKind} kind={textKind} nodeId={nodeId} nodes={nodes ?? []} onNodeChange={(value) => resetTo(setNodeId)(value)} sourceControl={sourceControl} /> : <>
       {/* 洞察卡片区：表格之外的顶部。
        *
        * 为何抬到这里而不是留在表格工具栏里：原来它们挤在一行与筛选控件争宽，
@@ -1121,24 +1132,7 @@ export default function LogsPage() {
             ))}
           </SelectContent>
         </Select>
-        {view === 'all' && (
-          <Select
-            value={source === '' ? SENTINEL_ALL : source}
-            onValueChange={(v: string) => resetTo(setSource)(v === SENTINEL_ALL ? '' : v)}
-          >
-            <SelectTrigger size="sm" className="w-32" data-testid="logs-source-select">
-              <SelectValue placeholder={t('logs.allSources')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={SENTINEL_ALL}>{t('logs.allSources')}</SelectItem>
-              {SOURCES.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {t(`logs.source_${s}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+        {sourceControl}
         {/* 节点/实例选择器始终占位（platform 视图下禁用），避免切换视图时工具栏元素增减导致布局位移。 */}
         <Select
             disabled={view === 'platform'}
@@ -1343,6 +1337,7 @@ export default function LogsPage() {
           }}
         />
       </Panel>
+      </>}
     </PageShell>
   )
 }

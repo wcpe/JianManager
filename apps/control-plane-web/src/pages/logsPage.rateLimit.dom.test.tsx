@@ -418,6 +418,7 @@ describe('筛选身份键必须覆盖 source 维度（限流保留项的归属�
       http.get(API('/logs/federation/facets'), () =>
         HttpResponse.json({ dimensions: [], coverage: { complete: true, targets: [] } }),
       ),
+      http.get(API('/diagnostics/log'), () => HttpResponse.json({ error: 'RATE_LIMITED', message: '文本日志请求过于频繁' }, { status: 429 })),
       http.get(API('/logs/federation'), ({ request }) => {
         federationCalls++
         const src = new URL(request.url).searchParams.get('source')
@@ -446,7 +447,7 @@ describe('筛选身份键必须覆盖 source 维度（限流保留项的归属�
     // 切到「全部日志」视图（source 选择器只在该视图下渲染）。
     await user.click(screen.getByRole('tab', { name: '全部日志' }))
     const sourceTrigger = await screen.findByTestId('logs-source-select')
-    expect(seenSources).toContain('(none)')
+    expect(seenSources).toContain('instance')
 
     // 切到筛选 B（来源 = 控制面，即 `source=control_plane`，UI 文案「平台」）的同时服务端开始持续限流。
     rateLimited = true
@@ -457,23 +458,11 @@ describe('筛选身份键必须覆盖 source 维度（限流保留项的归属�
     const option = await screen.findByRole('option', { name: '平台' })
     await user.click(option)
 
-    // ① 新筛选确实发出了带 source 的请求（证明这是独立筛选维度，而非纯前端展示开关）。
-    await waitFor(() =>
-      expect(seenSources).toContain('control_plane'),
-      { timeout: 8000 },
-    )
-    // 等两层重试退避退到错误终态（helper 250/600ms + react-query 500/1000ms）。
-    await waitFor(
-      () => expect(screen.getByTestId('logs-coverage-banner')).toHaveAttribute('data-state', 'rate_limited'),
-      { timeout: 15000 },
-    )
-
-    // ② 旧筛选的行不得继续可见：`source` 变了，保留项即判失效。
-    //    filterKey 漏含 source 时本断言会红（旧行被当作新筛选的结果继续渲染）。
+    // 文件数据面独立请求失败时，不复用实例VL查询的旧行，也不伪造空成功。
+    expect(await screen.findByRole('alert')).toHaveTextContent('文本日志请求过于频繁')
+    expect(seenSources).not.toContain('control_plane')
     expect(screen.queryByText('federation-kept-row')).not.toBeInTheDocument()
-    // ③ 不得把限流伪装成「查到了 0 条」空成功。
     expect(screen.queryByText('暂无日志')).not.toBeInTheDocument()
-    const emptyState = screen.getByTestId('logs-empty-state')
-    expect(emptyState).toHaveAttribute('data-empty-success', 'false')
+    expect(screen.getByTestId('logs-empty-state')).toHaveAttribute('data-empty-success', 'false')
   }, 60000)
 })

@@ -539,6 +539,16 @@ func statsPipe(q query.RangeQuery) (string, error) {
 		}
 	}
 	var b strings.Builder
+	if q.MetricField != "" {
+		if !validField(q.MetricField) {
+			return "", fmt.Errorf("vlrange: invalid metric field %q", q.MetricField)
+		}
+		// sum/count is merged across Workers. Count the same numeric sample set
+		// as sum, not every log including missing or non-numeric values.
+		b.WriteString(" | filter ")
+		b.WriteString(q.MetricField)
+		b.WriteString(":range[-inf,inf]")
+	}
 	b.WriteString(" | stats")
 	if len(groups) > 0 {
 		b.WriteString(" by (")

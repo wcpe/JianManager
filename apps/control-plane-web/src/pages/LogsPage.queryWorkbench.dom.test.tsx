@@ -1,4 +1,4 @@
-/** FR-557：VL 全窗口时间桶、字段探索与流值筛选。 */
+/** VL 全窗口时间桶、字段探索与流值筛选。 */
 import { describe, expect, it, beforeEach } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import userEvent from '@testing-library/user-event'
@@ -24,7 +24,7 @@ const logEvent = {
   fields: { parser_version: 'v1', shard: 'blue' },
 }
 
-describe('LogsPage × FR-557 查询分析工作台', () => {
+describe('LogsPage 查询分析工作台', () => {
   beforeEach(() => {
     loginMockUser()
     HTMLElement.prototype.scrollIntoView ??= () => {}

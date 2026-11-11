@@ -35,6 +35,7 @@ export function LogTimeline({
   emptyHint = '',
   highlightKeyword,
   sourceLabelOf,
+  onInteractionPauseChange,
 }: {
   items: LogEntry[]
   total: number
@@ -53,10 +54,30 @@ export function LogTimeline({
   highlightKeyword?: string
   /** 把一行映射为具体实例名/节点名。 */
   sourceLabelOf: (log: LogEntry) => string
+  /** Suspend live display updates while the user reads history or holds a native selection. */
+  onInteractionPauseChange?: (paused: boolean) => void
 }) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
+  const [selecting, setSelecting] = useState(false)
+  useEffect(() => {
+    if (!onInteractionPauseChange) return
+    const selectionChanged = () => {
+      const selection = document.getSelection()
+      const root = containerRef.current
+      const selected = Boolean(root && selection && !selection.isCollapsed
+        && ((selection.anchorNode && root.contains(selection.anchorNode)) || (selection.focusNode && root.contains(selection.focusNode))))
+      setSelecting(selected)
+      onInteractionPauseChange(selected || (root?.scrollTop ?? 0) > 4)
+    }
+    document.addEventListener('selectionchange', selectionChanged)
+    window.addEventListener('pointerup', selectionChanged)
+    return () => {
+      document.removeEventListener('selectionchange', selectionChanged)
+      window.removeEventListener('pointerup', selectionChanged)
+    }
+  }, [onInteractionPauseChange])
 
   // 跟随态只把最新结果滚到顶部；列表本身始终留在固定结果槽位内。
   useEffect(() => {
@@ -108,7 +129,17 @@ export function LogTimeline({
   return (
     <div
       ref={containerRef}
-      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      onScroll={(event) => {
+        const top = event.currentTarget.scrollTop
+        setScrollTop(top)
+        onInteractionPauseChange?.(selecting || top > 4)
+      }}
+      onPointerDownCapture={(event) => {
+        if (event.button === 0 && !(event.target as HTMLElement).closest('button')) {
+          setSelecting(true)
+          onInteractionPauseChange?.(true)
+        }
+      }}
       data-testid="logs-virtual"
       data-total-count={total}
       data-rendered-count={items.length}

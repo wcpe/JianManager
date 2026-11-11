@@ -70,25 +70,24 @@ describe('LogsPage 空态按原因分支', () => {
     loginMockUserAs(10)
   })
 
-  it('选「平台」→ 说明设计如此、重试无效', async () => {
+  it('选平台来源实际读取CP文件尾部，文件未创建如实提示', async () => {
     stubAll(() => emptyEnvelope())
+    server.use(http.get(API('/diagnostics/log'), () => HttpResponse.json({ content: '', truncated: false, fileBytes: 0, path: '/logs/cp.log', note: '日志文件尚未创建' })))
     renderWithProviders(<LogsPage />, { route: '/logs' })
     await chooseSource('平台')
-
-    const empty = await screen.findByTestId('logs-empty-state')
-    await waitFor(() => expect(empty).toHaveAttribute('data-empty-reason', 'control_plane'))
-    // 关键：不能只说「暂无日志」，必须告诉用户“这是设计如此”。
-    expect(screen.getByTestId('logs-empty-hint')).toHaveTextContent(/设计如此/)
+    await waitFor(() => expect(screen.getByTestId('logs-text-status')).toHaveTextContent('日志文件尚未创建'))
+    expect(screen.getByTestId('logs-empty-state')).toHaveAttribute('data-empty-success', 'false')
+    expect(screen.queryByTestId('logs-fields-trigger')).not.toBeInTheDocument()
   })
 
-  it('选「节点」且空 → 提示去登记日志源', async () => {
+  it('选节点来源先选择具体节点，不提示配置VL日志源', async () => {
     stubAll(() => emptyEnvelope())
     renderWithProviders(<LogsPage />, { route: '/logs' })
     await chooseSource('节点')
-
     const empty = await screen.findByTestId('logs-empty-state')
-    await waitFor(() => expect(empty).toHaveAttribute('data-empty-reason', 'worker'))
-    expect(screen.getByTestId('logs-empty-hint')).toHaveTextContent(/登记日志源/)
+    await waitFor(() => expect(empty).toHaveAttribute('data-empty-reason', 'choose_node'))
+    expect(screen.getByTestId('logs-empty-hint')).toHaveTextContent('选择节点')
+    expect(screen.queryByTestId('logs-fields-trigger')).not.toBeInTheDocument()
   })
 
   it('覆盖 pending → 提示尚未校验（不得被 not_ready 吞掉）', async () => {
