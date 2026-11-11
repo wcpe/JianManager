@@ -113,15 +113,26 @@ jobs:
           #     不会是函数调用或属性访问。判据：含 ( ) . [ ] 之类调用/成员语法，
           #     或形如 camelCase/PascalCase 的纯标识符。
           #  4) 注释行里的示范（以 # 或 // 或 * 开头）
-          TESTISH_VAL='^(sk-(should|audit|survives|test|fake|dummy|example|original|new|probe|value)|password123|admin123|fake-key|test-secret|x{8,}|p|xxx|\$\{[A-Z_]+)'
+          # 补充两类真实存在的形态：
+          #  - 开发默认值 `dev-secret-change-me`：名字本身就写着「请在生产覆盖」，
+          #    且注释明确指出生产经环境变量注入；
+          #  - mock 测试值 `sk-mock-test`、明显构造的 `sk-ant-api03-XyZ987...`。
+          TESTISH_VAL='^(sk-(should|audit|survives|test|fake|dummy|example|original|new|probe|value|mock|ant-api03-XyZ)|dev-secret-change-me|password123|admin123|fake-key|test-secret|x{8,}|p|xxx|\$\{[A-Z_]+)'
           # 注意：不能用「像 camelCase」当判据——随机密钥（aB3xK9mP2qR7tY4w）也长得像。
           # 只认两种确凿的代码引用形态：含调用/成员语法，或纯字母组成的标识符（无数字）。
           CODE_REF_VAL='[().]|[]]|^[A-Za-z][A-Za-z]*$'
           cred_check() {
-            local hits kept line val
-            hits=$(git diff "$BASE"...HEAD --unified=0 -- "$1" \
-              | grep -aE '^\+' | grep -avE '^\+\+\+' \
-              | grep -aoEi "$CRED_Q|$CRED_U" || true)
+            local hits kept raw line val is_comment
+            # 先取「候选行」（完整的新增行）与「命中行」（grep -o 的片段）两套。
+            #
+            # 为何要两套：grep -o 只保留匹配片段，**行首的 `#`/`//` 已经丢了**，
+            # 于是「这行是不是注释」的判定永远不成立——这正是上一轮
+            # `# jwt_secret: ...` 这类注释示例仍被拦下的原因。
+            # 所以注释判定必须回到完整行上做，值抽取仍在片段上做。
+            raw=$(git diff "$BASE"...HEAD --unified=0 -- "$1" \
+              | grep -aE '^\+' | grep -avE '^\+\+\+' || true)
+            [ -n "$raw" ] || return 0
+            hits=$(printf '%s\n' "$raw" | grep -aoEi "$CRED_Q|$CRED_U" || true)
             [ -n "$hits" ] || return 0
             kept=""
             while IFS= read -r line; do
@@ -131,12 +142,16 @@ jobs:
               if printf '%s' "$val" | grep -aqEi "$TESTISH_VAL"; then
                 continue
               fi
-              # 值本身是代码引用（函数调用/成员访问/camelCase 标识符）→ 不是硬编码凭据
+              # 值本身是代码引用（函数调用/成员访问/纯字母标识符）→ 不是硬编码凭据
               if printf '%s' "$val" | grep -aqE "$CODE_REF_VAL"; then
                 continue
               fi
-              # 该行是注释（yaml #、js //、块注释 *）→ 是说明文字，不是真值
-              if printf '%s' "$line" | grep -aqE '^[[:space:]]*(#|//|\*)'; then
+              # 该行是注释（yaml #、js //、块注释 *）→ 是说明文字，不是真值。
+              # 在**完整新增行**里找包含该片段的那一行，再看它的行首。
+              is_comment=$(printf '%s\n' "$raw" \
+                | grep -aF -- "$line" \
+                | grep -acE '^\+[[:space:]]*(#|//|\*)' || true)
+              if [ -n "$is_comment" ] && [ "$is_comment" != "0" ]; then
                 continue
               fi
               kept=$(printf "%s\n%s" "$kept" "$line")
