@@ -48,7 +48,10 @@ test.describe('搭建 Bukkit 子服（mock 模式真浏览器）', () => {
     await page.screenshot({ path: path.join(artifactsDir, 'fr034-e2e-provision-dialog.png'), fullPage: true })
 
     await page.getByRole('button', { name: '搭建', exact: true }).click()
-    await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible()
+    // 页名同样已由「实例管理」改为「服务器」（instances.title）。
+    // 本文件开头那处已改（连同那句改选说明），但提交后回列表这处漏了——
+    // 于是“搭建成功、回到列表”的前半段一直是绿的，失败点被推到后面。
+    await expect(page.getByRole('heading', { name: '服务器', exact: true })).toBeVisible()
     await page.getByRole('searchbox', { name: '搜索实例' }).fill(name)
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
     await expect(page.getByText('后端').last()).toBeVisible()
