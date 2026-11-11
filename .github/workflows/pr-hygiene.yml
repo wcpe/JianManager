@@ -259,7 +259,7 @@ jobs:
           # 【Windows 路径为何是单层反斜杠】`run: |` 是 YAML 字面块，**不做反斜杠转义**，
           # shell 单引号里收到的就是原样字符；而 POSIX ERE 中 `\\` 是两个连续反斜杠。
           # 早前写成 `C:\\\\Users\\\\`（四重），实际要求路径里出现双反斜杠，
-          # 而真实路径是 `C:\Users\bob\…`（单个）—— 于是该分支永远不命中，形同不存在。
+          # 而真实路径是单反斜杠形式（如 C:\Users\某个占位名\）—— 于是该分支永远不命中，形同不存在。
           # 与下方“内容检查”同一写法（那里一直是单层，是对的）。
           MSG_PATH_ALLOW='(/home/(user|example|runner|app|node|ubuntu|assistant)/)|(/Users/(user|example|runner|shared)/)|(/opt/(app|jm|jianmanager)/)|(/tmp/)|(/var/(log|lib|run)/)|(/usr/)|(/etc/)|(C:\\Users\\(user|example|runner)\\)'
           if printf '%s\n' "$MSGS" | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\' | grep -vE "$MSG_PATH_ALLOW"; then
