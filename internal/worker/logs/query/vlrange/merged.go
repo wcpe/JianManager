@@ -39,6 +39,7 @@ const (
 // 为何常量仍取 31d（**刻意远小于上界**，不是取满）：
 //   - retention 30d 场景下“all”窗最多跨 31 个 UTC 天 ⇒ 单次查询即可完成；
 //   - VL 的 sort+limit top-K 从最新分区早停，实测 30 天窗 1.2-1.3s。
+//
 // 代价已知：retention 180d 时，180d 窗会切成 6 段——这是**性能项，不是正确性问题**。
 //
 // **边界比较符已在本机实测确证**（VictoriaLogs v1.52.0，起本地实例逐点探测；
@@ -47,6 +48,7 @@ const (
 //   - 744h + 10ns / 1µs / 1s ⇒ HTTP 400 `too big time range selected`
 //     （`it cannot exceed -search.maxQueryTimeRange=744h0m0s`）；
 //   - ⇒ VL 的判定是**严格大于**（`window > 上限` 才拒）。
+//
 // 该判定规则与参数具体取值无关，换 retention 后仍成立。
 //
 // 改动此常量前先确认它仍**不大于** `-search.maxQueryTimeRange`，否则代次占用探测
