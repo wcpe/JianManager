@@ -112,7 +112,7 @@ jobs:
               | grep -aE '^\+' | grep -avE '^\+\+\+' \
               | grep -aoEi "$CRED_Q|$CRED_U" || true)
             [ -n "$hits" ] || return 0
-        kept=""
+            kept=""
             while IFS= read -r line; do
               [ -n "$line" ] || continue
               # 抽右侧的值（去掉 16位的 key、分隔符、引号与空白）。
@@ -120,8 +120,7 @@ jobs:
               if printf '%s' "$val" | grep -aqEi "$TESTISH_VAL"; then
                 continue
               fi
-              kept="$kept
-$line"
+              kept=$(printf "%s\n%s" "$kept" "$line")
             done <<< "$hits"
             [ -n "$kept" ] && printf '%s\n' "$kept"
             return 0
@@ -135,9 +134,7 @@ $line"
             [ -n "$f" ] || continue
             hits=$(cred_check "$f")
             if [ -n "$hits" ]; then
-              cred_findings="$cred_findings
-$f:
-$hits"
+              cred_findings=$(printf "%s\n%s:\n%s" "$cred_findings" "$f" "$hits")
             fi
           done <<< "$changed_files"
 
