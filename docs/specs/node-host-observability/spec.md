@@ -148,7 +148,7 @@
 
 ### 7.1 真机截图取证（2026-10-29 完成）
 
-四处版式已在真实 Chromium 中逐块截图存证，归档于 `docs/screenshots/fr513-host-obs/`，
+四处版式已在真实 Chromium 中逐块截图存证，归档于 `docs/screenshots/host-obs/`，
 取证脚本 `apps/control-plane-web/e2e/host-obs-visual.spec.ts`。
 
 实测渲染出的浮层文本（Playwright 从 DOM 直接提取，非人工誊写）：
@@ -165,7 +165,7 @@ CPU 构成          空闲 51.2%  IO 等待 19.3%  用户态 18.4%  内核态 9.
 
 ✅ **已交付@v0.24.0**。整链贯通：Worker `hostobs` 采集 → 心跳 → CP 入库 → 首页悬浮卡四处新版式；
 §6 四个待定项已在实现中定案（不含 guest、进程计数读 `/proc` 走独立 goroutine、挂载点进快照表）；
-真机截图取证 5 张存档于 `docs/screenshots/fr513-host-obs/`，实测读数即下方代码块。
+真机截图取证 5 张存档于 `docs/screenshots/host-obs/`，实测读数即下方代码块。
 
 四点值得注意，正是本 spec 要解决的四个盲区：
 1. **负载三档递增**（42.5 → 58.7 → 71.2），单值时代看不出这是「持续爬升」。
