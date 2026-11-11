@@ -1,5 +1,5 @@
 /** VL 全窗口时间桶、字段探索与流值筛选。 */
-import { describe, expect, it, beforeEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import userEvent from '@testing-library/user-event'
 import { screen, waitFor } from '@testing-library/react'
@@ -25,14 +25,16 @@ const logEvent = {
 }
 
 describe('LogsPage 查询分析工作台', () => {
+  afterEach(() => vi.restoreAllMocks())
   beforeEach(() => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-11T08:10:00Z'))
     loginMockUser()
     HTMLElement.prototype.scrollIntoView ??= () => {}
     server.use(
       http.get(API('/nodes'), () => HttpResponse.json([{ id: 1, name: 'node-1', status: 1 }])),
       http.get(API('/instances'), () => HttpResponse.json([{ id: 2, name: 'instance-2', nodeId: 1 }])),
       http.get(API('/logs/federation'), () => HttpResponse.json({
-        sourceTag: 'federated', items: [logEvent], view: { view_id: 'fr557-view' },
+        sourceTag: 'federated', items: [logEvent], view: { view_id: 'structured-view' },
         ...summary, exhausted: true,
       })),
       http.get(API('/logs/federation/stats'), () => HttpResponse.json({

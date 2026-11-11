@@ -11,11 +11,11 @@
  * ② follow 态的时间桶在渲染期重算，跨桶时 queryKey 变化触发一次请求，
  *    同时 refetchInterval 到点又触发一次 ⇒ 同一份数据成对双发；联邦视图下 useLogs
  *    还额外每 tick 打一条数据面请求。
- *    现要求：每个 3 秒 tick 恰好一次联邦请求，且联邦视图下不再有并行的经典请求。
+ *    现要求：显式 UNSUPPORTED 后才回退轮询；回退时每个 3 秒 tick 恰好一次联邦请求，且不并行读经典表。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { act, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
@@ -23,6 +23,12 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import LogsPage from './LogsPage'
 import { RATE_LIMIT_QUERY_RETRIES } from '@/api/logFederation'
+import { LiveLogError, subscribeLiveLogs } from '@/api/logLive'
+
+vi.mock('@/api/logLive', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/logLive')>()
+  return { ...actual, subscribeLiveLogs: vi.fn() }
+})
 
 const FOLLOW_INTERVAL = 3000
 
@@ -98,13 +104,18 @@ async function renderFollowing() {
   renderWithProviders(<LogsPage />)
   // 让首屏探测（/nodes、/instances、联邦）落地后再开跟随，避免把启动请求算进 tick 统计。
   await advanceFollowClock(300)
-  fireEvent.click(screen.getByRole('button', { name: '实时跟随' }))
+  fireEvent.click(screen.getByTestId('logs-live-toggle'))
   await advanceFollowClock(300)
+  expect(subscribeLiveLogs).toHaveBeenCalledTimes(1)
+  expect(screen.getByTestId('logs-live-status')).toHaveAttribute('data-state', 'fallback')
+  expect(screen.getByTestId('logs-live-status')).toHaveTextContent('UNSUPPORTED')
 }
 
-describe('日志中心限流保留与轮询节流', () => {
+describe('日志中心轮询回退的限流保留与节流', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    vi.mocked(subscribeLiveLogs).mockReset()
+    vi.mocked(subscribeLiveLogs).mockRejectedValue(new LiveLogError('UNSUPPORTED', 'native tail unsupported by test server'))
     // 无 pointer capture 的 jsdom 下 Radix Select/按钮交互需要的最小补丁。
     HTMLElement.prototype.hasPointerCapture ??= () => false
     HTMLElement.prototype.setPointerCapture ??= () => {}

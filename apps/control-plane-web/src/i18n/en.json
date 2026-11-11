@@ -3730,6 +3730,15 @@
     "openExternalTitle": "Open external link?",
     "openExternal": "Open"
   },
+  "logsLive": {
+    "window": "Follow window", "windowCount": "{{count}} rows in window",
+    "stop": "Stop follow", "pause": "Pause", "resume": "Resume",
+    "idle": "Disconnected", "connecting": "Connecting to live logs", "live": "Live connection",
+    "reconnecting": "Connection lost, reconnecting", "paused": "Paused",
+    "fallback": "Push unsupported by server; polling every 3 seconds", "error": "Live logs stopped",
+    "limitedReplay": "Latest 100 rows; reconnect attempts about 10 seconds of replay and may miss rows",
+    "waiting": "Waiting for live logs. A connection or replay does not confirm complete history; stop follow to search history."
+  },
   "logsText": {
     "window": "File tail window", "file": "Log file", "updated": "Last read",
     "loadedOnly": "Search and level filters apply to the loaded text window",
@@ -3846,7 +3855,7 @@
     "helpCoverageTitle": "Coverage & completeness",
     "helpCoverageBody": "The cards and banner above show how much data this query covered. When it says incomplete, rows may be missing and export is blocked — that is not a failure, just collection/verification still in progress. A leading ≈ marks a non-exact count.",
     "helpFollowTitle": "Live follow",
-    "helpFollowBody": "Polls every 3 seconds and pins new logs to the top; pauses while you scroll back and resumes at the top. Insight cards are hidden while following — aggregates go stale every 3 seconds and showing an old snapshot misleads more than showing nothing.",
+    "helpFollowBody": "Instance logs stream from the server into a 100-row window. Pause, scroll back or select text to close the connection and retain the display. Resume clears the log selection, returns to the top and reconnects. Reconnection only attempts about 10 seconds of replay and may miss rows, so use history search for earlier data. Older nodes show an explicit polling fallback. Node and platform text windows refresh every 3 seconds. The insight area keeps its space.",
     "helpShortcutTitle": "Common actions",
     "helpShortcutBody": "Drag over log text and copy using native browser selection or Ctrl/Cmd+C. There is no row selection mode. The arrow expands raw content and fields. Pause live updates while reviewing or selecting text to keep the selection intact.",
     "vizTotalTitle": "Total events",

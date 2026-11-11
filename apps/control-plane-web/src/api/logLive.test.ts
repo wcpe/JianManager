@@ -55,6 +55,12 @@ describe('native log fetch contract', () => {
       expect(fetcher.mock.calls[1][1].headers.Authorization).toBe('Bearer refreshed-secret')
     } finally { vi.unstubAllGlobals() }
   })
+  it.each([404, 405, 501])('reports an older CP without a stream route (%i) as unsupported', async (status) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'NOT_IMPLEMENTED' }), { status, headers: { 'Content-Type': 'application/json' } })))
+    try {
+      await expect(subscribeLiveLogs({}, { signal: new AbortController().signal, onFrame: () => {} })).rejects.toMatchObject({ code: 'UNSUPPORTED', retryable: false, status })
+    } finally { vi.unstubAllGlobals() }
+  })
   it('marks resource limits permanent and transient disconnect retryable', () => {
     expect(new LiveLogError('BUDGET_EXCEEDED', 'stop').retryable).toBe(false)
     expect(new LiveLogError('SESSION_EXPIRED', 'reconnect').retryable).toBe(true)

@@ -123,11 +123,14 @@ export async function subscribeLiveLogs(
     response = await connect()
   }
   if (!response.ok) {
-    let code = response.status === 403 || response.status === 401 ? 'FORBIDDEN' : response.status === 429 ? 'RATE_LIMITED' : 'STREAM_UNAVAILABLE'
+    let code = response.status === 403 || response.status === 401 ? 'FORBIDDEN'
+      : [404, 405, 501].includes(response.status) ? 'UNSUPPORTED'
+        : response.status === 429 ? 'RATE_LIMITED' : 'STREAM_UNAVAILABLE'
     let message = `日志连接失败 (${response.status})`
     try {
       const value = await response.json() as { error?: string; message?: string }
-      code = value.error ?? code; message = value.message ?? message
+      if (code !== 'UNSUPPORTED') code = value.error ?? code
+      message = value.message ?? message
     } catch { /* preserve HTTP status on non-JSON failures */ }
     throw new LiveLogError(code, message, response.status)
   }

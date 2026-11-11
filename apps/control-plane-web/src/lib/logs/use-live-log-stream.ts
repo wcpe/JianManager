@@ -40,6 +40,7 @@ export function useLiveLogStream(params: Record<string, unknown>, enabled: boole
     let alive = true
     let attempts = 0
     let buffer = latest.current.identity === identity ? latest.current.items : []
+    let nextRowId = buffer.reduce((max, row) => Math.max(max, typeof row.id === 'number' ? row.id : 0), 0) + 1
     let renderTimer: ReturnType<typeof setTimeout> | undefined
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     const flush = () => {
@@ -54,10 +55,10 @@ export function useLiveLogStream(params: Record<string, unknown>, enabled: boole
           onFrame: (frame) => {
             if (!alive || controller.signal.aborted) return
             if (frame.type === 'ready') {
-              attempts = 0
               setState({ identity, items: buffer, status: 'live', partial: frame.partial ?? true })
             } else if (frame.type === 'event' && frame.event) {
-              buffer = appendLiveEvent(buffer, frame.event)
+              attempts = 0
+              buffer = appendLiveEvent(buffer, { ...frame.event, id: nextRowId++ })
               if (renderTimer === undefined) renderTimer = setTimeout(flush, 100)
             }
           },
@@ -68,6 +69,7 @@ export function useLiveLogStream(params: Record<string, unknown>, enabled: boole
         if (renderTimer !== undefined) { clearTimeout(renderTimer); renderTimer = undefined }
         const failure = error as { code?: string; message?: string; retryable?: boolean }
         const code = failure.code || 'STREAM_UNAVAILABLE'
+        if (code === 'SESSION_EXPIRED') attempts = 0
         const retryable = failure.retryable !== false && code !== 'FORBIDDEN'
         if (code === 'UNSUPPORTED') {
           setState({ identity, items: buffer, status: 'fallback', code, message: failure.message })

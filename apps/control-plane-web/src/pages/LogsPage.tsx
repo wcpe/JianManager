@@ -24,7 +24,9 @@ import {
 	type LogsFederationResult,
 } from '@/api/logFederation'
 import { useAuthStore } from '@/stores/auth'
-import { usePlatformDiagnosticsLog } from '@/api/nodeDiagnostics'
+import { useLiveLogStream } from '@/lib/logs/use-live-log-stream'
+import { buildLogTimeBuckets } from '@/lib/logs/log-time-buckets'
+import { subscribeLiveLogs } from '@/api/logLive'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { LogExportRangeDialog } from '@/components/logs/LogExportRangeDialog'
@@ -32,11 +34,11 @@ import {
   EventsTotalCard,
   LevelDistributionCard,
   TimeDistributionCard,
-  type TimeDistributionBucket,
   TopSourcesCard,
 } from '@/components/logs/LogsInsightCards'
 import { LogTimeline } from '@/components/logs/LogTimeline'
 import { TextLogWorkbench } from '@/components/logs/TextLogWorkbench'
+import { LogFieldExplorer } from '@/components/logs/LogFieldExplorer'
 import { PageHeader, PageHelp, PageShell } from '@jianmanager/ui/components/layout'
 import { resolveSourceLabel } from '@/lib/logs/logs-source-label'
 import { useDebounced } from '@/lib/hooks/use-debounced'
@@ -109,37 +111,6 @@ function normalizeSource(raw: string): string {
   return raw
 }
 
-/**
- * 从一行平台日志文本里推断级别。
- *
- * 为什么要在前端推断：平台日志现在是**纯文本文件**，不是结构化行。
- * slog 两种格式都在行内带级别：
- *   - text：`time=... level=WARN msg=...`
- *   - json：`{"time":"...","level":"WARN","msg":"..."}`
- * 两者都没命中时归 info（与后端 log_level.go 的推断口径一致）。
- */
-function inferLineLevel(line: string): string {
-  const m = /level[=":]+\s*"?(DEBUG|INFO|WARN|WARNING|ERROR)"?/i.exec(line)
-  const v = m?.[1]?.toUpperCase()
-  if (!v) return 'info'
-  if (v === 'WARNING') return 'warn'
-  return v.toLowerCase()
-}
-
-/**
- * 从一行平台日志文本里取时间（用于排序与展示）。
- *
- * 取不到就返回空串——不伪造当前时间：那会让排序看起来正常、实际是错的。
- */
-function inferLineTime(line: string): string {
-  // json 格式："time":"2026-10-29T15:04:32+08:00"
-  const json = /"time"\s*:\s*"([^"]+)"/.exec(line)?.[1]
-  if (json) return json
-  // text 格式：time=2026-10-29T15:04:32.000+08:00
-  const text = /\btime=(\S+)/.exec(line)?.[1]
-  if (text) return text
-  return ''
-}
 
 /** 联邦事件 → LogEntry 行（F-003：列表主数据源）。 */
 function mapFederationItems(items: unknown[] | null | undefined): LogEntry[] {
@@ -223,11 +194,6 @@ function timeBucketForRange(range: TimeRangePreset): string {
   }
 }
 
-function statsBucketLabel(dimensions?: Record<string, string>): string {
-  if (!dimensions) return ''
-  return dimensions._time ?? dimensions.time ?? Object.values(dimensions)[0] ?? ''
-}
-
 function isSafeLogsField(value: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(value)
 }
@@ -239,17 +205,10 @@ function escapeLogsQLString(value: string): string {
 
 /**
  * 日志中心（查看 / 检索 / 增强 + 覆盖/失败态接线）。
- * 套「流水检索」范式：强筛选（级别 pill + 来源/节点/实例/时间范围 + 关键字）→ 时间线行（虚拟滚动）；
- * 「实时跟随」开关锁定首页并按间隔轮询（tail）；导出可选范围（当前页/全部匹配/时间段）。
- * 级别用 StatusBadge 着色，token 驱动，与告警页语义统一。
- *
- * 联邦覆盖接线（最小改动）：
- * - 可选联邦 API（`/logs/federation`）经 `useLogsFederation` 探测；不可用时**不回退**经典表
- *   （用户裁定：「没有就是没有」，以免把平台/历史日志读成该视图的日志），只出横幅指明去看
- *   Legacy 只读入口。详见下方 `classicAuthoritative` 一段。
- * - 覆盖/失败态一律经 `classifyLogViewState` + `toCoverageBannerProps`，失败/partial 禁止空成功。
- * - `sourceTag=legacy` 打 Legacy 徽标；ErrFederatedNotReady 显示联邦未就绪说明。
- * - 导出在 `resolveExportDownloadAffordance` 阻断时禁用；经典 `/logs/export` 仅在平台视图放行。
+ * 实例日志使用 VL 的授权 Query View、字段分析和高级过滤；节点/平台使用文件窗口。
+ * 实例跟随优先订阅原生 SSE，只有明确不支持时才轮询；原生选区与回看冻结显示。
+ * 列表、统计和导出共享查询身份；失败与覆盖不完整均不得呈现为空成功。
+ * 工具栏、洞察、状态与页脚保留固定槽位，日志只在结果区域内滚动。
  */
 export default function LogsPage() {
   const { t } = useTranslation()
@@ -306,6 +265,8 @@ export default function LogsPage() {
   // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（online_only）。
   const [onlineOnly, setOnlineOnly] = useState(false)
   const [follow, setFollow] = useState(false)
+  const [manualPaused, setManualPaused] = useState(false)
+  const [interactionPaused, setInteractionPaused] = useState(false)
   const [streamField, setStreamField] = useState<'stream' | 'log_source_id'>('stream')
   const [exporting, setExporting] = useState(false)
 
@@ -367,7 +328,13 @@ export default function LogsPage() {
 		// 续页不解析游标、不从日志时间重建窗口，保留纳秒同戳组和原视图身份。
 		...(!follow && page > 1 ? federationCursors[page] : {}),
 	}
-  const federationQuery = useLogsFederation(federationParams, { enabled: federationEnabled })
+  const liveParams = { ...scope, ...timeParamsFor(range, new Date(rangeAnchor), true), to: undefined }
+  const liveState = useLiveLogStream(liveParams, follow && federationEnabled, manualPaused || interactionPaused, subscribeLiveLogs)
+  const pollingFallback = follow && liveState.code === 'UNSUPPORTED'
+  const liveDisplay = follow && federationEnabled && !pollingFallback
+  const federationQuery = useLogsFederation(federationParams, {
+    enabled: federationEnabled && (!follow || (pollingFallback && !manualPaused && !interactionPaused)),
+  })
   /**
    * 最近一份「联邦可用且带 items」的成功结果，用于限流期间继续渲染已有行。
    *
@@ -498,78 +465,21 @@ export default function LogsPage() {
         : undefined
 
 
-  /**
-   * 经典表格查询（**仅**平台视图的权威来源）。
-   *
-   * 两个门控都指向同一目标：**联邦视图下不要为了「可能用得上」而重复请求**。
-   * ① `refetchInterval` 不含联邦视图：node_instance/all 视图的主数据源是 federation，
-   *    再让 useLogs 跟着每 3 秒打一条数据面请求，只会让每次轮询变成 2 条（生产 429 的
-   *    主因之一），而它拉回的行在联邦活跃时根本不参与渲染。
-   * ② `enabled` 只在「经典接口确实是权威来源」时才开：**只有平台视图**
-   *    （federationEnabled=false）符合。仅关掉 ① 还不够——跟随态的时间桶每 3 秒滚动一次，
-   *    `params` 里的 from/to 随之变化 ⇒ queryKey 变化本身就触发一次新请求（实测：即使
-   *    refetchInterval=false，classic 仍每 tick 发 1 条）。关掉 ② 才真正消除这次重复。
-   *
-   * **联邦视图不再因降级而回退经典表**（用户裁定）：查询服务不可用时「没有就是没有」，
-   * 把平台/历史日志填进节点/实例视图，会让「查不到」被读成「这些就是该视图的日志」，
-   * 属于静默换源式的误导。Legacy 有专门入口（工具栏右侧「更多」），要看存量日志的用户
-   * 自己切过去看，而不是由本视图替他决定。
-   * 由此 `data` 在联邦视图下恒为 undefined，items/total/isLoading/isError 会连锁落到
-   * 「联邦不可用 ⇒ 空且非成功」的语义上，无需各处重复判断。
-   */
-  const classicAuthoritative = !federationEnabled
-  // 平台视图（view=platform）的权威来源已改为**进程日志文件尾部诊断**（2026-10-29）。
-  //
-  // 为什么改：CP `logs` 表已废弃——它把日志正文与业务数据混在同一个库，
-  // 关键词检索是 LIKE 全表扫，保留期靠“归档后 DELETE”维持。
-  // 新形态是诚实的降级：平台日志只提供“最近 N 行 + 时间/级别/关键字可见性”，
-  // **不提供**分页、总条数、任意时间窗——那些能力在文件上实现不了，也不该假装能。
-  // 要看完整历史请直接在该机器上 grep（面板会给出可复制的命令）。
-  const platformLogQuery = usePlatformDiagnosticsLog(false, 500) // File mode is owned by TextLogWorkbench.
-  const platformLogLines = useMemo<LogEntry[]>(() => {
-    const content = platformLogQuery.data?.content
-    if (!content) return []
-    return content
-      .split('\n')
-      .filter((line) => line.length > 0)
-      // 尾部原文是「旧→新」，页面按时间倒序渲染，故反转。
-      .reverse()
-      .map((line, index) => ({
-        id: -(index + 1),
-        source: 'control_plane',
-        // 级别由行内 level= 推断（slog text/json 两种格式都覆盖），失败则归 info。
-        level: inferLineLevel(line),
-        instanceId: 0,
-        instanceUuid: '',
-        nodeId: 0,
-        message: line,
-        time: inferLineTime(line),
-      }) satisfies LogEntry)
-  }, [platformLogQuery.data])
-  // CP 经典日志接口（/logs、/logs/export）已随 `logs` 表下线，不再发起查询。
-  // 保留同名占位量是为了让下游渲染分支（loading/error/data）保持单一形态，
-  // 而不必在三处删条件；它们的值恒为“未加载/无错/空”。
-  type ClassicLogPage = { items?: LogEntry[]; total?: number }
-  const data = undefined as ClassicLogPage | undefined
-  const classicLoading = false
-  const classicError = false
-  const refetchLogs = () => undefined
   // 同条件的聚合可复用搜索视图；实际时间窗与在线目标必须逐字段同源。
   const aggregateParams: Record<string, unknown> = {
     ...scope,
     ...(federation?.response.viewId ? { viewId: federation.response.viewId } : {}),
   }
-  const mainFetching = federationEnabled ? federationQuery.isFetching : classicLoading
-  const refetchMain = federationEnabled ? federationQuery.refetch : refetchLogs
+  const mainFetching = federationQuery.isFetching
+  const refetchMain = federationQuery.refetch
   useEffect(() => {
-    if (!follow || mainFetching || exporting) return
-    // 上一轮真正落定后再计时，慢请求不会被新桶打断，也不会形成重叠轮询。
+    if (!pollingFallback || manualPaused || interactionPaused || mainFetching || exporting) return
     const timer = window.setTimeout(() => {
       if (timeParams.from) setFollowAnchorMs(bucketFloor(Date.now()))
       else void refetchMain()
     }, FOLLOW_INTERVAL)
     return () => window.clearTimeout(timer)
-  }, [follow, mainFetching, exporting, timeParams.from, refetchMain])
+  }, [pollingFallback, manualPaused, interactionPaused, mainFetching, exporting, timeParams.from, refetchMain])
 
 	// 编排（§1 延后串行）：① 主列表先出——stats/facets 均已 gate 在「主查询有数据且拿到 viewId」之后 ✓；
 	// ② stats → facets 再串行——facets 额外等 stats 落定（成功或失败），
@@ -648,30 +558,13 @@ export default function LogsPage() {
     )
     : null
 
-  // 两源：联邦（节点与实例）/ 平台进程日志尾部。
-  // 平台视图不再有服务端分页与总数：total 就是拿到的行数（尾部条数），
-  // 这不是“偷懒”，而是文件末尾的真相——不伪造一个算不出来的总数。
-  const platformView = view === 'platform'
-  const items = platformView
-    ? platformLogLines
-    : federationActive
-      ? (federationItems ?? [])
-      : (data?.items ?? [])
-  const total = platformView
-    ? platformLogLines.length
-    : federationActive
-      ? items.length
-      : (data?.total ?? 0)
+  const platformView = !federationEnabled
+  const items = liveDisplay ? mapFederationItems(liveState.items) : federationItems ?? []
+  const total = items.length
   // 有游标时必须原 view 续页（预算截断空页也可续）；明确结束才移动完整窗口。
-  const timeBuckets = useMemo<TimeDistributionBucket[]>(
-    () => (Array.isArray(statsPoints) ? statsPoints : [])
-      .map((point, index) => ({
-        label: statsBucketLabel(point.dimensions) || String(index + 1),
-        count: Number(point.agg?.count ?? point.count ?? 0),
-      }))
-      .filter((bucket) => Number.isFinite(bucket.count) && bucket.count >= 0),
-    [statsPoints],
-  )
+  const timeDistribution = useMemo(() => buildLogTimeBuckets(statsPoints ?? [], {
+    from: scope.from, to: scope.to, timeBucket: timeBucketForRange(range), exact: statsSummary.exact,
+  }), [statsPoints, scope.from, scope.to, range, statsSummary.exact])
 
   const availableFields = federationFields.data?.fields ?? []
   const availableStreamFields = (federationStreamFieldNames.data?.fields ?? [])
@@ -724,6 +617,7 @@ export default function LogsPage() {
       (v: T) => {
         exportRequest.current?.abort()
         setter(v)
+        setInteractionPaused(false)
         setPage(1)
         setFederationCursors({})
       },
@@ -762,6 +656,7 @@ export default function LogsPage() {
     (candidate: (typeof LOG_VIEWS)[number]) => {
       exportRequest.current?.abort()
       setView(candidate)
+      setInteractionPaused(false)
       setPage(1)
       setFederationCursors({})
     },
@@ -788,8 +683,8 @@ export default function LogsPage() {
 	// 联邦视图下经典查询根本不参与页面态（`classicAuthoritative=false` ⇒ 不发起、无数据）：
 	// 页面态只由联邦探测与联邦结果决定，不再存在「降级后由经典表说话」这条路径。
 	const federationProbePending = federationEnabled && federationQuery.isLoading
-	const isLoading = federationProbePending || (classicAuthoritative && classicLoading)
-	const isError = classicAuthoritative && classicError
+  const isLoading = liveDisplay ? liveState.status === 'connecting' : federationProbePending
+  const isError = liveDisplay && liveState.status === 'error' && items.length === 0
 	// 空结果语义：失败/partial 不得呈「暂无日志」空成功。
 	// 查询服务未启用（降级）亦然：经典路径可能确实没有行，但引擎侧数据从未被查询，
 	// 此时宣称「暂无日志」是假成功，必须保留非成功空态。
@@ -800,42 +695,11 @@ export default function LogsPage() {
 		? (federation?.classified.emptySuccessAllowed ?? false)
 		: (!federation || federation.classified.emptySuccessAllowed)
 
-  /**
-   * 空结果的原因分类：决定空态提示怎么说。
-   *
-   * 三类的**处置完全不同**：
-   *  - `control_plane`：设计如此，重试无效——CP 自身日志只落平台库，
-   *    根本不进联邦数据面（后端 log_federation 把它映射到不可能命中的前缀）。
-   *  - `worker`：需节点登记日志源，属配置问题，不是等。
-   *  - `pending`：覆盖尚未校验，等一下重试即可。
-   *  - `no_data`：真的没匹配，放宽条件。
-   *
-   * 判定顺序有讲究，**不能照搬代码直觉**：
-   *  1. 先判 `control_plane`——它是“永远不可能有”，优先级最高；
-   *  2. 再判 `pending`——未校验时 emptySuccessAllowed 也是 false，
-   *     若先判 not_ready 会把 pending 吞掉（实测踩过）；
-   *  3. 然后 not_ready（真失败）；
-   *  4. 最后才落到具体来源与无数据。
-   */
-  const emptyReason: 'control_plane' | 'worker' | 'pending' | 'no_data' | 'not_ready' =
-    source === 'control_plane'
-      ? 'control_plane'
-      : federation?.response.coverage?.pending
-        ? 'pending'
-        : !emptySuccessAllowed
-          ? 'not_ready'
-          : source === 'worker'
-            ? 'worker'
-            : 'no_data'
+  // 文件来源由 TextLogWorkbench 独立分类；此处只解释当前实例 VL 查询。
+  const emptyReason = federation?.response.coverage?.pending ? 'pending'
+    : !emptySuccessAllowed ? 'not_ready' : 'no_data'
 
-  const emptyHint = t(`logs.emptyHint${{
-    control_plane: 'SourceControlPlane',
-    worker: 'SourceWorker',
-    pending: 'Pending',
-    no_data: 'NoData',
-    // not_ready 已有专用文案（logsFederation.emptyNotSuccess），不再叠一层提示。
-    not_ready: 'NoData',
-  }[emptyReason]}`)
+  const emptyHint = t(`logs.emptyHint${emptyReason === 'pending' ? 'Pending' : 'NoData'}`)
 
   const handleExport = async (exportScope: LogExportScope, bounds?: { from: string; to: string }) => {
     if (exportDisabled || exportRequest.current) return
@@ -1140,7 +1004,9 @@ export default function LogsPage() {
               />
             )}
             <TimeDistributionCard
-              buckets={timeBuckets}
+              buckets={timeDistribution.buckets}
+              invalid={timeDistribution.invalid}
+              failed={federationStats.isError}
               uncertain={!statsSummary.exact}
             />
           </div>
@@ -1148,7 +1014,7 @@ export default function LogsPage() {
       </div>
 
       {/* 强筛选工具栏 */}
-      <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
+      <div className="jm-toolbar-surface flex h-[116px] shrink-0 flex-wrap content-start items-center gap-2 overflow-y-auto p-2" data-testid="logs-toolbar">
         {/* 级别快速 pill（全部 + 四级） */}
         <div className="flex items-center gap-1">
           <LevelPill active={level === ''} onClick={() => resetTo(setLevel)('')}>
@@ -1287,6 +1153,15 @@ export default function LogsPage() {
 
         {/* VL 字段与流探索：只在实例/联邦查询能力可用时有内容，平台/节点文本模式不展示。 */}
         <div className="flex items-center gap-1" data-testid="logs-vl-exploration">
+          <LogFieldExplorer
+            params={aggregateParams}
+            enabled={aggregateReady && !queryDraftDirty}
+            fields={availableFields}
+            onFilter={appendStructuredFilter}
+            fieldsStatus={federationFields.isError ? 'failed' : federationFields.isSuccess
+              ? Array.isArray(federationFields.data.fields) ? 'ready' : 'unsupported' : 'loading'}
+            onRetryFields={() => { void federationFields.refetch() }}
+          />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -1357,37 +1232,61 @@ export default function LogsPage() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        {/* 实时跟随开关 pill，靠右 */}
-        <button
-          type="button"
-          aria-pressed={follow}
-		  onClick={() => {
-      exportRequest.current?.abort()
-      setRangeAnchor(Date.now())
-      setFollowAnchorMs(bucketFloor(Date.now()))
-			setFollow((f) => !f)
-			setPage(1)
-			setFederationCursors({})
-		  }}
-		  disabled={platformView}
-          className={cn(
-            'ml-auto inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors duration-200 ease-ios',
-            follow
-              ? 'bg-status-success/15 text-status-success'
-              : 'bg-muted text-muted-foreground hover:bg-accent',
-          )}
-        >
-          <Radio className={cn('size-3.5', follow && 'animate-pulse')} />
-          {t('logs.follow')}
-        </button>
+        <div className="ml-auto flex items-center gap-1">
+          <Button
+            type="button" size="sm" variant={follow ? 'default' : 'outline'}
+            className="w-24" data-testid="logs-live-toggle" aria-pressed={follow}
+            onClick={() => {
+              exportRequest.current?.abort()
+              setRangeAnchor(Date.now())
+              setFollowAnchorMs(bucketFloor(Date.now()))
+              setManualPaused(false)
+              setInteractionPaused(false)
+              setFollow((value) => !value)
+              setPage(1)
+              setFederationCursors({})
+            }}
+            disabled={platformView}
+          >
+            <Radio className={cn('size-3.5', follow && !manualPaused && !interactionPaused && 'animate-pulse')} />
+            {t(follow ? 'logsLive.stop' : 'logs.follow')}
+          </Button>
+          <Button type="button" size="sm" variant="outline" className="w-20" data-testid="logs-live-pause" disabled={!follow} aria-pressed={manualPaused || interactionPaused}
+            onClick={(event) => {
+              if (!manualPaused && !interactionPaused) { setManualPaused(true); return }
+              const viewport = event.currentTarget.closest('[data-page="logs"]')?.querySelector<HTMLElement>('[data-log-viewport]')
+              const selection = document.getSelection()
+              if (viewport && selection && ((selection.anchorNode && viewport.contains(selection.anchorNode)) || (selection.focusNode && viewport.contains(selection.focusNode)))) {
+                selection.removeAllRanges()
+              }
+              if (viewport) viewport.scrollTop = 0
+              setManualPaused(false)
+              setInteractionPaused(false)
+            }}>
+            {t(manualPaused || interactionPaused ? 'logsLive.resume' : 'logsLive.pause')}
+          </Button>
+        </div>
       </div>
 
 
       <div
         data-testid="logs-coverage-slot"
-        className="flex min-h-11 shrink-0 items-center"
+        className="flex h-11 shrink-0 items-center gap-2 overflow-hidden"
       >
-        {queryInputError || queryFailure ? (
+        {follow ? (
+          <>
+            <div data-testid="logs-live-status" data-state={liveState.status} role={liveState.status === 'error' ? 'alert' : 'status'} className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+              title={`${t('logsLive.limitedReplay')}${liveState.message ? ` · ${liveState.message}` : ''}`}>
+              {t(`logsLive.${liveState.status}`)} · {t('logsLive.limitedReplay')}{liveState.code ? ` · ${liveState.code}` : ''}
+              {liveState.message ? ` · ${liveState.message}` : ''}
+            </div>
+            {pollingFallback && federation && (
+              <div className="max-h-11 min-w-0 flex-1 overflow-y-auto">
+                <CoverageBanner federation={federation} onAction={handleFederationAction} qualityGuidanceKey={qualityGuidanceKey} onRetry={() => { void federationQuery.refetch() }} />
+              </div>
+            )}
+          </>
+        ) : queryInputError || queryFailure ? (
           <p role="alert" data-testid="logs-query-error" className="min-w-0 truncate text-xs text-destructive" title={queryInputError ?? queryFailure}>
             {queryInputError ?? queryFailure}
           </p>
@@ -1399,11 +1298,11 @@ export default function LogsPage() {
             onAction={handleFederationAction}
             qualityGuidanceKey={qualityGuidanceKey}
             onRetry={() => {
-              void federationQuery.refetch(); void refetchLogs()
+              void federationQuery.refetch()
             }}
           />
         ) : null}
-        {activeAdvanced && queryMeta && !queryFailure && !queryInputError && (
+        {activeAdvanced && !follow && queryMeta && !queryFailure && !queryInputError && (
           <span data-testid="logs-query-meta" className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
             {t('logs.queryMeta', {
               ms: Math.round(queryMeta.elapsed_ms), rows: queryMeta.returned_rows,
@@ -1429,12 +1328,13 @@ export default function LogsPage() {
           <LogTimeline
             items={items}
             total={total}
-            follow={follow}
+            follow={follow && !manualPaused && !interactionPaused}
             filterKey={filterKey}
+            onInteractionPauseChange={setInteractionPaused}
             loading={isLoading || (!follow && federationQuery.isPlaceholderData)}
-            emptySuccessAllowed={emptySuccessAllowed}
+            emptySuccessAllowed={!follow && emptySuccessAllowed}
             emptyReason={emptyReason}
-            emptyHint={emptyHint}
+            emptyHint={follow ? t('logsLive.waiting') : emptyHint}
             highlightKeyword={keyword}
             sourceLabelOf={sourceLabelOf}
           />
@@ -1686,22 +1586,22 @@ function LogFooter({
   const { t } = useTranslation()
   if (follow) {
     return (
-      <div className="flex shrink-0 items-center gap-2 border-t px-3 py-2 text-[11px] text-status-success">
-        <span className="size-1.5 animate-pulse rounded-full bg-status-success" />
-        {t('logs.followingHint')}
-        <span className="ml-auto text-muted-foreground">{t('logs.totalCount', { count: total })}</span>
+      <div data-testid="logs-footer" className="flex h-10 shrink-0 items-center gap-2 border-t px-3 text-[11px] text-muted-foreground">
+        <span className="size-1.5 rounded-full bg-muted-foreground" />
+        {t('logsLive.window')}
+        <span className="ml-auto">{t('logsLive.windowCount', { count: total })}</span>
       </div>
     )
   }
   if (platformTail) {
     return (
-      <div className="flex shrink-0 items-center gap-2 border-t px-3 py-2 text-[11px] text-muted-foreground">
+      <div data-testid="logs-footer" className="flex h-10 shrink-0 items-center gap-2 border-t px-3 text-[11px] text-muted-foreground">
         <span>{t('logs.platformTailHint', { count: total })}</span>
       </div>
     )
   }
   return (
-    <div className="flex shrink-0 items-center justify-between border-t px-3 py-2 text-sm text-muted-foreground">
+    <div data-testid="logs-footer" className="flex h-10 shrink-0 items-center justify-between border-t px-3 text-sm text-muted-foreground">
       <span>{t('logs.totalCount', { count: total })}</span>
       <div className="flex items-center gap-2">
         <Button variant="outline" size="sm" disabled={page <= 1} onClick={onPrev}>

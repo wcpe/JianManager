@@ -65,6 +65,21 @@ describe('bounded instance live buffer', () => {
     await act(() => vi.advanceTimersByTimeAsync(60_000))
     expect(subscribe).toHaveBeenCalledTimes(2)
   })
+  it('does not let premature ready frames defeat the retry ceiling', async () => {
+    const { connections, subscribe } = transport()
+    const { result } = renderHook(() => useLiveLogStream({ instanceId: 2 }, true, false, subscribe))
+    for (let attempt = 0; attempt <= 6; attempt++) {
+      await act(async () => {
+        connections[attempt].onFrame({ type: 'ready' })
+        connections[attempt].fail({ code: 'STREAM_UNAVAILABLE', retryable: true })
+      })
+      if (attempt < 6) await act(() => vi.advanceTimersByTimeAsync(Math.min(8000, 500 * 2 ** attempt)))
+    }
+    expect(result.current.status).toBe('error')
+    await act(() => vi.advanceTimersByTimeAsync(60_000))
+    expect(subscribe).toHaveBeenCalledTimes(7)
+  })
+
   it('reconnects with bounded backoff and releases retry timers when stopped', async () => {
     const { connections, subscribe } = transport()
     const { result, unmount } = renderHook(() => useLiveLogStream({ instanceId: 2 }, true, false, subscribe))

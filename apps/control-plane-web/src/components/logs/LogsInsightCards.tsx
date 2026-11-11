@@ -234,59 +234,103 @@ export function TopSourcesCard({
 export interface TimeDistributionBucket {
   label: string
   count: number
+  /** At least one interval is unknown; count is only an observed subtotal. */
+  missing?: boolean
 }
 
 /**
  * 时间分布：来自 Stats timeBucket 的全窗口柱阵。
  *
  * 当前页时间戳只代表已加载的 100 行，会把分页/预算截断误画成全量趋势。
- * 这里以聚合结果为唯一数据源，并在不精确时显示约值。
+ * 未返回的桶只有在聚合精确时才能算 0，其余缺口始终显示为未知。
  */
 export function TimeDistributionCard({
   buckets,
   uncertain,
+  failed,
+  invalid,
 }: {
   buckets: TimeDistributionBucket[]
   uncertain?: boolean
+  failed?: boolean
+  invalid?: boolean
 }) {
-  const { t } = useTranslation()
-  const ordered = buckets.filter((bucket) => bucket.count >= 0)
-  if (!ordered.length || ordered.every((bucket) => bucket.count === 0)) return null
-  const peak = Math.max(...ordered.map((bucket) => bucket.count), 1)
+  const { t, i18n } = useTranslation()
+  const unsupported = invalid || buckets.length > 256
+    || buckets.some((bucket) => !Number.isFinite(bucket.count) || bucket.count < 0 || !bucket.label)
+  const hasMissing = buckets.some((bucket) => bucket.missing)
+  const empty = !buckets.length || buckets.every((bucket) => !bucket.missing && bucket.count === 0)
+  const state = failed ? 'failed' : unsupported ? 'unsupported' : empty ? 'empty' : hasMissing ? 'unknown' : 'ready'
+  const unknown = t('logs.aggregateUnverified')
+  const stateMessage = state === 'failed'
+    ? t('logs.aggregateFailed', { kind: t('logs.vizTimeTitle') })
+    : state === 'unsupported'
+      ? t('logs.vizTimeUnsupported', {
+        defaultValue: i18n?.resolvedLanguage?.startsWith('zh')
+          ? '时间分布不可用：时间桶无效或不受支持'
+          : 'Time distribution unavailable: invalid or unsupported time buckets',
+      })
+      : uncertain ? unknown : t('logs.empty')
+  const detail = unsupported || failed ? '' : buckets.map((bucket) => `${bucket.label}:${bucket.missing ? '?' : bucket.count}`).join(',')
+  const peak = unsupported || failed ? 1 : Math.max(...buckets.filter((bucket) => !bucket.missing).map((bucket) => bucket.count), 1)
 
   return (
     <InsightCard
       icon={<Timer className="size-3 shrink-0" />}
       title={t('logs.vizTimeTitle')}
       testId="logs-time-card"
-      hint={uncertain ? t('logs.vizApprox') : t('logs.vizTimeWindow')}
+      hint={failed || unsupported ? undefined : uncertain || hasMissing ? unknown : t('logs.vizTimeWindow')}
     >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div
-            data-testid="logs-time-distribution"
-            data-time-detail={ordered.map((bucket) => `${bucket.label}:${bucket.count}`).join(',')}
-            className="flex h-8 items-end gap-px"
-            role="img"
-            aria-label={t('logs.vizTimeAria')}
-          >
-            {ordered.map((bucket) => (
-              <div
-                key={bucket.label}
-                className={cn('min-w-0 flex-1 rounded-t-[1px] bg-status-info/70', bucket.count === 0 && 'bg-muted')}
-                title={`${bucket.label}: ${uncertain ? '≈' : ''}${bucket.count.toLocaleString()}`}
-                style={{ height: `${Math.max(bucket.count === 0 ? 1 : 6, (bucket.count / peak) * 100)}%` }}
-              />
-            ))}
-          </div>
-        </TooltipTrigger>
-        <TooltipContent>
-          {t('logs.vizTimeRangeHelp', {
-            from: ordered[0]?.label ?? '',
-            to: ordered[ordered.length - 1]?.label ?? '',
-          })}
-        </TooltipContent>
-      </Tooltip>
+      {state === 'failed' || state === 'unsupported' || state === 'empty' ? (
+        <div
+          data-testid="logs-time-distribution"
+          data-time-detail={detail}
+          data-state={state}
+          className="flex h-8 items-center text-[11px] text-muted-foreground"
+          role="status"
+        >
+          <span className={cn('line-clamp-2', (state === 'failed' || state === 'unsupported') && 'text-status-warning')}>
+            {stateMessage}
+          </span>
+        </div>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              data-testid="logs-time-distribution"
+              data-time-detail={detail}
+              data-state={state}
+              className="flex h-8 items-end gap-px"
+              role="img"
+              aria-label={hasMissing ? `${t('logs.vizTimeAria')} · ${unknown}` : t('logs.vizTimeAria')}
+            >
+              {buckets.map((bucket) => (
+                <div
+                  key={bucket.label}
+                  data-missing={bucket.missing ? 'true' : undefined}
+                  className={cn(
+                    'min-w-0 flex-1 rounded-t-[1px]',
+                    bucket.missing
+                      ? 'flex items-center justify-center overflow-hidden border border-dashed border-status-warning/60 bg-status-warning/10 text-[9px] text-status-warning'
+                      : bucket.count === 0 ? 'bg-muted' : 'bg-status-info/70',
+                  )}
+                  title={`${bucket.label}: ${bucket.missing ? `? · ${unknown}` : `${uncertain ? '≈' : ''}${bucket.count.toLocaleString()}`}`}
+                  style={{ height: bucket.missing ? '100%' : `${Math.max(bucket.count === 0 ? 1 : 6, (bucket.count / peak) * 100)}%` }}
+                >
+                  {bucket.missing ? <span aria-hidden>?</span> : null}
+                </div>
+              ))}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>
+            {t('logs.vizTimeRangeHelp', {
+              from: buckets[0]?.label ?? '',
+              to: buckets[buckets.length - 1]?.label ?? '',
+            })}
+            {hasMissing ? ` · ? ${unknown}` : null}
+          </TooltipContent>
+        </Tooltip>
+      )}
     </InsightCard>
   )
 }

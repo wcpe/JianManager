@@ -61,9 +61,11 @@ export function LogTimeline({
   const containerRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [selecting, setSelecting] = useState(false)
+  const pointerSelecting = useRef(false)
   useEffect(() => {
     if (!onInteractionPauseChange) return
     const selectionChanged = () => {
+      if (pointerSelecting.current) return
       const selection = document.getSelection()
       const root = containerRef.current
       const selected = Boolean(root && selection && !selection.isCollapsed
@@ -71,11 +73,14 @@ export function LogTimeline({
       setSelecting(selected)
       onInteractionPauseChange(selected || (root?.scrollTop ?? 0) > 4)
     }
+    const releasePointer = () => { pointerSelecting.current = false; selectionChanged() }
     document.addEventListener('selectionchange', selectionChanged)
-    window.addEventListener('pointerup', selectionChanged)
+    window.addEventListener('pointerup', releasePointer)
+    window.addEventListener('pointercancel', releasePointer)
     return () => {
       document.removeEventListener('selectionchange', selectionChanged)
-      window.removeEventListener('pointerup', selectionChanged)
+      window.removeEventListener('pointerup', releasePointer)
+      window.removeEventListener('pointercancel', releasePointer)
     }
   }, [onInteractionPauseChange])
 
@@ -135,11 +140,13 @@ export function LogTimeline({
         onInteractionPauseChange?.(selecting || top > 4)
       }}
       onPointerDownCapture={(event) => {
-        if (event.button === 0 && !(event.target as HTMLElement).closest('button')) {
+        if (onInteractionPauseChange && event.button === 0 && !(event.target as HTMLElement).closest('button')) {
+          pointerSelecting.current = true
           setSelecting(true)
-          onInteractionPauseChange?.(true)
+          onInteractionPauseChange(true)
         }
       }}
+      data-log-viewport
       data-testid="logs-virtual"
       data-total-count={total}
       data-rendered-count={items.length}
