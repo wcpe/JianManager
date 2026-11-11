@@ -9,7 +9,7 @@
  * 所以断言以**可粘贴的文本**、**data-\* 事实值**、**浮层里真存在的小节**为准，
  * 而不依赖仅在已加载翻译资源时才有意义的文案。
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -17,7 +17,6 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { formatLogsForCopy, formatLogLine } from '@/lib/logs/logs-copy'
 import { parseLogSource, resolveSourceLabel } from '@/lib/logs/logs-source-label'
 import type { LogEntry } from '@/lib/console/console-log-types'
 import LogsPage from './LogsPage'
@@ -49,26 +48,6 @@ const event = (index: number, sourceId = 'inst:2/file') => ({
   level: index % 2 === 0 ? 'INFO' : 'WARN',
   message: `日志行-${index}`,
   event_time_utc: new Date(Date.UTC(2026, 10, 10, 8, 0, index)).toISOString(),
-})
-
-describe('logs-copy 纯函数', () => {
-  it('每行带时间/级别/来源/正文，而不是只有正文', () => {
-    const line = formatLogLine(log({ message: 'boom' }), {
-      sourceLabelOf: () => 'logtest-mc',
-      formatTime: () => '2026-11-10 16:00:00',
-    })
-    // 粘出去要能对上“哪一行、什么时候、哪条流”。
-    expect(line).toBe('2026-11-10 16:00:00\tINFO\tlogtest-mc\tboom')
-  })
-
-  it('多行拼接末尾没有多余空行，正文里的换行原样保留', () => {
-    const text = formatLogsForCopy(
-      [log({ id: 1, message: 'a\nb' }), log({ id: 2, message: 'c' })],
-      { sourceLabelOf: () => 'x', formatTime: () => 't' },
-    )
-    expect(text.endsWith('\n')).toBe(false)
-    expect(text.split('\n').length).toBe(3)
-  })
 })
 
 describe('logs-source-label 纯函数', () => {
@@ -147,39 +126,24 @@ describe('LogsPage 多选复制与帮助', () => {
     expect(names).toContain('dev-node')
   })
 
-  it('点击行选中，Shift+点击选中区间，选中条显示数量并可复制', async () => {
+  it('日志正文保留浏览器原生选区，不再渲染自定义多选条或接管复制快捷键', async () => {
     renderWithProviders(<LogsPage />)
     await screen.findByText('日志行-0')
-    const rows = screen.getAllByTestId('log-row-toggle')
 
-    const user = userEvent.setup()
-    // 桩必须装在 userEvent.setup() **之后**：setup() 会用自己的 clipboard 桩
-    // 接管 navigator，先装的桩会被它覆盖，于是 copyToClipboard 走 execCommand 回退，
-    // 看上去像“点了复制没反应”。
-    const writeText = vi.fn(async () => {})
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText },
-    })
+    const messages = screen.getAllByTestId('log-message')
+    expect(messages).toHaveLength(20)
+    expect(screen.queryByTestId('logs-selection-bar')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('logs-copy-selected')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('log-row-toggle')).not.toBeInTheDocument()
+    expect(screen.getByTestId('logs-virtual')).toHaveAttribute('data-rendered-count', '20')
 
-    await user.click(rows[0]!)
-    expect(await screen.findByTestId('logs-selection-bar')).toHaveAttribute('data-selected-count', '1')
-
-    // Shift 点第三行：区间选择（0..2 共 3 行）。
-    await user.keyboard('{Shift>}')
-    await user.click(rows[2]!)
-    await user.keyboard('{/Shift}')
-    await waitFor(() =>
-      expect(screen.getByTestId('logs-selection-bar')).toHaveAttribute('data-selected-count', '3'),
-    )
-
-    await user.click(screen.getByTestId('logs-copy-selected'))
-    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1))
-    const copied = writeText.mock.calls[0]![0] as string
-    // 三条，每行都带来源名，且不被截断成空。
-    expect(copied.split('\n')).toHaveLength(3)
-    expect(copied).toContain('logtest-mc')
-    expect(copied).toContain('日志行-0')
+    // jsdom 无法模拟真实鼠标拖选，但 DOM 必须允许浏览器对正文节点建立原生 Range。
+    const selection = window.getSelection()
+    const range = document.createRange()
+    range.selectNodeContents(messages[0]!)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    expect(selection?.toString()).toContain('日志行-0')
   })
 
   it('帮助浮层补齐“三种视图的区别”', async () => {

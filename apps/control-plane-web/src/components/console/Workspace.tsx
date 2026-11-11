@@ -142,8 +142,9 @@ export default function Workspace() {
     而分页后每页行数固定，本来就该「一屏一页、滚动收在表格内」。
   */
   const isNodesRoute = /^\/nodes\/?$/.test(location.pathname)
+  const isLogsRoute = location.pathname === '/logs'
   const isFixedViewportRoute =
-    isInstanceRoute || isInstanceListRoute || isPermissionsRoute || isNodesRoute
+    isInstanceRoute || isInstanceListRoute || isPermissionsRoute || isNodesRoute || isLogsRoute
   // 路由过渡容器 key 仅按 pathname——同页仅 query 变化（如发布向导 ?step= 步骤切换、列表筛选、
   // tab 切换）不得 remount 路由子树，否则会清空页内本地状态（如发布向导本地暂存的 drafts）。
   // 页面级切换（pathname 变）仍会换 key 重放进场动画。

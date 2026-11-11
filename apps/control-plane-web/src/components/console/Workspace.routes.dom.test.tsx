@@ -11,6 +11,10 @@ vi.mock('@/pages/InstanceDetailPage', () => ({
   default: () => <h1>服务器控制台 / survival-1</h1>,
 }))
 
+vi.mock('@/pages/LogsPage', () => ({
+  default: () => <h1>日志中心</h1>,
+}))
+
 /** 
  * Workspace 路由（IA统计页）：观测·统计页 + 同义旧路径重定向兼容（不 404）。
  * 用 /statistics 系验证渲染与 /stats→/statistics 重定向。后统计页已是平台级聚合页，
@@ -34,5 +38,14 @@ describe('Workspace 观测路由与重定向', () => {
 
     expect(await screen.findByText(/服务器控制台 \/ survival-1/)).toBeInTheDocument()
     expect(window.location.pathname).toBe('/instances/1')
+  })
+
+  it('/logs 走固定视口骨架，外层不滚动', async () => {
+    const { container } = renderWithProviders(<Workspace />, { route: '/logs' })
+    expect(await screen.findByRole('heading', { name: '日志中心' })).toBeInTheDocument()
+    const shell = container.querySelector('.jm-workspace-bg')
+    const route = container.querySelector('[data-slot="workspace-route-transition"]')
+    expect(shell?.className).toContain('overflow-hidden')
+    expect(route?.className).toContain('flex-1')
   })
 })

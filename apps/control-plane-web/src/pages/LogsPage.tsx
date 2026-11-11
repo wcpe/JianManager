@@ -665,10 +665,6 @@ export default function LogsPage() {
 	const federationProbePending = federationEnabled && federationQuery.isLoading
 	const isLoading = federationProbePending || (classicAuthoritative && classicLoading)
 	const isError = classicAuthoritative && classicError
-	const hasData = classicAuthoritative
-		? !!data
-		// 联邦视图下「有数据」= 有联邦结果（含限流时保留的上一份行）。
-		: !!federation
 	// 空结果语义：失败/partial 不得呈「暂无日志」空成功。
 	// 查询服务未启用（降级）亦然：经典路径可能确实没有行，但引擎侧数据从未被查询，
 	// 此时宣称「暂无日志」是假成功，必须保留非成功空态。
@@ -968,46 +964,48 @@ export default function LogsPage() {
        * 这串读不懂的徒标，连带着把日志面板顶满。拆成卡片后，每块只回答一个问题，
        * 且表格区只剩日志本身。
        *
-       * 跟随态不渲染：跟随是“看最新的还在不断进来的那几行”，聚合数字每 3 秒就陈旧，
-       * 展示一个持续跳动的旧快照比不展示更误导。 */}
-      {!follow && insightsVisible && (
-        <div
-          data-testid="logs-federation-insights"
-          className="grid shrink-0 grid-cols-2 gap-2 lg:grid-cols-4"
-        >
-          <EventsTotalCard
-            count={statsCount}
-            exact={statsSummary.exact}
-            partial={statsSummary.partial}
-            pending={statsSummary.pending}
-            truncated={statsSummary.truncated}
-            failed={federationStats.isError}
-            quality={statsSummary.quality}
-            summary={
-              federationFacets.isError
-                ? t('logs.vizSummaryFacetsFailed')
-                : !facetsSummary.exact
-                  ? `${t('logs.aggregateFacets')} · ${t(facetsSummary.partial ? 'logs.aggregatePartial' : facetsSummary.pending ? 'logs.aggregatePending' : 'logs.aggregateUnverified')}`
-                  : facetsTruncated
-                    ? `${t('logs.aggregateFacets')} · ${t('logs.aggregateTruncated')}`
-                    : undefined
-            }
-          />
-          <LevelDistributionCard
-            levels={levelFacets.map((facet) => ({ level: facet.value, count: facet.count }))}
-            uncertain={!facetsSummary.exact || facetsTruncated}
-            failed={federationFacets.isError}
-          />
-          {streamItems.length > 0 && (
-            <TopSourcesCard
-              items={streamItems}
-              lookup={{ instances, nodes }}
-              countsReliable={streamsComplete}
+       * 跟随态不显示聚合内容，但保留固定高度槽位：聚合数字每 3 秒就陈旧，
+       * 同时避免跟随切换时把日志窗口整体向上/向下推。 */}
+      <div
+        data-testid="logs-insights-slot"
+        className="grid h-[104px] shrink-0 grid-cols-2 gap-2 overflow-hidden lg:grid-cols-4"
+      >
+        {!follow && insightsVisible ? (
+          <div data-testid="logs-federation-insights" className="contents">
+            <EventsTotalCard
+              count={statsCount}
+              exact={statsSummary.exact}
+              partial={statsSummary.partial}
+              pending={statsSummary.pending}
+              truncated={statsSummary.truncated}
+              failed={federationStats.isError}
+              quality={statsSummary.quality}
+              summary={
+                federationFacets.isError
+                  ? t('logs.vizSummaryFacetsFailed')
+                  : !facetsSummary.exact
+                    ? `${t('logs.aggregateFacets')} · ${t(facetsSummary.partial ? 'logs.aggregatePartial' : facetsSummary.pending ? 'logs.aggregatePending' : 'logs.aggregateUnverified')}`
+                    : facetsTruncated
+                      ? `${t('logs.aggregateFacets')} · ${t('logs.aggregateTruncated')}`
+                      : undefined
+              }
             />
-          )}
-          <TimeDistributionCard timestamps={pageTimestamps} />
-        </div>
-      )}
+            <LevelDistributionCard
+              levels={levelFacets.map((facet) => ({ level: facet.value, count: facet.count }))}
+              uncertain={!facetsSummary.exact || facetsTruncated}
+              failed={federationFacets.isError}
+            />
+            {streamItems.length > 0 && (
+              <TopSourcesCard
+                items={streamItems}
+                lookup={{ instances, nodes }}
+                countsReliable={streamsComplete}
+              />
+            )}
+            <TimeDistributionCard timestamps={pageTimestamps} />
+          </div>
+        ) : null}
+      </div>
 
       {/* 强筛选工具栏 */}
       <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
@@ -1139,72 +1137,72 @@ export default function LogsPage() {
       </div>
 
 
-      {/* 覆盖/失败态横幅：partial/offline/failed 不得当空成功。 */}
-      {federation && (
-        <CoverageBanner
-          federation={federation}
-          onAction={handleFederationAction}
-          qualityGuidanceKey={qualityGuidanceKey}
-          onRetry={() => {
-			void federationQuery.refetch(); void refetchLogs()
-          }}
-        />
-      )}
+      <div
+        data-testid="logs-coverage-slot"
+        className="flex min-h-11 shrink-0 items-center"
+      >
+        {federation ? (
+          <CoverageBanner
+            federation={federation}
+            onAction={handleFederationAction}
+            qualityGuidanceKey={qualityGuidanceKey}
+            onRetry={() => {
+              void federationQuery.refetch(); void refetchLogs()
+            }}
+          />
+        ) : null}
+      </div>
 
-      {isLoading && !hasData ? (
-        <div className="flex flex-col gap-1">
-          <p className="text-muted-foreground">{t('common.loading')}</p>
-          <SlowQueryHint />
-        </div>
-      ) : isError ? (
-        <p className="text-destructive">{t('logs.loadError')}</p>
-      ) : (
-        <Panel
-          className="min-h-0 flex-1"
-          bodyClassName="flex min-h-0 flex-col p-0"
-        >
+      <Panel
+        className="min-h-0 flex-1"
+        bodyClassName="flex min-h-0 flex-col p-0"
+      >
+        {isError ? (
+          <div
+            data-testid="logs-query-error"
+            className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-destructive"
+          >
+            {t('logs.loadError')}
+          </div>
+        ) : (
           <LogTimeline
             items={items}
             total={total}
             follow={follow}
             filterKey={filterKey}
-            // 切窗口/筛选期间展示的是上一份数据（placeholderData）：此时 isLoading 为 false
-            // 但新结果尚未到达，须维持 loading 语义（timeline 据此不把旧数据误判为空态）；
-            // follow 轮询每 3 秒换桶，不置位以免闪烁。
             loading={isLoading || (!follow && federationQuery.isPlaceholderData)}
             emptySuccessAllowed={emptySuccessAllowed}
             emptyReason={emptyReason}
             emptyHint={emptyHint}
             highlightKeyword={keyword}
             sourceLabelOf={sourceLabelOf}
-            onCopyResult={(ok, count) => {
-              if (ok) toast.success(t('logs.copySucceeded', { count }))
-              else toast.error(t('logs.copyFailed'))
-            }}
           />
-          <LogFooter
-            follow={follow}
-            platformTail={platformView}
-            total={total}
-            page={follow ? 1 : page}
-            totalPages={totalPages}
-            canNext={federationActive ? federationNextAvailable : undefined}
-            onPrev={() => setPage((p) => Math.max(1, p - 1))}
-			onNext={() => {
-				if (federationActive) {
-					if (!federationNextAvailable) return
-					const next = federationCanContinue
-						? { from: federationParams.from as string | undefined,
-							to: federationParams.to as string | undefined,
-							viewId: federation?.response.viewId, cursor: federation?.response.nextCursor ?? undefined }
-						: windowForAnchor(range, federationParams.from as string)
-					setFederationCursors((current) => ({ ...current, [page + 1]: next }))
-				}
-				setPage((p) => p + 1)
-			}}
-          />
-        </Panel>
-      )}
+        )}
+        <LogFooter
+          follow={follow}
+          platformTail={platformView}
+          total={total}
+          page={follow ? 1 : page}
+          totalPages={totalPages}
+          canNext={federationActive ? federationNextAvailable : undefined}
+          onPrev={() => setPage((p) => Math.max(1, p - 1))}
+          onNext={() => {
+            if (federationActive) {
+              if (!federationNextAvailable) return
+              const next = federationCanContinue
+                ? {
+                    from: federationParams.from as string | undefined,
+                    to: federationParams.to as string | undefined,
+                    viewId: federation?.response.viewId,
+                    cursor: federation?.response.nextCursor ?? undefined,
+                  }
+                : windowForAnchor(range, federationParams.from as string)
+              setFederationCursors((current) => ({ ...current, [page + 1]: next }))
+            }
+            setPage((p) => p + 1)
+          }}
+        />
+      </Panel>
     </PageShell>
   )
 }
@@ -1353,36 +1351,6 @@ function CoverageBanner({
         </div>
       )}
     </div>
-  )
-}
-
-/** 级别快速筛选 pill：选中态主色淡染，非选中态弱色；带级别时前导状态色点。 */
-/** 慢查询提示出现的等待阈值（秒）：3 秒内的加载属正常往返，不必打扰用户。 */
-const SLOW_QUERY_HINT_SECONDS = 3
-
-/**
- * 慢查询提示：长耗时查询不能只留一个转圈——让用户知道「还在跑、等了多久」，
- * 并提示缩小时间范围（无界范围是最慢路径）。纯前端计时，不改任何查询语义。
- *
- * 计时的归零交给组件生命周期：本组件只在「加载中且尚无数据」时挂载，加载结束即卸载，
- * 秒数随之丢弃。不在 effect 体内同步 setState(0) —— 那会触发级联渲染
- * （react-hooks/set-state-in-effect），且在严格模式下被双调用放大。
- */
-function SlowQueryHint() {
-  const { t } = useTranslation()
-  const [waitedSeconds, setWaitedSeconds] = useState(0)
-  useEffect(() => {
-    const startedAt = Date.now()
-    const timer = window.setInterval(() => {
-      setWaitedSeconds(Math.floor((Date.now() - startedAt) / 1000))
-    }, 1000)
-    return () => window.clearInterval(timer)
-  }, [])
-  if (waitedSeconds < SLOW_QUERY_HINT_SECONDS) return null
-  return (
-    <p className="text-xs text-muted-foreground" data-testid="logs-slow-query-hint">
-      {t('logs.slowQueryHint', { seconds: waitedSeconds })}
-    </p>
   )
 }
 

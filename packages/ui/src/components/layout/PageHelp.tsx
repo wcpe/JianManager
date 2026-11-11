@@ -40,6 +40,7 @@ export function PageHelp({
   intro,
   sections,
   testId = 'page-help',
+  ariaLabel,
   contentClassName,
 }: {
   /** 浮层标题，同时作为按钮的无障碍名。 */
@@ -49,6 +50,9 @@ export function PageHelp({
   sections: PageHelpSection[]
   /** 测试前缀：触发器 `${testId}-trigger`，内容 `${testId}-content`。 */
   testId?: string
+  /** 按钮无障碍标签；未传时使用浮层标题。 */
+  ariaLabel?: string
+  /** 内容区宽度：说明很长时可放宽。 */
   contentClassName?: string
 }) {
   return (
@@ -58,7 +62,7 @@ export function PageHelp({
           type="button"
           data-testid={`${testId}-trigger`}
           data-slot="page-help-trigger"
-          aria-label={title}
+          aria-label={ariaLabel ?? title}
           className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
         >
           <HelpCircleIcon className="size-3.5" aria-hidden />
