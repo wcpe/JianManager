@@ -72,27 +72,13 @@ async function measureScrollRender(page: Page, surface: string, rounds: number):
   return timings
 }
 
-/** 统计测量期间的 long task（>50ms）次数与总阻塞时长。 */
-async function collectLongTasks(page: Page, action: () => Promise<void>): Promise<{ count: number; totalMs: number }> {
-  await page.evaluate(() => {
-    const store = window as Window & { __jmLongTasks?: { count: number; totalMs: number } }
-    store.__jmLongTasks = { count: 0, totalMs: 0 }
-    const obs = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        const s = (window as Window & { __jmLongTasks?: { count: number; totalMs: number } }).__jmLongTasks
-        if (!s) continue
-        s.count += 1
-        s.totalMs += entry.duration
-      }
-    })
-    obs.observe({ entryTypes: ['longtask'] })
-  })
-  await action()
-  return page.evaluate(() => {
-    const s = (window as Window & { __jmLongTasks?: { count: number; totalMs: number } }).__jmLongTasks
-    return { count: s?.count ?? 0, totalMs: Math.round((s?.totalMs ?? 0) * 10) / 10 }
-  })
-}
+/*
+  原有一个 `collectLongTasks`（PerformanceObserver 采 longtask）也一并删掉了：
+  它唯一的调用方是被删的那条日志用例。任务页没用它——它对滚动重挂载耗时的度量
+  直接走 `measureScrollRender` 的 performance.now() 采样，已足够。
+
+  留下未调用的工具函数会让下一个人以为某条用例还在采 longtask，实际没有。
+*/
 
 test.describe('验收③：列表虚拟化前后对比实测', () => {
   test.beforeEach(async ({ page }) => {
@@ -125,71 +111,25 @@ test.describe('验收③：列表虚拟化前后对比实测', () => {
     expect(probe.domRows, '审计页可见行数不超过真实数据量').toBeLessThanOrEqual(60)
   })
 
-  test('日志中心（整页 100 条）：DOM 行数被裁剪，不随数据量线性增长', async ({ page }) => {
-    test.setTimeout(180_000)
-    await page.goto('/logs')
-    await expect(page.locator('[data-page="logs"]'), '日志中心就绪').toBeVisible({ timeout: READY_TIMEOUT_MS })
+  /*
+    日志中心那条「DOM 行数被裁剪」用例已删除（2026-11-12）。
 
-    // 默认时间窗只有 15 分钟（quick-first-paint 依据），需显式切到「全部时间」才拿得到整页数据。
-    const rangeSelect = page.getByTestId('logs-range-select')
-    await expect(rangeSelect, '日志时间范围控件存在').toBeVisible({ timeout: READY_TIMEOUT_MS })
-    await rangeSelect.click()
-    await page.getByRole('option', { name: '全部时间' }).click()
-    await expect(rangeSelect, '时间范围已切到全部时间').toContainText('全部时间')
+    【为什么删而不是改断言】产品在「稳定日志页视口并恢复原生选区」那次变更里
+    **主动移除了日志页的虚拟滚动**：`LogTimeline` 现在用 `items.map()` 把当前页
+    100 行全部留在 DOM，理由写在组件的文件头——日志排障要靠浏览器原生拖选与
+    跨行复制，而虚拟滚动会卸载离开视口的节点、把原生选区打断。也就是说
+    「DOM 行数远小于总条数」这件事，产品是**刻意不做**的。
 
-    const surface = '[data-testid="logs-virtual"]'
-    await expect(page.locator(surface), '日志虚拟容器存在').toBeVisible({ timeout: READY_TIMEOUT_MS })
-    // 等整页数据到位。
-    //
-    // 【为何不是 1000+】日志中心已改为**分页**（`PAGE_SIZE = 100`，见 LogsPage），
-    // `data-total-count` 报的是**当前页行数**而非全库总数（联邦视图）——所以它的上限
-    // 就是 100。历史上这里断言过 1000+，那前提是「一次拿回全库」的旧实现。
-    // 同样的结论在 navigation-benchmark.spec.ts 里有完整记录（那里已改成 minTotal=1）：
-    // 平台视图硬上限 500 行、联邦视图每页 100 行，「1000+」在任一视图下都结构性不可满足。
-    // 非要凑 1000+ 只能造假数据，那等于不再验证真实页面。
-    //
-    // 虚拟化的判据不变：**一页 100 条，DOM 里仍只挂几十行**。
-    await expect
-      .poll(async () => Number(await page.locator(surface).getAttribute('data-total-count')), {
-        message: '日志当前页已载入',
-        timeout: READY_TIMEOUT_MS,
-      })
-      .toBeGreaterThan(0)
+    本用例此前被我改过两轮：先是把 1000+ 调成「当前页」，再把裁剪断言换成
+    「DOM 行数 ≤ 已加载行数」。后者是**同义反复**——全量渲染下这两个数恒等，
+    这条断言永远不会失败，留下来只会假装还有一道门禁在守着虚拟化。
 
-    const probe = await readProbe(page, surface, '[data-testid="log-row"]')
-    // 【为何不在这里断言「容器可滚动」】日志页每页只有 100 条（100 × 30px = 3000px），
-    // 而它所在的容器实测高 3100px —— 一页数据根本撑不出滚动条。那条断言只在
-    // 「一次拿回全库」的旧实现下才成立，现已失效；强行保留只能靠造假数据绕过。
-    // 滚动度量交给下面的任务页（mock 有 1500 行，真能滚）。
+    真正的判据由下面的任务页承担：它仍走虚拟窗口，mock 有 1500 行，真溢出、
+    真裁剪，`domRows < 120` 是有效断言。
 
-    const timings = await measureScrollRender(page, surface, 3)
-    const longTasks = await collectLongTasks(page, () => measureScrollRender(page, surface, 3).then(() => undefined))
-
-    test.info().annotations.push({
-      type: 'logs-render-benchmark',
-      description: JSON.stringify({ probe, timings, longTasks }),
-    })
-
-    // 核心判据改成「每页上限」而非「虚拟窗口裁剪」。
-    //
-    // 【为何不再断言 DOM 行数远小于总条数】这是本用例第三次跟随架构变更被调整，
-    // 根本原因是它依托的两个前提都变了：
-    //   1. 数据量：日志中心已改分页（`PAGE_SIZE = 100`），`data-total-count` 报的是
-    //      当前页行数，不再有「1000+ 条」可断言（同见 navigation-benchmark 的完整记录）；
-    //   2. 虚拟化触发条件：`LogTimeline` 的 `viewportHeight` 由 ResizeObserver 实测，
-    //      不再是写死的 460px——容器实际高 3100px，能完整装下 100 行 × 30px = 3000px，
-    //      窗口因此覆盖全部行。这是产品的**真实行为**（没溢出就不裁剪），不是缺陷。
-    //
-    // 硬拗成「必须只渲染几十行」只有两种办法：改产品让它无谓地裁剪，或造假数据——
-    // 两者都会让这条门禁失去意义。所以这里改为守住真正重要的那条不变量：
-    // **一页不超过 100 条**。渲染量的解耦判据由下方的任务页（mock 有 1500 行，真溢出、真裁剪）承担。
-    expect(probe.totalCount, '当前页条数').toBeGreaterThan(0)
-    expect(probe.totalCount, '当前页不应超过每页上限（100）').toBeLessThanOrEqual(100)
-    // 无论是否触发裁剪，DOM 行数都不得多于已加载行数（多出来的只可能是幽灵行）。
-    expect(probe.domRows, 'DOM 行数不得超过已加载行数').toBeLessThanOrEqual(probe.totalCount)
-    const worst = Math.max(...timings)
-    expect(worst, '日志页单轮滚动重挂载耗时').toBeLessThan(3000)
-  })
+    若将来日志页重新引入虚拟滚动，请按任务页那种形态新写用例，
+    不要复活这条已被削弱的断言。
+  */
 
   test('任务页：数百条量级渲染开销与 DOM 行数', async ({ page }) => {
     test.setTimeout(180_000)
