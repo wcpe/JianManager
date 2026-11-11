@@ -1,6 +1,6 @@
 /** Field identifiers accepted by the current Worker stats/facets adapter. */
 export function isQueryableLogField(field: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(field)
+  return /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(field)
 }
 
 export const LOG_FIELD_TIME_BUCKETS = ['', '1m', '5m', '15m', '1h', '6h', '1d'] as const
@@ -8,13 +8,14 @@ export const LOG_FIELD_TIME_BUCKETS = ['', '1m', '5m', '15m', '1h', '6h', '1d'] 
 export function fieldValueExpression(field: string, value: string, exclude = false): string {
   if (!isQueryableLogField(field)) throw new Error('Invalid log field')
   // JSON quotes also escape backslashes, newlines and control characters. OR stays inside the literal.
-  const exact = `(${field}:=${JSON.stringify(value)})`
+  const identifier = /[.-]/.test(field) ? JSON.stringify(field) : field
+  const exact = `(${identifier}:=${JSON.stringify(value)})`
   return exclude ? `NOT ${exact}` : exact
 }
 
 export function buildFieldFacetParams(params: Record<string, unknown>, field: string) {
   if (!isQueryableLogField(field)) throw new Error('Invalid log field')
-  return { ...params, dimensions: field, dimensionLimit: 20 }
+  return { ...params, dimensions: field, dimensionLimit: 20, explore: true }
 }
 
 export function buildFieldStatsParams(

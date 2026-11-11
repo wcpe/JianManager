@@ -514,9 +514,17 @@ export default function LogsPage() {
 	// Fields / Streams / stream fields 均只在实例联邦查询的同一 Query View 内启用。
 	const aggregateReady = federationActive && !follow && !federationQuery.isPlaceholderData && !federationQuery.isFetching && !!federation?.response.viewId
 	const federationFields = useLogsFederationFields(
-		aggregateParams,
+		{ ...aggregateParams, explore: true },
 		aggregateReady && (federationFacets.isSuccess || federationFacets.isError),
 	)
+  const fieldDiscovery = describeLogAggregate(federationFields.data)
+  const fieldDiscoveryUnsupported = (federationFields.error as { response?: { status?: number } } | null)?.response?.status === 501
+    || fieldDiscovery.reasons.some((reason) => /unsupported|unimplemented/i.test(reason))
+  const fieldDiscoveryStatus = fieldDiscoveryUnsupported ? 'unsupported'
+    : federationFields.isError ? 'failed' : federationFields.isSuccess
+      ? Array.isArray(federationFields.data.fields) && federationFields.data.coverage?.complete === true
+        && !fieldDiscovery.partial && !fieldDiscovery.truncated && !fieldDiscovery.pending ? 'ready' : 'failed'
+      : 'loading'
 	const federationStreamFieldNames = useLogsFederationStreamFieldNames(
 		aggregateParams,
 		aggregateReady && (federationStreams.isSuccess || federationStreams.isError),
@@ -969,11 +977,11 @@ export default function LogsPage() {
        * 同时避免跟随切换时把日志窗口整体向上/向下推。 */}
       <div
         data-testid="logs-insights-slot"
-        className="grid h-[104px] shrink-0 grid-cols-2 gap-2 overflow-hidden lg:grid-cols-4"
+        className="grid h-[104px] shrink-0 grid-cols-[repeat(4,minmax(140px,1fr))] gap-2 overflow-x-auto overflow-y-hidden"
       >
         {!follow && insightsVisible ? (
           <div data-testid="logs-federation-insights" className="contents">
-            <EventsTotalCard
+            <div className="min-w-0" data-testid="logs-insight-cell-total"><EventsTotalCard
               count={statsCount}
               exact={statsSummary.exact}
               partial={statsSummary.partial}
@@ -990,25 +998,25 @@ export default function LogsPage() {
                       ? `${t('logs.aggregateFacets')} · ${t('logs.aggregateTruncated')}`
                       : undefined
               }
-            />
-            <LevelDistributionCard
+            /></div>
+            <div className="min-w-0" data-testid="logs-insight-cell-level"><LevelDistributionCard
               levels={levelFacets.map((facet) => ({ level: facet.value, count: facet.count }))}
               uncertain={!facetsSummary.exact || facetsTruncated}
               failed={federationFacets.isError}
-            />
-            {streamItems.length > 0 && (
+            /></div>
+            <div className="min-w-0" data-testid="logs-insight-cell-sources">{streamItems.length > 0 && (
               <TopSourcesCard
                 items={streamItems}
                 lookup={{ instances, nodes }}
                 countsReliable={streamsComplete}
               />
-            )}
-            <TimeDistributionCard
+            )}</div>
+            <div className="min-w-0" data-testid="logs-insight-cell-time"><TimeDistributionCard
               buckets={timeDistribution.buckets}
               invalid={timeDistribution.invalid}
               failed={federationStats.isError}
               uncertain={!statsSummary.exact}
-            />
+            /></div>
           </div>
         ) : null}
       </div>
@@ -1158,8 +1166,7 @@ export default function LogsPage() {
             enabled={aggregateReady && !queryDraftDirty}
             fields={availableFields}
             onFilter={appendStructuredFilter}
-            fieldsStatus={federationFields.isError ? 'failed' : federationFields.isSuccess
-              ? Array.isArray(federationFields.data.fields) ? 'ready' : 'unsupported' : 'loading'}
+            fieldsStatus={fieldDiscoveryStatus}
             onRetryFields={() => { void federationFields.refetch() }}
           />
           <DropdownMenu>
@@ -1168,6 +1175,7 @@ export default function LogsPage() {
                 type="button"
                 variant="outline"
                 size="sm"
+                className="w-28"
                 disabled={platformView || availableFields.length === 0}
                 data-testid="logs-fields-trigger"
               >
@@ -1179,7 +1187,7 @@ export default function LogsPage() {
                 <DropdownMenuItem
                   key={field}
                   data-testid="logs-field-option"
-                  onSelect={() => appendStructuredFilter(`${field}:*`)}
+                  onSelect={() => appendStructuredFilter(`${/[.-]/.test(field) ? JSON.stringify(field) : field}:*`)}
                 >
                   {field}
                 </DropdownMenuItem>

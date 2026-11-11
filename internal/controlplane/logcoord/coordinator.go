@@ -1458,6 +1458,14 @@ func (c *Coordinator) Tail(ctx context.Context, q Query, mode string) (*SearchRe
 
 // Fields 使用本次整请求额度枚举字段，顶层不完整证据与空截断都必须保留。
 func (c *Coordinator) Fields(ctx context.Context, q Query) (*FieldsResponse, error) {
+	if q.ExploreFields {
+		q.Budget = restrictExplorationBudget(q.Budget)
+		if q.ViewID == "" {
+			if err := validateExplorationTime(q.FromUTC, q.ToUTC); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if c.dialer == nil {
 		return nil, errNoDialer
 	}
@@ -1471,10 +1479,15 @@ func (c *Coordinator) Fields(ctx context.Context, q Query) (*FieldsResponse, err
 		return nil, err
 	}
 	view.Budget = readBudgetForQuery(view, q)
+	if q.ExploreFields {
+		if err := validateExplorationTime(view.FromUTC, view.ToUTC); err != nil {
+			return nil, err
+		}
+	}
 	fieldSet := map[string]bool{}
 	covBy := make(map[string]TargetCoverage)
 	order, byWorker := resolved.ByWorker()
-	reserved := reserveWorkerBudgets(order, view.Budget)
+	reserved := metadataWorkerBudgets(order, view.Budget, q.ExploreFields)
 	workerCoverage := Coverage{Complete: true, EnumerationState: EnumExhausted}
 	truncated := false
 	for _, workerID := range order {
@@ -1504,7 +1517,8 @@ func (c *Coordinator) Fields(ctx context.Context, q Query) (*FieldsResponse, err
 			continue
 		}
 		resp, callErr := client.Fields(ctx, WorkerSearchRequest{TargetIDs: targetIDs, FromUTC: view.FromUTC,
-			ToUTC: view.ToUTC, Filter: view.Filter, Budget: local, ViewID: workerView, OrderVersion: view.OrderVersion})
+			ToUTC: view.ToUTC, Filter: view.Filter, Budget: local, ViewID: workerView, OrderVersion: view.OrderVersion,
+			ExploreFields: q.ExploreFields})
 		if resp != nil {
 			mergeWorkerCoverage(&workerCoverage, resp.Coverage, false)
 			truncated = truncated || resp.Truncated
@@ -1540,6 +1554,12 @@ func (c *Coordinator) Fields(ctx context.Context, q Query) (*FieldsResponse, err
 		fields = append(fields, field)
 	}
 	sort.Strings(fields)
+	if q.ExploreFields && len(fields) > maxExplorationFields {
+		fields = fields[:maxExplorationFields]
+		truncated = true
+		workerCoverage.Complete = false
+		workerCoverage.PartialReasons = appendUniqueReason(workerCoverage.PartialReasons, "BUDGET_EXCEEDED")
+	}
 	cov := BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, EnumExhausted)
 	mergeWorkerCoverage(&cov, &workerCoverage, false)
 	if truncated {
@@ -1548,7 +1568,7 @@ func (c *Coordinator) Fields(ctx context.Context, q Query) (*FieldsResponse, err
 	if err := c.persistClosedVisibleSeq(&view, cov); err != nil {
 		return nil, err
 	}
-	return &FieldsResponse{View: view, Coverage: cov, Fields: fields, Truncated: truncated}, nil
+	return &FieldsResponse{ExploreApplied: q.ExploreFields, View: view, Coverage: cov, Fields: fields, Truncated: truncated}, nil
 }
 
 // persistClosedVisibleSeq 原子固定首次观察到的目标向量，后续只能比较，不能覆盖或丢掉失败路旧值。
@@ -1775,6 +1795,17 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 
 // Facets 受控维度精确合并；高基数截断语义传染。
 func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsResponse, error) {
+	if q.ExploreFields {
+		if len(q.Dimensions) != 1 || q.DimensionLimit == 0 || q.DimensionLimit > 20 {
+			return nil, fmt.Errorf("%w: exactly one dimension and dimensionLimit in [1,20] are required", ErrExplorationInvalid)
+		}
+		q.Budget = restrictExplorationBudget(q.Budget)
+		if q.ViewID == "" {
+			if err := validateExplorationTime(q.FromUTC, q.ToUTC); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if q.Budget.TimeoutMS > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(q.Budget.TimeoutMS)*time.Millisecond)
@@ -1794,7 +1825,12 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 
 	var perWorker []WorkerFacetsResponse
 	view.Budget = readBudgetForQuery(view, q.Query)
-	reserved := reserveWorkerBudgets(order, view.Budget)
+	if q.ExploreFields {
+		if err := validateExplorationTime(view.FromUTC, view.ToUTC); err != nil {
+			return nil, err
+		}
+	}
+	reserved := metadataWorkerBudgets(order, view.Budget, q.ExploreFields)
 	workerCoverage := Coverage{Complete: true, EnumerationState: EnumExhausted}
 	workerTruncated := false
 
@@ -1833,13 +1869,14 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 			continue
 		}
 		resp, callErr := client.Facets(ctx, WorkerSearchRequest{
-			TargetIDs:    targetIDs,
-			FromUTC:      view.FromUTC,
-			ToUTC:        view.ToUTC,
-			Filter:       view.Filter,
-			Budget:       local,
-			ViewID:       workerView,
-			OrderVersion: view.OrderVersion,
+			TargetIDs:     targetIDs,
+			FromUTC:       view.FromUTC,
+			ToUTC:         view.ToUTC,
+			Filter:        view.Filter,
+			Budget:        local,
+			ViewID:        workerView,
+			OrderVersion:  view.OrderVersion,
+			ExploreFields: q.ExploreFields,
 		}, q.Dimensions, q.DimensionLimit)
 		if resp != nil {
 			mergeWorkerCoverage(&workerCoverage, resp.Coverage, false)
@@ -1902,6 +1939,9 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 	}
 
 	dims := MergeFacets(perWorker, q.Dimensions, q.DimensionLimit)
+	if q.ExploreFields && len(perWorker) == 0 {
+		dims = nil
+	}
 	truncated := workerTruncated || FacetsTruncated(dims)
 	cov := BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, EnumExhausted)
 	mergeWorkerCoverage(&cov, &workerCoverage, false)
@@ -1917,11 +1957,12 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 	}
 
 	return &FacetsResponse{
-		View:       view,
-		Coverage:   cov,
-		Quality:    quality,
-		Dimensions: dims,
-		Truncated:  truncated,
+		ExploreApplied: q.ExploreFields,
+		View:           view,
+		Coverage:       cov,
+		Quality:        quality,
+		Dimensions:     dims,
+		Truncated:      truncated,
 	}, nil
 }
 

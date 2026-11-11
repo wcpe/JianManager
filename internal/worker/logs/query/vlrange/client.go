@@ -533,9 +533,12 @@ func statsPipe(q query.RangeQuery) (string, error) {
 		}
 		groups = append([]string{"_time:" + q.TimeBucket}, groups...)
 	}
-	for _, field := range groups {
+	for i, field := range groups {
 		if !validField(field) && !validTimeGroup(field) {
 			return "", fmt.Errorf("vlrange: invalid group field %q", field)
+		}
+		if validField(field) {
+			groups[i] = fieldRef(field)
 		}
 	}
 	var b strings.Builder
@@ -546,7 +549,7 @@ func statsPipe(q query.RangeQuery) (string, error) {
 		// sum/count is merged across Workers. Count the same numeric sample set
 		// as sum, not every log including missing or non-numeric values.
 		b.WriteString(" | filter ")
-		b.WriteString(q.MetricField)
+		b.WriteString(fieldRef(q.MetricField))
 		b.WriteString(":range[-inf,inf]")
 	}
 	b.WriteString(" | stats")
@@ -561,13 +564,13 @@ func statsPipe(q query.RangeQuery) (string, error) {
 			return "", fmt.Errorf("vlrange: invalid metric field %q", q.MetricField)
 		}
 		b.WriteString(", sum(")
-		b.WriteString(q.MetricField)
+		b.WriteString(fieldRef(q.MetricField))
 		b.WriteString(") as _jm_sum, min(")
-		b.WriteString(q.MetricField)
+		b.WriteString(fieldRef(q.MetricField))
 		b.WriteString(") as _jm_min, max(")
-		b.WriteString(q.MetricField)
+		b.WriteString(fieldRef(q.MetricField))
 		b.WriteString(") as _jm_max, avg(")
-		b.WriteString(q.MetricField)
+		b.WriteString(fieldRef(q.MetricField))
 		b.WriteString(") as _jm_avg")
 	}
 	return b.String(), nil
@@ -906,12 +909,21 @@ func escape(s string) string {
 	return quoted[1 : len(quoted)-1]
 }
 
+// fieldRef quotes punctuation-bearing identifiers while preserving existing QL
+// for ordinary identifiers and the separately validated _time:bucket grouping.
+func fieldRef(s string) string {
+	if strings.ContainsAny(s, ".-") {
+		return strconv.Quote(s)
+	}
+	return s
+}
+
 func validField(s string) bool {
 	if s == "" {
 		return false
 	}
 	for i, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' || (i > 0 && r >= '0' && r <= '9') {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' || (i > 0 && ((r >= '0' && r <= '9') || r == '.' || r == '-')) {
 			continue
 		}
 		return false

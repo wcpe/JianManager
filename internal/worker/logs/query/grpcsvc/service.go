@@ -347,6 +347,7 @@ func (s *Service) LogFields(ctx context.Context, req *workerpb.LogFieldsRequest)
 		}, nil
 	}
 	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	qreq.ExploreFields = req.GetExploreFields()
 	fq, ok := s.query.(FieldsQuerier)
 	if !ok {
 		return &workerpb.LogFieldsResponse{
@@ -357,11 +358,12 @@ func (s *Service) LogFields(ctx context.Context, req *workerpb.LogFieldsRequest)
 	res := fq.Fields(ctx, qreq)
 	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
 	out := &workerpb.LogFieldsResponse{
-		RequestId: res.RequestID,
-		View:      grpcmap.ViewRefToProto(res.View),
-		Coverage:  grpcmap.CoverageToProto(res.Coverage),
-		Fields:    append([]string(nil), res.Fields...),
-		Error:     grpcmap.QueryErrorToProto(res.Err),
+		ExploreApplied: res.ExploreApplied,
+		RequestId:      res.RequestID,
+		View:           grpcmap.ViewRefToProto(res.View),
+		Coverage:       grpcmap.CoverageToProto(res.Coverage),
+		Fields:         append([]string(nil), res.Fields...),
+		Error:          grpcmap.QueryErrorToProto(res.Err),
 	}
 	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
 	return out, nil
@@ -376,6 +378,7 @@ func (s *Service) LogFacets(ctx context.Context, req *workerpb.LogFacetsRequest)
 		}, nil
 	}
 	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	qreq.ExploreFields = req.GetExploreFields()
 	fq, ok := s.query.(FacetsQuerier)
 	if !ok {
 		return &workerpb.LogFacetsResponse{
@@ -390,12 +393,13 @@ func (s *Service) LogFacets(ctx context.Context, req *workerpb.LogFacetsRequest)
 		values = append(values, &workerpb.LogFacetValue{Dimension: v.Dimension, Value: v.Value, Count: v.Count})
 	}
 	out := &workerpb.LogFacetsResponse{
-		RequestId: res.RequestID,
-		View:      grpcmap.ViewRefToProto(res.View),
-		Coverage:  grpcmap.CoverageToProto(res.Coverage),
-		Values:    values,
-		Truncated: res.Truncated,
-		Error:     grpcmap.QueryErrorToProto(res.Err),
+		ExploreApplied: res.ExploreApplied,
+		RequestId:      res.RequestID,
+		View:           grpcmap.ViewRefToProto(res.View),
+		Coverage:       grpcmap.CoverageToProto(res.Coverage),
+		Values:         values,
+		Truncated:      res.Truncated,
+		Error:          grpcmap.QueryErrorToProto(res.Err),
 	}
 	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
 	return out, nil

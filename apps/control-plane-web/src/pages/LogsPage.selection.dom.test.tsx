@@ -106,6 +106,30 @@ describe('LogsPage 多选复制与帮助', () => {
     expect(screen.getByTestId('logs-time-card')).toBeInTheDocument()
   })
 
+  it('keeps all four insight cells while source data is pending', async () => {
+    let release: (() => void) | undefined
+    server.use(http.get(API('/logs/federation/streams'), async ({ request }) => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+        request.signal.addEventListener('abort', () => resolve(), { once: true })
+      })
+      return HttpResponse.json({ streams: [{ log_source_id: 'inst:2/file', stream: 'file', hits: 20 }], complete: true, ...summary })
+    }))
+    renderWithProviders(<LogsPage />)
+    try {
+      await waitFor(() => expect(release).toBeDefined())
+      const insights = screen.getByTestId('logs-federation-insights')
+      const cellIds = ['total', 'level', 'sources', 'time'].map((name) => `logs-insight-cell-${name}`)
+      expect(Array.from(insights.children).map((node) => node.getAttribute('data-testid'))).toEqual(cellIds)
+      expect(screen.getByTestId('logs-insight-cell-sources')).toBeEmptyDOMElement()
+      const timeCell = screen.getByTestId('logs-insight-cell-time')
+      release?.()
+      expect(await screen.findByTestId('logs-source-card')).toBeInTheDocument()
+      expect(screen.getByTestId('logs-insight-cell-time')).toBe(timeCell)
+      expect(Array.from(insights.children).map((node) => node.getAttribute('data-testid'))).toEqual(cellIds)
+    } finally { release?.() }
+  })
+
   it('洞察卡片不再出现 EXACT/PARTIAL 这类后端枚举当正文', async () => {
     renderWithProviders(<LogsPage />)
     const insights = await screen.findByTestId('logs-federation-insights')

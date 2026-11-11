@@ -22,7 +22,7 @@ describe('LogFieldExplorer', () => {
     const seen: URLSearchParams[] = []
     server.use(http.get(API('/logs/federation/facets'), ({ request }) => {
       seen.push(new URL(request.url).searchParams)
-      return HttpResponse.json({ ...exact, dimensions: [{ dimension: 'shard', values: [{ value: 'blue', count: 4 }] }] })
+      return HttpResponse.json({ ...exact, explore_applied: true, dimensions: [{ dimension: 'shard', values: [{ value: 'blue', count: 4 }] }] })
     }))
     const user = userEvent.setup()
     renderWithProviders(<LogFieldExplorer params={params} enabled fields={fields} onFilter={() => {}} />)
@@ -33,13 +33,13 @@ describe('LogFieldExplorer', () => {
     await user.selectOptions(screen.getByLabelText('字段'), 'shard')
     expect(await screen.findByTestId('field-value-row')).toHaveTextContent('blue')
     expect(seen).toHaveLength(1)
-    expect(Object.fromEntries(seen[0])).toMatchObject({ ...params, instanceId: '2', dimensions: 'shard', dimensionLimit: '20' })
+    expect(Object.fromEntries(seen[0])).toMatchObject({ ...params, instanceId: '2', dimensions: 'shard', dimensionLimit: '20', explore: 'true' })
   })
 
   it('常见值支持正向/排除精确筛选，恶意值与OR仍在字符串中', async () => {
     const value = 'blue" OR * \\ tail'
     const onFilter = vi.fn()
-    server.use(http.get(API('/logs/federation/facets'), () => HttpResponse.json({ ...exact, dimensions: [{ dimension: 'shard', values: [{ value, count: 2 }] }] })))
+    server.use(http.get(API('/logs/federation/facets'), () => HttpResponse.json({ ...exact, explore_applied: true, dimensions: [{ dimension: 'shard', values: [{ value, count: 2 }] }] })))
     const user = userEvent.setup()
     renderWithProviders(<LogFieldExplorer params={params} enabled fields={fields} onFilter={onFilter} />)
     await user.click(screen.getByTestId('log-field-explorer-trigger'))
@@ -53,7 +53,7 @@ describe('LogFieldExplorer', () => {
   it('数值分析显式执行并传metricField/groupBy/timeBucket；展示count/sum/min/max与加权avg', async () => {
     const seen: URLSearchParams[] = []
     server.use(
-      http.get(API('/logs/federation/facets'), () => HttpResponse.json({ ...exact, dimensions: [{ dimension: 'duration_ms', values: [] }] })),
+      http.get(API('/logs/federation/facets'), () => HttpResponse.json({ ...exact, explore_applied: true, dimensions: [{ dimension: 'duration_ms', values: [] }] })),
       http.get(API('/logs/federation/stats'), ({ request }) => {
         seen.push(new URL(request.url).searchParams)
         return HttpResponse.json({ ...exact, points: [{ time_bucket_utc: '2026-11-10T00:05:00Z', dimensions: { shard: 'blue' }, agg: { count: 2, sum: 10, min: 3, max: 7, has_min_max: true } }] })
@@ -85,7 +85,7 @@ describe('LogFieldExplorer', () => {
       calls++
       return calls === 1
         ? HttpResponse.json({ error: 'LOG_UNSUPPORTED', message: '旧节点不支持字段查询' }, { status: 501 })
-        : HttpResponse.json({ ...exact, dimensions: [{ dimension: 'shard', values: [{ value: 'recovered', count: 1 }] }] })
+        : HttpResponse.json({ ...exact, explore_applied: true, dimensions: [{ dimension: 'shard', values: [{ value: 'recovered', count: 1 }] }] })
     }))
     const user = userEvent.setup()
     renderWithProviders(<LogFieldExplorer params={params} enabled fields={fields} onFilter={() => {}} />)
@@ -99,7 +99,7 @@ describe('LogFieldExplorer', () => {
   })
 
   it('部分覆盖和截断同时可见，空结果不声称成功且提供重试', async () => {
-    server.use(http.get(API('/logs/federation/facets'), () => HttpResponse.json({ coverage: { complete: false }, truncated: true, dimensions: [] })))
+    server.use(http.get(API('/logs/federation/facets'), () => HttpResponse.json({ explore_applied: true, coverage: { complete: false }, truncated: true, dimensions: [] })))
     const user = userEvent.setup()
     renderWithProviders(<LogFieldExplorer params={params} enabled fields={fields} onFilter={() => {}} />)
     await user.click(screen.getByTestId('log-field-explorer-trigger'))
@@ -110,10 +110,47 @@ describe('LogFieldExplorer', () => {
     expect(screen.queryByText('当前窗口没有该字段值。')).not.toBeInTheDocument()
   })
 
+  it('点与连字符字段可分面、生成安全包含排除筛选并进行数值分组', async () => {
+    const onFilter = vi.fn()
+    const numericRequests: URLSearchParams[] = []
+    server.use(
+      http.get(API('/logs/federation/facets'), ({ request }) => {
+        const dimension = new URL(request.url).searchParams.get('dimensions')
+        const value = dimension === 'http.status_code' ? '200' : 'edge-a'
+        return HttpResponse.json({ ...exact, explore_applied: true, dimensions: [{ dimension, values: [{ value, count: 10 }] }] })
+      }),
+      http.get(API('/logs/federation/stats'), ({ request }) => {
+        numericRequests.push(new URL(request.url).searchParams)
+        return HttpResponse.json({ ...exact, points: [{ dimensions: { 'trace-id': 'edge-a' }, agg: { count: 10, sum: 2000, min: 200, max: 200, avg: 200, has_min_max: true } }] })
+      }),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<LogFieldExplorer params={params} enabled fields={['http.status_code', 'trace-id']} onFilter={onFilter} />)
+    await user.click(screen.getByTestId('log-field-explorer-trigger'))
+    for (const [field, value] of [['http.status_code', '200'], ['trace-id', 'edge-a']]) {
+      await user.selectOptions(screen.getByLabelText('字段'), field)
+      await waitFor(() => expect(screen.getByTestId('field-value-row')).toHaveTextContent(value))
+      const row = screen.getByTestId('field-value-row')
+      await user.click(within(row).getByRole('button', { name: /仅包含/ }))
+      await user.click(within(row).getByRole('button', { name: /排除/ }))
+    }
+    expect(onFilter.mock.calls).toEqual([
+      ['("http.status_code":="200")'], ['NOT ("http.status_code":="200")'],
+      ['("trace-id":="edge-a")'], ['NOT ("trace-id":="edge-a")'],
+    ])
+    await user.selectOptions(screen.getByLabelText('字段'), 'http.status_code')
+    await user.click(screen.getByRole('tab', { name: '数值统计' }))
+    await user.selectOptions(screen.getByLabelText('分组字段'), 'trace-id')
+    await user.click(screen.getByRole('button', { name: '运行统计' }))
+    expect(await screen.findByTestId('field-stats-row')).toHaveTextContent('edge-a')
+    expect(Object.fromEntries(numericRequests[0])).toMatchObject({ metricField: 'http.status_code', groupBy: 'trace-id' })
+    expect(numericRequests[0]?.get('explore')).toBeNull()
+  })
+
   it('非法字段不请求；数值字段返回不可用指标时不冒充零统计', async () => {
     let facetsCalls = 0
     server.use(
-      http.get(API('/logs/federation/facets'), () => { facetsCalls++; return HttpResponse.json({ ...exact, dimensions: [{ dimension: 'shard', values: [] }] }) }),
+      http.get(API('/logs/federation/facets'), () => { facetsCalls++; return HttpResponse.json({ ...exact, explore_applied: true, dimensions: [{ dimension: 'shard', values: [] }] }) }),
       http.get(API('/logs/federation/stats'), () => HttpResponse.json({ ...exact, points: [{ agg: { count: 2, has_min_max: false } }] })),
     )
     const user = userEvent.setup()
@@ -137,7 +174,7 @@ describe('LogFieldExplorer', () => {
     server.use(http.get(API('/logs/federation/facets'), async () => {
       requested = true
       await new Promise<void>((resolve) => { release = resolve })
-      return HttpResponse.json({ ...exact, dimensions: [] })
+      return HttpResponse.json({ ...exact, explore_applied: true, dimensions: [] })
     }))
     const user = userEvent.setup()
     renderWithProviders(<LogFieldExplorer params={params} enabled fields={fields} onFilter={() => {}} />)
@@ -161,7 +198,7 @@ describe('LogFieldExplorer', () => {
 
   it('缺失统计数组不能显示为成功空样本；统计错误允许重试', async () => {
     server.use(
-      http.get(API('/logs/federation/facets'), () => HttpResponse.json({ ...exact, dimensions: [{ dimension: 'duration_ms', values: [] }] })),
+      http.get(API('/logs/federation/facets'), () => HttpResponse.json({ ...exact, explore_applied: true, dimensions: [{ dimension: 'duration_ms', values: [] }] })),
       http.get(API('/logs/federation/stats'), () => HttpResponse.json({ ...exact })),
     )
     const user = userEvent.setup()
@@ -187,7 +224,7 @@ describe('LogFieldExplorer', () => {
     let calls = 0
     server.use(http.get(API('/logs/federation/facets'), () => {
       calls++
-      return HttpResponse.json({ ...exact, dimensions: [{ dimension: 'shard', values: [] }] })
+      return HttpResponse.json({ ...exact, explore_applied: true, dimensions: [{ dimension: 'shard', values: [] }] })
     }))
     const user = userEvent.setup()
     let update = (value: { params: typeof params; enabled: boolean }) => { void value }

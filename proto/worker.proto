@@ -3064,19 +3064,24 @@ message LogStatsResponse {
   LogError error = 6;
 }
 
-message LogFieldsRequest { LogQueryRequestBase query = 1; }
+message LogFieldsRequest {
+  LogQueryRequestBase query = 1;
+  bool explore_fields = 2;
+}
 message LogFieldsResponse {
   string request_id = 1;
   LogQueryViewRef view = 2;
   LogCoverage coverage = 3;
   repeated string fields = 4;
   LogError error = 5;
+  bool explore_applied = 6;
 }
 
 message LogFacetsRequest {
   LogQueryRequestBase query = 1;
   repeated string dimensions = 2;
   uint32 dimension_limit = 3;
+  bool explore_fields = 4;
 }
 
 message LogFacetValue { string dimension = 1; string value = 2; uint64 count = 3; }
@@ -3088,6 +3093,7 @@ message LogFacetsResponse {
   repeated LogFacetValue values = 4;
   bool truncated = 5;
   LogError error = 6;
+  bool explore_applied = 7;
 }
 
 message LogTailRequest {

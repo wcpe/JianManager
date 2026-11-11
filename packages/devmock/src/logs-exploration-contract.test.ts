@@ -37,6 +37,41 @@ beforeEach(async () => {
 })
 
 describe('日志域桩查询能力', () => {
+  it('显式explore执行有界字段发现并确认，按需单字段不改stream标签', async () => {
+    const fields = await get('/fields', { explore: 'true' })
+    expect(fields.status).toBe(200)
+    const body = await fields.json() as { fields: string[]; explore_applied?: boolean }
+    expect(body.explore_applied).toBe(true)
+    expect(body.fields).toEqual(expect.arrayContaining(['shard', 'duration_ms']))
+    expect(body.fields).not.toContain('_time')
+    expect(body.fields).not.toContain('_msg')
+    const facets = await get('/facets', { explore: 'true', dimensions: 'shard', dimensionLimit: '1' })
+    expect(await facets.json()).toMatchObject({ explore_applied: true, truncated: true, coverage: { complete: false }, dimensions: [{ dimension: 'shard', truncated: true }] })
+    expect(await (await get('/stream-field-names')).json()).toMatchObject({ fields: ['log_source_id', 'stream'] })
+    expect((await get('/fields', { explore: 'true', viewId: '', from: '', to: '' })).status).toBe(400)
+    for (const dimensions of ['shard,stream', '_msg', 'event_id', 'bad|stats']) {
+      expect((await get('/facets', { explore: 'true', dimensions, dimensionLimit: '20' })).status).toBe(400)
+    }
+    expect((await get('/facets', { explore: 'true', dimensions: 'not_present', dimensionLimit: '20' })).status).toBe(501)
+    expect((await get('/facets', { explore: 'true', dimensions: 'shard', dimensionLimit: '21' })).status).toBe(400)
+    const legacy = await (await get('/fields')).json() as { explore_applied?: boolean }
+    expect(legacy.explore_applied).toBeUndefined()
+  })
+
+  it('点和连字符字段保持发现、分面与数值分组一致，未实现QL明确拒绝', async () => {
+    db<(typeof rows)[number]>('logs').insert({ ...rows[0]!, id: 99, message: 'punctuated-marker', fields: { ...rows[0]!.fields, 'http.status_code': 200, 'trace-id': 'edge-a' } } as (typeof rows)[number])
+    const query = { explore: 'true', viewId: '', keyword: 'punctuated-marker' }
+    const fields = await (await get('/fields', query)).json() as { explore_applied: boolean; fields: string[]; view: { view_id: string } }
+    expect(fields.explore_applied).toBe(true)
+    expect(fields.fields).toEqual(expect.arrayContaining(['http.status_code', 'trace-id']))
+    query.viewId = fields.view.view_id
+    const facets = await get('/facets', { ...query, dimensions: 'trace-id', dimensionLimit: '20' })
+    expect(await facets.json()).toMatchObject({ explore_applied: true, dimensions: [{ dimension: 'trace-id', values: [{ value: 'edge-a', count: 1 }] }] })
+    const stats = await get('/stats', { ...query, metricField: 'http.status_code', groupBy: 'trace-id' })
+    expect(await stats.json()).toMatchObject({ points: [{ dimensions: { 'trace-id': 'edge-a' }, agg: { count: 1, sum: 200, min: 200, max: 200, avg: 200 } }] })
+    expect((await get('', { viewId: '', keyword: '("http.status_code":="200")' })).status).toBe(501)
+  })
+
   it('字段从固定view的真实行投影，不杜撰schema或把后加行混进来', async () => {
     db<(typeof rows)[number]>('logs').insert({ ...rows[0]!, id: 99, fields: { shard: 'later', duration_ms: 99, later_only: true } } as (typeof rows)[number])
     const response = await get('/fields')

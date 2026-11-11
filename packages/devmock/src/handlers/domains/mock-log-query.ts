@@ -36,7 +36,7 @@ export function mockLogFields(rows: MockLogDocument[]) {
   return [...new Set(rows.flatMap((row) => Object.keys(projectMockLog(row))))].sort()
 }
 function checkField(rows: MockLogDocument[], field: string) {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(field)) throw new MockLogQueryError('字段名不符合当前 mock 查询契约', 400, 'INVALID_REQUEST')
+  if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(field)) throw new MockLogQueryError('字段名不符合当前 mock 查询契约', 400, 'INVALID_REQUEST')
   if (!knownFields.has(field) && !rows.some((row) => Object.hasOwn(projectMockLog(row), field))) throw new MockLogQueryError(`种子数据中不存在字段 ${field}`)
 }
 function boundedLimit(raw: string | null, fallback: number, maximum = 100) {
@@ -57,6 +57,7 @@ function valueCounts(rows: MockLogDocument[], field: string, limit: number) {
   return { values: values.slice(0, limit), truncated: values.length > limit }
 }
 export function mockLogFacets(rows: MockLogDocument[], url: URL) {
+  if (url.searchParams.get('explore') === 'true') return mockLogExploreFacets(rows, url)
   const names = [...new Set((url.searchParams.get('dimensions') ?? 'level').split(',').map((name) => name.trim()).filter(Boolean))]
   if (names.length === 0 || names.length > 16) throw new MockLogQueryError('维度列表为空或超出 mock 上限', 400, 'INVALID_REQUEST')
   const limit = boundedLimit(url.searchParams.get('dimensionLimit'), 20)
@@ -126,4 +127,51 @@ export function mockLogStats(rows: MockLogDocument[], url: URL) {
   }
   if (points.size === 0 && !bucket && groupBy.length === 0) points.set('empty', { agg: { count: 0 } })
   return { points: [...points.values()].sort((a, b) => (a.time_bucket_utc ?? '').localeCompare(b.time_bucket_utc ?? '') || JSON.stringify(a.dimensions ?? {}).localeCompare(JSON.stringify(b.dimensions ?? {}))), truncated }
+}
+
+const reservedExplorationFields = new Set([
+  '_time', '_msg', '_stream', '_stream_id', 'message', 'event_id', 'canonical_content_hash',
+  'source_generation', 'record_start', 'record_end', 'event_time', 'event_time_utc',
+  'ingest_time', 'ingest_time_utc', 'projection_generation', 'storage_namespace',
+  'closed_visible_seq', 'catalog_generation', 'id', 'source', 'nodeId', 'instanceId', 'instanceUuid',
+])
+function explorationFieldAllowed(field: string) {
+  return field.length <= 128 && /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(field) && !reservedExplorationFields.has(field)
+}
+function boundedExplorationRows(rows: MockLogDocument[], url: URL) {
+  const from = Date.parse(url.searchParams.get('from') ?? '')
+  const to = Date.parse(url.searchParams.get('to') ?? '')
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) throw new MockLogQueryError('字段探索需要有限绝对时间范围', 400, 'INVALID_REQUEST')
+  const selected: MockLogDocument[] = []
+  const encoder = new TextEncoder()
+  let bytes = 0
+  const started = Date.now()
+  for (const row of rows) {
+    const size = encoder.encode(JSON.stringify(projectMockLog(row))).length
+    if (bytes + size > 1 << 20 || selected.length >= 10000 || Date.now() - started >= 5000) break
+    bytes += size
+    selected.push(row)
+  }
+  return { rows: selected, truncated: selected.length < rows.length }
+}
+
+/** Only acknowledge exploration after applying its bounded row/field policy. */
+export function mockLogExploreFields(rows: MockLogDocument[], url: URL) {
+  const selected = boundedExplorationRows(rows, url)
+  const fields = mockLogFields(selected.rows).filter(explorationFieldAllowed)
+  return { fields: fields.slice(0, 256), truncated: selected.truncated || fields.length > 256, explore_applied: true }
+}
+function mockLogExploreFacets(rows: MockLogDocument[], url: URL) {
+  const names = (url.searchParams.get('dimensions') ?? '').split(',')
+  if (names.length !== 1 || !explorationFieldAllowed(names[0]!)) throw new MockLogQueryError('字段探索仅支持单个合法非保留字段', 400, 'INVALID_REQUEST')
+  if (!url.searchParams.has('dimensionLimit')) throw new MockLogQueryError('字段探索必须指定 dimensionLimit', 400, 'INVALID_REQUEST')
+  const limit = boundedLimit(url.searchParams.get('dimensionLimit'), 20, 20)
+  const selected = boundedExplorationRows(rows, url)
+  const field = names[0]!
+  if (!mockLogFields(selected.rows).includes(field)) {
+    if (selected.truncated) throw new MockLogQueryError('预算内未能证实字段存在', 422, 'LOG_BUDGET_EXCEEDED')
+    throw new MockLogQueryError(`固定视图内不存在字段 ${field}`)
+  }
+  const dimension = { dimension: field, ...valueCounts(selected.rows, field, limit) }
+  return { dimensions: [dimension], truncated: selected.truncated || dimension.truncated, explore_applied: true }
 }

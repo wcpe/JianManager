@@ -20,3 +20,20 @@ func TestStatsNumericSamplesUseNumericDenominator(t *testing.T) {
 	_, err = statsPipe(query.RangeQuery{MetricField: "x) | fields *"})
 	require.Error(t, err)
 }
+
+func TestStatsPipeQuotesDottedAndHyphenatedFields(t *testing.T) {
+	pipe, err := statsPipe(query.RangeQuery{MetricField: "http.status_code", GroupBy: []string{"trace-id"}, TimeBucket: "5m"})
+	require.NoError(t, err)
+	require.Contains(t, pipe, ` | filter "http.status_code":range[-inf,inf] | stats by (_time:5m,"trace-id")`)
+	require.Contains(t, pipe, `sum("http.status_code") as _jm_sum, min("http.status_code") as _jm_min, max("http.status_code") as _jm_max, avg("http.status_code") as _jm_avg`)
+	for _, field := range []string{"http.status_code", "trace-id", "duration_ms"} {
+		require.True(t, validField(field))
+	}
+	for _, field := range []string{"", ".field", "-field", "5field", "field name", "field|stats", "field(x)", `field"`} {
+		require.False(t, validField(field))
+		_, err := statsPipe(query.RangeQuery{MetricField: field})
+		if field != "" {
+			require.Error(t, err)
+		}
+	}
+}

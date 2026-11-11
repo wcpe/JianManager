@@ -16,6 +16,8 @@ type PlanRequest struct {
 	RequestID string
 	// TimeRange 绝对 UTC；为空表示不限制分区日。
 	TimeRange TimeRange
+	// Filter is frozen for explicit document-field exploration.
+	Filter string
 	// TargetIDs CP 计算后的授权目标（storage_namespace 或 ns/day）；空 = 本 Worker 全部 Catalog 分区。
 	TargetIDs []string
 	Budget    Budget
@@ -209,6 +211,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		ViewID:             viewID,
 		OrderVersion:       SortVersion,
 		TimeRange:          req.TimeRange,
+		Filter:             req.Filter,
 		TargetIDs:          make([]string, 0, len(keys)),
 		ClosedVisibleSeq:   make(map[string]uint64, len(keys)),
 		Generations:        make(map[string]uint64, len(keys)),

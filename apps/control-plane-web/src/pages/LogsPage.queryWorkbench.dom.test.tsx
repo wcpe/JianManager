@@ -50,9 +50,10 @@ describe('LogsPage 查询分析工作台', () => {
       http.get(API('/logs/federation/streams'), () => HttpResponse.json({
         streams: [{ log_source_id: 'inst:2/file', stream: 'file', hits: 10 }], complete: true, ...summary,
       })),
-      http.get(API('/logs/federation/fields'), () => HttpResponse.json({
-        fields: ['level', 'parser_version', 'shard'], ...summary,
-      })),
+      http.get(API('/logs/federation/fields'), ({ request }) => {
+        expect(new URL(request.url).searchParams.get('explore')).toBe('true')
+        return HttpResponse.json({ fields: ['level', 'parser_version', 'shard'], explore_applied: true, ...summary })
+      }),
       http.get(API('/logs/federation/stream-field-names'), () => HttpResponse.json({
         fields: ['stream', 'log_source_id'], ...summary,
       })),
@@ -84,5 +85,45 @@ describe('LogsPage 查询分析工作台', () => {
     await user.click(screen.getByTestId('log-row-expand'))
     expect(await screen.findByTestId('log-row-fields')).toHaveTextContent('parser_version=v1')
     expect(screen.getByTestId('log-row-fields')).toHaveTextContent('shard=blue')
+  })
+
+  it.each(['http.status_code', 'trace-id'])('Fields菜单给%s生成安全字段引用', async (field) => {
+    const searches: URLSearchParams[] = []
+    server.use(
+      http.get(API('/logs/federation/fields'), () => HttpResponse.json({ fields: [field], explore_applied: true, ...summary })),
+      http.get(API('/logs/federation'), ({ request }) => {
+        searches.push(new URL(request.url).searchParams)
+        return HttpResponse.json({ sourceTag: 'federated', items: [logEvent], view: { view_id: 'structured-view' }, ...summary, exhausted: true })
+      }),
+    )
+    renderWithProviders(<LogsPage />)
+    await screen.findByText('structured-message')
+    await waitFor(() => expect(screen.getByTestId('logs-fields-trigger')).toBeEnabled())
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('logs-fields-trigger'))
+    await user.click(await screen.findByRole('menuitem', { name: field }))
+    await waitFor(() => expect(searches.some((params) => params.get('keyword') === `${JSON.stringify(field)}:*`)).toBe(true))
+  })
+
+  it.each([
+    { name: '旧CP缺少ack', status: 200, body: { fields: [], ...summary }, message: '当前节点不支持字段枚举。' },
+    { name: 'HTTP501', status: 501, body: { error: 'LOG_UNSUPPORTED' }, message: '当前节点不支持字段枚举。' },
+    { name: 'Worker不支持', status: 200, body: { explore_applied: true, fields: [], coverage: { complete: false, partial_reasons: ['UNSUPPORTED'] } }, message: '当前节点不支持字段枚举。' },
+    { name: '上游失败', status: 200, body: { explore_applied: true, fields: [], coverage: { complete: false, partial_reasons: ['RANGE_UNAVAILABLE'] } }, message: '字段列表查询失败。' },
+    { name: '预算截断', status: 200, body: { explore_applied: true, fields: [], coverage: { complete: false }, truncated: true }, message: '字段列表查询失败。' },
+  ])('$name不把空fields当成功，允许重试恢复', async ({ status, body, message }) => {
+    let recovered = false
+    server.use(http.get(API('/logs/federation/fields'), () => recovered
+      ? HttpResponse.json({ explore_applied: true, fields: [], ...summary })
+      : HttpResponse.json(body, { status })))
+    renderWithProviders(<LogsPage />)
+    await screen.findByText('structured-message')
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('log-field-explorer-trigger'))
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(screen.queryByText('当前查询尚未提供字段，请先完成实例日志查询。')).not.toBeInTheDocument()
+    recovered = true
+    await user.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByText('当前查询尚未提供字段，请先完成实例日志查询。')).toBeInTheDocument()
   })
 })

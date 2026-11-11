@@ -141,6 +141,9 @@ func (s *Service) Stats(ctx context.Context, req QueryRequest, groupBy []string)
 // Fields 枚举同一固定 View 的字段。内部身份字段仍由 Worker schema 白名单控制，
 // RangeClient 只负责补充真实数据中出现的用户字段。
 func (s *Service) Fields(ctx context.Context, req QueryRequest) FieldsResponse {
+	if req.ExploreFields {
+		return s.exploreFields(ctx, req)
+	}
 	resp := FieldsResponse{RequestID: req.RequestID}
 	ctx, cancel := WithQueryDeadline(ctx, req.Budget)
 	defer cancel()
@@ -247,6 +250,9 @@ func (s *Service) Fields(ctx context.Context, req QueryRequest) FieldsResponse {
 
 // Facets 在 Worker 侧合并每个权威 range 的受控维度，返回截断标记而不是伪完整结果。
 func (s *Service) Facets(ctx context.Context, req QueryRequest, dimensions []string, limit uint32) FacetsResponse {
+	if req.ExploreFields {
+		return s.exploreFacets(ctx, req, dimensions, limit)
+	}
 	resp := FacetsResponse{RequestID: req.RequestID}
 	ctx, cancel := WithQueryDeadline(ctx, req.Budget)
 	defer cancel()

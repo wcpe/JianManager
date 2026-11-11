@@ -108,7 +108,7 @@ func (a *WorkerClientAdapter) Fields(ctx context.Context, req WorkerSearchReques
 	if a == nil || a.client == nil {
 		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
 	}
-	resp, err := a.client.LogFields(ctx, &workerpb.LogFieldsRequest{Query: toProtoQueryBase(req)})
+	resp, err := a.client.LogFields(ctx, &workerpb.LogFieldsRequest{Query: toProtoQueryBase(req), ExploreFields: req.ExploreFields})
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
 			return &WorkerFieldsResponse{Unsupported: true, Error: err.Error()}, nil
@@ -132,6 +132,11 @@ func (a *WorkerClientAdapter) Fields(ctx context.Context, req WorkerSearchReques
 	if e := resp.GetError(); e != nil {
 		out.Error = e.GetMessage()
 		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
+	}
+	if req.ExploreFields && !resp.GetExploreApplied() {
+		out.Fields = nil
+		out.Unsupported, out.Error = true, "document-field exploration unsupported by worker"
+		out.Coverage = unsupportedExplorationCoverage(out.Coverage)
 	}
 	return out, nil
 }
@@ -172,8 +177,15 @@ func (a *WorkerClientAdapter) Facets(ctx context.Context, req WorkerSearchReques
 		Query:          toProtoQueryBase(req),
 		Dimensions:     append([]string(nil), dimensions...),
 		DimensionLimit: dimensionLimit,
+		ExploreFields:  req.ExploreFields,
 	})
-	return mapFacetsResponse(resp, err)
+	out, mapErr := mapFacetsResponse(resp, err)
+	if req.ExploreFields && out != nil && resp != nil && !resp.GetExploreApplied() {
+		out.Dimensions = nil
+		out.Unsupported, out.Error = true, "document-field exploration unsupported by worker"
+		out.Coverage = unsupportedExplorationCoverage(out.Coverage)
+	}
+	return out, mapErr
 }
 
 // Streams 实现 WorkerClient（窗内有哪些流、各多少条）。

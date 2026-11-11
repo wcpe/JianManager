@@ -204,11 +204,19 @@ func (c *Client) FieldNames(ctx context.Context, query, filter string, start, en
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, fmt.Errorf("vlsup: field_names 响应解析失败: %w", err)
 	}
+	validation, validate := ctx.Value(fieldNamesValidationKey{}).(FieldNamesValidation)
 	out := make([]string, 0, len(parsed.Values))
 	for _, v := range parsed.Values {
-		if name := strings.TrimSpace(v.Value); name != "" {
+		name := v.Value
+		if !validate {
+			name = strings.TrimSpace(name)
+		}
+		if name != "" {
 			out = append(out, name)
 		}
+	}
+	if validate {
+		return c.validateFieldNames(ctx, params, out, validation)
 	}
 	return out, nil
 }

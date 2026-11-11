@@ -733,6 +733,7 @@ export interface FederationStatsPoint {
 }
 
 export interface FederationAggregateResponse {
+  explore_applied?: boolean
   coverage?: FederationCoverageBody
   quality?: LogsFederationEnvelope['quality']
   truncated?: boolean
@@ -803,12 +804,22 @@ export function useLogsFederationStats(params: Record<string, unknown>, enabled:
   return query
 }
 
+/** Explicit execution acknowledgement prevents an older CP from silently ignoring explore. */
+function requireFieldExploration<T extends FederationAggregateResponse>(params: Record<string, unknown>, data: T): T {
+  if (params.explore === true && data.explore_applied !== true) {
+    throw Object.assign(new Error('Document-field exploration unsupported by control plane'), {
+      code: 'LOG_UNSUPPORTED', response: { status: 501, data: { error: 'LOG_UNSUPPORTED' } },
+    })
+  }
+  return data
+}
+
 /** 联邦维度聚合（洞察栏级别分布）；重试策略与 stats 同源，失败同样不阻断页面。 */
 export function useLogsFederationFacets(params: Record<string, unknown>, enabled: boolean) {
 	const query = useQuery({
 		queryKey: ['logsFederationFacets', params],
-		queryFn: async ({ signal }) =>
-			(await getWithRateLimitRetry<FederationFacetsResponse>('/logs/federation/facets', { params, signal, timeout: 60_000 })).data,
+		queryFn: async ({ signal }) => requireFieldExploration(params,
+			(await getWithRateLimitRetry<FederationFacetsResponse>('/logs/federation/facets', { params, signal, timeout: 60_000 })).data),
 		enabled,
 		retry: rateLimitRetry,
 		retryDelay: rateLimitRetryDelay,
@@ -827,8 +838,8 @@ export function useLogsFederationFacets(params: Record<string, unknown>, enabled
 export function useLogsFederationFields(params: Record<string, unknown>, enabled: boolean) {
   const query = useQuery({
     queryKey: ['logsFederationFields', params],
-    queryFn: async ({ signal }) =>
-      (await getWithRateLimitRetry<FederationFieldsResponse>('/logs/federation/fields', { params, signal, timeout: 60_000 })).data,
+    queryFn: async ({ signal }) => requireFieldExploration(params,
+      (await getWithRateLimitRetry<FederationFieldsResponse>('/logs/federation/fields', { params, signal, timeout: 60_000 })).data),
     enabled,
     retry: rateLimitRetry,
     retryDelay: rateLimitRetryDelay,

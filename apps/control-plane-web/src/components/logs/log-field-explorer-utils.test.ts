@@ -12,7 +12,9 @@ describe('受控日志字段查询', () => {
   it('字段名遵守 Worker validField，不允许表达式或管道成为字段名', () => {
     expect(isQueryableLogField('duration_ms')).toBe(true)
     expect(isQueryableLogField('_time')).toBe(true)
-    for (const field of ['', '5field', 'duration.ms', 'level OR *', 'level|stats', 'level"']) {
+    expect(isQueryableLogField('http.status_code')).toBe(true)
+    expect(isQueryableLogField('trace-id')).toBe(true)
+    for (const field of ['', '5field', '.field', '-field', 'level OR *', 'level|stats', 'level()', 'level"']) {
       expect(isQueryableLogField(field)).toBe(false)
       expect(() => fieldValueExpression(field, 'x')).toThrow()
     }
@@ -24,13 +26,17 @@ describe('受控日志字段查询', () => {
     expect(fieldValueExpression('shard', value)).toBe(`(shard:=${literal})`)
     expect(fieldValueExpression('shard', value, true)).toBe(`NOT (shard:=${literal})`)
     expect(fieldValueExpression('shard', '')).toBe('(shard:="")')
+    expect(fieldValueExpression('http.status_code', '200')).toBe('("http.status_code":="200")')
+    expect(fieldValueExpression('trace-id', value, true)).toBe(`NOT ("trace-id":=${literal})`)
   })
 
   it('字段分布和指标查询克隆参数且保留同 view/scope/filter/time 身份', () => {
     const scope = Object.freeze({ viewId: 'v-1', instanceId: 2, from: 'start', to: 'end', keyword: '(a OR b)', onlineOnly: true, groupBy: 'old', timeBucket: '6h', metricField: 'old_metric' })
-    expect(buildFieldFacetParams(scope, 'shard')).toMatchObject({ ...scope, dimensions: 'shard', dimensionLimit: 20 })
+    expect(buildFieldFacetParams(scope, 'shard')).toMatchObject({ ...scope, dimensions: 'shard', dimensionLimit: 20, explore: true })
     expect(buildFieldStatsParams(scope, 'duration_ms', 'shard', '5m')).toEqual({ ...scope, metricField: 'duration_ms', groupBy: 'shard', timeBucket: '5m' })
     expect(scope.metricField).toBe('old_metric')
+    expect(buildFieldFacetParams(scope, 'trace-id')).toMatchObject({ dimensions: 'trace-id', explore: true })
+    expect(buildFieldStatsParams(scope, 'http.status_code', 'trace-id', '5m')).toMatchObject({ metricField: 'http.status_code', groupBy: 'trace-id' })
     expect(() => buildFieldStatsParams(scope, 'x | stats', '', '')).toThrow()
     expect(() => buildFieldStatsParams(scope, 'x', 'bad OR *', '')).toThrow()
     expect(() => buildFieldStatsParams(scope, 'x', '', '1m|stats')).toThrow()

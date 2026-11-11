@@ -701,6 +701,7 @@ func (h *LogFederationHandler) Fields(c *gin.Context) {
 	if !ok {
 		return
 	}
+	q.ExploreFields = parseBoolParam(c.Query("explore"))
 	resp, err := h.coord.Fields(c.Request.Context(), q)
 	if err != nil {
 		writeFederationError(c, err)
@@ -840,6 +841,7 @@ func (h *LogFederationHandler) Facets(c *gin.Context) {
 	if !ok {
 		return
 	}
+	q.ExploreFields = parseBoolParam(c.Query("explore"))
 	// 与 buildQuery 里 Budget.Limit 同口径：先钳掉负值。
 	// 不钳就会在转 uint32 时溢出成 4294967295，使下游裁剪与 Truncated 标记一并失效——
 	// 本地裁剪是 field_values 响应的唯一体积闸（该端点不向 VL 传 limit）。
@@ -959,6 +961,8 @@ func dedupeFederationReasons(in []string) []string {
 func writeFederationError(c *gin.Context, err error) {
 	msg := err.Error()
 	switch {
+	case errors.Is(err, logcoord.ErrExplorationInvalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": msg})
 	case errors.Is(err, logcoord.ErrViewAuthz):
 		// F-007：授权拒绝/主体或目标不匹配 → 403，不得当作内部错误。
 		c.JSON(http.StatusForbidden, gin.H{

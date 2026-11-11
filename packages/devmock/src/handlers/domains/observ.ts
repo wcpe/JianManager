@@ -12,7 +12,7 @@ import type {
 } from '@jianmanager/devmock/contracts'
 import { mockDataScaleProfile } from '@jianmanager/devmock/runtime-control'
 import { nodeIdByUuid, nodeUuidById } from '@jianmanager/devmock/handlers/domains/node'
-import { MockLogQueryError, mockLogFields, mockLogFacets, mockLogStats, mockLogStreams, mockLogStreamValues } from './mock-log-query'
+import { MockLogQueryError, mockLogFields, mockLogExploreFields, mockLogFacets, mockLogStats, mockLogStreams, mockLogStreamValues } from './mock-log-query'
 
 /** 
  * 可观测与日志域 mock handler：metrics / alerts / notifications / tasks / logs。
@@ -695,7 +695,7 @@ function mockLogScope(url: URL): string {
 }
 function unsupportedLogExpression(url: URL): HttpResponse | null {
   const keyword = url.searchParams.get('keyword') ?? ''
-  if (url.searchParams.get('advanced') === 'true' || url.searchParams.get('query')?.trim() || /\b(?:AND|OR|NOT)\b|\||(?:^|[\s(])[A-Za-z_][A-Za-z0-9_]*:/.test(keyword)) {
+  if (url.searchParams.get('advanced') === 'true' || url.searchParams.get('query')?.trim() || /\b(?:AND|OR|NOT)\b|\||(?:^|[\s(])(?:[A-Za-z_][A-Za-z0-9_.-]*|"[A-Za-z_][A-Za-z0-9_.-]*"):/.test(keyword)) {
     return HttpResponse.json({ error: 'UNSUPPORTED', message: 'mock 仅支持普通关键词；高级 LogsQL 请连接真实后端验证' }, { status: 501 })
   }
   return null
@@ -2568,7 +2568,8 @@ export const handlers = [
   domainRoute('get', '/logs/federation/fields', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    return mockLogOperation(info.request, (rows) => ({ fields: mockLogFields(rows) }))
+    return mockLogOperation(info.request, (rows, url) => url.searchParams.get('explore') === 'true'
+      ? mockLogExploreFields(rows, url) : { fields: mockLogFields(rows) })
   }),
 
   domainRoute('get', '/logs/federation/streams', (info) => {

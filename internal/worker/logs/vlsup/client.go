@@ -626,6 +626,23 @@ func (c *Client) Post(ctx context.Context, path string, query url.Values) ([]byt
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
+	reserve, bounded := ctx.Value(metadataReadBudgetKey{}).(func() (uint64, func(uint64), error))
+	bounded = bounded && reserve != nil && (path == fieldNamesPath || path == fieldValuesPath || path == "/select/logsql/query")
+	if bounded {
+		// VL must share the caller's absolute deadline, including metadata work.
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				return nil, context.DeadlineExceeded
+			}
+			copyQuery := make(url.Values, len(query)+1)
+			for key, values := range query {
+				copyQuery[key] = append([]string(nil), values...)
+			}
+			copyQuery.Set("timeout", remaining.String())
+			query = copyQuery
+		}
+	}
 	u := c.baseURL + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -643,14 +660,39 @@ func (c *Client) Post(ctx context.Context, path string, query url.Values) ([]byt
 	if strings.HasPrefix(path, "/select/") {
 		client, limit = c.hq, maxQueryResponseBytes
 	}
+	var actual uint64
+	if bounded {
+		boundedClient := *client
+		boundedClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &boundedClient
+		admitted, refund, err := reserve()
+		if err != nil {
+			return nil, err
+		}
+		defer func() { refund(actual) }()
+		if admitted == 0 {
+			return nil, ErrMetadataReadBudget
+		}
+		if admitted < uint64(limit) {
+			limit = int64(admitted)
+		}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("vlsup: POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	readLimit := limit + 1
+	if bounded {
+		readLimit = limit
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, readLimit))
+	actual = uint64(len(body))
 	if readErr != nil {
 		return nil, readErr
+	}
+	if bounded && int64(len(body)) >= limit {
+		return nil, fmt.Errorf("%w: POST %s reached %d bytes", ErrMetadataReadBudget, path, limit)
 	}
 	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("vlsup: POST %s response exceeds limit (%d bytes)", path, limit)

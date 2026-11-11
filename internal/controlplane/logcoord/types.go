@@ -110,6 +110,8 @@ type Query struct {
 	// Fast 首屏省去 OpenView 往返，汇总 Search 返回的真实 Worker 快照后才公开 CP 视图。
 	// 完整性校验仍以 Pending 标记；导出必须用同一快照重新读取并完成校验。
 	Fast bool `json:"fast,omitempty"`
+	// ExploreFields opts Fields/Facets into bounded document-field discovery.
+	ExploreFields bool `json:"explore_fields,omitempty"`
 	// AllowProjectionDrift：本次查询豁免 Worker 侧「投影清单版本（ManifestVersion）变化」判 VIEW_STALE。
 	//
 	// 只允许**导出路径**（Coordinator.Export 逐页 Search）置位：导出是「单次操作自己 CreateView、
@@ -314,10 +316,11 @@ type SearchResponse struct {
 }
 
 type FieldsResponse struct {
-	View      View     `json:"view"`
-	Coverage  Coverage `json:"coverage"`
-	Fields    []string `json:"fields"`
-	Truncated bool     `json:"truncated"`
+	ExploreApplied bool     `json:"explore_applied,omitempty"`
+	View           View     `json:"view"`
+	Coverage       Coverage `json:"coverage"`
+	Fields         []string `json:"fields"`
+	Truncated      bool     `json:"truncated"`
 }
 
 // StatsQuery 统计请求。
@@ -417,10 +420,11 @@ type FacetDimension struct {
 
 // FacetsResponse 跨 Worker Facet 汇总。
 type FacetsResponse struct {
-	View       View             `json:"view"`
-	Coverage   Coverage         `json:"coverage"`
-	Quality    Quality          `json:"quality"`
-	Dimensions []FacetDimension `json:"dimensions"`
+	ExploreApplied bool             `json:"explore_applied,omitempty"`
+	View           View             `json:"view"`
+	Coverage       Coverage         `json:"coverage"`
+	Quality        Quality          `json:"quality"`
+	Dimensions     []FacetDimension `json:"dimensions"`
 	// Truncated 任一维度存在截断语义。
 	Truncated bool `json:"truncated"`
 }
