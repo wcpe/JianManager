@@ -154,7 +154,7 @@ const (
 type WorkerServiceClient interface {
 	// Register Worker Node 首次启动时注册到 Control Plane。
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
-	// ReportStartupProgress Worker 上报启动阶段进度（FR-486，CP 侧实现）。
+	// ReportStartupProgress Worker 上报启动阶段进度（CP 侧实现）。
 	//
 	// 存在的理由：加载（尤其大索引的全表扫描）发生在**注册之前**，那段时间 CP 侧完全看不到
 	// 该节点——2026-09-28 生产事故中这段黑盒长达 8m39s，主控台连节点都不存在。
@@ -167,15 +167,15 @@ type WorkerServiceClient interface {
 	ReportStartupProgress(ctx context.Context, in *ReportStartupProgressRequest, opts ...grpc.CallOption) (*ReportStartupProgressResponse, error)
 	// Heartbeat 双向心跳流，Worker 上报资源指标。
 	Heartbeat(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HeartbeatRequest, HeartbeatResponse], error)
-	// FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（FR-308，CP 侧实现）：
+	// FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（CP 侧实现）：
 	// 携带节点身份鉴权 + 本地已知 sha256，指纹一致回空归档（省流），否则回 tar.gz 字节。
 	FetchBotWorkerArchive(ctx context.Context, in *FetchBotWorkerArchiveRequest, opts ...grpc.CallOption) (*FetchBotWorkerArchiveResponse, error)
-	// ReportCrashSnapshot Worker 上报实例崩溃快照（FR-313，CP 侧实现）：进程非正常退出
+	// ReportCrashSnapshot Worker 上报实例崩溃快照（CP 侧实现）：进程非正常退出
 	//（退出码 ≠ 0 或 RUNNING/STARTING 态意外退出）时携带节点身份上报现场（退出码/信号/
 	// 时长/尾部输出），CP 持久化并按实例滚动保留最近 5 条。与注册/心跳同信道（隧道/直拨
 	// 双模式天然可用）；老 CP 返回 Unimplemented，Worker 记日志丢弃、不阻塞状态机。
 	ReportCrashSnapshot(ctx context.Context, in *ReportCrashSnapshotRequest, opts ...grpc.CallOption) (*ReportCrashSnapshotResponse, error)
-	// ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（FR-455/456，CP 侧实现）：
+	// ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（CP 侧实现）：
 	// 运行期周期扫描与接管兜底的处置动作（scan_detected / scan_disposed / scan_dispose_blocked /
 	// dispose_blocked / dispose_reaped）经与注册/心跳同信道（隧道/直拨双模式天然可用）上报，
 	// 携带节点身份鉴权，CP 经审计服务入库（保证孤儿处置「不静默」）。老 CP 返回 Unimplemented，
@@ -186,7 +186,7 @@ type WorkerServiceClient interface {
 	// ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
 	// Worker 用它填充内存注册表（不在表者按 STOPPED 注册、不启动进程；已在表者跳过，
 	// 不覆盖 RecoverDaemonInstances 恢复的 RUNNING 实例）。使重启后停机实例的
-	// 文件/配置/归档/备份 op 能定位工作目录（FR-FIXA 修 bug #2，见 ADR-050）。
+	// 文件/配置/归档/备份 op 能定位工作目录（修 bug #2）。
 	ResyncInstances(ctx context.Context, in *ResyncInstancesRequest, opts ...grpc.CallOption) (*ResyncInstancesResponse, error)
 	// StartInstance 启动实例。
 	StartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
@@ -196,13 +196,13 @@ type WorkerServiceClient interface {
 	RestartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
 	// KillInstance 强制终止实例。
 	KillInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
-	// InspectManagedProcess 只读探查某实例受管进程树内的目标 PID（FR-407）。
+	// InspectManagedProcess 只读探查某实例受管进程树内的目标 PID。
 	InspectManagedProcess(ctx context.Context, in *ManagedProcessInspectRequest, opts ...grpc.CallOption) (*ManagedProcessInspectResponse, error)
-	// TerminateManagedProcess 处置某实例受管进程树内的非根目标 PID（FR-408）。
+	// TerminateManagedProcess 处置某实例受管进程树内的非根目标 PID。
 	TerminateManagedProcess(ctx context.Context, in *ManagedProcessActionRequest, opts ...grpc.CallOption) (*ManagedProcessActionResponse, error)
-	// 启动前同步预检（FR-314）：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
+	// 启动前同步预检：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
 	PreflightStartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
-	// AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程（FR-471）：登记 PID 并纳入受管生命周期。
+	// AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程：登记 PID 并纳入受管生命周期。
 	AdoptForeignRuntime(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
 	// AdoptInPlaceRuntime 收养就地导入实例的外部运行进程：**不改进程、不重启**。
 	//
@@ -220,9 +220,9 @@ type WorkerServiceClient interface {
 	ListInstances(ctx context.Context, in *ListInstancesRequest, opts ...grpc.CallOption) (*ListInstancesResponse, error)
 	// StreamInstanceEvents 订阅实例事件流。
 	StreamInstanceEvents(ctx context.Context, in *StreamInstanceEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[InstanceEvent], error)
-	// FR-473/479：日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
+	// 日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
 	GetLogCapabilities(ctx context.Context, in *GetLogCapabilitiesRequest, opts ...grpc.CallOption) (*GetLogCapabilitiesResponse, error)
-	// FR-473/479：按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
+	// 按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
 	LogCreateView(ctx context.Context, in *LogCreateViewRequest, opts ...grpc.CallOption) (*LogCreateViewResponse, error)
 	LogSearch(ctx context.Context, in *LogSearchRequest, opts ...grpc.CallOption) (*LogSearchResponse, error)
 	LogStats(ctx context.Context, in *LogStatsRequest, opts ...grpc.CallOption) (*LogStatsResponse, error)
@@ -253,7 +253,7 @@ type WorkerServiceClient interface {
 	LogTail(ctx context.Context, in *LogTailRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEvent], error)
 	LogRehydrate(ctx context.Context, in *LogRehydrateRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
 	LogArchiveStatus(ctx context.Context, in *LogArchiveStatusRequest, opts ...grpc.CallOption) (*LogArchiveStatusResponse, error)
-	// FR-476：CP 经反向隧道查看/控制 Worker 受管 VL namespace。
+	// CP 经反向隧道查看/控制 Worker 受管 VL namespace。
 	LogRuntimeStatus(ctx context.Context, in *LogRuntimeStatusRequest, opts ...grpc.CallOption) (*LogRuntimeStatusResponse, error)
 	LogRuntimeControl(ctx context.Context, in *LogRuntimeControlRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
 	LogMigratePartition(ctx context.Context, in *LogMigratePartitionRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
@@ -281,7 +281,7 @@ type WorkerServiceClient interface {
 	ListFiles(ctx context.Context, in *ListFilesRequest, opts ...grpc.CallOption) (*ListFilesResponse, error)
 	// ReadFile 读取文件内容。
 	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (*ReadFileResponse, error)
-	// HashFile 计算实例工作目录内文件的 SHA-256（FR-468 §2.5 版本漂移检测）。
+	// HashFile 计算实例工作目录内文件的 SHA-256（版本漂移检测）。
 	// 与 ReadFile 分开：哈希只需读盘不需传内容，避免为校验把数十 MB 二进制经 gRPC 搬回 CP。
 	HashFile(ctx context.Context, in *HashFileRequest, opts ...grpc.CallOption) (*HashFileResponse, error)
 	// WriteFile 写入文件内容。
@@ -290,32 +290,32 @@ type WorkerServiceClient interface {
 	DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error)
 	// RenameFile 重命名文件。
 	RenameFile(ctx context.Context, in *RenameFileRequest, opts ...grpc.CallOption) (*RenameFileResponse, error)
-	// CheckPathAccess 探测路径可读/可写（相对 Worker 进程用户，FR-373）。
+	// CheckPathAccess 探测路径可读/可写（相对 Worker 进程用户）。
 	// instance_uuid 非空：path 为实例工作目录相对路径；为空：path 须为节点绝对路径（与 BrowseDir 同语义）。
 	CheckPathAccess(ctx context.Context, in *CheckPathAccessRequest, opts ...grpc.CallOption) (*CheckPathAccessResponse, error)
-	// ChmodPath 对单 path 做非递归 chmod（FR-373；不 chown、不递归）。
+	// ChmodPath 对单 path 做非递归 chmod（不 chown、不递归）。
 	// instance_uuid 非空：实例相对路径；为空：节点绝对路径。mode 空=保证属主可读写（目录含 x）。
 	ChmodPath(ctx context.Context, in *ChmodPathRequest, opts ...grpc.CallOption) (*ChmodPathResponse, error)
-	// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
+	// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（批量下载）。
 	DownloadArchive(ctx context.Context, in *DownloadArchiveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadArchiveChunk], error)
 	// DownloadFile 单文件分块流式下载（原样字节，不打包）。
 	// ReadFile 的 10MiB 上限是在线编辑器护栏，下载必须走本 RPC，任意大小不截断。
 	DownloadFile(ctx context.Context, in *DownloadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadFileChunk], error)
-	// UploadFile 单文件分块流式上传（与 DownloadFile 对称，FR-304）。
+	// UploadFile 单文件分块流式上传（与 DownloadFile 对称）。
 	// WriteFile unary 受服务端单消息上限约束（直拨 64MiB 拒收）且反向隧道无上限会整块缓冲，
 	// 大文件上传必须走本 RPC：Worker 落临时文件、收完原子改名，中途失败不留半截目标文件。
 	// 首帧必须携带 instance_uuid + path（content 可同帧携带），后续帧仅 content（其余字段忽略）；
 	// 零帧即关流约定返回 success=false（不触盘、无副作用），供 CP 作老 Worker 能力探测
 	// （老 Worker 对本 RPC 返回 Unimplemented，CP 借此区分并回退 WriteFile）。
 	UploadFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UploadFileChunk, UploadFileResponse], error)
-	// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
+	// SearchFiles 对实例工作目录做全文搜索或文件名快速打开。
 	// Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
 	SearchFiles(ctx context.Context, in *SearchFilesRequest, opts ...grpc.CallOption) (*SearchFilesResponse, error)
-	// ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程；FR-075，见 ADR-018）。
+	// ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程）。
 	ListArchiveEntries(ctx context.Context, in *ListArchiveEntriesRequest, opts ...grpc.CallOption) (*ListArchiveEntriesResponse, error)
-	// ReadArchiveEntry 读取归档内某条目内容，流式截断到上限（FR-075）。
+	// ReadArchiveEntry 读取归档内某条目内容，流式截断到上限。
 	ReadArchiveEntry(ctx context.Context, in *ReadArchiveEntryRequest, opts ...grpc.CallOption) (*ReadArchiveEntryResponse, error)
-	// DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（FR-075，见 ADR-018）。
+	// DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码。
 	DecompileClass(ctx context.Context, in *DecompileClassRequest, opts ...grpc.CallOption) (*DecompileClassResponse, error)
 	// ListConfigFiles 列出可管理配置文件。
 	ListConfigFiles(ctx context.Context, in *ListConfigFilesRequest, opts ...grpc.CallOption) (*ListConfigFilesResponse, error)
@@ -335,9 +335,9 @@ type WorkerServiceClient interface {
 	PullSelfLog(ctx context.Context, in *PullSelfLogRequest, opts ...grpc.CallOption) (*PullSelfLogResponse, error)
 	// GetInstanceMetrics 获取实例指标。
 	GetInstanceMetrics(ctx context.Context, in *GetInstanceMetricsRequest, opts ...grpc.CallOption) (*GetInstanceMetricsResponse, error)
-	// GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照（FR-399）。
+	// GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照。
 	GetInstanceResourceSnapshot(ctx context.Context, in *GetInstanceResourceSnapshotRequest, opts ...grpc.CallOption) (*GetInstanceResourceSnapshotResponse, error)
-	// GetInstanceEnv 获取运行中实例 JVM 进程的实际环境（FR-344 环境变量下区）。
+	// GetInstanceEnv 获取运行中实例 JVM 进程的实际环境（环境变量下区）。
 	GetInstanceEnv(ctx context.Context, in *GetInstanceEnvRequest, opts ...grpc.CallOption) (*GetInstanceEnvResponse, error)
 	// ListJDKs 列出 Worker 本地已注册/探测到的 JDK 目录。
 	ListJDKs(ctx context.Context, in *ListJDKsRequest, opts ...grpc.CallOption) (*ListJDKsResponse, error)
@@ -345,42 +345,42 @@ type WorkerServiceClient interface {
 	InstallJDK(ctx context.Context, in *InstallJDKRequest, opts ...grpc.CallOption) (*InstallJDKResponse, error)
 	// RemoveJDK 删除 Worker 托管的 JDK 目录。
 	RemoveJDK(ctx context.Context, in *RemoveJDKRequest, opts ...grpc.CallOption) (*RemoveJDKResponse, error)
-	// JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
+	// JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器。
 	JDKCatalog(ctx context.Context, in *JDKCatalogRequest, opts ...grpc.CallOption) (*JDKCatalogResponse, error)
-	// ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填（FR-228）。
+	// ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填。
 	ProbeJDK(ctx context.Context, in *ProbeJDKRequest, opts ...grpc.CallOption) (*ProbeJDKResponse, error)
-	// ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，FR-298 节点运行时库）。
+	// ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，节点运行时库）。
 	// 路径不存在/探测失败静默跳过，不阻断整体扫描；托管根下的候选标 already_registered。
 	ScanRuntimes(ctx context.Context, in *ScanRuntimesRequest, opts ...grpc.CallOption) (*ScanRuntimesResponse, error)
-	// InstallRuntime 下载并安装指定运行时到 Worker 托管目录（首批 nodejs，FR-299）。
-	// 携带 task_id 异步执行（语义同 InstallJDK/FR-183）：启动即返回，进度/日志/终态经心跳上报。
+	// InstallRuntime 下载并安装指定运行时到 Worker 托管目录（首批 nodejs）。
+	// 携带 task_id 异步执行（语义同 InstallJDK）：启动即返回，进度/日志/终态经心跳上报。
 	InstallRuntime(ctx context.Context, in *InstallRuntimeRequest, opts ...grpc.CallOption) (*InstallRuntimeResponse, error)
-	// RemoveRuntime 删除 Worker 托管的运行时目录（FR-299，删除顶层清理语义同 RemoveJDK/FR-292）。
+	// RemoveRuntime 删除 Worker 托管的运行时目录（删除顶层清理语义同 RemoveJDK）。
 	RemoveRuntime(ctx context.Context, in *RemoveRuntimeRequest, opts ...grpc.CallOption) (*RemoveRuntimeResponse, error)
-	// GetPMConfig 读取节点包管理器与 registry 配置（FR-306）：当前 PM 偏好、corepack 可用性、
+	// GetPMConfig 读取节点包管理器与 registry 配置：当前 PM 偏好、corepack 可用性、
 	// 已激活 PM 版本、托管 .npmrc 现有 registry。
 	GetPMConfig(ctx context.Context, in *GetPMConfigRequest, opts ...grpc.CallOption) (*GetPMConfigResponse, error)
-	// SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc（FR-306）。
+	// SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc。
 	SetPMConfig(ctx context.Context, in *SetPMConfigRequest, opts ...grpc.CallOption) (*SetPMConfigResponse, error)
-	// ListGlobalPackages 列出托管全局目录下已装包（FR-307；含 outdated 可更新标记，best-effort）。
+	// ListGlobalPackages 列出托管全局目录下已装包（含 outdated 可更新标记，best-effort）。
 	ListGlobalPackages(ctx context.Context, in *ListGlobalPackagesRequest, opts ...grpc.CallOption) (*ListGlobalPackagesResponse, error)
-	// InstallGlobalPackage 安装/升级全局包（FR-307；task_id 必填走任务中心异步，版本空=latest，
+	// InstallGlobalPackage 安装/升级全局包（task_id 必填走任务中心异步，版本空=latest，
 	// 升级=对已装包再装 @latest）。
 	InstallGlobalPackage(ctx context.Context, in *InstallGlobalPackageRequest, opts ...grpc.CallOption) (*InstallGlobalPackageResponse, error)
-	// RemoveGlobalPackage 卸载全局包（FR-307，同步）。
+	// RemoveGlobalPackage 卸载全局包（同步）。
 	RemoveGlobalPackage(ctx context.Context, in *RemoveGlobalPackageRequest, opts ...grpc.CallOption) (*RemoveGlobalPackageResponse, error)
-	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
-	// 先查节点核心缓存（FR-178 sha256 键 / FR-330 组合键），命中免远程下载。
+	// DownloadCore 下载服务端核心 jar 到实例工作目录（一键开服）。
+	// 先查节点核心缓存（sha256 键 / 组合键），命中免远程下载。
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
-	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
+	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod。
 	InstallForgeServer(ctx context.Context, in *InstallForgeServerRequest, opts ...grpc.CallOption) (*InstallForgeServerResponse, error)
-	// FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（FR-441 通用二进制运行时搭建）。
+	// FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（通用二进制运行时搭建）。
 	// 与 DownloadCore 的分工：DownloadCore 只服务 MC 核心 jar（绑定节点核心缓存与组合键），
 	// 本 RPC 服务 coreType=binary 的两类 Worker 侧来源——url=Worker 直连远程下载（避免 CP 中转
 	// 大文件）、node_file=节点本地文件就地复制（路径须过受管区校验）。asset 来源由 CP 签发短期
 	// token 转成 url 形态下发（复用制品库签名分发通道），故本 RPC 无需感知制品库语义。
 	//
-	// 服务端流式（非 unary）：二进制体积可达数十 MB、慢链路分钟级，与 FR-319 异步化同因——
+	// 服务端流式（非 unary）：二进制体积可达数十 MB、慢链路分钟级，与异步任务同因——
 	// 必须让前端看见「在下载」而非「卡住」，故周期性上报字节进度，末帧携带终态结果。
 	FetchBinary(ctx context.Context, in *FetchBinaryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FetchBinaryProgress], error)
 	// ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限。
@@ -393,13 +393,13 @@ type WorkerServiceClient interface {
 	SetArtifactCacheCap(ctx context.Context, in *SetArtifactCacheCapRequest, opts ...grpc.CallOption) (*SetArtifactCacheCapResponse, error)
 	// BrowseDir 只读列出节点上某绝对路径下的子目录（防穿越，CP 仅平台管理员可达）。
 	BrowseDir(ctx context.Context, in *BrowseDirRequest, opts ...grpc.CallOption) (*BrowseDirResponse, error)
-	// DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录（FR-010）。
+	// DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录。
 	DeployServerProbe(ctx context.Context, in *DeployServerProbeRequest, opts ...grpc.CallOption) (*DeployServerProbeResponse, error)
-	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
+	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（一键复制）。
 	CloneWorkDir(ctx context.Context, in *CloneWorkDirRequest, opts ...grpc.CallOption) (*CloneWorkDirResponse, error)
 	// RemoveInstance 移除实例注册并删除其工作目录与派生索引（CP 删除实例时真清理，兑现「所有数据将被删除」）。
 	RemoveInstance(ctx context.Context, in *RemoveInstanceRequest, opts ...grpc.CallOption) (*RemoveInstanceResponse, error)
-	// DisposeOrphanRuntime 处置无主运行时（FR-326）：CP 反向对账发现 Worker 有、CP 无记录的实例后下发。
+	// DisposeOrphanRuntime 处置无主运行时：CP 反向对账发现 Worker 有、CP 无记录的实例后下发。
 	// Worker 停进程树并清理本地运行态元数据（PID/sock/注册表），不删工作目录、不重建 CP 记录。
 	// 老 Worker 返回 Unimplemented，CP 记日志不崩（向后兼容）。
 	DisposeOrphanRuntime(ctx context.Context, in *DisposeOrphanRuntimeRequest, opts ...grpc.CallOption) (*DisposeOrphanRuntimeResponse, error)
@@ -415,7 +415,7 @@ type WorkerServiceClient interface {
 	// RestoreBackup 按备份链顺序（全量基 + 各增量）回放归档到实例工作目录；
 	// 远程归档先据 storage 拉回本地再回放。
 	RestoreBackup(ctx context.Context, in *RestoreBackupRequest, opts ...grpc.CallOption) (*RestoreBackupResponse, error)
-	// TestStorageBackend 对远程备份存储做一次非破坏性读写删除探测（FR-152）。
+	// TestStorageBackend 对远程备份存储做一次非破坏性读写删除探测。
 	TestStorageBackend(ctx context.Context, in *TestStorageBackendRequest, opts ...grpc.CallOption) (*TestStorageBackendResponse, error)
 	// CreateBot 在 Worker 上创建 Bot 连接。
 	CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error)
@@ -431,15 +431,15 @@ type WorkerServiceClient interface {
 	RunBotScript(ctx context.Context, in *RunBotScriptRequest, opts ...grpc.CallOption) (*RunBotScriptResponse, error)
 	// StreamBotEvents 订阅 Bot 事件流。
 	StreamBotEvents(ctx context.Context, in *StreamBotEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotEvent], error)
-	// GetBotCapacity 返回本节点 Bot Worker 的 fleet 准入容量快照（FR-351）。
+	// GetBotCapacity 返回本节点 Bot Worker 的 fleet 准入容量快照。
 	GetBotCapacity(ctx context.Context, in *GetBotCapacityRequest, opts ...grpc.CallOption) (*GetBotCapacityResponse, error)
-	// ApplyBotBatch 批量应用最多 50 个 Bot assignment，并返回逐项回执（FR-351）。
+	// ApplyBotBatch 批量应用最多 50 个 Bot assignment，并返回逐项回执。
 	ApplyBotBatch(ctx context.Context, in *ApplyBotBatchRequest, opts ...grpc.CallOption) (*ApplyBotBatchResponse, error)
-	// GetBotFleetSnapshot 返回当前 Bot fleet 运行快照（FR-351，供后续 reconcile 建基线）。
+	// GetBotFleetSnapshot 返回当前 Bot fleet 运行快照（供后续 reconcile 建基线）。
 	GetBotFleetSnapshot(ctx context.Context, in *GetBotFleetSnapshotRequest, opts ...grpc.CallOption) (*GetBotFleetSnapshotResponse, error)
-	// StreamBotFleetEvents 以类型化流持续上报 runtime/action 事件（FR-351）。
+	// StreamBotFleetEvents 以类型化流持续上报 runtime/action 事件。
 	StreamBotFleetEvents(ctx context.Context, in *StreamBotFleetEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotFleetEvent], error)
-	// SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执（FR-351）。
+	// SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执。
 	SignalBotActions(ctx context.Context, in *SignalBotActionsRequest, opts ...grpc.CallOption) (*SignalBotActionsResponse, error)
 	// ApplyBotCommandSchedules 下发 CP 已展开 occurrence plan；absolute/barrier 启动模式与 skip 集。
 	ApplyBotCommandSchedules(ctx context.Context, in *ApplyBotCommandSchedulesRequest, opts ...grpc.CallOption) (*ApplyBotCommandSchedulesResponse, error)
@@ -463,22 +463,22 @@ type WorkerServiceClient interface {
 	// ReloadProbeConfig 下发配置重载（`core.config_reload`）。
 	//
 	// **独立超时**是本 RPC 存在的唯一理由：探针侧重载跑在独立的 reload 协调池上（不与业务命令争用），
-	// 默认 10s，远大于业务命令的 5s（FR-526 §2.2）。走 SendPluginCommand 就无法表达这个差异。
-	// FR-532（生效编排）之前本 RPC 只保证「能下发并拿回回执」，不维护生效状态机。
+	// 默认 10s，远大于业务命令的 5s。走 SendPluginCommand 就无法表达这个差异。
+	// 生效编排落地之前本 RPC 只保证「能下发并拿回回执」，不维护生效状态机。
 	ReloadProbeConfig(ctx context.Context, in *ReloadProbeConfigRequest, opts ...grpc.CallOption) (*ReloadProbeConfigResponse, error)
 	// GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
 	GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error)
-	// CheckDocker 探测本机 Docker 守护进程是否可用（FR-237）：返回可用性 + 版本 + 错误，
-	// 供创建向导选 docker 模式前先测、不可用即禁用提示（与 FR-229 连通性族同范式）。
+	// CheckDocker 探测本机 Docker 守护进程是否可用：返回可用性 + 版本 + 错误，
+	// 供创建向导选 docker 模式前先测、不可用即禁用提示（与连通性检查族同范式）。
 	CheckDocker(ctx context.Context, in *CheckDockerRequest, opts ...grpc.CallOption) (*CheckDockerResponse, error)
 	// UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
-	// daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
+	// daemon 模式下不杀游戏服（wrapper 子进程与 Worker 主进程隔离，
 	// Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
-	// action="rollback" 时改为回滚本地升级前备份（FR-182，见 ADR-042），不下载。
+	// action="rollback" 时改为回滚本地升级前备份，不下载。
 	UpgradeWorker(ctx context.Context, in *UpgradeWorkerRequest, opts ...grpc.CallOption) (*UpgradeWorkerResponse, error)
 	// TerminalSession 把 CP 侧终端代理（浏览器 ⇄ CP /ws/terminal）的 WS 帧经 gRPC 双向流
 	// 转发给 Worker：首帧必须为 open（携带一次性终端令牌），Worker 在本机回环拨自身 WS
-	// 终端服务并原样泵帧——令牌校验方仍是 Worker（ADR-061 信任模型不变），会话层零复制。
+	// 终端服务并原样泵帧——令牌校验方仍是 Worker（信任模型不变），会话层零复制。
 	// 经反向隧道承载时 CP→Worker 终端零入站；老 Worker 无本方法（Unimplemented）时 CP
 	// 回退直拨 Worker WS（双模式，与指令通道一致）。
 	TerminalSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalFrame, TerminalFrame], error)
@@ -489,7 +489,7 @@ type WorkerServiceClient interface {
 	// ImportServerDir 导入现成目录：migrate 模式把目录整体搬进托管区系统分配目录
 	// （同盘 os.Rename 优先，跨盘递归拷贝 + 数量/字节校验 + 清源）；in_place 模式 no-op 回原路径。
 	ImportServerDir(ctx context.Context, in *ImportServerDirRequest, opts ...grpc.CallOption) (*ImportServerDirResponse, error)
-	// ProbeInstanceEvidence CP 对账时向 Worker 拉取一批实例的进程侧证据（FR-455③）：
+	// ProbeInstanceEvidence CP 对账时向 Worker 拉取一批实例的进程侧证据：
 	// wrapper/Java PID 是否存活、daemon socket 是否可达、docker 容器是否在跑。
 	// CP 据此在「心跳清单缺失」时二次确认实例是否真已停机，避免通道抖动误判（消除
 	// 「面板 STOPPED 而进程在跑」）。老 Worker 返回 Unimplemented，CP 退化为旧行为。
@@ -1843,7 +1843,7 @@ func (c *workerServiceClient) ProbeInstanceEvidence(ctx context.Context, in *Pro
 type WorkerServiceServer interface {
 	// Register Worker Node 首次启动时注册到 Control Plane。
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
-	// ReportStartupProgress Worker 上报启动阶段进度（FR-486，CP 侧实现）。
+	// ReportStartupProgress Worker 上报启动阶段进度（CP 侧实现）。
 	//
 	// 存在的理由：加载（尤其大索引的全表扫描）发生在**注册之前**，那段时间 CP 侧完全看不到
 	// 该节点——2026-09-28 生产事故中这段黑盒长达 8m39s，主控台连节点都不存在。
@@ -1856,15 +1856,15 @@ type WorkerServiceServer interface {
 	ReportStartupProgress(context.Context, *ReportStartupProgressRequest) (*ReportStartupProgressResponse, error)
 	// Heartbeat 双向心跳流，Worker 上报资源指标。
 	Heartbeat(grpc.BidiStreamingServer[HeartbeatRequest, HeartbeatResponse]) error
-	// FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（FR-308，CP 侧实现）：
+	// FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（CP 侧实现）：
 	// 携带节点身份鉴权 + 本地已知 sha256，指纹一致回空归档（省流），否则回 tar.gz 字节。
 	FetchBotWorkerArchive(context.Context, *FetchBotWorkerArchiveRequest) (*FetchBotWorkerArchiveResponse, error)
-	// ReportCrashSnapshot Worker 上报实例崩溃快照（FR-313，CP 侧实现）：进程非正常退出
+	// ReportCrashSnapshot Worker 上报实例崩溃快照（CP 侧实现）：进程非正常退出
 	//（退出码 ≠ 0 或 RUNNING/STARTING 态意外退出）时携带节点身份上报现场（退出码/信号/
 	// 时长/尾部输出），CP 持久化并按实例滚动保留最近 5 条。与注册/心跳同信道（隧道/直拨
 	// 双模式天然可用）；老 CP 返回 Unimplemented，Worker 记日志丢弃、不阻塞状态机。
 	ReportCrashSnapshot(context.Context, *ReportCrashSnapshotRequest) (*ReportCrashSnapshotResponse, error)
-	// ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（FR-455/456，CP 侧实现）：
+	// ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（CP 侧实现）：
 	// 运行期周期扫描与接管兜底的处置动作（scan_detected / scan_disposed / scan_dispose_blocked /
 	// dispose_blocked / dispose_reaped）经与注册/心跳同信道（隧道/直拨双模式天然可用）上报，
 	// 携带节点身份鉴权，CP 经审计服务入库（保证孤儿处置「不静默」）。老 CP 返回 Unimplemented，
@@ -1875,7 +1875,7 @@ type WorkerServiceServer interface {
 	// ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
 	// Worker 用它填充内存注册表（不在表者按 STOPPED 注册、不启动进程；已在表者跳过，
 	// 不覆盖 RecoverDaemonInstances 恢复的 RUNNING 实例）。使重启后停机实例的
-	// 文件/配置/归档/备份 op 能定位工作目录（FR-FIXA 修 bug #2，见 ADR-050）。
+	// 文件/配置/归档/备份 op 能定位工作目录（修 bug #2）。
 	ResyncInstances(context.Context, *ResyncInstancesRequest) (*ResyncInstancesResponse, error)
 	// StartInstance 启动实例。
 	StartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
@@ -1885,13 +1885,13 @@ type WorkerServiceServer interface {
 	RestartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
 	// KillInstance 强制终止实例。
 	KillInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
-	// InspectManagedProcess 只读探查某实例受管进程树内的目标 PID（FR-407）。
+	// InspectManagedProcess 只读探查某实例受管进程树内的目标 PID。
 	InspectManagedProcess(context.Context, *ManagedProcessInspectRequest) (*ManagedProcessInspectResponse, error)
-	// TerminateManagedProcess 处置某实例受管进程树内的非根目标 PID（FR-408）。
+	// TerminateManagedProcess 处置某实例受管进程树内的非根目标 PID。
 	TerminateManagedProcess(context.Context, *ManagedProcessActionRequest) (*ManagedProcessActionResponse, error)
-	// 启动前同步预检（FR-314）：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
+	// 启动前同步预检：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
 	PreflightStartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
-	// AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程（FR-471）：登记 PID 并纳入受管生命周期。
+	// AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程：登记 PID 并纳入受管生命周期。
 	AdoptForeignRuntime(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
 	// AdoptInPlaceRuntime 收养就地导入实例的外部运行进程：**不改进程、不重启**。
 	//
@@ -1909,9 +1909,9 @@ type WorkerServiceServer interface {
 	ListInstances(context.Context, *ListInstancesRequest) (*ListInstancesResponse, error)
 	// StreamInstanceEvents 订阅实例事件流。
 	StreamInstanceEvents(*StreamInstanceEventsRequest, grpc.ServerStreamingServer[InstanceEvent]) error
-	// FR-473/479：日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
+	// 日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
 	GetLogCapabilities(context.Context, *GetLogCapabilitiesRequest) (*GetLogCapabilitiesResponse, error)
-	// FR-473/479：按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
+	// 按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
 	LogCreateView(context.Context, *LogCreateViewRequest) (*LogCreateViewResponse, error)
 	LogSearch(context.Context, *LogSearchRequest) (*LogSearchResponse, error)
 	LogStats(context.Context, *LogStatsRequest) (*LogStatsResponse, error)
@@ -1942,7 +1942,7 @@ type WorkerServiceServer interface {
 	LogTail(*LogTailRequest, grpc.ServerStreamingServer[LogEvent]) error
 	LogRehydrate(context.Context, *LogRehydrateRequest) (*LogTaskResponse, error)
 	LogArchiveStatus(context.Context, *LogArchiveStatusRequest) (*LogArchiveStatusResponse, error)
-	// FR-476：CP 经反向隧道查看/控制 Worker 受管 VL namespace。
+	// CP 经反向隧道查看/控制 Worker 受管 VL namespace。
 	LogRuntimeStatus(context.Context, *LogRuntimeStatusRequest) (*LogRuntimeStatusResponse, error)
 	LogRuntimeControl(context.Context, *LogRuntimeControlRequest) (*LogTaskResponse, error)
 	LogMigratePartition(context.Context, *LogMigratePartitionRequest) (*LogTaskResponse, error)
@@ -1970,7 +1970,7 @@ type WorkerServiceServer interface {
 	ListFiles(context.Context, *ListFilesRequest) (*ListFilesResponse, error)
 	// ReadFile 读取文件内容。
 	ReadFile(context.Context, *ReadFileRequest) (*ReadFileResponse, error)
-	// HashFile 计算实例工作目录内文件的 SHA-256（FR-468 §2.5 版本漂移检测）。
+	// HashFile 计算实例工作目录内文件的 SHA-256（版本漂移检测）。
 	// 与 ReadFile 分开：哈希只需读盘不需传内容，避免为校验把数十 MB 二进制经 gRPC 搬回 CP。
 	HashFile(context.Context, *HashFileRequest) (*HashFileResponse, error)
 	// WriteFile 写入文件内容。
@@ -1979,32 +1979,32 @@ type WorkerServiceServer interface {
 	DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error)
 	// RenameFile 重命名文件。
 	RenameFile(context.Context, *RenameFileRequest) (*RenameFileResponse, error)
-	// CheckPathAccess 探测路径可读/可写（相对 Worker 进程用户，FR-373）。
+	// CheckPathAccess 探测路径可读/可写（相对 Worker 进程用户）。
 	// instance_uuid 非空：path 为实例工作目录相对路径；为空：path 须为节点绝对路径（与 BrowseDir 同语义）。
 	CheckPathAccess(context.Context, *CheckPathAccessRequest) (*CheckPathAccessResponse, error)
-	// ChmodPath 对单 path 做非递归 chmod（FR-373；不 chown、不递归）。
+	// ChmodPath 对单 path 做非递归 chmod（不 chown、不递归）。
 	// instance_uuid 非空：实例相对路径；为空：节点绝对路径。mode 空=保证属主可读写（目录含 x）。
 	ChmodPath(context.Context, *ChmodPathRequest) (*ChmodPathResponse, error)
-	// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
+	// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（批量下载）。
 	DownloadArchive(*DownloadArchiveRequest, grpc.ServerStreamingServer[DownloadArchiveChunk]) error
 	// DownloadFile 单文件分块流式下载（原样字节，不打包）。
 	// ReadFile 的 10MiB 上限是在线编辑器护栏，下载必须走本 RPC，任意大小不截断。
 	DownloadFile(*DownloadFileRequest, grpc.ServerStreamingServer[DownloadFileChunk]) error
-	// UploadFile 单文件分块流式上传（与 DownloadFile 对称，FR-304）。
+	// UploadFile 单文件分块流式上传（与 DownloadFile 对称）。
 	// WriteFile unary 受服务端单消息上限约束（直拨 64MiB 拒收）且反向隧道无上限会整块缓冲，
 	// 大文件上传必须走本 RPC：Worker 落临时文件、收完原子改名，中途失败不留半截目标文件。
 	// 首帧必须携带 instance_uuid + path（content 可同帧携带），后续帧仅 content（其余字段忽略）；
 	// 零帧即关流约定返回 success=false（不触盘、无副作用），供 CP 作老 Worker 能力探测
 	// （老 Worker 对本 RPC 返回 Unimplemented，CP 借此区分并回退 WriteFile）。
 	UploadFile(grpc.ClientStreamingServer[UploadFileChunk, UploadFileResponse]) error
-	// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
+	// SearchFiles 对实例工作目录做全文搜索或文件名快速打开。
 	// Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
 	SearchFiles(context.Context, *SearchFilesRequest) (*SearchFilesResponse, error)
-	// ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程；FR-075，见 ADR-018）。
+	// ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程）。
 	ListArchiveEntries(context.Context, *ListArchiveEntriesRequest) (*ListArchiveEntriesResponse, error)
-	// ReadArchiveEntry 读取归档内某条目内容，流式截断到上限（FR-075）。
+	// ReadArchiveEntry 读取归档内某条目内容，流式截断到上限。
 	ReadArchiveEntry(context.Context, *ReadArchiveEntryRequest) (*ReadArchiveEntryResponse, error)
-	// DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（FR-075，见 ADR-018）。
+	// DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码。
 	DecompileClass(context.Context, *DecompileClassRequest) (*DecompileClassResponse, error)
 	// ListConfigFiles 列出可管理配置文件。
 	ListConfigFiles(context.Context, *ListConfigFilesRequest) (*ListConfigFilesResponse, error)
@@ -2024,9 +2024,9 @@ type WorkerServiceServer interface {
 	PullSelfLog(context.Context, *PullSelfLogRequest) (*PullSelfLogResponse, error)
 	// GetInstanceMetrics 获取实例指标。
 	GetInstanceMetrics(context.Context, *GetInstanceMetricsRequest) (*GetInstanceMetricsResponse, error)
-	// GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照（FR-399）。
+	// GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照。
 	GetInstanceResourceSnapshot(context.Context, *GetInstanceResourceSnapshotRequest) (*GetInstanceResourceSnapshotResponse, error)
-	// GetInstanceEnv 获取运行中实例 JVM 进程的实际环境（FR-344 环境变量下区）。
+	// GetInstanceEnv 获取运行中实例 JVM 进程的实际环境（环境变量下区）。
 	GetInstanceEnv(context.Context, *GetInstanceEnvRequest) (*GetInstanceEnvResponse, error)
 	// ListJDKs 列出 Worker 本地已注册/探测到的 JDK 目录。
 	ListJDKs(context.Context, *ListJDKsRequest) (*ListJDKsResponse, error)
@@ -2034,42 +2034,42 @@ type WorkerServiceServer interface {
 	InstallJDK(context.Context, *InstallJDKRequest) (*InstallJDKResponse, error)
 	// RemoveJDK 删除 Worker 托管的 JDK 目录。
 	RemoveJDK(context.Context, *RemoveJDKRequest) (*RemoveJDKResponse, error)
-	// JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
+	// JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器。
 	JDKCatalog(context.Context, *JDKCatalogRequest) (*JDKCatalogResponse, error)
-	// ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填（FR-228）。
+	// ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填。
 	ProbeJDK(context.Context, *ProbeJDKRequest) (*ProbeJDKResponse, error)
-	// ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，FR-298 节点运行时库）。
+	// ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，节点运行时库）。
 	// 路径不存在/探测失败静默跳过，不阻断整体扫描；托管根下的候选标 already_registered。
 	ScanRuntimes(context.Context, *ScanRuntimesRequest) (*ScanRuntimesResponse, error)
-	// InstallRuntime 下载并安装指定运行时到 Worker 托管目录（首批 nodejs，FR-299）。
-	// 携带 task_id 异步执行（语义同 InstallJDK/FR-183）：启动即返回，进度/日志/终态经心跳上报。
+	// InstallRuntime 下载并安装指定运行时到 Worker 托管目录（首批 nodejs）。
+	// 携带 task_id 异步执行（语义同 InstallJDK）：启动即返回，进度/日志/终态经心跳上报。
 	InstallRuntime(context.Context, *InstallRuntimeRequest) (*InstallRuntimeResponse, error)
-	// RemoveRuntime 删除 Worker 托管的运行时目录（FR-299，删除顶层清理语义同 RemoveJDK/FR-292）。
+	// RemoveRuntime 删除 Worker 托管的运行时目录（删除顶层清理语义同 RemoveJDK）。
 	RemoveRuntime(context.Context, *RemoveRuntimeRequest) (*RemoveRuntimeResponse, error)
-	// GetPMConfig 读取节点包管理器与 registry 配置（FR-306）：当前 PM 偏好、corepack 可用性、
+	// GetPMConfig 读取节点包管理器与 registry 配置：当前 PM 偏好、corepack 可用性、
 	// 已激活 PM 版本、托管 .npmrc 现有 registry。
 	GetPMConfig(context.Context, *GetPMConfigRequest) (*GetPMConfigResponse, error)
-	// SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc（FR-306）。
+	// SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc。
 	SetPMConfig(context.Context, *SetPMConfigRequest) (*SetPMConfigResponse, error)
-	// ListGlobalPackages 列出托管全局目录下已装包（FR-307；含 outdated 可更新标记，best-effort）。
+	// ListGlobalPackages 列出托管全局目录下已装包（含 outdated 可更新标记，best-effort）。
 	ListGlobalPackages(context.Context, *ListGlobalPackagesRequest) (*ListGlobalPackagesResponse, error)
-	// InstallGlobalPackage 安装/升级全局包（FR-307；task_id 必填走任务中心异步，版本空=latest，
+	// InstallGlobalPackage 安装/升级全局包（task_id 必填走任务中心异步，版本空=latest，
 	// 升级=对已装包再装 @latest）。
 	InstallGlobalPackage(context.Context, *InstallGlobalPackageRequest) (*InstallGlobalPackageResponse, error)
-	// RemoveGlobalPackage 卸载全局包（FR-307，同步）。
+	// RemoveGlobalPackage 卸载全局包（同步）。
 	RemoveGlobalPackage(context.Context, *RemoveGlobalPackageRequest) (*RemoveGlobalPackageResponse, error)
-	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
-	// 先查节点核心缓存（FR-178 sha256 键 / FR-330 组合键），命中免远程下载。
+	// DownloadCore 下载服务端核心 jar 到实例工作目录（一键开服）。
+	// 先查节点核心缓存（sha256 键 / 组合键），命中免远程下载。
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
-	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
+	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod。
 	InstallForgeServer(context.Context, *InstallForgeServerRequest) (*InstallForgeServerResponse, error)
-	// FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（FR-441 通用二进制运行时搭建）。
+	// FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（通用二进制运行时搭建）。
 	// 与 DownloadCore 的分工：DownloadCore 只服务 MC 核心 jar（绑定节点核心缓存与组合键），
 	// 本 RPC 服务 coreType=binary 的两类 Worker 侧来源——url=Worker 直连远程下载（避免 CP 中转
 	// 大文件）、node_file=节点本地文件就地复制（路径须过受管区校验）。asset 来源由 CP 签发短期
 	// token 转成 url 形态下发（复用制品库签名分发通道），故本 RPC 无需感知制品库语义。
 	//
-	// 服务端流式（非 unary）：二进制体积可达数十 MB、慢链路分钟级，与 FR-319 异步化同因——
+	// 服务端流式（非 unary）：二进制体积可达数十 MB、慢链路分钟级，与异步任务同因——
 	// 必须让前端看见「在下载」而非「卡住」，故周期性上报字节进度，末帧携带终态结果。
 	FetchBinary(*FetchBinaryRequest, grpc.ServerStreamingServer[FetchBinaryProgress]) error
 	// ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限。
@@ -2082,13 +2082,13 @@ type WorkerServiceServer interface {
 	SetArtifactCacheCap(context.Context, *SetArtifactCacheCapRequest) (*SetArtifactCacheCapResponse, error)
 	// BrowseDir 只读列出节点上某绝对路径下的子目录（防穿越，CP 仅平台管理员可达）。
 	BrowseDir(context.Context, *BrowseDirRequest) (*BrowseDirResponse, error)
-	// DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录（FR-010）。
+	// DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录。
 	DeployServerProbe(context.Context, *DeployServerProbeRequest) (*DeployServerProbeResponse, error)
-	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
+	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（一键复制）。
 	CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error)
 	// RemoveInstance 移除实例注册并删除其工作目录与派生索引（CP 删除实例时真清理，兑现「所有数据将被删除」）。
 	RemoveInstance(context.Context, *RemoveInstanceRequest) (*RemoveInstanceResponse, error)
-	// DisposeOrphanRuntime 处置无主运行时（FR-326）：CP 反向对账发现 Worker 有、CP 无记录的实例后下发。
+	// DisposeOrphanRuntime 处置无主运行时：CP 反向对账发现 Worker 有、CP 无记录的实例后下发。
 	// Worker 停进程树并清理本地运行态元数据（PID/sock/注册表），不删工作目录、不重建 CP 记录。
 	// 老 Worker 返回 Unimplemented，CP 记日志不崩（向后兼容）。
 	DisposeOrphanRuntime(context.Context, *DisposeOrphanRuntimeRequest) (*DisposeOrphanRuntimeResponse, error)
@@ -2104,7 +2104,7 @@ type WorkerServiceServer interface {
 	// RestoreBackup 按备份链顺序（全量基 + 各增量）回放归档到实例工作目录；
 	// 远程归档先据 storage 拉回本地再回放。
 	RestoreBackup(context.Context, *RestoreBackupRequest) (*RestoreBackupResponse, error)
-	// TestStorageBackend 对远程备份存储做一次非破坏性读写删除探测（FR-152）。
+	// TestStorageBackend 对远程备份存储做一次非破坏性读写删除探测。
 	TestStorageBackend(context.Context, *TestStorageBackendRequest) (*TestStorageBackendResponse, error)
 	// CreateBot 在 Worker 上创建 Bot 连接。
 	CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error)
@@ -2120,15 +2120,15 @@ type WorkerServiceServer interface {
 	RunBotScript(context.Context, *RunBotScriptRequest) (*RunBotScriptResponse, error)
 	// StreamBotEvents 订阅 Bot 事件流。
 	StreamBotEvents(*StreamBotEventsRequest, grpc.ServerStreamingServer[BotEvent]) error
-	// GetBotCapacity 返回本节点 Bot Worker 的 fleet 准入容量快照（FR-351）。
+	// GetBotCapacity 返回本节点 Bot Worker 的 fleet 准入容量快照。
 	GetBotCapacity(context.Context, *GetBotCapacityRequest) (*GetBotCapacityResponse, error)
-	// ApplyBotBatch 批量应用最多 50 个 Bot assignment，并返回逐项回执（FR-351）。
+	// ApplyBotBatch 批量应用最多 50 个 Bot assignment，并返回逐项回执。
 	ApplyBotBatch(context.Context, *ApplyBotBatchRequest) (*ApplyBotBatchResponse, error)
-	// GetBotFleetSnapshot 返回当前 Bot fleet 运行快照（FR-351，供后续 reconcile 建基线）。
+	// GetBotFleetSnapshot 返回当前 Bot fleet 运行快照（供后续 reconcile 建基线）。
 	GetBotFleetSnapshot(context.Context, *GetBotFleetSnapshotRequest) (*GetBotFleetSnapshotResponse, error)
-	// StreamBotFleetEvents 以类型化流持续上报 runtime/action 事件（FR-351）。
+	// StreamBotFleetEvents 以类型化流持续上报 runtime/action 事件。
 	StreamBotFleetEvents(*StreamBotFleetEventsRequest, grpc.ServerStreamingServer[BotFleetEvent]) error
-	// SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执（FR-351）。
+	// SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执。
 	SignalBotActions(context.Context, *SignalBotActionsRequest) (*SignalBotActionsResponse, error)
 	// ApplyBotCommandSchedules 下发 CP 已展开 occurrence plan；absolute/barrier 启动模式与 skip 集。
 	ApplyBotCommandSchedules(context.Context, *ApplyBotCommandSchedulesRequest) (*ApplyBotCommandSchedulesResponse, error)
@@ -2152,22 +2152,22 @@ type WorkerServiceServer interface {
 	// ReloadProbeConfig 下发配置重载（`core.config_reload`）。
 	//
 	// **独立超时**是本 RPC 存在的唯一理由：探针侧重载跑在独立的 reload 协调池上（不与业务命令争用），
-	// 默认 10s，远大于业务命令的 5s（FR-526 §2.2）。走 SendPluginCommand 就无法表达这个差异。
-	// FR-532（生效编排）之前本 RPC 只保证「能下发并拿回回执」，不维护生效状态机。
+	// 默认 10s，远大于业务命令的 5s。走 SendPluginCommand 就无法表达这个差异。
+	// 生效编排落地之前本 RPC 只保证「能下发并拿回回执」，不维护生效状态机。
 	ReloadProbeConfig(context.Context, *ReloadProbeConfigRequest) (*ReloadProbeConfigResponse, error)
 	// GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
 	GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error)
-	// CheckDocker 探测本机 Docker 守护进程是否可用（FR-237）：返回可用性 + 版本 + 错误，
-	// 供创建向导选 docker 模式前先测、不可用即禁用提示（与 FR-229 连通性族同范式）。
+	// CheckDocker 探测本机 Docker 守护进程是否可用：返回可用性 + 版本 + 错误，
+	// 供创建向导选 docker 模式前先测、不可用即禁用提示（与连通性检查族同范式）。
 	CheckDocker(context.Context, *CheckDockerRequest) (*CheckDockerResponse, error)
 	// UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
-	// daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
+	// daemon 模式下不杀游戏服（wrapper 子进程与 Worker 主进程隔离，
 	// Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
-	// action="rollback" 时改为回滚本地升级前备份（FR-182，见 ADR-042），不下载。
+	// action="rollback" 时改为回滚本地升级前备份，不下载。
 	UpgradeWorker(context.Context, *UpgradeWorkerRequest) (*UpgradeWorkerResponse, error)
 	// TerminalSession 把 CP 侧终端代理（浏览器 ⇄ CP /ws/terminal）的 WS 帧经 gRPC 双向流
 	// 转发给 Worker：首帧必须为 open（携带一次性终端令牌），Worker 在本机回环拨自身 WS
-	// 终端服务并原样泵帧——令牌校验方仍是 Worker（ADR-061 信任模型不变），会话层零复制。
+	// 终端服务并原样泵帧——令牌校验方仍是 Worker（信任模型不变），会话层零复制。
 	// 经反向隧道承载时 CP→Worker 终端零入站；老 Worker 无本方法（Unimplemented）时 CP
 	// 回退直拨 Worker WS（双模式，与指令通道一致）。
 	TerminalSession(grpc.BidiStreamingServer[TerminalFrame, TerminalFrame]) error
@@ -2178,7 +2178,7 @@ type WorkerServiceServer interface {
 	// ImportServerDir 导入现成目录：migrate 模式把目录整体搬进托管区系统分配目录
 	// （同盘 os.Rename 优先，跨盘递归拷贝 + 数量/字节校验 + 清源）；in_place 模式 no-op 回原路径。
 	ImportServerDir(context.Context, *ImportServerDirRequest) (*ImportServerDirResponse, error)
-	// ProbeInstanceEvidence CP 对账时向 Worker 拉取一批实例的进程侧证据（FR-455③）：
+	// ProbeInstanceEvidence CP 对账时向 Worker 拉取一批实例的进程侧证据：
 	// wrapper/Java PID 是否存活、daemon socket 是否可达、docker 容器是否在跑。
 	// CP 据此在「心跳清单缺失」时二次确认实例是否真已停机，避免通道抖动误判（消除
 	// 「面板 STOPPED 而进程在跑」）。老 Worker 返回 Unimplemented，CP 退化为旧行为。

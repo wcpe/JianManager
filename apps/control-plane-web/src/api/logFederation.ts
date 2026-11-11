@@ -687,6 +687,7 @@ export interface FederationStatsAggregate {
 	sum?: number
 	min?: number
 	max?: number
+	avg?: number
 	has_min_max?: boolean
 }
 
@@ -722,6 +723,11 @@ export interface FederationFacetDimension {
 
 export interface FederationFacetsResponse extends FederationAggregateResponse {
   dimensions?: FederationFacetDimension[]
+}
+
+export interface FederationFieldsResponse extends FederationAggregateResponse {
+  /** 文档字段全集（不是当前页的字段子集）。 */
+  fields?: string[]
 }
 
 /** 聚合自身的覆盖、质量与截断分别呈现；未知质量不宣称精确或至少。 */
@@ -775,6 +781,26 @@ export function useLogsFederationFacets(params: Record<string, unknown>, enabled
 		retryDelay: rateLimitRetryDelay,
 	})
   useCancelDisabledLogQuery('logsFederationFacets', params, enabled)
+  return query
+}
+
+/**
+ * 联邦字段枚举：查询时间窗内出现过的**文档字段全集**。
+ *
+ * 与当前页行的字段推断不同：Fields 由 Worker/VL 在固定 Query View 的完整范围上计算，
+ * 因此可用于字段面板和后续字段值探索。unsupported/partial 必须由调用方显式展示，
+ * 不把 `fields: []` 解释成「确实没有字段」。
+ */
+export function useLogsFederationFields(params: Record<string, unknown>, enabled: boolean) {
+  const query = useQuery({
+    queryKey: ['logsFederationFields', params],
+    queryFn: async ({ signal }) =>
+      (await getWithRateLimitRetry<FederationFieldsResponse>('/logs/federation/fields', { params, signal, timeout: 60_000 })).data,
+    enabled,
+    retry: rateLimitRetry,
+    retryDelay: rateLimitRetryDelay,
+  })
+  useCancelDisabledLogQuery('logsFederationFields', params, enabled)
   return query
 }
 

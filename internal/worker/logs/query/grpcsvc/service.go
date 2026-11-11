@@ -330,6 +330,7 @@ func (s *Service) LogStats(ctx context.Context, req *workerpb.LogStatsRequest) (
 	}
 	qreq.GroupBy = append([]string(nil), req.GetGroupBy()...)
 	qreq.TimeBucket = req.GetTimeBucket()
+	qreq.MetricField = req.GetMetricField()
 	resp := s.query.Stats(ctx, qreq, req.GetGroupBy())
 	s.fillClosedVisibleSeq(&resp.Coverage, viewIDOf(resp.View, qreq.View))
 	out := grpcmap.StatsResponseToProto(resp)

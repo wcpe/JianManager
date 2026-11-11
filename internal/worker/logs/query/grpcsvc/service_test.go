@@ -358,13 +358,17 @@ func TestLogStats_MapsPointsAndClosedVisibleSeq(t *testing.T) {
 			// 显式授权目标：Worker 边界已要求非空（无 View 时空授权=全量读取原语，M-9）。
 			AuthorizedTargets: &workerpb.LogAuthorizedTargets{TargetIds: []string{"ns/game-1/2026-09-20"}},
 		},
-		GroupBy: []string{"level"},
+		GroupBy:     []string{"level"},
+		TimeBucket:  "1h",
+		MetricField: "duration_ms",
 	})
 	require.NoError(t, err)
 	require.Nil(t, resp.GetError())
 	require.Len(t, resp.GetPoints(), 1)
 	require.InDelta(t, 10.0, resp.GetPoints()[0].GetAvg(), 1e-9)
 	require.Equal(t, []string{"level"}, fq.lastGroupBy)
+	require.Equal(t, "1h", fq.lastReq.TimeBucket)
+	require.Equal(t, "duration_ms", fq.lastReq.MetricField)
 	// ClosedVisibleSeq 从 planner view 回填
 	require.Equal(t, "77", resp.GetCoverage().GetTargets()[0].GetClosedVisibleSeq())
 	require.Equal(t, "5", resp.GetCoverage().GetTargets()[0].GetCatalogGeneration())
