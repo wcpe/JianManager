@@ -81,11 +81,12 @@ func (h *LogFederationHandler) Live(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "UNAUTHORIZED"})
 		return
 	}
-	q.Budget.TimeoutMS = uint32(duration / time.Millisecond)
-	if q.Budget.Limit == 0 || q.Budget.Limit > logcoord.LiveSessionRows {
-		q.Budget.Limit = logcoord.LiveSessionRows
+	budget, duration, err := liveRequestBudget(c, q.Budget, duration)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+		return
 	}
-	q.Budget.MaxBytes = logcoord.LiveSessionBytes
+	q.Budget = budget
 	ctx, cancel := context.WithTimeout(c.Request.Context(), duration)
 	defer cancel()
 	frames := make(chan logcoord.LiveFrame, 1)

@@ -14,7 +14,7 @@ import (
 )
 
 // LogProtocolVersion Worker Log RPC 协议版本（与契约对齐）。
-const LogProtocolVersion = "log-rpc/1"
+const LogProtocolVersion = "log-query/1"
 
 // WorkerClientFactory 按 WorkerID 取得 workerpb 日志查询客户端。
 // 生产实现经 CP 反向 gRPC 隧道（ClientPool）；测试注入 fake。

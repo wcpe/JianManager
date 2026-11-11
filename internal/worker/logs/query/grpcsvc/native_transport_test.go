@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/wcpe/JianManager/internal/controlplane/logcoord"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/grpcsvc"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
@@ -43,17 +44,25 @@ func TestNativeTailCrossesRealGRPCBeforeVLStreamCloses(t *testing.T) {
 	conn, err := grpc.NewClient("passthrough:///native-test", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	defer conn.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	stream, err := workerpb.NewWorkerServiceClient(conn).LogTailLive(ctx, &workerpb.LogTailRequest{Query: &workerpb.LogQueryRequestBase{AuthorizedTargets: &workerpb.LogAuthorizedTargets{TargetIds: []string{"inst:7"}}}})
-	require.NoError(t, err)
-	ev, err := stream.Recv()
-	require.NoError(t, err)
-	require.Equal(t, "native-grpc", ev.EventId)
-	require.Equal(t, "real-field", ev.Fields["trace_id"])
-	cancel()
-	_, err = stream.Recv()
-	require.Error(t, err)
+	// Exercise the production CP adapter, including its protocol version, rather
+	// than an empty proto base that silently skips Worker compatibility checks.
+	adapter := logcoord.NewWorkerClientAdapter(workerpb.NewWorkerServiceClient(conn))
+	received := false
+	err = adapter.LiveTail(ctx, logcoord.LiveWorkerRequest{
+		WorkerSearchRequest: logcoord.WorkerSearchRequest{TargetIDs: []string{"inst:7"}},
+		PermissionScope:     "native-transport-test",
+	}, func(ev logcoord.Event) error {
+		received = true
+		require.Equal(t, "native-grpc", ev.EventID)
+		require.Equal(t, "inst:7/file", ev.LogSourceID)
+		require.Equal(t, "real-field", ev.Fields["trace_id"])
+		cancel()
+		return nil
+	})
+	require.True(t, received, "CP adapter must receive an event before cancellation; transport error: %v", err)
+	require.Error(t, err, "cancellation must terminate the adapter's receive loop")
 	select {
 	case <-cancelled:
 	case <-time.After(time.Second):

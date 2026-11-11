@@ -67,7 +67,7 @@ func (a *WorkerClientAdapter) LiveTail(ctx context.Context, req LiveWorkerReques
 			return io.ErrUnexpectedEOF
 		}
 		if status.Code(err) == codes.Unimplemented {
-			return ErrLiveUnsupported
+			return fmt.Errorf("%w: %v", ErrLiveUnsupported, err)
 		}
 		if err != nil {
 			return err
