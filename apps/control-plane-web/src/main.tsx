@@ -42,6 +42,15 @@ async function enableMocking() {
   // 使 mock 模式刷新后保持登录（否则刷新→会话丢→首个 API 401→跳登录，整站不可持续点）。
   runtime.applyPersistedMockRuntime()
   await startMockWorker()
+  // 【就绪标记】给 e2e 一个可观测的等待点。
+  //
+  // 为何需要：页面是「先 render，mock 就绪后 invalidateQueries() 重取」。
+  // 这能救 React Query 的查询，但**登录是命令式流程**，不走缓存。
+  // 慢环境（CI 首个用例还要等 vite 依赖预构建）下，首批请求会抢在
+  // Service Worker 接管前发出 —— 它们穿透到 vite proxy 指向的空端口，
+  // 确定性 ECONNREFUSED，鉴权失败后再也进不去控制台。
+  // 打一个标记后，e2e 可以先等 `window.__JM_MOCK_READY__` 再开始操作。
+  ;(window as unknown as { __JM_MOCK_READY__?: boolean }).__JM_MOCK_READY__ = true
   const [{ installMockPollingControl, loadPersistedPollingExclude }, { mountMockControlPanel }] = await Promise.all([
     import('./components/devtools/mock-polling'),
     import('./components/devtools/mount-mock-control-panel'),

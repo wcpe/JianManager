@@ -16,6 +16,7 @@ import { type Page, expect } from '@playwright/test'
  */
 export async function login(page: Page, username = 'admin', password = 'admin123'): Promise<void> {
   await page.goto('/login')
+  await waitForMockReady(page)
   await page.getByLabel('用户名', { exact: true }).fill(username)
   await page.getByLabel('密码', { exact: true }).fill(password)
   await page.getByRole('button', { name: '登录', exact: true }).click()
@@ -25,6 +26,27 @@ export async function login(page: Page, username = 'admin', password = 'admin123
   // 不是功能坏，也不是断言错。45s 只影响首次等待，不影响后续用例（模块已缓存）。
   // 注意：这不是放宽断言，真实登不进去仍会失败（只是晚 15s）。
   await expect(page.locator('[data-slot="console-shell"]')).toBeVisible({ timeout: 45_000 })
+}
+
+/**
+ * 等 mock 模式的 Service Worker 真的接管完再继续。
+ *
+ * 【为何必须等】页面是「先 render，mock 就绪后 invalidateQueries() 重取」。
+ * 这能救 React Query 的查询，但**登录是命令式流程**，不走缓存。
+ * 慢环境（CI 首个用例还要等 vite 依赖预构建）下，首批请求会抢在 SW 接管前
+ * 发出——它们穿透到 vite proxy 指向的空端口（mock 模式的 `http://127.0.0.1:9`），
+ * 确定性 ECONNREFUSED，鉴权失败后页面就停在登录页，等 45s 也没用。
+ * 这正是四个 shard 里**每个 shard 的第 1 个用例**稳定挂掉的原因。
+ *
+ * 标记由 main.tsx 在 `await startMockWorker()` 之后写入。非 mock 模式（真后端）
+ * 不会有这个标记，但那条路径也不跑 e2e。
+ */
+async function waitForMockReady(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => (window as unknown as { __JM_MOCK_READY__?: boolean }).__JM_MOCK_READY__ === true,
+    undefined,
+    { timeout: 90_000 },
+  )
 }
 
 /**
