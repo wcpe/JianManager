@@ -231,62 +231,59 @@ export function TopSourcesCard({
   )
 }
 
-/**
- * 时间分布：迷你柱阵，只统计**当前页**。
- *
- * # 为何不做全量时间直方图
- *
- * 后端 `/stats` 只返回单个聚合值（`agg.count`），**没有时间序列**。
- * 做不了就不伪造：标题与 tooltip 都写清「仅当前页」。要真直方图得后端新增时序接口。
- */
-export function TimeDistributionCard({ timestamps }: { timestamps: number[] }) {
-  const { t } = useTranslation()
-  const BUCKETS = 24
-  if (timestamps.length < 2) return null
-  const min = Math.min(...timestamps)
-  const max = Math.max(...timestamps)
-  // 跨度为零时除零：全部堆在同一个桶里毫无信息，不如不渲染。
-  if (max <= min) return null
+export interface TimeDistributionBucket {
+  label: string
+  count: number
+}
 
-  const span = max - min
-  const width = span / BUCKETS
-  const buckets = new Array<number>(BUCKETS).fill(0)
-  for (const ts of timestamps) {
-    const i = Math.min(BUCKETS - 1, Math.floor((ts - min) / width))
-    const idx = Math.max(0, i)
-    buckets[idx] = (buckets[idx] ?? 0) + 1
-  }
-  const peak = Math.max(...buckets, 1)
+/**
+ * 时间分布：来自 Stats timeBucket 的全窗口柱阵。
+ *
+ * 当前页时间戳只代表已加载的 100 行，会把分页/预算截断误画成全量趋势。
+ * 这里以聚合结果为唯一数据源，并在不精确时显示约值。
+ */
+export function TimeDistributionCard({
+  buckets,
+  uncertain,
+}: {
+  buckets: TimeDistributionBucket[]
+  uncertain?: boolean
+}) {
+  const { t } = useTranslation()
+  const ordered = buckets.filter((bucket) => bucket.count >= 0)
+  if (!ordered.length || ordered.every((bucket) => bucket.count === 0)) return null
+  const peak = Math.max(...ordered.map((bucket) => bucket.count), 1)
 
   return (
     <InsightCard
       icon={<Timer className="size-3 shrink-0" />}
       title={t('logs.vizTimeTitle')}
       testId="logs-time-card"
-      hint={t('logs.vizTimePageOnly')}
+      hint={uncertain ? t('logs.vizApprox') : t('logs.vizTimeWindow')}
     >
       <Tooltip>
         <TooltipTrigger asChild>
           <div
             data-testid="logs-time-distribution"
+            data-time-detail={ordered.map((bucket) => `${bucket.label}:${bucket.count}`).join(',')}
             className="flex h-8 items-end gap-px"
             role="img"
             aria-label={t('logs.vizTimeAria')}
           >
-            {buckets.map((n, i) => (
+            {ordered.map((bucket) => (
               <div
-                key={i}
-                className={cn('min-w-0 flex-1 rounded-t-[1px] bg-status-info/70', n === 0 && 'bg-muted')}
-                // 最小 2px：否则「有数据但极少」的桶完全不可见，看上去像没数据。
-                style={{ height: `${Math.max(n === 0 ? 1 : 6, (n / peak) * 100)}%` }}
+                key={bucket.label}
+                className={cn('min-w-0 flex-1 rounded-t-[1px] bg-status-info/70', bucket.count === 0 && 'bg-muted')}
+                title={`${bucket.label}: ${uncertain ? '≈' : ''}${bucket.count.toLocaleString()}`}
+                style={{ height: `${Math.max(bucket.count === 0 ? 1 : 6, (bucket.count / peak) * 100)}%` }}
               />
             ))}
           </div>
         </TooltipTrigger>
         <TooltipContent>
-          {t('logs.vizTimeHelp', {
-            from: new Date(min).toLocaleString(),
-            to: new Date(max).toLocaleString(),
+          {t('logs.vizTimeRangeHelp', {
+            from: ordered[0]?.label ?? '',
+            to: ordered[ordered.length - 1]?.label ?? '',
           })}
         </TooltipContent>
       </Tooltip>

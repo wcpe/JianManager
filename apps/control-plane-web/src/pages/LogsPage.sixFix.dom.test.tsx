@@ -312,7 +312,7 @@ describe('日志六模块正式行为回归', () => {
     expect(container.querySelector('svg[onload]')).toBeNull()
     expect(parseAnsi('\u001b]8;;javascript:alert(1)\u0007链接文本\u001b]8;;\u0007')).toEqual([{ text: '链接文本' }])
     expect(screen.getAllByTestId('log-row').length).toBe(100)
-    await userEvent.setup().click(screen.getAllByRole('combobox').at(-1)!)
+    await userEvent.setup().click(screen.getByTestId('logs-instance-select'))
     expect(await screen.findByRole('option', { name: '实例-60' })).toBeInTheDocument()
     expect(screen.getAllByRole('option')).toHaveLength(61)
     expect(instanceCalls).toBe(1)

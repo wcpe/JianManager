@@ -25,6 +25,14 @@ export interface LogEntry {
   /** 原始流名（stdout/stderr），仅实例日志。 */
   stream?: string
   message: string
+  /**
+   * VL 结构化字段（实例日志）。
+   *
+   * 节点/平台普通文本日志没有这个字段；它只在联邦实例事件里由 `_msg` 之外
+   * 的文档字段投影出来，详情区原样展示，不把字段值重新拼回查询字符串。
+   */
+  fields?: Record<string, unknown>
+
   /** 日志产生时间（RFC3339）。 */
   time: string
 }

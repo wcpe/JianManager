@@ -12,10 +12,13 @@ import {
 	FederatedExportIncompleteError,
 	isRateLimitError,
 	rateLimitedEnvelope,
-	useLogsFederation,
-	useLogsFederationFacets,
-	useLogsFederationStats,
-	useLogsFederationStreams,
+  useLogsFederation,
+  useLogsFederationFacets,
+  useLogsFederationFields,
+  useLogsFederationStats,
+  useLogsFederationStreamFieldNames,
+  useLogsFederationStreamFieldValues,
+  useLogsFederationStreams,
 	type LogsFederationResult,
 } from '@/api/logFederation'
 import { useAuthStore } from '@/stores/auth'
@@ -27,6 +30,7 @@ import {
   EventsTotalCard,
   LevelDistributionCard,
   TimeDistributionCard,
+  type TimeDistributionBucket,
   TopSourcesCard,
 } from '@/components/logs/LogsInsightCards'
 import { LogTimeline } from '@/components/logs/LogTimeline'
@@ -157,6 +161,9 @@ function mapFederationItems(items: unknown[] | null | undefined): LogEntry[] {
       : typeof o.source === 'string'
         ? o.source
         : undefined
+    const fields = o.fields && typeof o.fields === 'object' && !Array.isArray(o.fields)
+      ? Object.fromEntries(Object.entries(o.fields as Record<string, unknown>))
+      : undefined
     return {
       id: typeof o.id === 'number' ? o.id : -(index + 1),
       source: normalizeSource(
@@ -172,6 +179,7 @@ function mapFederationItems(items: unknown[] | null | undefined): LogEntry[] {
       instanceUuid: typeof o.instance_uuid === 'string' ? o.instance_uuid : '',
       nodeId: typeof nodeRaw === 'number' ? nodeRaw : 0,
       stream: typeof o.stream === 'string' ? o.stream : undefined,
+      ...(fields ? { fields } : {}),
       message,
       time,
     } satisfies LogEntry
@@ -200,6 +208,31 @@ const FOLLOW_INTERVAL = 3000
 function bucketFloor(ms: number): number {
   return Math.floor(ms / FOLLOW_INTERVAL) * FOLLOW_INTERVAL
 }
+
+function timeBucketForRange(range: TimeRangePreset): string {
+  switch (range) {
+    case '15m': return '1m'
+    case '1h': return '5m'
+    case '24h': return '15m'
+    case '7d': return '1h'
+    case 'all': return '6h'
+    default: return '15m'
+  }
+}
+
+function statsBucketLabel(dimensions?: Record<string, string>): string {
+  if (!dimensions) return ''
+  return dimensions._time ?? dimensions.time ?? Object.values(dimensions)[0] ?? ''
+}
+
+function isSafeLogsField(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(value)
+}
+
+function escapeLogsQLString(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
+}
+
 
 /**
  * 日志中心（查看 / 检索 / 增强 + 覆盖/失败态接线）。
@@ -265,7 +298,9 @@ export default function LogsPage() {
   // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（online_only）。
   const [onlineOnly, setOnlineOnly] = useState(false)
   const [follow, setFollow] = useState(false)
+  const [streamField, setStreamField] = useState<'stream' | 'log_source_id'>('stream')
   const [exporting, setExporting] = useState(false)
+
   const [exportRangeOpen, setExportRangeOpen] = useState(false)
   const exportRequest = useRef<AbortController | null>(null)
   useEffect(() => () => exportRequest.current?.abort(), [])
@@ -487,7 +522,7 @@ export default function LogsPage() {
 	// ② stats → facets 再串行——facets 额外等 stats 落定（成功或失败），
 	// 任一时刻最多一个聚合请求在飞 ⇒ 不再与主列表/彼此并发挤 VL 的 maxConcurrentRequests=2 两个槽 ✗。
 	const federationStats = useLogsFederationStats(
-		{ ...aggregateParams, groupBy: 'level' },
+		{ ...aggregateParams, groupBy: '', timeBucket: timeBucketForRange(range) },
 		federationActive && !follow && !federationQuery.isPlaceholderData && !federationQuery.isFetching && !!federation?.response.viewId,
 	)
 	const federationFacets = useLogsFederationFacets(
@@ -513,7 +548,22 @@ export default function LogsPage() {
   const levelDimension = federationFacets.data?.dimensions?.find((dimension) => dimension.dimension === 'level')
 	const levelFacets = !federationFacets.isError ? levelDimension?.values ?? [] : []
 	const facetsTruncated = facetsSummary.truncated || federationFacets.data?.dimensions?.some((dimension) => dimension.truncated) === true
-	// 流清单（源 + 流名 + 条数）。complete=false 时条数不可信（VL 截断会把 hits 全归零）。
+	// Fields / Streams / stream fields 均只在实例联邦查询的同一 Query View 内启用。
+	const aggregateReady = federationActive && !follow && !federationQuery.isPlaceholderData && !federationQuery.isFetching && !!federation?.response.viewId
+	const federationFields = useLogsFederationFields(
+		aggregateParams,
+		aggregateReady && (federationFacets.isSuccess || federationFacets.isError),
+	)
+	const federationStreamFieldNames = useLogsFederationStreamFieldNames(
+		aggregateParams,
+		aggregateReady && (federationStreams.isSuccess || federationStreams.isError),
+	)
+	const federationStreamFieldValues = useLogsFederationStreamFieldValues(
+		aggregateParams,
+		streamField,
+		aggregateReady,
+	)
+	// 流清单（源 + 流名 + 条数）。complete=false 时条数不可信。
 	const streamItems = !federationStreams.isError ? federationStreams.data?.streams ?? [] : []
 	const streamsComplete = federationStreams.data?.complete === true
 	const insightsVisible = federationActive && !federationQuery.isPlaceholderData && (
@@ -560,19 +610,21 @@ export default function LogsPage() {
       ? items.length
       : (data?.total ?? 0)
   // 有游标时必须原 view 续页（预算截断空页也可续）；明确结束才移动完整窗口。
-  /**
-   * 当前页的时间戳（毫秒），供时间分布图用。
-   *
-   * 只统计**当前页**：后端 `/stats` 只返回单个聚合值，没有时间序列，
-   * 所以做不了全量直方图。不做假数据，标题也就写「本页」。
-   */
-  const pageTimestamps = useMemo(
-    () =>
-      items
-        .map((it) => new Date(it.time).getTime())
-        .filter((n) => Number.isFinite(n)),
-    [items],
+  const timeBuckets = useMemo<TimeDistributionBucket[]>(
+    () => (Array.isArray(statsPoints) ? statsPoints : [])
+      .map((point, index) => ({
+        label: statsBucketLabel(point.dimensions) || String(index + 1),
+        count: Number(point.agg?.count ?? point.count ?? 0),
+      }))
+      .filter((bucket) => Number.isFinite(bucket.count) && bucket.count >= 0),
+    [statsPoints],
   )
+
+  const availableFields = federationFields.data?.fields ?? []
+  const availableStreamFields = (federationStreamFieldNames.data?.fields ?? [])
+    .filter((field): field is 'stream' | 'log_source_id' => field === 'stream' || field === 'log_source_id')
+  const availableStreamValues = federationStreamFieldValues.data?.values ?? []
+
 
   /**
    * 把一行日志映射成「具体是谁」的显示名。
@@ -624,6 +676,19 @@ export default function LogsPage() {
       },
     [],
   )
+
+  /** 结构化字段/流筛选只由受控字段名和值生成 LogsQL 片段；不接受用户输入拼接字段名。 */
+  const appendStructuredFilter = useCallback((expression: string) => {
+    const trimmed = expression.trim()
+    if (!trimmed) return
+    exportRequest.current?.abort()
+    setKeyword((current) => {
+      const previous = current.trim()
+      return previous ? `(${previous}) AND ${trimmed}` : trimmed
+    })
+    setPage(1)
+    setFederationCursors({})
+  }, [])
 
   /**
    * 切换视图：只重置分页状态，**保留** nodeId / instanceId 等筛选。
@@ -1002,7 +1067,10 @@ export default function LogsPage() {
                 countsReliable={streamsComplete}
               />
             )}
-            <TimeDistributionCard timestamps={pageTimestamps} />
+            <TimeDistributionCard
+              buckets={timeBuckets}
+              uncertain={!statsSummary.exact}
+            />
           </div>
         ) : null}
       </div>
@@ -1098,7 +1166,7 @@ export default function LogsPage() {
               resetTo(setInstanceId)(v === SENTINEL_ALL ? null : Number(v))
             }
           >
-            <SelectTrigger size="sm" className="w-44">
+            <SelectTrigger size="sm" className="w-44" data-testid="logs-instance-select">
               <SelectValue placeholder={t('logs.allInstances')} />
             </SelectTrigger>
             <SelectContent>
@@ -1111,6 +1179,78 @@ export default function LogsPage() {
             </SelectContent>
           </Select>
 
+        {/* VL 字段与流探索：只在实例/联邦查询能力可用时有内容，平台/节点文本模式不展示。 */}
+        <div className="flex items-center gap-1" data-testid="logs-vl-exploration">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={platformView || availableFields.length === 0}
+                data-testid="logs-fields-trigger"
+              >
+                {t('logs.fields')} {availableFields.length > 0 ? `(${availableFields.length})` : ''}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-80 w-72 overflow-y-auto">
+              {availableFields.filter(isSafeLogsField).slice(0, 100).map((field) => (
+                <DropdownMenuItem
+                  key={field}
+                  data-testid="logs-field-option"
+                  onSelect={() => appendStructuredFilter(`${field}:*`)}
+                >
+                  {field}
+                </DropdownMenuItem>
+              ))}
+              {availableFields.length === 0 && (
+                <DropdownMenuItem disabled>{t('logs.fieldsUnavailable')}</DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Select
+            disabled={platformView || availableStreamFields.length === 0}
+            value={streamField}
+            onValueChange={(value: string) => setStreamField(value as 'stream' | 'log_source_id')}
+          >
+            <SelectTrigger size="sm" className="w-32" data-testid="logs-stream-field-select">
+              <SelectValue placeholder={t('logs.streamField')} />
+            </SelectTrigger>
+            <SelectContent>
+              {availableStreamFields.map((field) => (
+                <SelectItem key={field} value={field}>{field}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={platformView || availableStreamValues.length === 0}
+                data-testid="logs-stream-values-trigger"
+              >
+                {t('logs.streamValues')}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-80 w-72 overflow-y-auto">
+              {availableStreamValues.slice(0, 100).map((item) => (
+                <DropdownMenuItem
+                  key={item.value}
+                  data-testid="logs-stream-value-option"
+                  onSelect={() => appendStructuredFilter(`${streamField}:"${escapeLogsQLString(item.value)}"`)}
+                >
+                  <span className="truncate">{item.value}</span>
+                  <span className="ml-auto tabular-nums text-muted-foreground">{item.count}</span>
+                </DropdownMenuItem>
+              ))}
+              {availableStreamValues.length === 0 && (
+                <DropdownMenuItem disabled>{t('logs.streamValuesUnavailable')}</DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
         {/* 实时跟随开关 pill，靠右 */}
         <button
           type="button"

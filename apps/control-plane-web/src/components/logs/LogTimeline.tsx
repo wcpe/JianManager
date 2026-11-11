@@ -208,6 +208,15 @@ export function LogRow({
             {log.stream ? <span>stream: {log.stream}</span> : null}
             {log.instanceId > 0 && <span>instanceId: {log.instanceId}</span>}
             {log.nodeId > 0 && <span>nodeId: {log.nodeId}</span>}
+            {log.fields && Object.keys(log.fields).length > 0 && (
+              <div data-testid="log-row-fields" className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                {Object.entries(log.fields).map(([key, value]) => (
+                  <span key={key} title={typeof value === 'string' ? value : JSON.stringify(value)}>
+                    <span className="font-medium text-foreground">{key}</span>={typeof value === 'string' ? value : JSON.stringify(value)}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
