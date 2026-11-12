@@ -170,6 +170,27 @@ describe('LogsPage live subscription integration', () => {
     expect(tailReads).toHaveLength(0)
   })
 
+  it('cancels instance streaming when selecting node files on the same tab', async () => {
+    server.use(http.get(API('/nodes/1/diagnostics/log'), () => HttpResponse.json({ content: 'worker-file-row', truncated: false, fileBytes: 15, path: '/data/var/log/worker.log' })))
+    const user = await startFollow()
+    const old = connections[0]
+    await emit(old, 'instance-before-node-switch')
+    screen.getByTestId('logs-source-select').focus()
+    await user.keyboard('{Enter}')
+    await user.click(await screen.findByRole('option', { name: '节点', exact: true }))
+    expect(old.signal.aborted).toBe(true)
+    screen.getByTestId('logs-node-select').focus()
+    await user.keyboard('{Enter}')
+    await user.click(await screen.findByRole('option', { name: 'node-1', exact: true }))
+    await screen.findByText('worker-file-row')
+    await act(async () => old.onFrame({ type: 'event', event: event('old-instance-after-node') }))
+    expect(screen.queryByText('old-instance-after-node')).not.toBeInTheDocument()
+    expect(screen.queryByText('instance-before-node-switch')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('logs-live-status')).not.toBeInTheDocument()
+    expect(connections).toHaveLength(1)
+    expect(tailReads).toHaveLength(0)
+  })
+
   it('cancels the subscription when switching to a text source and rejects old-scope callbacks', async () => {
     const user = await startFollow()
     const old = connections[0]

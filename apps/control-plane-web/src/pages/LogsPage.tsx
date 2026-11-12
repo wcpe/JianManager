@@ -231,9 +231,16 @@ export default function LogsPage() {
 			? (raw as (typeof LOG_VIEWS)[number])
 			: 'node_instance'
 	})
-  const [source, setSource] = useState('')
+  const [source, setSource] = useState(() => {
+    const raw = searchParams.get('source') ?? ''
+    return isPlatformAdmin && SOURCES.includes(raw) ? raw : ''
+  })
   const [level, setLevel] = useState('')
-  const [nodeId, setNodeId] = useState<number | null>(null)
+  const [nodeId, setNodeId] = useState<number | null>(() => {
+    const raw = searchParams.get('nodeId')
+    const value = raw ? Number(raw) : NaN
+    return isPlatformAdmin && Number.isSafeInteger(value) && value > 0 ? value : null
+  })
   // 深链预筛选：从 URL ?instanceId= 初始化实例筛选（如从终端「查看完整历史」进入）。
   const [instanceId, setInstanceId] = useState<number | null>(() => {
     const q = searchParams.get('instanceId')
@@ -284,9 +291,11 @@ export default function LogsPage() {
     follow ? new Date(followAnchorMs) : new Date(rangeAnchor),
     follow,
   )
-  // Default node_instance is the authorized-instance workbench, including for
-  // non-admin users. Text sources never expose the advanced input.
-  const advancedAllowed = view !== 'platform' && (view !== 'all' || source === '' || source === 'instance')
+  // 平台页固定平台来源；节点/实例页可选 Worker 文件或实例 VL，非管理员只查实例。
+  const selectedSource = view === 'platform' ? 'control_plane'
+    : !isPlatformAdmin || (view === 'node_instance' && source === 'control_plane') ? 'instance'
+      : source || 'instance'
+  const advancedAllowed = view !== 'platform' && selectedSource === 'instance'
   const activeAdvanced = advancedMode && advancedAllowed
   const queryDraftDirty = activeAdvanced
     ? advancedQuery.trim() !== appliedAdvancedQuery
@@ -313,8 +322,8 @@ export default function LogsPage() {
   const scopeKey = logScopeKey(scope)
 
   // Platform and Worker process logs use bounded file windows, never VL.
-  const textKind = isPlatformAdmin && (view === 'platform' || (view === 'all' && source === 'control_plane'))
-    ? 'control_plane' : isPlatformAdmin && view === 'all' && source === 'worker' ? 'worker' : null
+  const textKind = isPlatformAdmin && selectedSource === 'control_plane'
+    ? 'control_plane' : isPlatformAdmin && selectedSource === 'worker' ? 'worker' : null
   const federationEnabled = !textKind && view !== 'platform'
   // 可选联邦覆盖探测。与 useLogs 同筛选参数；API 404 → degraded legacy。
 	const federationParams: Record<string, unknown> = {
@@ -803,9 +812,9 @@ export default function LogsPage() {
   )
 
   const sourceControl = (
-    <Select disabled={view !== 'all'} value={view === 'platform' ? 'control_plane' : source || 'instance'} onValueChange={(value: string) => resetTo(setSource)(value)}>
+    <Select disabled={view === 'platform' || !isPlatformAdmin} value={selectedSource} onValueChange={(value: string) => resetTo(setSource)(value)}>
       <SelectTrigger size="sm" className="w-32" data-testid="logs-source-select"><SelectValue /></SelectTrigger>
-      <SelectContent>{SOURCES.map((value) => <SelectItem key={value} value={value}>{t(`logs.source_${value}`)}</SelectItem>)}</SelectContent>
+      <SelectContent>{SOURCES.filter((value) => (isPlatformAdmin || value === 'instance') && (view !== 'node_instance' || value !== 'control_plane')).map((value) => <SelectItem key={value} value={value}>{t(`logs.source_${value}`)}</SelectItem>)}</SelectContent>
     </Select>
   )
 

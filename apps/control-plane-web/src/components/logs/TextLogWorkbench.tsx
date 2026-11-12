@@ -81,7 +81,8 @@ export function TextLogWorkbench({ kind, nodeId, nodes, onNodeChange, sourceCont
       </div>
     </div>
     <div className="flex h-11 shrink-0 items-center overflow-hidden text-xs text-muted-foreground" role="status" data-testid="logs-text-status">
-      {query.isError ? <span role="alert" className="truncate text-destructive">{t('logs.loadError')} · {errorMessage}</span>
+      {!ready ? <span>{t('logsText.chooseNode')}</span>
+        : query.isError ? <span role="alert" className="truncate text-destructive">{t('logs.loadError')} · {errorMessage}</span>
         : snapshot?.data.note ? <span>{snapshot.data.note}</span>
           : <span>{t('logsText.loadedOnly')}{snapshot?.data.truncated ? ` · ${t('logsText.truncated')}` : ''}{query.isFetching ? ` · ${t('common.loading')}` : ''}{paused && follow ? ` · ${t('logsText.reading')}` : ''}</span>}
     </div>

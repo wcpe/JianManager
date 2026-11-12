@@ -7,7 +7,7 @@
  *   ③ 覆盖尚未校验（pending）——等一下重试就行。
  * 混为一谈的结果：用户反复重试或直接报障，而三种里只有③真该重试。
  *
- * 来源筛选只能经下拉框设定（不读 URL 参数），所以这里走真实用户路径。
+ * 来源既可经下拉框选择，也可通过合法 source/nodeId 深链初始化；这里覆盖手动路径。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
@@ -49,7 +49,7 @@ function stubAll(envelope: () => Record<string, unknown>) {
  * 经下拉框选一个来源类别（真实用户路径）。
  *
  * 两个坑（照既有 federation 用例的做法）：
- *  - 来源下拉**只在「全部日志」视图渲染**，先切视图；
+ *  - 全部日志视图允许全部来源；此处先切视图以验证该入口仍可用；
  *  - jsdom 没实现 scrollIntoView，Radix Select 展开时会调用它，需垫片；
  *    并用键盘激活（聚焦 + Enter）而不是 click，否则弹层不展开。
  */
