@@ -31,10 +31,9 @@ async function downloadFromMenu(page: Page, label: string, name: string) {
  * 断言窗口宽度（== 默认预设跨度）＋ 上界≈now 才锁得住「默认最近 1 小时」这一开发版策略。
  * 快首屏仍使用有界窗口；需要更短时间范围可由筛选器主动选择。
  *
- * 观测的是**联邦**端点 `/api/v1/logs/federation`：devmock 提供联邦假后端（与经典 `/logs`
- * 复用同一份种子），页面在联邦视图下**只**以 federation.items 为数据源。查询服务不可用时
- * **不再回退**经典路径（用户裁定：没有就是没有，平台/历史日志走「更多 → Legacy 只读」专门入口），
- * 所以这里断言的必须是联邦端点本人下发的参数。
+ * 观测的是实例页签的 `/api/v1/logs/federation`：实例 API 始终发送
+ * `view=node_instance` 和 `source=instance`，查询服务不可用时不回退经典 `/logs`。
+ * 平台/节点文件日志通过各自页签读取独立文件窗口，全部日志由融合工作台承载。
  */
 
 /** 默认时间窗跨度：1 小时（与 LogsPage 的 `useState<TimeRangePreset>('1h')` 对齐）。 */
@@ -72,6 +71,8 @@ test('日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 分页'
   await page.goto('/logs')
 
   await expect(page.getByRole('heading', { name: '日志中心' })).toBeVisible()
+  await expect(page.getByRole('tablist', { name: '日志视图' }).getByRole('tab')).toHaveText(['平台日志', '节点日志', '实例日志', '全部日志'])
+  await expect(page.getByRole('tab', { name: '实例日志', exact: true })).toHaveAttribute('aria-selected', 'true')
   // 「实时跟随」必须 exact：页头 help 问号的 aria-label 里也含这四个字（真源在 LogsPageView 的 description），
   // 散写会命中两个按钮 → strict mode violation。
   await expect(page.getByRole('button', { name: '实时跟随', exact: true })).toBeVisible()
@@ -91,6 +92,8 @@ test('日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 分页'
     .poll(async () => lastParams(seen, '/api/v1/logs/federation'))
     .not.toBeNull()
   const logsParams = lastParams(seen, '/api/v1/logs/federation')!
+  expect(logsParams.get('view')).toBe('node_instance')
+  expect(logsParams.get('source')).toBe('instance')
   const fromMs = new Date(logsParams.get('from') ?? '').getTime()
   const toMs = new Date(logsParams.get('to') ?? '').getTime()
   // 窗宽是默认预设的直接函数（不受断言时刻影响）：默认窗改成 24h/全部时间即红。
@@ -119,6 +122,7 @@ async function prepareBrowserLogs(page: Page) {
   await login(page)
   await page.goto('/logs')
   await expect(page.getByRole('heading', { name: '日志中心' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '实例日志', exact: true })).toHaveAttribute('aria-selected', 'true')
   const base = Math.floor(Date.now() / 1000) * 1000 - 1000
   const rows = Array.from({ length: 163 }, (_, index) => ({
     id: 10000 + index, event_id: `browser-event-${index}`, canonical_content_hash: `browser-hash-${index}`,
@@ -228,6 +232,7 @@ test('六项修复：英文深色与窄视口仍可操作两个既有设计系�
   await page.evaluate(() => { localStorage.setItem('language', 'en'); localStorage.setItem('theme', 'dark') })
   await page.goto('/logs')
   await expect(page.getByRole('heading', { name: 'Log Center' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Instance Logs', exact: true })).toHaveAttribute('aria-selected', 'true')
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(page.getByTestId('logs-export-trigger')).toBeEnabled()
   await exportFromMenu(page, 'Export selected range')

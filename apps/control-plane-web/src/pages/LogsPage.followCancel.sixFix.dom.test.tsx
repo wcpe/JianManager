@@ -46,12 +46,18 @@ describe('跟随完成后调度与输入去抖', () => {
   it('首屏只有一个Search，连续输入复用250ms debounce', async () => {
     const keywords: string[] = []
     server.use(http.get(API('/logs/federation'), ({ request }) => {
-      keywords.push(new URL(request.url).searchParams.get('keyword') ?? '')
+      const params = new URL(request.url).searchParams
+      if (params.get('keyword') !== 'independent-proof') {
+        expect(params.get('view')).toBe('node_instance')
+        expect(params.get('source')).toBe('instance')
+      }
+      keywords.push(params.get('keyword') ?? '')
       return HttpResponse.json(response)
     }))
     renderWithProviders(<LogsPage />)
     await advance(300)
     expect(keywords).toEqual([''])
+    expect(screen.getByRole('tab', { name: '实例日志' })).toHaveAttribute('aria-selected', 'true')
     fireEvent.change(screen.getByPlaceholderText('搜索日志内容…'), { target: { value: 'a' } })
     await advance(100)
     fireEvent.change(screen.getByPlaceholderText('搜索日志内容…'), { target: { value: 'ab' } })

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -7,12 +7,16 @@ import { server } from '@jianmanager/devmock/server'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUserAs } from '@/test/auth'
 import { TextLogWorkbench } from './TextLogWorkbench'
+import { downloadLogSnapshot } from '@/lib/logs/log-snapshot-export'
+
+vi.mock('@/lib/logs/log-snapshot-export', () => ({ downloadLogSnapshot: vi.fn() }))
 
 const props = { nodes: [{ id: 1, name: 'dev-node', status: 1 }], onNodeChange: () => {}, sourceControl: <span>source</span> }
 const tail = { content: 'time=2026-11-11T10:00:00Z level=INFO msg="ready"\ntime=2026-11-11T10:00:01Z level=ERROR msg="failed"', truncated: true, fileBytes: 100000, path: '/var/log/process.log' }
 
 beforeEach(() => {
   loginMockUserAs(10)
+  vi.mocked(downloadLogSnapshot).mockClear()
   document.getSelection()?.removeAllRanges()
 })
 
@@ -43,6 +47,21 @@ describe('text log windows', () => {
     renderWithProviders(<TextLogWorkbench {...props} kind="control_plane" nodeId={null} />)
     expect(await screen.findByRole('alert')).toHaveTextContent('log file unavailable')
     expect(screen.getByTestId('logs-empty-state')).toHaveAttribute('data-empty-success', 'false')
+  })
+
+  it('exports only the visible filtered file window with its truncation and capture boundary', async () => {
+    server.use(http.get(API('/nodes/1/diagnostics/log'), () => HttpResponse.json(tail)))
+    renderWithProviders(<TextLogWorkbench {...props} kind="worker" nodeId={1} />)
+    await screen.findByText(/msg="failed"/)
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('搜索已加载文本…'), 'failed')
+    await user.click(screen.getByTestId('logs-text-export'))
+    expect(downloadLogSnapshot).toHaveBeenCalledOnce()
+    const [items, windows, prefix] = vi.mocked(downloadLogSnapshot).mock.calls[0]
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ source: 'worker', nodeId: 1, message: expect.stringContaining('failed') })
+    expect(windows[0]).toMatchObject({ source: 'worker', status: 'ready', loadedRows: 2, limit: 200, truncated: true, capturedAt: expect.any(String) })
+    expect(prefix).toBe('node-1-logs')
   })
 
   it('keeps native text selection and releases refresh after selection is cleared', async () => {

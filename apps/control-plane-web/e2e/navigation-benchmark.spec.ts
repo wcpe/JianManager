@@ -62,39 +62,17 @@ const ROUTES: BenchRoute[] = [
     label: '日志中心',
     href: '/logs',
     readySelector: '[data-page="logs"]',
-    /**
-     * 日志中心**不再做虚拟化数量断言**（2026-11-04 跟架构变更同步）。
-     *
-     * # 为什么删掉了原来的 minTotal=1000
-     *
-     * 旧前提是「切平台视图 ⇒ 经典 `/logs` 接口返回 total=12004 ⇒ 虚拟列表有 1000+ 条」。
-     * 这个前提已被**两轮架构变更**先后取消：
-     *
-     *  1. CP 的 `logs` 表下线（2026-10-29）——平台视图改读**进程日志文件尾部**，
-     *     见 LogsPage「平台视图的权威来源已改为进程日志文件尾部诊断」一段；
-     *  2. 经典 `/logs` 不再发起查询（`data` 恒为 undefined、`classicLoading=false`）。
-     *
-     * 而文件尾部的**设计上限就是最近 500 行**（`usePlatformDiagnosticsLog(view==='platform', 500)`），
-     * 且同一段注释写明了“**不提供**分页、总条数、任意时间窗——那些能力在文件上实现不了，
-     * 也不该假装能”。所以「要 1000+ 条」在这条视图上**结构性不可满足**，不是夹具缺件。
-     *
-     * # 现在断言什么
-     *
-     * 只验「该页在该视图下确实渲染出了日志行」——即 `logs-virtual` 容器存在且
-     * `data-total-count > 0`。不拿它做虚拟化性能门禁（那种断言属于实例列表等真正
-     * 有万级数据集的页，它们仍在用 minTotal=1000）。
-     */
+    /** 平台页签读取最多 200 行的文件窗口；这里只检查真实行与窗口上限，实例页仍保留分页验收。 */
     prepare: async (page) => {
       await selectPlatformView(page)
     },
     virtual: {
       surfaceSelector: '[data-testid="logs-virtual"]',
       itemSelector: '[data-testid="log-row"]',
-      // 只要求“有数据”，不要求 1000+：平台视图的硬上限是 500 行（见上方注释）。
+      // 文件窗口必须返回真实行；窗口上限由 selectPlatformView 另行检查。
       minTotal: 1,
-      // 上限仍取一个明显大于可视窗口的值：若哪天有人把虚拟化拆了、把所有行都
-      // 塞进 DOM，这条会转红。500 行全渲染 > 40 仍能抓住。
-      maxRendered: 600,
+      // 平台页签允许完整展示当前文件窗口，不做虚拟化数量断言。
+      maxRendered: 201,
     },
   },
   { label: '客户端分发运维', href: '/client-dist-ops', readySelector: '[data-page="client-dist-ops"]' },
@@ -126,23 +104,19 @@ async function resetConsoleLayout(page: Page): Promise<void> {
   await pinClassicHome(page)
 }
 
-/**
- * 把日志中心切到「平台日志」视图（经典端点，服务端给出全量 total）。
- *
- * 为什么 benchmark 选平台视图而不是默认的「节点/实例日志」（2026-10-16）：联邦视图
- * **不再降级回退**经典 `/logs`（用户裁定：查询服务不可用时「没有就是没有」，平台/历史日志
- * 走「更多 → Legacy 只读」专门入口），因此它的虚拟列表 total 不再是经典路径的服务端全量，
- * 而是本页取回行数（每页 100）。本用例要验的是「1000+ 数据下只渲染可视窗口」，只有平台视图
- * （走经典 `/logs`，mock 种子一年 12004 条）能提供这个量级；两者共用同一个虚拟列表组件，
- * 对虚拟化的验证等价。
- * 定位走角色 + 文案：视图是同页 tablist 的 tab（无 testid），文案由 `logs.view_platform` 提供。
- */
+/** 平台文件页签单独检查有界窗口；管理员四页签均可见，默认仍为实例日志。 */
 async function selectPlatformView(page: Page): Promise<void> {
+  await expect(page.getByRole('tablist', { name: '日志视图' }).getByRole('tab')).toHaveText(['平台日志', '节点日志', '实例日志', '全部日志'])
+  await expect(page.getByRole('tab', { name: '实例日志' })).toHaveAttribute('aria-selected', 'true')
   const tab = page.getByRole('tab', { name: '平台日志' })
   await expect(tab, '日志中心「平台日志」视图 tab 存在').toBeVisible()
   await tab.click()
   // 断言已选中（Radix Tabs 置 aria-selected），避免「点了但没生效」的静默通过。
   await expect(tab, '日志中心已切到平台视图').toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('logs-text-workbench')).toBeVisible()
+  await expect(page.getByTestId('logs-export-trigger')).toHaveCount(0)
+  await expect(page.getByTestId('logs-text-export')).toBeEnabled()
+  await expect.poll(async () => Number(await page.getByTestId('logs-virtual').getAttribute('data-total-count'))).toBeLessThanOrEqual(200)
 }
 
 /** 断言虚拟化页仍只渲染可视窗口，避免 benchmark 在 DOM 爆量时虚假通过。 */
@@ -153,7 +127,7 @@ async function expectVirtualRendering(page: Page, route: BenchRoute): Promise<vo
   await expect(surface, `${route.label} 虚拟渲染容器存在`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
   await expect.poll(
     async () => Number(await surface.getAttribute('data-total-count')),
-    { message: `${route.label} mock 数据量达到 1000+`, timeout: ROUTE_READY_TIMEOUT_MS },
+    { message: `${route.label} 数据量达到 ${route.virtual.minTotal} 条`, timeout: ROUTE_READY_TIMEOUT_MS },
   )
     .toBeGreaterThanOrEqual(route.virtual.minTotal)
 

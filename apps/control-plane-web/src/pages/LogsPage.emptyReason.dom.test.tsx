@@ -58,11 +58,7 @@ async function chooseSource(label: string) {
   const user = userEvent.setup()
   // 等页面首个可交互元素出现，确认已渲染完成再找视图 tab。
   await screen.findByRole('tablist')
-  await user.click(await screen.findByRole('tab', { name: '全部日志' }))
-  const trigger = await screen.findByTestId('logs-source-select')
-  trigger.focus()
-  await user.keyboard('{Enter}')
-  await user.click(await screen.findByRole('option', { name: label }))
+  await user.click(await screen.findByRole('tab', { name: label === '节点' ? '节点日志' : '平台日志', exact: true }))
 }
 
 describe('LogsPage 空态按原因分支', () => {

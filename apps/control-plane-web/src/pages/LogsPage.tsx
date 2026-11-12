@@ -38,6 +38,7 @@ import {
 } from '@/components/logs/LogsInsightCards'
 import { LogTimeline } from '@/components/logs/LogTimeline'
 import { TextLogWorkbench } from '@/components/logs/TextLogWorkbench'
+import { AllLogsWorkbench } from '@/components/logs/AllLogsWorkbench'
 import { LogFieldExplorer } from '@/components/logs/LogFieldExplorer'
 import { PageHeader, PageHelp, PageShell } from '@jianmanager/ui/components/layout'
 import { resolveSourceLabel } from '@/lib/logs/logs-source-label'
@@ -70,6 +71,7 @@ import {
   windowForAnchor,
   TIME_RANGE_PRESETS,
   LOG_VIEWS,
+  resolveLogView,
   type TimeRangePreset,
   type LogExportScope,
 } from '@/lib/logs/logs-filters'
@@ -164,7 +166,6 @@ function mapFederationItems(items: unknown[] | null | undefined): LogEntry[] {
 const SENTINEL_ALL = '__all__'
 const PAGE_SIZE = 100
 
-const SOURCES = ['instance', 'control_plane', 'worker']
 const ROLE_PLATFORM_ADMIN = 10
 const LEVELS = ['error', 'warn', 'info', 'debug']
 const EXPORT_SCOPES: LogExportScope[] = ['currentPage', 'allMatched', 'range']
@@ -220,21 +221,7 @@ export default function LogsPage() {
   const navigate = useNavigate()
   const isPlatformAdmin = useAuthStore((state) => state.role === ROLE_PLATFORM_ADMIN)
 
-	// 视图从 URL `?view=` 初始化（深链/书签/分享必须落到正确视图）。
-	//
-	// 2026-10-29 修：此前硬编码 `'node_instance'`，导致 `?view=platform` 这类深链
-	// 一律静默回到「节点/实例日志」——页面不报错、只是视图不对，最难察觉的一类。
-	// 非法值回退默认，不把 URL 里的垃圾值当成视图名。
-	const [view, setView] = useState<(typeof LOG_VIEWS)[number]>(() => {
-		const raw = searchParams.get('view')
-		return (LOG_VIEWS as readonly string[]).includes(raw ?? '')
-			? (raw as (typeof LOG_VIEWS)[number])
-			: 'node_instance'
-	})
-  const [source, setSource] = useState(() => {
-    const raw = searchParams.get('source') ?? ''
-    return isPlatformAdmin && SOURCES.includes(raw) ? raw : ''
-  })
+  const [view, setView] = useState(() => resolveLogView(searchParams.get('view'), searchParams.get('source'), isPlatformAdmin))
   const [level, setLevel] = useState('')
   const [nodeId, setNodeId] = useState<number | null>(() => {
     const raw = searchParams.get('nodeId')
@@ -291,11 +278,7 @@ export default function LogsPage() {
     follow ? new Date(followAnchorMs) : new Date(rangeAnchor),
     follow,
   )
-  // 平台页固定平台来源；节点/实例页可选 Worker 文件或实例 VL，非管理员只查实例。
-  const selectedSource = view === 'platform' ? 'control_plane'
-    : !isPlatformAdmin || (view === 'node_instance' && source === 'control_plane') ? 'instance'
-      : source || 'instance'
-  const advancedAllowed = view !== 'platform' && selectedSource === 'instance'
+  const advancedAllowed = view === 'instance'
   const activeAdvanced = advancedMode && advancedAllowed
   const queryDraftDirty = activeAdvanced
     ? advancedQuery.trim() !== appliedAdvancedQuery
@@ -306,7 +289,7 @@ export default function LogsPage() {
       ? t('logs.advancedTooLong')
       : undefined
   const scope = normalizeLogScope({
-    view,
+    view: 'node_instance',
     source: 'instance',
     level,
     ...(nodeId !== null ? { nodeId } : {}),
@@ -322,9 +305,9 @@ export default function LogsPage() {
   const scopeKey = logScopeKey(scope)
 
   // Platform and Worker process logs use bounded file windows, never VL.
-  const textKind = isPlatformAdmin && selectedSource === 'control_plane'
-    ? 'control_plane' : isPlatformAdmin && selectedSource === 'worker' ? 'worker' : null
-  const federationEnabled = !textKind && view !== 'platform'
+  const textKind = isPlatformAdmin && view === 'platform'
+    ? 'control_plane' : isPlatformAdmin && view === 'node' ? 'worker' : null
+  const federationEnabled = view === 'instance'
   // 可选联邦覆盖探测。与 useLogs 同筛选参数；API 404 → degraded legacy。
 	const federationParams: Record<string, unknown> = {
 		...params,
@@ -681,12 +664,8 @@ export default function LogsPage() {
     [],
   )
 
-  // 导出门禁（2026-10-29 变更）：
-  //
-  // CP `/logs/export` 已随 `logs` 表一并下线，**平台视图没有导出能力**。
-  // 要导出就把 grep 结果自己重定向（面板会给出可复制的命令）。
-  //
-  // 联邦视图仍按覆盖/校验门禁；平台文件尾部不提供导出（见上）。
+  // 仅实例视图使用服务端历史导出门禁；文件和汇总视图各自导出已加载窗口。
+  // 已下线的经典 /logs/export 不再参与任何入口。
   const classicExportAllowed = false
   const exportBlockedByFederation =
     !!federation && !classicExportAllowed && !federation.exportAffordance.showDownload
@@ -811,12 +790,6 @@ export default function LogsPage() {
     [navigate, federationQuery, t],
   )
 
-  const sourceControl = (
-    <Select disabled={view === 'platform' || !isPlatformAdmin} value={selectedSource} onValueChange={(value: string) => resetTo(setSource)(value)}>
-      <SelectTrigger size="sm" className="w-32" data-testid="logs-source-select"><SelectValue /></SelectTrigger>
-      <SelectContent>{SOURCES.filter((value) => (isPlatformAdmin || value === 'instance') && (view !== 'node_instance' || value !== 'control_plane')).map((value) => <SelectItem key={value} value={value}>{t(`logs.source_${value}`)}</SelectItem>)}</SelectContent>
-    </Select>
-  )
 
   return (
     <PageShell variant="fixed" data-page="logs">
@@ -829,7 +802,7 @@ export default function LogsPage() {
        * 用户会以为是不同的东西。
        *
        * 帮助用 help（点击展开浮层）而不是 description（悬停 Tooltip）：
-       * 本页要讲清「三种视图的区别」「三类来源」「覆盖完整性」「跟随」
+        * 本页要讲清「四种视图的区别」「来源与窗口边界」「覆盖完整性」「跟随」
        * 「多选复制」五件事，一句话装不下；Tooltip 在触摸设备上还展不开。 */}
       <PageHeader
         title={t('logs.title')}
@@ -843,8 +816,9 @@ export default function LogsPage() {
                 title: t('logs.helpViewsTitle'),
                 body: t('logs.helpViewsIntro'),
                 items: [
-                  t('logs.helpViewNodeInstance'),
                   t('logs.helpViewPlatform'),
+                  t('logs.helpViewNode'),
+                  t('logs.helpViewInstance'),
                   t('logs.helpViewAll'),
                 ],
               },
@@ -876,7 +850,7 @@ export default function LogsPage() {
             ]}
           />
         )}
-        actions={(
+        actions={view === 'instance' ? (
           <>
             {/* 来源做标（原「联邦」「Legacy」徽标）已删。
              *
@@ -937,7 +911,7 @@ export default function LogsPage() {
               <Button size="sm" variant="outline" onClick={() => exportRequest.current?.abort()}>{t('common.cancel')}</Button>
             )}
           </>
-        )}
+        ) : undefined}
       />
       <LogExportRangeDialog
         key={`${scopeKey}|${exportRangeOpen}`}
@@ -955,8 +929,8 @@ export default function LogsPage() {
         aria-label={t('logs.viewLabel')}
       >
         {LOG_VIEWS.filter(
-          // 非平台管理员只能看 node_instance（联邦查询按实例范围收敛）。
-          (candidate) => isPlatformAdmin || candidate === 'node_instance',
+          // 普通用户仅可访问授权实例，平台/节点文本与汇总只对管理员开放。
+          (candidate) => isPlatformAdmin || candidate === 'instance',
         ).map(
           (candidate) => (
             <Button
@@ -975,7 +949,8 @@ export default function LogsPage() {
         )}
       </div>
 
-      {textKind ? <TextLogWorkbench key={textKind} kind={textKind} nodeId={nodeId} nodes={nodes ?? []} onNodeChange={(value) => resetTo(setNodeId)(value)} sourceControl={sourceControl} /> : <>
+      {view === 'all' && isPlatformAdmin ? <AllLogsWorkbench nodes={nodes ?? []} instances={instances ?? []} initialNodeId={nodeId} initialInstanceId={instanceId} mapInstanceItems={mapFederationItems} />
+        : textKind ? <TextLogWorkbench key={textKind} kind={textKind} nodeId={nodeId} nodes={nodes ?? []} onNodeChange={(value) => resetTo(setNodeId)(value)} sourceControl={null} /> : <>
       {/* 洞察卡片区：表格之外的顶部。
        *
        * 为何抬到这里而不是留在表格工具栏里：原来它们挤在一行与筛选控件争宽，
@@ -1151,8 +1126,7 @@ export default function LogsPage() {
         </div>
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2" data-testid="logs-scope-row">
-        <div className="grid min-w-0 flex-1 grid-cols-3 gap-2">
-        <div className="min-w-0 [&>button]:w-full">{sourceControl}</div>
+        <div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
         {/* 节点/实例选择器始终占位（platform 视图下禁用），避免切换视图时工具栏元素增减导致布局位移。 */}
         <Select
             disabled={view === 'platform'}

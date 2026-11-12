@@ -175,9 +175,7 @@ describe('LogsPage live subscription integration', () => {
     const user = await startFollow()
     const old = connections[0]
     await emit(old, 'instance-before-node-switch')
-    screen.getByTestId('logs-source-select').focus()
-    await user.keyboard('{Enter}')
-    await user.click(await screen.findByRole('option', { name: '节点', exact: true }))
+    await user.click(screen.getByRole('tab', { name: '节点日志', exact: true }))
     expect(old.signal.aborted).toBe(true)
     screen.getByTestId('logs-node-select').focus()
     await user.keyboard('{Enter}')

@@ -9,7 +9,7 @@
  * - Legacy 只读视图已随 CP logs 表下线（2026-10-29）——入口已删，旧深链回退默认视图。
  * - ErrFederatedNotReady → 联邦未就绪说明，空结果不当成功。
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -45,6 +45,7 @@ function stubBaseHandlers() {
   server.use(
     http.get(API('/nodes'), () => HttpResponse.json([])),
     http.get(API('/instances'), () => HttpResponse.json([])),
+    http.get(API('/nodes/:id/diagnostics/log'), () => HttpResponse.json({ content: 'node-file-tail-line\n', truncated: false, fileBytes: 20, path: '/var/log/worker.log' })),
     http.get(API('/logs'), () => HttpResponse.json(seedLogsPage)),
 	http.get(API('/logs/federation/stats'), () => HttpResponse.json({ points: [], coverage: { complete: true, targets: [] } })),
 	http.get(API('/logs/federation/facets'), () => HttpResponse.json({ dimensions: [], coverage: { complete: true, targets: [] } })),
@@ -183,7 +184,7 @@ describe('LogsPage × logs-federation', () => {
     // 来源做标已删（见 ③ 的说明）：此处不再断言其存在。
     expect(screen.queryByTestId('logs-source-tag')).not.toBeInTheDocument()
     // 查询服务不可用 → 本视图就是没有数据：经典 /logs 的种子行（见 stubBaseHandlers 桩）不得渲染。
-    // 若它们出现，用户会把平台/历史日志读成「节点/实例日志」，即静默换源式误导。
+    // 若它们出现，用户会把平台/历史日志读成「实例日志」，即静默换源式误导。
     await waitFor(() =>
       expect(screen.queryByText(/federation-seed-log-line/)).not.toBeInTheDocument(),
     )
@@ -214,7 +215,8 @@ describe('LogsPage × logs-federation', () => {
 	renderWithProviders(<LogsPage />, { route: '/logs?view=legacy' })
 	await screen.findByText('federation-seed-log-line')
 	// ?view=legacy 是非法值（已从 LOG_VIEWS 移除）→ 回退默认视图，且不发 /logs/legacy。
-	expect(screen.getByRole('tab', { name: '节点/实例日志' })).toHaveAttribute('aria-selected', 'true')
+	expect(screen.getByRole('tab', { name: '实例日志' })).toHaveAttribute('aria-selected', 'true')
+	expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['平台日志', '节点日志', '实例日志', '全部日志'])
 	expect(screen.queryByTestId('logs-more-trigger')).not.toBeInTheDocument()
 	expect(screen.queryByTestId('logs-view-legacy')).not.toBeInTheDocument()
 	expect(legacyCalls).toEqual([])
@@ -488,6 +490,8 @@ describe('LogsPage × logs-federation', () => {
 		mount()
 		await screen.findByTestId('logs-coverage-banner')
 		expect(screen.queryByText('federation-seed-log-line')).not.toBeInTheDocument()
+		expect(screen.getAllByRole('tab')).toHaveLength(1)
+		expect(screen.getByRole('tab', { name: '实例日志' })).toHaveAttribute('aria-selected', 'true')
 	})
 
 	it('Stats 与 level Facets 复用同scope搜索视图，独立完整且质量精确时显示精确计数', async () => {
@@ -772,14 +776,13 @@ describe('LogsPage × logs-federation', () => {
 		expect(await screen.findByText('实例 #144')).toBeInTheDocument()
 	})
 
-	it('⑮ 选择来源后 source 参数下发到联邦请求', async () => {
-		// 来源下拉仅在「全部日志」视图渲染，该视图仅平台管理员可见（与既有用例同一 token 构造）
+	it('⑮ 实例页签固定使用 instance 来源与 node_instance wire view', async () => {
 		const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
 		loginMockUser(`mock.${payload}.sig`)
-		const seen: string[] = []
+		const seen: URLSearchParams[] = []
 		server.use(
 			http.get(API('/logs/federation'), ({ request }) => {
-				seen.push(request.url)
+				seen.push(new URL(request.url).searchParams)
 				return HttpResponse.json({
 					sourceTag: 'federated', items: seedLogsPage.items,
 					coverage: { complete: true, partial_reasons: [], targets: [] },
@@ -787,22 +790,18 @@ describe('LogsPage × logs-federation', () => {
 				})
 			}),
 		)
-		renderWithProviders(<LogsPage />)
+		renderWithProviders(<LogsPage />, { route: '/logs?view=node' })
+		expect(screen.getByRole('tab', { name: '节点日志' })).toHaveAttribute('aria-selected', 'true')
+		expect(seen).toEqual([])
+		await userEvent.setup().click(screen.getByRole('tab', { name: '实例日志' }))
 		await screen.findByText('federation-seed-log-line')
-		const user = userEvent.setup()
-		// 来源下拉仅在「全部日志」视图渲染，须先切换视图
-		await user.click(screen.getByRole('tab', { name: '全部日志' }))
-		const trigger = await screen.findByTestId('logs-source-select')
-		// jsdom 未实现 scrollIntoView，Radix Select 展开时会调用它；仅本用例需要该垫片。
-		Element.prototype.scrollIntoView = vi.fn()
-		// Radix Select 用键盘激活：聚焦后回车展开，再选「实例」项
-		trigger.focus()
-		await user.keyboard('{Enter}')
-		const option = await screen.findByRole('option', { name: '实例' })
-		await user.click(option)
-		await waitFor(() =>
-			expect(seen.some((u) => new URL(u).searchParams.get('source') === 'instance')).toBe(true),
-		)
+		expect(screen.getByRole('tab', { name: '实例日志' })).toHaveAttribute('aria-selected', 'true')
+		expect(screen.queryByTestId('logs-source-select')).not.toBeInTheDocument()
+		expect(seen.length).toBeGreaterThan(0)
+		for (const params of seen) {
+			expect(params.get('source')).toBe('instance')
+			expect(params.get('view')).toBe('node_instance')
+		}
 	})
 
 	it('⑬ 覆盖完整且校验通过 → 导出按钮提示下载前复核权限', async () => {
@@ -854,6 +853,8 @@ describe('LogsPage × logs-federation', () => {
 		expect(await screen.findByText('platform-file-tail-line')).toBeInTheDocument()
 		expect(federationCalls).toBe(federationBefore)
 		expect(screen.queryByText('federation-seed-log-line')).not.toBeInTheDocument()
+		expect(screen.queryByTestId('logs-export-trigger')).not.toBeInTheDocument()
+		expect(screen.getByTestId('logs-text-export')).toBeEnabled()
 	})
 
 	/**
@@ -931,17 +932,8 @@ describe('LogsPage × logs-federation', () => {
 		}, { message: '切换级别后 instanceId 与 level 必须同时保留' })
 	})
 
-	/**
-	 * 回归（2026-10-19，评审复核纠正；2026-10-29 改为跨视图而非 Legacy）：切视图**保留**
-	 * instanceId / nodeId 筛选。
-	 *
-	 * 曾一度在 switchView 里清掉两者，依据是「平台与历史日志不带这两个维度」——该前提是错的，
-	 * 已回退；清掉只会把用户已经选定的范围放大，属于替用户改查询。
-	 *
-	 * Legacy 视图已于 2026-10-29 随 CP logs 表下线，本不变量改由「全部日志」视图承载：
-	 * 它仍走同一条联邦查询链路，最能体现“切视图不改筛选”。
-	 */
-	it('⑲ 切换视图时保留 instanceId 筛选', async () => {
+	/** 切出实例页签再返回，必须保留原节点和实例范围；all 的融合行为由独立组件覆盖。 */
+	it('⑲ 返回实例页签时保留 nodeId 与 instanceId 筛选', async () => {
 		const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
 		loginMockUser(`mock.${payload}.sig`)
 		const fedCalls: URLSearchParams[] = []
@@ -958,18 +950,25 @@ describe('LogsPage × logs-federation', () => {
 			}),
 		)
 		// 深链进入时带 instanceId，模拟「从实例详情跳该实例日志」的真实路径。
-		renderWithProviders(<LogsPage />, { route: '/logs?instanceId=2' })
+		renderWithProviders(<LogsPage />, { route: '/logs?view=instance&nodeId=1&instanceId=2' })
 		await screen.findByText('federation-seed-log-line')
+		expect(fedCalls.at(-1)?.get('nodeId')).toBe('1')
 		expect(fedCalls.at(-1)?.get('instanceId')).toBe('2')
 
 		const user = userEvent.setup()
-		// 「全部日志」仅平台管理员渲染（token 已按 admin 构造）。
-		await user.click(screen.getByRole('tab', { name: '全部日志' }))
+		await user.click(screen.getByRole('tab', { name: '节点日志' }))
+		expect(screen.queryByTestId('logs-instance-select')).not.toBeInTheDocument()
+		await user.click(screen.getByRole('tab', { name: '实例日志' }))
+		await screen.findByText('federation-seed-log-line')
+		await user.click(screen.getByRole('button', { name: '错误' }))
 
 		await waitFor(() => {
 			const last = fedCalls.at(-1)
-			expect(last?.get('view')).toBe('all')
+			expect(last?.get('view')).toBe('node_instance')
+			expect(last?.get('source')).toBe('instance')
+			expect(last?.get('nodeId')).toBe('1')
 			expect(last?.get('instanceId')).toBe('2')
-		}, { message: '切换视图后 instanceId 必须保留' })
+			expect(last?.get('level')).toBe('error')
+		}, { message: '返回实例页签后 nodeId 与 instanceId 必须保留' })
 	})
 })

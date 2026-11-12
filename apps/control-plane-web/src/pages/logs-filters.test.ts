@@ -5,6 +5,7 @@ import {
   computeVirtualWindow,
   TIME_RANGE_PRESETS,
   LOG_VIEWS,
+  resolveLogView,
 } from '@/lib/logs/logs-filters'
 
 describe('logLevelStatus', () => {
@@ -25,10 +26,22 @@ describe('logLevelStatus', () => {
 })
 
 describe('LOG_VIEWS', () => {
-  it('defines the primary views plus the administrator-only full search view', () => {
-    // legacy 已于 2026-10-29 随 CP logs 表下线并从取值域移除：留着它会让 ?view=legacy
-    // 深链落进一个不存在的数据源（不报错也不给数据，静默失效）。
-    expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all'])
+  it('separates platform tails, node tails, instance history and the combined window', () => {
+    expect(LOG_VIEWS).toEqual(['platform', 'node', 'instance', 'all'])
+  })
+})
+
+describe('resolveLogView', () => {
+  it('keeps explicit four views and maps old instance/node links', () => {
+    for (const view of LOG_VIEWS) expect(resolveLogView(view, 'worker', true)).toBe(view)
+    expect(resolveLogView('node_instance', 'worker', true)).toBe('node')
+    expect(resolveLogView('node_instance', null, true)).toBe('instance')
+    expect(resolveLogView(null, 'worker', true)).toBe('node')
+    expect(resolveLogView('legacy', 'worker', true)).toBe('instance')
+    expect(resolveLogView('invalid', null, true)).toBe('instance')
+  })
+  it('restricts all process and combined views to administrators', () => {
+    for (const view of LOG_VIEWS) expect(resolveLogView(view, 'worker', false)).toBe('instance')
   })
 })
 

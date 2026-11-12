@@ -3158,7 +3158,7 @@
 
 > **同上，端点已随 CP `logs` 表删除，现返回 404。**
 > 联邦视图的导出走 `POST /api/v1/logs/federation/export`（NDJSON，带覆盖/质量门禁）；
-> 平台文件尾部不提供导出——要留存就在该机器上 `grep` 重定向。
+> 平台/节点文件窗口和全部日志汇总可在浏览器导出当前已加载、筛选后的 NDJSON 快照；首行 `window_metadata` 标注 `scope=loaded_window_only`、`complete_history=false` 以及各源捕获时间、行数限制、截断和失败状态。此本地快照不调用已下线的 `/logs/export`，也不等同实例 VL 的服务端历史导出。
 
 - **描述（历史）**: 按当前筛选导出日志为 NDJSON 附件（每行一条 JSON，按时间正序）
 - **关联 FR**: FR-049, FR-050, FR-403

@@ -6,14 +6,21 @@
 import type { StatusLevel } from '@jianmanager/ui'
 import type { LogQueryParams } from '@/api/logs'
 
-/**
- * 日志中心固定主视图，顺序与管理员可见的切换控件一致。
- *
- * 2026-10-29：`legacy`（CP `logs` 表的切换前存量）随该表删除而下线，从取值域里移除。
- * 留着它会让 `?view=legacy` 深链落进一个「不存在的数据源」——页面既不报错也不给数据，
- * 是最难察觉的一类静默失效。现在这类深链按非法值回退默认视图。
- */
-export const LOG_VIEWS = ['platform', 'node_instance', 'all'] as const
+/** 页面分为四种能力明确的视图；实例 API 继续使用既有 node_instance 协议值。 */
+export const LOG_VIEWS = ['platform', 'node', 'instance', 'all'] as const
+export type LogView = (typeof LOG_VIEWS)[number]
+
+/** 兼容旧书签，同时让进程日志入口严格保持管理员范围。 */
+export function resolveLogView(rawView: string | null, rawSource: string | null, isPlatformAdmin: boolean): LogView {
+  if (!isPlatformAdmin) return 'instance'
+  if (rawView === 'platform' || rawView === 'node' || rawView === 'instance') return rawView
+  if (rawView === 'all') return 'all'
+  if (rawView === null || rawView === 'node_instance') {
+    if (rawSource === 'worker') return 'node'
+    if (rawSource === 'control_plane' && rawView === null) return 'platform'
+  }
+  return 'instance'
+}
 
 /**
  * 日志级别 → 状态等级。

@@ -241,7 +241,7 @@ describe('日志六模块正式行为回归', () => {
     )
     renderWithProviders(<LogsPage />)
     // 空值是“查过且确实为 0”，与“查询失败”不同：前者显示 0 且状态精确。
-    expect(await screen.findByTestId('logs-events-total-count')).toHaveTextContent(/^0$/)
+    await waitFor(() => expect(screen.getByTestId('logs-events-total-count')).toHaveTextContent(/^0$/))
     expect(screen.getByTestId('logs-events-total-note')).toHaveAttribute('data-state', 'exact')
   })
 

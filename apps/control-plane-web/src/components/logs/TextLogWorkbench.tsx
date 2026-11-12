@@ -1,10 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Pause, Play, RefreshCw } from 'lucide-react'
+import { Download, Pause, Play, RefreshCw } from 'lucide-react'
 import api from '@/api/client'
 import type { ProcessLogTail } from '@/api/nodeDiagnostics'
 import { filterProcessLogs, processLogEntries } from '@/lib/logs/process-log-text'
+import { downloadLogSnapshot } from '@/lib/logs/log-snapshot-export'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jianmanager/ui/components/select'
@@ -18,7 +19,8 @@ export function TextLogWorkbench({ kind, nodeId, nodes, onNodeChange, sourceCont
   onNodeChange: (nodeId: number | null) => void
   sourceControl: ReactNode
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const english = i18n.language.startsWith('en')
   const [lines, setLines] = useState(200)
   const [keyword, setKeyword] = useState('')
   const [level, setLevel] = useState('all')
@@ -61,10 +63,10 @@ export function TextLogWorkbench({ kind, nodeId, nodes, onNodeChange, sourceCont
     <div className="flex h-[116px] shrink-0 flex-col gap-2 overflow-hidden rounded-md border bg-card p-2" data-testid="logs-toolbar">
       <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
         {sourceControl}
-        <Select value={nodeId === null ? '__none__' : String(nodeId)} disabled={kind === 'control_plane'} onValueChange={(value) => { setSelecting(false); onNodeChange(value === '__none__' ? null : Number(value)) }}>
+        {kind === 'worker' && <Select value={nodeId === null ? '__none__' : String(nodeId)} onValueChange={(value) => { setSelecting(false); onNodeChange(value === '__none__' ? null : Number(value)) }}>
           <SelectTrigger className="h-9 w-40 shrink-0" data-testid="logs-node-select"><SelectValue placeholder={t('logsText.chooseNode')} /></SelectTrigger>
           <SelectContent><SelectItem value="__none__">{t('logsText.chooseNode')}</SelectItem>{nodes.map((node) => <SelectItem key={node.id} value={String(node.id)}>{node.name}</SelectItem>)}</SelectContent>
-        </Select>
+        </Select>}
         <Input className="h-9 min-w-[220px] flex-1" value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder={t('logsText.search')} aria-label={t('logsText.search')} />
       </div>
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
@@ -78,6 +80,14 @@ export function TextLogWorkbench({ kind, nodeId, nodes, onNodeChange, sourceCont
         </Select>
         <Button size="sm" variant="outline" disabled={!ready || query.isFetching || selecting} onClick={() => { void query.refetch() }}><RefreshCw className="size-3.5" />{t('common.refresh')}</Button>
         <Button size="sm" variant="outline" aria-pressed={follow} disabled={!ready} onClick={() => { setFollow((value) => !value) }}>{follow ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}{t('logs.follow')}</Button>
+        <Button size="sm" variant="outline" className="ml-auto shrink-0" data-testid="logs-text-export" disabled={!ready || query.isFetching || query.isError || !!snapshot?.data.note || rows.length === 0 || selecting} onClick={() => {
+          if (!snapshot || query.isFetching || query.isError || snapshot.data.note) return
+          downloadLogSnapshot(rows, [{
+            key: identity, label: sourceName, source: kind, status: 'ready', loadedRows: allRows.length, limit: lines,
+            capturedAt: new Date(snapshot.at).toISOString(), truncated: snapshot.data.truncated,
+            note: english ? 'File tail only; export includes the displayed filtered rows.' : '仅文件尾部；导出当前筛选后可见行。',
+          }], kind === 'worker' ? `node-${nodeId}-logs` : 'platform-logs')
+        }}><Download className="size-3.5" />{english ? 'Export current window' : '导出当前窗口'}</Button>
       </div>
     </div>
     <div className="flex h-11 shrink-0 items-center overflow-hidden text-xs text-muted-foreground" role="status" data-testid="logs-text-status">

@@ -69,6 +69,9 @@ describe('advanced log query mode', () => {
     await waitFor(() => expect(reads.at(-1)?.get('logsQL')).toBe('error OR level:WARN'))
     expect(reads.at(-1)?.get('advanced')).toBe('true')
     expect(reads.at(-1)?.get('instanceId')).toBe('2')
+    expect(reads.at(-1)?.get('view')).toBe('node_instance')
+    expect(reads.at(-1)?.get('source')).toBe('instance')
+    expect(screen.getByRole('tab', { name: '实例日志' })).toHaveAttribute('aria-selected', 'true')
     expect(reads.at(-1)?.has('keyword')).toBe(false)
     const meta = await screen.findByTestId('logs-query-meta')
     expect(meta).toHaveTextContent('12')
@@ -188,14 +191,24 @@ describe('advanced log query mode', () => {
     expect(screen.getByTestId('logs-export-trigger')).toBeDisabled()
   })
 
-  it('does not offer advanced query for platform text logs', async () => {
+  it.each(['deep link', 'tab switch'])('does not offer advanced query for platform text logs through %s', async (entry) => {
     // A platform-admin token is necessary for the platform route.
     const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
     loginMockUser(`mock.${payload}.sig`)
-    renderWithProviders(<LogsPage />, { route: '/logs?view=platform' })
+    let instanceReads = 0
+    if (entry === 'deep link') {
+      renderWithProviders(<LogsPage />, { route: '/logs?view=platform' })
+    } else {
+      renderWithProviders(<LogsPage />)
+      await screen.findByText('advanced-query-event')
+      instanceReads = reads.length
+      await userEvent.setup().click(screen.getByRole('tab', { name: '平台日志' }))
+    }
     await screen.findByText('platform text')
     expect(screen.queryByTestId('logs-advanced-toggle')).not.toBeInTheDocument()
-    expect(reads).toHaveLength(0)
+    expect(screen.queryByTestId('logs-export-trigger')).not.toBeInTheDocument()
+    expect(screen.getByTestId('logs-text-export')).toBeEnabled()
+    expect(reads).toHaveLength(instanceReads)
   })
 })
 

@@ -173,7 +173,7 @@ describe('LogsPage 多选复制与帮助', () => {
     expect(selection?.toString()).toContain('日志行-0')
   })
 
-  it('帮助浮层补齐“三种视图的区别”', async () => {
+  it('帮助浮层说明四类日志及各自范围', async () => {
     renderWithProviders(<LogsPage />)
     const user = userEvent.setup()
     await user.click(await screen.findByTestId('logs-help-trigger'))
@@ -181,8 +181,8 @@ describe('LogsPage 多选复制与帮助', () => {
     // 第一个小节就是视图区别（用户最常问的）。
     const first = within(content).getByTestId('logs-help-section-0')
     expect(first).toBeInTheDocument()
-    // 三条视图说明各自成条：节点/实例、平台、全部。
-    expect(first.querySelectorAll('li')).toHaveLength(3)
+    // 四条视图说明各自成条，文本窗口与实例历史不能混为全量。
+    expect(first.querySelectorAll('li')).toHaveLength(4)
     // 来源仍是小节（现在排第二）。
     expect(within(content).getByTestId('logs-help-section-1')).toBeInTheDocument()
   })

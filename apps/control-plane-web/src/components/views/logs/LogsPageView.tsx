@@ -46,7 +46,7 @@ import type {
 import { computeVirtualWindow, logLevelStatus, LOG_VIEWS, TIME_RANGE_PRESETS } from '@/lib/logs/logs-filters'
 import type { LogExportScope, TimeRangePreset } from '@/lib/logs/logs-filters'
 
-/** 日志中心主视图取值（与后端 `view` 参数同域；`legacy` 为只读存量入口）。 */
+/** 日志页面主视图；历史实例 API 的协议值由容器单独映射。 */
 export type LogsView = (typeof LOG_VIEWS)[number]
 
 /** Radix Select 不允许空字符串值，用哨兵代表「全部」。 */
@@ -362,7 +362,7 @@ export function LogsPageView({
           {LOG_VIEWS.filter(
             // 主视图切换：节点实例视图仅平台管理员可见。
             // legacy 已随 CP logs 表下线（2026-10-29），不在取值域内，无需再排除。
-            (candidate) => isPlatformAdmin || candidate === 'node_instance',
+            (candidate) => isPlatformAdmin || candidate === 'instance',
           ).map((candidate) => (
             <Segment
               key={candidate}
