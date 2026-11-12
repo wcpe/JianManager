@@ -537,10 +537,7 @@ export default function LogsPage() {
 	// 流清单（源 + 流名 + 条数）。complete=false 时条数不可信。
 	const streamItems = !federationStreams.isError ? federationStreams.data?.streams ?? [] : []
 	const streamsComplete = federationStreams.data?.complete === true
-	const insightsVisible = federationActive && !federationQuery.isPlaceholderData && (
-		federationStats.isSuccess || federationStats.isError || federationFacets.isSuccess || federationFacets.isError
-		|| federationStreams.isSuccess || federationStreams.isError
-	)
+  const insightsVisible = federationActive && !federationQuery.isPlaceholderData
   /**
    * 列表主数据源。限流中断时回落到 {@link lastGoodFederation} 的最近一份成功列表：
    * 已有行继续可见（不清空），绝不把限流呈成「暂无日志」。
@@ -977,13 +974,17 @@ export default function LogsPage() {
        * 同时避免跟随切换时把日志窗口整体向上/向下推。 */}
       <div
         data-testid="logs-insights-slot"
-        className="grid h-[104px] shrink-0 grid-cols-[repeat(4,minmax(140px,1fr))] gap-2 overflow-x-auto overflow-y-hidden"
+        className="grid h-[208px] shrink-0 grid-cols-2 auto-rows-[104px] gap-2 overflow-x-auto overflow-y-hidden xl:h-[104px] xl:grid-cols-4"
       >
         {!follow && insightsVisible ? (
           <div data-testid="logs-federation-insights" className="contents">
             <div className="min-w-0" data-testid="logs-insight-cell-total"><EventsTotalCard
               count={statsCount}
               exact={statsSummary.exact}
+              levelCount={levelFacets.length}
+              streamCount={streamItems.length}
+              bucketCount={timeDistribution.buckets.length}
+              queryMeta={queryMeta}
               partial={statsSummary.partial}
               pending={statsSummary.pending}
               truncated={statsSummary.truncated}
@@ -1004,13 +1005,12 @@ export default function LogsPage() {
               uncertain={!facetsSummary.exact || facetsTruncated}
               failed={federationFacets.isError}
             /></div>
-            <div className="min-w-0" data-testid="logs-insight-cell-sources">{streamItems.length > 0 && (
-              <TopSourcesCard
-                items={streamItems}
-                lookup={{ instances, nodes }}
-                countsReliable={streamsComplete}
-              />
-            )}</div>
+            <div className="min-w-0" data-testid="logs-insight-cell-sources"><TopSourcesCard
+              items={streamItems}
+              lookup={{ instances, nodes }}
+              countsReliable={streamsComplete}
+              failed={federationStreams.isError}
+            /></div>
             <div className="min-w-0" data-testid="logs-insight-cell-time"><TimeDistributionCard
               buckets={timeDistribution.buckets}
               invalid={timeDistribution.invalid}
@@ -1022,8 +1022,9 @@ export default function LogsPage() {
       </div>
 
       {/* 强筛选工具栏 */}
-      <div className="jm-toolbar-surface flex h-[116px] shrink-0 flex-wrap content-start items-center gap-2 overflow-y-auto p-2" data-testid="logs-toolbar">
-        {/* 级别快速 pill（全部 + 四级） */}
+      <div className="jm-toolbar-surface flex h-[116px] min-w-0 shrink-0 flex-col gap-2 overflow-hidden p-2" data-testid="logs-toolbar">
+        <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+
         <div className="flex items-center gap-1">
           <LevelPill active={level === ''} onClick={() => resetTo(setLevel)('')}>
             {t('logs.allLevels')}
@@ -1118,6 +1119,8 @@ export default function LogsPage() {
             ))}
           </SelectContent>
         </Select>
+        </div>
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
         {sourceControl}
         {/* 节点/实例选择器始终占位（platform 视图下禁用），避免切换视图时工具栏元素增减导致布局位移。 */}
         <Select
@@ -1273,6 +1276,7 @@ export default function LogsPage() {
             }}>
             {t(manualPaused || interactionPaused ? 'logsLive.resume' : 'logsLive.pause')}
           </Button>
+        </div>
         </div>
       </div>
 

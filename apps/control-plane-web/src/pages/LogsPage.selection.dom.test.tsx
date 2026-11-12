@@ -104,6 +104,9 @@ describe('LogsPage 多选复制与帮助', () => {
     expect(await screen.findByTestId('logs-level-card')).toBeInTheDocument()
     expect(await screen.findByTestId('logs-source-card')).toBeInTheDocument()
     expect(screen.getByTestId('logs-time-card')).toBeInTheDocument()
+    expect(screen.getByTestId('logs-metric-summary')).toHaveTextContent('当前页')
+    expect(screen.getByTestId('logs-metric-summary')).toHaveTextContent('级别')
+    expect(screen.getByTestId('logs-metric-summary')).toHaveTextContent('流数量')
   })
 
   it('keeps all four insight cells while source data is pending', async () => {
@@ -121,7 +124,7 @@ describe('LogsPage 多选复制与帮助', () => {
       const insights = screen.getByTestId('logs-federation-insights')
       const cellIds = ['total', 'level', 'sources', 'time'].map((name) => `logs-insight-cell-${name}`)
       expect(Array.from(insights.children).map((node) => node.getAttribute('data-testid'))).toEqual(cellIds)
-      expect(screen.getByTestId('logs-insight-cell-sources')).toBeEmptyDOMElement()
+      expect(screen.getByTestId('logs-insight-cell-sources')).toContainElement(screen.getByTestId('logs-source-empty'))
       const timeCell = screen.getByTestId('logs-insight-cell-time')
       release?.()
       expect(await screen.findByTestId('logs-source-card')).toBeInTheDocument()

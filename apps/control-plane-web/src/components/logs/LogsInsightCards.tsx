@@ -50,7 +50,7 @@ export function InsightCard({
     <div
       data-testid={testId}
       className={cn(
-        'flex min-w-0 flex-col gap-1.5 rounded-md border bg-card/50 px-2.5 py-2',
+        'flex h-full min-w-0 flex-col gap-1.5 overflow-hidden rounded-md border bg-card/50 px-2.5 py-2',
         className,
       )}
     >
@@ -59,7 +59,7 @@ export function InsightCard({
         <span className="truncate font-medium">{title}</span>
         {hint ? <span className="ml-auto shrink-0 opacity-70">{hint}</span> : null}
       </div>
-      <div className="min-w-0">{children}</div>
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</div>
     </div>
   )
 }
@@ -109,7 +109,15 @@ export function LevelDistributionCard({
     .slice()
     .sort((a, b) => levelRank(a.level) - levelRank(b.level))
   const sum = ordered.reduce((n, item) => n + item.count, 0)
-  if (!ordered.length || sum <= 0) return null
+  if (!ordered.length || sum <= 0) {
+    return (
+      <InsightCard icon={<Layers className="size-3 shrink-0" />} title={t('logs.vizLevelTitle')} testId="logs-level-card">
+        <p data-testid="logs-level-empty" className="flex h-8 items-center text-[11px] text-muted-foreground">
+          {t('logs.aggregateUnknown', { kind: t('logs.vizLevelTitle') })}
+        </p>
+      </InsightCard>
+    )
+  }
 
   return (
     <InsightCard
@@ -152,6 +160,7 @@ export function LevelDistributionCard({
             <span className="tabular-nums text-foreground">
               {uncertain ? '≈' : ''}{item.count.toLocaleString()}
             </span>
+            <span className="text-muted-foreground">{Math.round((item.count / sum) * 100)}%</span>
           </span>
         ))}
       </div>
@@ -172,14 +181,24 @@ export function TopSourcesCard({
   items,
   lookup,
   countsReliable,
+  failed,
 }: {
   items: FederationStreamItem[]
   lookup: SourceNameLookup
   /** 上游是否保证计数可当断言（VL 截断时 hits 会被归零）。 */
   countsReliable?: boolean
+  failed?: boolean
 }) {
   const { t } = useTranslation()
-  if (!items.length) return null
+  if (failed || !items.length) {
+    return (
+      <InsightCard icon={<Activity className="size-3 shrink-0" />} title={t('logs.vizSourceTitle')} testId="logs-source-card">
+        <p data-testid="logs-source-empty" data-state={failed ? 'failed' : 'empty'} className={cn('flex h-8 items-center text-[11px]', failed ? 'text-status-warning' : 'text-muted-foreground')}>
+          {failed ? t('logs.vizAggregateFailed', { kind: t('logs.vizSourceTitle') }) : t('logs.aggregateUnknown', { kind: t('logs.vizSourceTitle') })}
+        </p>
+      </InsightCard>
+    )
+  }
   // 后端不保证降序；不排序时「Top」可能是随机的，条形长度也就失去意义。
   const top = items.slice().sort((a, b) => b.hits - a.hits).slice(0, 5)
   const peak = Math.max(...top.map((item) => item.hits), 1)
@@ -227,6 +246,10 @@ export function TopSourcesCard({
           )
         })}
       </ul>
+      <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground" data-testid="logs-source-summary">
+        <span>{t('logs.vizSourceCount', { count: items.length })}</span>
+        <span className="tabular-nums">{countsReliable ? t('logs.vizSourceHits', { count: items.reduce((sum, item) => sum + item.hits, 0).toLocaleString() }) : t('logs.vizCountsUnreliable')}</span>
+      </div>
     </InsightCard>
   )
 }
@@ -272,6 +295,7 @@ export function TimeDistributionCard({
       })
       : uncertain ? unknown : t('logs.empty')
   const detail = unsupported || failed ? '' : buckets.map((bucket) => `${bucket.label}:${bucket.missing ? '?' : bucket.count}`).join(',')
+  const bucketTotal = buckets.reduce((sum, bucket) => sum + (bucket.missing ? 0 : bucket.count), 0)
   const peak = unsupported || failed ? 1 : Math.max(...buckets.filter((bucket) => !bucket.missing).map((bucket) => bucket.count), 1)
 
   return (
@@ -294,42 +318,49 @@ export function TimeDistributionCard({
           </span>
         </div>
       ) : (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              data-testid="logs-time-distribution"
-              data-time-detail={detail}
-              data-state={state}
-              className="flex h-8 items-end gap-px"
-              role="img"
-              aria-label={hasMissing ? `${t('logs.vizTimeAria')} · ${unknown}` : t('logs.vizTimeAria')}
-            >
-              {buckets.map((bucket) => (
-                <div
-                  key={bucket.label}
-                  data-missing={bucket.missing ? 'true' : undefined}
-                  className={cn(
-                    'min-w-0 flex-1 rounded-t-[1px]',
-                    bucket.missing
-                      ? 'flex items-center justify-center overflow-hidden border border-dashed border-status-warning/60 bg-status-warning/10 text-[9px] text-status-warning'
-                      : bucket.count === 0 ? 'bg-muted' : 'bg-status-info/70',
-                  )}
-                  title={`${bucket.label}: ${bucket.missing ? `? · ${unknown}` : `${uncertain ? '≈' : ''}${bucket.count.toLocaleString()}`}`}
-                  style={{ height: bucket.missing ? '100%' : `${Math.max(bucket.count === 0 ? 1 : 6, (bucket.count / peak) * 100)}%` }}
-                >
-                  {bucket.missing ? <span aria-hidden>?</span> : null}
-                </div>
-              ))}
-            </div>
-          </TooltipTrigger>
-          <TooltipContent>
-            {t('logs.vizTimeRangeHelp', {
-              from: buckets[0]?.label ?? '',
-              to: buckets[buckets.length - 1]?.label ?? '',
-            })}
-            {hasMissing ? ` · ? ${unknown}` : null}
-          </TooltipContent>
-        </Tooltip>
+        <>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                data-testid="logs-time-distribution"
+                data-time-detail={detail}
+                data-state={state}
+                className="flex h-8 items-end gap-px"
+                role="img"
+                aria-label={hasMissing ? `${t('logs.vizTimeAria')} · ${unknown}` : t('logs.vizTimeAria')}
+              >
+                {buckets.map((bucket) => (
+                  <div
+                    key={bucket.label}
+                    data-missing={bucket.missing ? 'true' : undefined}
+                    className={cn(
+                      'min-w-0 flex-1 rounded-t-[1px]',
+                      bucket.missing
+                        ? 'flex items-center justify-center overflow-hidden border border-dashed border-status-warning/60 bg-status-warning/10 text-[9px] text-status-warning'
+                        : bucket.count === 0 ? 'bg-muted' : 'bg-status-info/70',
+                    )}
+                    title={`${bucket.label}: ${bucket.missing ? `? · ${unknown}` : `${uncertain ? '≈' : ''}${bucket.count.toLocaleString()}`}`}
+                    style={{ height: bucket.missing ? '100%' : `${Math.max(bucket.count === 0 ? 1 : 6, (bucket.count / peak) * 100)}%` }}
+                  >
+                    {bucket.missing ? <span aria-hidden>?</span> : null}
+                  </div>
+                ))}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              {t('logs.vizTimeRangeHelp', {
+                from: buckets[0]?.label ?? '',
+                to: buckets[buckets.length - 1]?.label ?? '',
+              })}
+              {hasMissing ? ` · ? ${unknown}` : null}
+            </TooltipContent>
+          </Tooltip>
+          <div data-testid="logs-time-summary" className="mt-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+            <span>{t('logs.vizBucketCount', { count: buckets.length })}</span>
+            <span className="tabular-nums">{t('logs.vizBucketTotal', { count: bucketTotal })}</span>
+            <span className="tabular-nums">{t('logs.vizBucketPeak', { count: peak })}</span>
+          </div>
+        </>
       )}
     </InsightCard>
   )
@@ -359,6 +390,11 @@ export function EventsTotalCard({
   quality,
   testId = 'logs-events-total',
   summary,
+  pageRows,
+  levelCount,
+  streamCount,
+  bucketCount,
+  queryMeta,
 }: {
   /** 事件数；undefined 表示尚未拿到。 */
   count?: number
@@ -383,6 +419,12 @@ export function EventsTotalCard({
    * 而不是只报一个。
    */
   summary?: React.ReactNode
+  /** Current page and aggregate metadata are shown together so the insight row is self-contained. */
+  pageRows?: number
+  levelCount?: number
+  streamCount?: number
+  bucketCount?: number
+  queryMeta?: { elapsed_ms: number; returned_rows: number; limit: number; max_bytes: number; timeout_ms: number }
 }) {
   const { t } = useTranslation()
 
@@ -432,6 +474,24 @@ export function EventsTotalCard({
           data-testid={`${testId}-summary`}
         >
           {summary}
+        </p>
+      ) : null}
+      <div data-testid="logs-metric-summary" className="mt-2 grid grid-cols-4 gap-1 border-t border-border/60 pt-1.5 text-[10px]">
+        {[
+          [t('logs.vizPageRows'), pageRows],
+          [t('logs.vizLevelCount'), levelCount],
+          [t('logs.vizStreamCount'), streamCount],
+          [t('logs.vizBucketCount'), bucketCount],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="min-w-0">
+            <div className="truncate text-muted-foreground">{label}</div>
+            <div className="tabular-nums font-medium text-foreground">{value === undefined ? '—' : Number(value).toLocaleString()}</div>
+          </div>
+        ))}
+      </div>
+      {queryMeta ? (
+        <p data-testid="logs-query-budget-summary" className="mt-1 truncate text-[10px] text-muted-foreground" title={t('logs.queryMeta', { ms: Math.round(queryMeta.elapsed_ms), rows: queryMeta.returned_rows, limit: queryMeta.limit, bytes: Math.round(queryMeta.max_bytes / (1024 * 1024)), seconds: queryMeta.timeout_ms / 1000 })}>
+          {t('logs.queryMeta', { ms: Math.round(queryMeta.elapsed_ms), rows: queryMeta.returned_rows, limit: queryMeta.limit, bytes: Math.round(queryMeta.max_bytes / (1024 * 1024)), seconds: queryMeta.timeout_ms / 1000 })}
         </p>
       ) : null}
     </InsightCard>
