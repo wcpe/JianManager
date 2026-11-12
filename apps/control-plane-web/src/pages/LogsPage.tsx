@@ -245,11 +245,8 @@ export default function LogsPage() {
   const [advancedQuery, setAdvancedQuery] = useState('*')
   const [appliedAdvancedQuery, setAppliedAdvancedQuery] = useState('*')
   const debouncedKeyword = useDebounced(keyword.trim(), 250)
-    // 默认 24h（2026-09-30 实测依据）：默认「全部时间」会让每个目标的全部分区参与查询——
-    // 默认窗＝**15 分钟**（w21 快首屏 ✗）：搜索页首屏走 CP 快路径（Query.Fast ⇒ resolveForQueryFast，
-    // 省每 Worker 一次 OpenView 往返 ＋ 未校验标记 Coverage.Pending ✓），窗口越小首屏越快；
-    // 「24h/全部」等更大范围仍从时间范围筛选器显式选择（走慢路径与完整校验 ✓，绝不给假完整 ✗）。
-    const [range, setRange] = useState<TimeRangePreset>('15m')
+  // 首屏保留有界查询，默认覆盖最近一小时；更短或更长窗口由时间筛选器显式选择。
+  const [range, setRange] = useState<TimeRangePreset>('1h')
   const [page, setPage] = useState(1)
 	// 页历史保存原窗口和服务端复合游标；只有窗口枚举结束后才允许向更早窗口移动。
 	const [federationCursors, setFederationCursors] = useState<Record<number,
@@ -420,6 +417,13 @@ export default function LogsPage() {
   const queryFailure = rawQueryFailure === 'LOG_ADVANCED_UNSUPPORTED' ? t('logs.advancedUnsupported') : rawQueryFailure
   const queryMeta = !federationQuery.isPlaceholderData ? federationQuery.data?.queryMeta : undefined
   const queryCancelled = cancelledQueryKey === filterKey
+  const queryMetaLabel = !follow && queryMeta && !queryFailure && !queryInputError && !queryDraftDirty && !queryCancelled && !federationQuery.isFetching
+    ? t('logs.queryMeta', {
+      ms: Math.round(queryMeta.elapsed_ms), rows: queryMeta.returned_rows,
+      limit: queryMeta.limit, bytes: Math.round(queryMeta.max_bytes / (1024 * 1024)),
+      seconds: queryMeta.timeout_ms / 1000,
+    })
+    : null
   const applyAdvancedQuery = () => {
     if (queryInputError) return
     exportRequest.current?.abort()
@@ -981,10 +985,10 @@ export default function LogsPage() {
             <div className="min-w-0" data-testid="logs-insight-cell-total"><EventsTotalCard
               count={statsCount}
               exact={statsSummary.exact}
+              pageRows={federationQuery.isPlaceholderData ? undefined : items.length}
               levelCount={levelFacets.length}
               streamCount={streamItems.length}
               bucketCount={timeDistribution.buckets.length}
-              queryMeta={queryMeta}
               partial={statsSummary.partial}
               pending={statsSummary.pending}
               truncated={statsSummary.truncated}
@@ -1021,27 +1025,10 @@ export default function LogsPage() {
         ) : null}
       </div>
 
-      {/* 强筛选工具栏 */}
-      <div className="jm-toolbar-surface flex h-[116px] min-w-0 shrink-0 flex-col gap-2 overflow-hidden p-2" data-testid="logs-toolbar">
-        <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
-
-        <div className="flex items-center gap-1">
-          <LevelPill active={level === ''} onClick={() => resetTo(setLevel)('')}>
-            {t('logs.allLevels')}
-          </LevelPill>
-          {LEVELS.map((l) => (
-            <LevelPill
-              key={l}
-              level={l}
-              active={level === l}
-              onClick={() => resetTo(setLevel)(level === l ? '' : l)}
-            >
-              {t(`logs.level_${l}`)}
-            </LevelPill>
-          ))}
-        </div>
-
-        <div className="flex h-9 min-w-52 items-center gap-1" data-testid="logs-query-controls">
+      {/* 查询、来源、字段分别成行，预算与筛选同区，日志面板独立滚动。 */}
+      <div className="jm-toolbar-surface flex min-w-0 shrink-0 flex-col gap-2 p-2" data-testid="logs-toolbar">
+        <div className="flex min-w-0 items-center gap-2" data-testid="logs-query-row">
+        <div className="flex h-9 min-w-0 flex-1 items-center gap-1" data-testid="logs-query-controls">
           {advancedAllowed && (
             <Button
               type="button"
@@ -1072,13 +1059,13 @@ export default function LogsPage() {
             aria-label={t(activeAdvanced ? 'logs.advancedLabel' : 'logs.searchPlaceholder')}
             aria-invalid={!!queryInputError}
             placeholder={t(activeAdvanced ? 'logs.advancedPlaceholder' : 'logs.searchPlaceholder')}
-            className={cn('h-9 w-52', activeAdvanced && 'font-mono')}
+            className={cn('h-9 min-w-0 flex-1', activeAdvanced && 'font-mono')}
           />
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className={cn('w-14 shrink-0', !activeAdvanced && 'invisible')}
+            className={cn('shrink-0', !activeAdvanced && 'hidden')}
             data-testid="logs-query-apply"
             disabled={!activeAdvanced || !!queryInputError}
             onClick={applyAdvancedQuery}
@@ -1089,7 +1076,7 @@ export default function LogsPage() {
             type="button"
             variant="ghost"
             size="sm"
-            className={cn('w-14 shrink-0', !federationQuery.isFetching && 'invisible')}
+            className={cn('shrink-0', !federationQuery.isFetching && 'hidden')}
             disabled={!federationQuery.isFetching}
             data-testid="logs-query-cancel"
             aria-label={t('logs.queryCancel')}
@@ -1108,7 +1095,7 @@ export default function LogsPage() {
         >
           {/* data-testid 供 e2e 定位：默认窗与选项文案都会漂移（见 e2e/navigation-benchmark.spec.ts），
               按 testid 定位才不会被「最近 15 分钟 / 最近 24 小时」这类文案变化打红。 */}
-          <SelectTrigger size="sm" className="w-36" data-testid="logs-range-select">
+          <SelectTrigger size="sm" className="w-32 shrink-0" data-testid="logs-range-select">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1119,9 +1106,44 @@ export default function LogsPage() {
             ))}
           </SelectContent>
         </Select>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button" size="sm" variant={follow ? 'default' : 'outline'}
+            className="shrink-0" data-testid="logs-live-toggle" aria-pressed={follow}
+            onClick={() => {
+              exportRequest.current?.abort()
+              setRangeAnchor(Date.now())
+              setFollowAnchorMs(bucketFloor(Date.now()))
+              setManualPaused(false)
+              setInteractionPaused(false)
+              setFollow((value) => !value)
+              setPage(1)
+              setFederationCursors({})
+            }}
+            disabled={platformView}
+          >
+            <Radio className={cn('size-3.5', follow && !manualPaused && !interactionPaused && 'animate-pulse')} />
+            {t(follow ? 'logsLive.stop' : 'logs.follow')}
+          </Button>
+          <Button type="button" size="sm" variant="outline" className="shrink-0" data-testid="logs-live-pause" disabled={!follow} aria-pressed={manualPaused || interactionPaused}
+            onClick={(event) => {
+              if (!manualPaused && !interactionPaused) { setManualPaused(true); return }
+              const viewport = event.currentTarget.closest('[data-page="logs"]')?.querySelector<HTMLElement>('[data-log-viewport]')
+              const selection = document.getSelection()
+              if (viewport && selection && ((selection.anchorNode && viewport.contains(selection.anchorNode)) || (selection.focusNode && viewport.contains(selection.focusNode)))) {
+                selection.removeAllRanges()
+              }
+              if (viewport) viewport.scrollTop = 0
+              setManualPaused(false)
+              setInteractionPaused(false)
+            }}>
+            {t(manualPaused || interactionPaused ? 'logsLive.resume' : 'logsLive.pause')}
+          </Button>
         </div>
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
-        {sourceControl}
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2" data-testid="logs-scope-row">
+        <div className="grid min-w-0 flex-1 grid-cols-3 gap-2">
+        <div className="min-w-0 [&>button]:w-full">{sourceControl}</div>
         {/* 节点/实例选择器始终占位（platform 视图下禁用），避免切换视图时工具栏元素增减导致布局位移。 */}
         <Select
             disabled={view === 'platform'}
@@ -1130,7 +1152,7 @@ export default function LogsPage() {
               resetTo(setNodeId)(v === SENTINEL_ALL ? null : Number(v))
             }
           >
-            <SelectTrigger size="sm" className="w-36" data-testid="logs-node-select">
+            <SelectTrigger size="sm" className="min-w-0 w-full" data-testid="logs-node-select">
               <SelectValue placeholder={t('logs.allNodes')} />
             </SelectTrigger>
             <SelectContent>
@@ -1149,7 +1171,7 @@ export default function LogsPage() {
               resetTo(setInstanceId)(v === SENTINEL_ALL ? null : Number(v))
             }
           >
-            <SelectTrigger size="sm" className="w-44" data-testid="logs-instance-select">
+            <SelectTrigger size="sm" className="min-w-0 w-full" data-testid="logs-instance-select">
               <SelectValue placeholder={t('logs.allInstances')} />
             </SelectTrigger>
             <SelectContent>
@@ -1161,7 +1183,24 @@ export default function LogsPage() {
               ))}
             </SelectContent>
           </Select>
-
+        </div>
+        <div className="flex shrink-0 items-center gap-1" data-testid="logs-level-filters">
+          <LevelPill active={level === ''} onClick={() => resetTo(setLevel)('')}>
+            {t('logs.allLevels')}
+          </LevelPill>
+          {LEVELS.map((l) => (
+            <LevelPill
+              key={l}
+              level={l}
+              active={level === l}
+              onClick={() => resetTo(setLevel)(level === l ? '' : l)}
+            >
+              {t(`logs.level_${l}`)}
+            </LevelPill>
+          ))}
+        </div>
+        </div>
+        <div className="flex min-h-8 min-w-0 flex-wrap items-center gap-2 border-t border-border/60 pt-2" data-testid="logs-exploration-row">
         {/* VL 字段与流探索：只在实例/联邦查询能力可用时有内容，平台/节点文本模式不展示。 */}
         <div className="flex items-center gap-1" data-testid="logs-vl-exploration">
           <LogFieldExplorer
@@ -1243,40 +1282,11 @@ export default function LogsPage() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <div className="ml-auto flex items-center gap-1">
-          <Button
-            type="button" size="sm" variant={follow ? 'default' : 'outline'}
-            className="w-24" data-testid="logs-live-toggle" aria-pressed={follow}
-            onClick={() => {
-              exportRequest.current?.abort()
-              setRangeAnchor(Date.now())
-              setFollowAnchorMs(bucketFloor(Date.now()))
-              setManualPaused(false)
-              setInteractionPaused(false)
-              setFollow((value) => !value)
-              setPage(1)
-              setFederationCursors({})
-            }}
-            disabled={platformView}
-          >
-            <Radio className={cn('size-3.5', follow && !manualPaused && !interactionPaused && 'animate-pulse')} />
-            {t(follow ? 'logsLive.stop' : 'logs.follow')}
-          </Button>
-          <Button type="button" size="sm" variant="outline" className="w-20" data-testid="logs-live-pause" disabled={!follow} aria-pressed={manualPaused || interactionPaused}
-            onClick={(event) => {
-              if (!manualPaused && !interactionPaused) { setManualPaused(true); return }
-              const viewport = event.currentTarget.closest('[data-page="logs"]')?.querySelector<HTMLElement>('[data-log-viewport]')
-              const selection = document.getSelection()
-              if (viewport && selection && ((selection.anchorNode && viewport.contains(selection.anchorNode)) || (selection.focusNode && viewport.contains(selection.focusNode)))) {
-                selection.removeAllRanges()
-              }
-              if (viewport) viewport.scrollTop = 0
-              setManualPaused(false)
-              setInteractionPaused(false)
-            }}>
-            {t(manualPaused || interactionPaused ? 'logsLive.resume' : 'logsLive.pause')}
-          </Button>
-        </div>
+        {queryMetaLabel && (
+          <span data-testid="logs-query-meta" className="ml-auto min-w-0 flex-1 text-right text-[11px] leading-4 tabular-nums text-muted-foreground">
+            {queryMetaLabel}
+          </span>
+        )}
         </div>
       </div>
 
@@ -1314,15 +1324,6 @@ export default function LogsPage() {
             }}
           />
         ) : null}
-        {activeAdvanced && !follow && queryMeta && !queryFailure && !queryInputError && (
-          <span data-testid="logs-query-meta" className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
-            {t('logs.queryMeta', {
-              ms: Math.round(queryMeta.elapsed_ms), rows: queryMeta.returned_rows,
-              limit: queryMeta.limit, bytes: Math.round(queryMeta.max_bytes / (1024 * 1024)),
-              seconds: queryMeta.timeout_ms / 1000,
-            })}
-          </span>
-        )}
       </div>
 
       <Panel

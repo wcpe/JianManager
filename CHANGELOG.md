@@ -39,6 +39,7 @@
     见 `internal/controlplane/database/business_retirement_restart_cycle_test.go`。
 
 ### 修复
+- **日志默认查询与筛选布局**：实例首屏时间窗从 15 分钟改为 1 小时，避免低频日志仅因短窗口无新行而难以找到历史记录；同步默认窗口 E2E 断言。筛选区按查询与跟随、来源与级别、字段与流分行排列，耗时、返回行数与执行预算移入筛选区并去除重复展示；未应用草稿、请求中与取消后隐藏旧执行信息。总量卡补齐当前页实际行数，收紧排版以完整展示指标值。
 - **日志工作台一屏布局与原生复制**：将 `/logs` 纳入 Workspace 固定视口高度链，日志区域内部滚动、分页 footer 常驻；洞察/筛选/覆盖和结果壳保留稳定槽位，减少筛选、加载、失败和跟随切换的位移。删除自定义多选、复制快捷键接管和按滚动卸载的虚拟行，当前页 100 行保留 DOM，浏览器可跨行原生拖选复制；来源显示具体名称或可辨识 ID。PageHeader 页面说明统一改为点击式 PageHelp，显式帮助内容优先，单行动作提示仍可使用 Tooltip。
 - **删除冷热分层旧架构残留（约 1.86 万行）**：`archive` / `retention` / `lifecycle` 三个包自单 VL 改造后已无执行对象，但代码与装配路径一直保留。本轮彻底移除。
   **删掉的**：`internal/worker/logs/archive`（6733 行，Deep Archive + Rehydrate + Provider/Registry）、`retention`（8332 行，Driver/Mover/Sweeper/ArchivePurge/VLDeleter）、`lifecycle`（1003 行，冷热迁移状态机）以及 `apps/worker/` 下 10 个装配文件。

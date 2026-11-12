@@ -28,8 +28,8 @@ async function downloadFromMenu(page: Page, label: string, name: string) {
  * 本批证据仅落项目根 .tmp/vl-six-fix-31cf5b3d/panel-*。
  *
  * 默认时间范围的断言走**请求参数**而非下拉显示文案：文案受 i18n 与默认值漂移影响，
- * 断言窗口宽度（== 默认预设跨度）＋ 上界≈now 才锁得住「默认最近 15 分钟」这一 2026-10-11
- * 快首屏依据（默认「全部时间」会让每个目标的全部分区参与查询）。
+ * 断言窗口宽度（== 默认预设跨度）＋ 上界≈now 才锁得住「默认最近 1 小时」这一开发版策略。
+ * 快首屏仍使用有界窗口；需要更短时间范围可由筛选器主动选择。
  *
  * 观测的是**联邦**端点 `/api/v1/logs/federation`：devmock 提供联邦假后端（与经典 `/logs`
  * 复用同一份种子），页面在联邦视图下**只**以 federation.items 为数据源。查询服务不可用时
@@ -37,8 +37,8 @@ async function downloadFromMenu(page: Page, label: string, name: string) {
  * 所以这里断言的必须是联邦端点本人下发的参数。
  */
 
-/** 默认时间窗跨度：15 分钟（与 LogsPage 的 `useState<TimeRangePreset>('15m')` 对齐）。 */
-const DEFAULT_WINDOW_MS = 15 * 60 * 1000
+/** 默认时间窗跨度：1 小时（与 LogsPage 的 `useState<TimeRangePreset>('1h')` 对齐）。 */
+const DEFAULT_WINDOW_MS = 60 * 60 * 1000
 /** 
  * 上界与挂钟的容差（NEW-4，2026-10-12 收紧）。
  *
@@ -95,7 +95,7 @@ test('日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 分页'
   const toMs = new Date(logsParams.get('to') ?? '').getTime()
   // 窗宽是默认预设的直接函数（不受断言时刻影响）：默认窗改成 24h/全部时间即红。
   expect(toMs - fromMs, '默认时间窗跨度').toBe(DEFAULT_WINDOW_MS)
-  // 上界≈now ⇒ 窗口确实是「最近 15 分钟」，而非任意一段 15 分钟宽的区间。
+  // 上界≈now ⇒ 窗口确实是「最近 1 小时」，而非任意一段 1 小时宽的区间。
   expect(Math.abs(toMs - Date.now()), '默认时间窗上界贴近当前时刻').toBeLessThan(TO_TOLERANCE_MS)
 
   // 手动切到「全部时间」：筛选器可用，且下发的参数里不再带时间上/下界（走参数而非文案）。

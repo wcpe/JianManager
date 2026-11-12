@@ -70,7 +70,11 @@ describe('advanced log query mode', () => {
     expect(reads.at(-1)?.get('advanced')).toBe('true')
     expect(reads.at(-1)?.get('instanceId')).toBe('2')
     expect(reads.at(-1)?.has('keyword')).toBe(false)
-    expect(screen.getByTestId('logs-query-meta')).toHaveTextContent('12')
+    const meta = await screen.findByTestId('logs-query-meta')
+    expect(meta).toHaveTextContent('12')
+    expect(screen.getByTestId('logs-toolbar')).toContainElement(meta)
+    expect(screen.getByTestId('logs-coverage-slot')).not.toContainElement(meta)
+    expect(screen.queryByTestId('logs-query-budget-summary')).not.toBeInTheDocument()
   })
 
   it('export shares the applied advanced filter and remains disabled for an unapplied draft', async () => {
@@ -90,6 +94,7 @@ describe('advanced log query mode', () => {
     expect(exports[0]?.get('viewId')).toBe('advanced-view')
     fireEvent.change(screen.getByTestId('logs-query-input'), { target: { value: 'stream:="stdout"' } })
     expect(screen.getByTestId('logs-export-trigger')).toBeDisabled()
+    expect(screen.queryByTestId('logs-query-meta')).not.toBeInTheDocument()
   })
 
   it('shows the actual query rejection, never an empty success', async () => {

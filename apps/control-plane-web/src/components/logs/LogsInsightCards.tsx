@@ -394,7 +394,6 @@ export function EventsTotalCard({
   levelCount,
   streamCount,
   bucketCount,
-  queryMeta,
 }: {
   /** 事件数；undefined 表示尚未拿到。 */
   count?: number
@@ -424,7 +423,6 @@ export function EventsTotalCard({
   levelCount?: number
   streamCount?: number
   bucketCount?: number
-  queryMeta?: { elapsed_ms: number; returned_rows: number; limit: number; max_bytes: number; timeout_ms: number }
 }) {
   const { t } = useTranslation()
 
@@ -446,28 +444,30 @@ export function EventsTotalCard({
       testId={testId}
       hint={quality && !exact ? <span title={t('logs.vizQualityValue', { quality })}>{quality}</span> : undefined}
     >
-      <div className="flex items-baseline gap-1.5">
-        <span
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex shrink-0 items-baseline gap-1.5">
+          <span
+            className={cn(
+              'text-xl font-semibold tabular-nums leading-none',
+              failed && 'text-muted-foreground',
+            )}
+            data-testid={`${testId}-count`}
+          >
+            {failed || count === undefined ? '—' : `${exact ? '' : '≈'}${count.toLocaleString()}`}
+          </span>
+          <span className="text-[11px] text-muted-foreground">{t('logs.vizTotalUnit')}</span>
+        </div>
+        <p
           className={cn(
-            'text-xl font-semibold tabular-nums leading-none',
-            failed && 'text-muted-foreground',
+            'min-w-0 text-right text-[10px] leading-3',
+            failed ? 'text-status-warning' : 'text-muted-foreground',
           )}
-          data-testid={`${testId}-count`}
+          data-testid={`${testId}-note`}
+          data-state={state}
         >
-          {failed || count === undefined ? '—' : `${exact ? '' : '≈'}${count.toLocaleString()}`}
-        </span>
-        <span className="text-[11px] text-muted-foreground">{t('logs.vizTotalUnit')}</span>
+          {note}
+        </p>
       </div>
-      <p
-        className={cn(
-          'mt-0.5 text-[11px] leading-snug',
-          failed ? 'text-status-warning' : 'text-muted-foreground',
-        )}
-        data-testid={`${testId}-note`}
-        data-state={state}
-      >
-        {note}
-      </p>
       {summary ? (
         <p
           className="mt-0.5 text-[11px] leading-snug text-muted-foreground"
@@ -476,7 +476,7 @@ export function EventsTotalCard({
           {summary}
         </p>
       ) : null}
-      <div data-testid="logs-metric-summary" className="mt-2 grid grid-cols-4 gap-1 border-t border-border/60 pt-1.5 text-[10px]">
+      <div data-testid="logs-metric-summary" className="mt-1 grid grid-cols-4 gap-1 border-t border-border/60 pt-1 text-[10px] leading-3">
         {[
           [t('logs.vizPageRows'), pageRows],
           [t('logs.vizLevelCount'), levelCount],
@@ -489,11 +489,6 @@ export function EventsTotalCard({
           </div>
         ))}
       </div>
-      {queryMeta ? (
-        <p data-testid="logs-query-budget-summary" className="mt-1 truncate text-[10px] text-muted-foreground" title={t('logs.queryMeta', { ms: Math.round(queryMeta.elapsed_ms), rows: queryMeta.returned_rows, limit: queryMeta.limit, bytes: Math.round(queryMeta.max_bytes / (1024 * 1024)), seconds: queryMeta.timeout_ms / 1000 })}>
-          {t('logs.queryMeta', { ms: Math.round(queryMeta.elapsed_ms), rows: queryMeta.returned_rows, limit: queryMeta.limit, bytes: Math.round(queryMeta.max_bytes / (1024 * 1024)), seconds: queryMeta.timeout_ms / 1000 })}
-        </p>
-      ) : null}
     </InsightCard>
   )
 }
