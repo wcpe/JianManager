@@ -62,6 +62,27 @@ func newDaemonStrategy(mgr *Manager, spec CommandSpec) *daemonStrategy {
 }
 
 func (d *daemonStrategy) Start(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, err)
+	}
+	// 只有当前 Unix socket 路径明确缺失，才把旧地址记录作为需要人工接管的迁移残留快速拒绝。
+	// 当前 socket 仍存在时，旧代可能已恢复控制且正在优雅退出，必须保留正常的上一代退出等待。
+	// Named Pipe 与文件路径不同；查询出错也不能推断缺失，均继续走既有等待与防双开守卫。
+	canonical := daemon.SocketAddr(d.pidDir, d.spec.UUID)
+	socketMissing := false
+	if runtime.GOOS != "windows" {
+		_, err := os.Lstat(canonical)
+		socketMissing = os.IsNotExist(err)
+	}
+	if rec, err := daemon.NewPIDFile(daemon.PIDFileName(d.pidDir, d.spec.UUID)).ReadRecord(); socketMissing && err == nil &&
+		rec.InstanceUUID == d.spec.UUID && rec.SocketAddr != "" && rec.SocketAddr != canonical &&
+		(d.mgr.pidAlive(rec.WrapperPID) || d.mgr.pidAlive(rec.JavaPID)) {
+		d.mu.Lock()
+		d.state = StateCrashed
+		d.mu.Unlock()
+		return fmt.Errorf("实例 %s 启动中止：旧部署残留需接管/清理，wrapperPid=%d javaPid=%d 记录地址=%s 当前地址=%s；请先恢复控制连接并停止旧实例，或显式接管/清理后再启动，拒绝新旧并存",
+			d.spec.UUID, rec.WrapperPID, rec.JavaPID, rec.SocketAddr, daemon.SocketAddr(d.pidDir, d.spec.UUID))
+	}
 	// 重启前等待上一代 wrapper/Java 完全退出，避免快速 stop→start 时旧进程仍占监听端口/socket
 	// 导致新进程端口冲突崩溃。不持 d.mu，以免长时间阻塞 State()/SendCommand 等查询；
 	// pidDir/UUID 构造后不可变，无锁读取安全；并发启动已由 Manager 的 STARTING 状态串行化。

@@ -77,12 +77,37 @@ const (
 	orphanKillVerifyInterval = 100 * time.Millisecond
 )
 
-// dialWrapper 恢复路径的 reconnect 拨号；测试经 recoverDial 注入假拨号。
+// dialWrapper 优先兼容 PID 记录地址；部署目录移动后，在强归属复核通过时尝试当前实例地址。
+// 仅重连已有 wrapper，不改 PID 记录、不发停止信号；测试经 recoverDial 注入拨号。
 func (m *Manager) dialWrapper(s *daemonStrategy, addr string) error {
+	dial := s.Reconnect
 	if m.recoverDial != nil {
-		return m.recoverDial(s, addr)
+		dial = func(addr string) error { return m.recoverDial(s, addr) }
 	}
-	return s.Reconnect(addr)
+	err := dial(addr)
+	canonical := daemon.SocketAddr(m.pidDir, s.spec.UUID)
+	if err == nil || addr == canonical || s.spec.UUID == "" {
+		return err
+	}
+	// 路径变了并不证明 PID 仍属于本实例：必须重新读当前目录的记录并验证进程强特征。
+	// cwd/WorkDir 可能也已迁移，只能复用收养所要求的 argv + 实例 UUID 证据，不能按目录猜归属。
+	rec, readErr := daemon.NewPIDFile(daemon.PIDFileName(m.pidDir, s.spec.UUID)).ReadRecord()
+	if readErr != nil || rec.InstanceUUID != s.spec.UUID || !m.pidAlive(rec.WrapperPID) {
+		return err
+	}
+	if owned, _ := m.verifyAdoptOwnership(rec.WrapperPID, s.spec.UUID, rec.WorkDir, true); !owned {
+		return err
+	}
+	if rec.JavaPID > 0 && m.pidAlive(rec.JavaPID) {
+		if owned, _ := m.verifyAdoptOwnership(rec.JavaPID, s.spec.UUID, rec.WorkDir, false); !owned {
+			return err
+		}
+	}
+	if fallbackErr := dial(canonical); fallbackErr != nil {
+		return fmt.Errorf("旧地址 %s 重连失败（%v），当前地址 %s 重连失败: %w", addr, err, canonical, fallbackErr)
+	}
+	slog.Info("已从当前 PID 目录重连迁移后的 wrapper", "instanceId", s.spec.UUID, "oldAddr", addr, "addr", canonical)
+	return nil
 }
 
 // pidAlive 进程存活探测；测试经 recoverPIDAlive 注入假读数。
