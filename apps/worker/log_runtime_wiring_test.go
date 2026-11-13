@@ -179,8 +179,9 @@ func TestWiringFixedClientsRecoverFromDisabledAndFailure(t *testing.T) {
 		_, readErr = clients.Ranges.Search(context.Background(), rng, queryArgs)
 		require.Error(t, readErr)
 	}
+	// 每次成功 Search 由投影查询 + 有界字段 hydration 两阶段组成；停止期间的查询仍不应触网。
 	require.Equal(t, 1, transport.inserts)
-	require.Equal(t, 3, transport.queries)
+	require.Equal(t, 6, transport.queries)
 }
 
 // TestWiringHealthFailureDoesNotReplaceClientsAndIsNotPublication 健康恢复不伪造Catalog发布。
