@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -68,13 +69,48 @@ func (h *FileHandler) Read(c *gin.Context) {
 		return
 	}
 
-	content, err := h.fileSvc.ReadFile(id, path)
+	// tailBytes>0 时只读文件尾部窗口（用于大日志在线预览）；缺省/非法/超范围一律按全量读，
+	// 保持既有调用方零影响。`0` 与不传等价。
+	tailBytes, err := parseTailBytes(c.Query("tailBytes"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+		return
+	}
+
+	res, err := h.fileSvc.ReadFileWindow(id, path, tailBytes)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
 	}
 
-	c.Data(http.StatusOK, "application/octet-stream", content)
+	// 尾部窗口用响应头回告，而非包装成 JSON：正文必须是纯文本（编辑器直接渲染），
+	// 而 HTML 的 text/plain 无超长上限（与下载同题），故不把正文塞进 JSON 字符串。
+	if res.Truncated {
+		c.Header("X-File-Truncated", "1")
+	}
+	if res.TotalSize > 0 {
+		c.Header("X-File-Total-Size", strconv.FormatInt(res.TotalSize, 10))
+	}
+
+	c.Data(http.StatusOK, "application/octet-stream", res.Content)
+}
+
+// parseTailBytes 解析 tailBytes 查询参数（字节窗口）。
+//
+// 语义：空串/0 → 0（读全量）；负数/非数字 → 明确报错（不静默当成全量，
+// 避免前端以为拿到了尾部却拿到整份大文件）。上限由 Worker 侧硬上限兵底。
+func parseTailBytes(raw string) (int64, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("tailBytes 参数非法: %s", raw)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("tailBytes 不能为负数")
+	}
+	return n, nil
 }
 
 type writeRequest struct {

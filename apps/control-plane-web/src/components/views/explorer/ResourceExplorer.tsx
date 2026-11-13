@@ -45,6 +45,14 @@ export interface ExplorerToast {
 export interface ExplorerFileApi {
   fetchFileList: (instanceId: number, dir: string) => Promise<FileInfo[]>
   readFileContent: (instanceId: number, path: string) => Promise<string>
+  /**
+   * 可选：读取文件尾部窗口（大日志在线预览）。
+   *
+   * 为何不用 readFileContent 直接放大上限：日志持续追写，任何固定上限都会被越过；
+   * 只读尾部才能稳定拿到“最新若干行”，且不会把整份大文件搬进浏览器。
+   * 未注入时保持旧行为（超大文件仅可下载）。
+   */
+  readFileTail?: (instanceId: number, path: string) => Promise<{ content: string; truncated: boolean; totalSize: number }>
   writeFileContent: (instanceId: number, path: string, content: string) => Promise<void>
   deleteFile: (instanceId: number, path: string) => Promise<void>
   renameFile: (instanceId: number, from: string, to: string) => Promise<void>
@@ -70,6 +78,19 @@ export interface ExplorerFileApi {
  * 左栏顶部插入收藏/已发现配置，历史按钮打开配置版本抽屉。不注入时为纯文件资源管理器。
  */
 export interface ConfigCapabilities {
+  /**
+   * 可选：判断某路径是否可走配置端点（配置编辑器 / 配置版本抽屉）。
+   *
+   * 资源管理器的树/列表呈现工作目录**全部**文件（含日志、jar 等），而后端配置面
+   * 只接受 `.properties/.yml/.yaml/.toml/.json/.conf`（`ValidateConfigInstancePath`，
+   * 其余一律「仅允许操作配置文件」422）。提供本判定后，**非配置文件**的打开与历史
+   * 都会退回普通文件能力（`files/read` + CodeEditor、`files/versions` + 文件版本抽屉），
+   * 配置文件仍走配置语义。
+   *
+   * 省略时向后兼容：只要注入了 config 就一律按配置处理（调用方须自行保证注入面只含
+   * 配置文件，否则会重现 422）。
+   */
+  isConfigPath?: (path: string) => boolean
   /** 
    * 渲染打开文件的编辑器（取代默认 CodeEditor 面板）。
    * 自行读取/保存内容（走配置端点，生成配置版本），保存后调用 onAfterSave 让资源管理器刷新树与版本缓存。
@@ -200,6 +221,15 @@ interface OpenFile {
   gotoLine?: number
   /** 定位 nonce：用于强制编辑器重定位（搭配 gotoLine）。 */
   gotoNonce?: number
+  /**
+   * 尾部窗口预览：true 表示 draft 只是文件末尾的一段，不是完整正文。
+   *
+   * 这种文件必须只读（尾部窗口写回去会丢掉前面的全部内容），且界面要说清
+   * “仅显示尾部”。
+   */
+  tailOnly?: boolean
+  /** 被预览文件的总字节数（tailOnly 时用于提示）。 */
+  totalSize?: number
 }
 
 type BlockedPreviewReason = 'binary' | 'too-large'
@@ -258,12 +288,18 @@ function fileExt(name: string): string {
   return dot >= 0 ? name.slice(dot).toLowerCase() : ''
 }
 
-function blockedPreviewFor(file: FileInfo, path: string): BlockedPreview | null {
+function blockedPreviewFor(
+  file: FileInfo,
+  path: string,
+  canTailPreview: boolean,
+): BlockedPreview | null {
   if (file.isDir) return null
   if (BINARY_PREVIEW_EXTENSIONS.has(fileExt(file.name))) {
     return { path, name: file.name, size: file.size, reason: 'binary' }
   }
-  if (file.size > TEXT_EDIT_LIMIT_BYTES) {
+  // 超大文本：能读尾部就走尾部窗口预览（日志持续追写，只读尾部才能稳定拿到最新行）；
+  // 不能读尾部时保持旧的“仅可下载”降级，不得敲开 1MiB 以上文件全量读的坑。
+  if (file.size > TEXT_EDIT_LIMIT_BYTES && !canTailPreview) {
     return { path, name: file.name, size: file.size, reason: 'too-large' }
   }
   return null
@@ -341,6 +377,7 @@ export default function ResourceExplorer({
   const {
     fetchFileList,
     readFileContent,
+    readFileTail,
     writeFileContent,
     deleteFile,
     renameFile,
@@ -351,6 +388,13 @@ export default function ResourceExplorer({
     chmodFile,
   } = fileApi
   const configMode = config != null
+  // 注入方给出的「能否走配置面」判定（缺省时向后兼容为「注入即配置」）。
+  const configPathPredicate = config?.isConfigPath
+  /** 该路径是否应使用配置语义（配置编辑器 + 配置版本抽屉）。 */
+  const usesConfigSemantics = useCallback(
+    (path: string): boolean => configMode && (configPathPredicate ? configPathPredicate(path) : true),
+    [configMode, configPathPredicate],
+  )
 
   // 当前目录（相对工作目录，空串=根）导航/排序/视图。
   const [nav, setNav] = useState(() => emptyNavHistory(initialDir))
@@ -610,31 +654,56 @@ export default function ResourceExplorer({
     // chmodFile / toast 均由外壳注入的模块级对象，引用恒定。
   }, [instanceId, refreshOpenWritable, t, chmodFile, toast])
 
+  /**
+   * 读取非配置文件的内容快照；超过编辑器上限且有尾部读取能力时只读尾部窗口。
+   *
+   * size 未知（如从搜索命中直接打开）时不预判：先整读，超过上限再退尾部。
+   */
+  const loadFileSnapshot = useCallback(
+    async (path: string, knownSize?: number): Promise<{ saved: string; tailOnly?: boolean; totalSize?: number }> => {
+      const maybeTail =
+        readFileTail != null && knownSize != null && knownSize > TEXT_EDIT_LIMIT_BYTES ? readFileTail : null
+      if (maybeTail) {
+        const tail = await maybeTail(instanceId, path)
+        return { saved: tail.content, tailOnly: true, totalSize: tail.totalSize || knownSize }
+      }
+      const content = await readFileContent(instanceId, path)
+      // 未预知大小但实际很大：撞到上限后回退到尾部窗口，而不是把上 MB 文本塞进编辑器。
+      if (readFileTail && content.length > TEXT_EDIT_LIMIT_BYTES) {
+        const tail = await readFileTail(instanceId, path)
+        return { saved: tail.content, tailOnly: true, totalSize: tail.totalSize || content.length }
+      }
+      return { saved: content }
+    },
+    [instanceId, readFileContent, readFileTail],
+  )
+
   const openByPathNow = useCallback(
-    async (path: string, name: string) => {
+    async (path: string, name: string, knownSize?: number) => {
       // 打开文本编辑器即关闭归档/反编译视图（右栏互斥）。
       setArchiveFor(null)
       setDecompileFor(null)
       setBlockedPreview(null)
       setOpenFileWritable(null)
-      if (configMode) {
+      // 只有「走配置面的文件」才由配置编辑器自行读取；其余（日志/jar 等）走 files/read。
+      if (usesConfigSemantics(path)) {
         setOpenFile({ path, name, saved: '', draft: '' })
         void refreshOpenWritable(path)
         return
       }
       try {
-        const content = await readFileContent(instanceId, path)
-        setOpenFile({ path, name, saved: content, draft: content })
+        const snap = await loadFileSnapshot(path, knownSize)
+        setOpenFile({ path, name, saved: snap.saved, draft: snap.saved, tailOnly: snap.tailOnly, totalSize: snap.totalSize })
         void refreshOpenWritable(path)
       } catch {
         toast.error(t('files.loadFailed'))
       }
     },
-    [configMode, instanceId, refreshOpenWritable, t, readFileContent, toast],
+    [usesConfigSemantics, loadFileSnapshot, refreshOpenWritable, t, toast],
   )
   const openByPath = useCallback(
-    (path: string, name: string) => {
-      runOrAskDiscard(() => { void openByPathNow(path, name) }, path)
+    (path: string, name: string, knownSize?: number) => {
+      runOrAskDiscard(() => { void openByPathNow(path, name, knownSize) }, path)
     },
     [openByPathNow, runOrAskDiscard],
   )
@@ -646,7 +715,10 @@ export default function ResourceExplorer({
         return
       }
       const path = joinPath(currentDir, file.name)
-      const blocked = configMode ? null : blockedPreviewFor(file, path)
+      // 非配置文件（含配置模式下打开的日志/jar）仍走二进制/超大文件的预览拦截。
+      const blocked = usesConfigSemantics(path)
+        ? null
+        : blockedPreviewFor(file, path, readFileTail != null)
       if (blocked) {
         runOrAskDiscard(() => {
           setOpenFile(null)
@@ -656,9 +728,9 @@ export default function ResourceExplorer({
         }, path)
         return
       }
-      openByPath(path, file.name)
+      openByPath(path, file.name, file.size)
     },
-    [configMode, currentDir, navigate, openByPath, runOrAskDiscard],
+    [usesConfigSemantics, currentDir, navigate, openByPath, runOrAskDiscard, readFileTail],
   )
 
   // 搜索命中点击：打开文件并定位到行。filename 模式 line=0 即仅打开不定位。
@@ -667,7 +739,8 @@ export default function ResourceExplorer({
     async (path: string, line: number) => {
       const name = path.split('/').pop() || path
       setBlockedPreview(null)
-      if (configMode) {
+      // 只对可走配置面的文件由配置编辑器自读；其余走 files/read（与双击打开一致）。
+      if (usesConfigSemantics(path)) {
         setOpenFile({
           path,
           name,
@@ -679,20 +752,22 @@ export default function ResourceExplorer({
         return
       }
       try {
-        const content = await readFileContent(instanceId, path)
+        const snap = await loadFileSnapshot(path)
         setOpenFile({
           path,
           name,
-          saved: content,
-          draft: content,
+          saved: snap.saved,
+          draft: snap.saved,
           gotoLine: line > 0 ? line : undefined,
           gotoNonce: Date.now(),
+          tailOnly: snap.tailOnly,
+          totalSize: snap.totalSize,
         })
       } catch {
         toast.error(t('files.loadFailed'))
       }
     },
-    [configMode, instanceId, t, readFileContent, toast],
+    [usesConfigSemantics, loadFileSnapshot, t, toast],
   )
   const openSearchHit = useCallback(
     (path: string, line: number) => {
@@ -759,6 +834,11 @@ export default function ResourceExplorer({
   const [saving, setSaving] = useState(false)
   const saveOpenFile = useCallback(async () => {
     if (!openFile || saving) return
+    // 尾部窗口只是文件末尾一段：写回去会丢掉前面的全部内容，故一律拒绝保存。
+    if (openFile.tailOnly) {
+      toast.error(t('files.tailPreviewReadOnly'))
+      return
+    }
     setSaving(true)
     const toastId = toast.loading(t('files.saving'))
     try {
@@ -1164,9 +1244,9 @@ export default function ResourceExplorer({
             </div>
           )}
 
-          {/* 编辑器：配置模式用注入的配置编辑器，否则默认 CodeEditor */}
+          {/* 编辑器：可走配置面的文件用注入的配置编辑器，其余（日志/jar 等）用默认 CodeEditor */}
           {openFile &&
-            (config ? (
+            (config != null && usesConfigSemantics(openFile.path) ? (
               <div className="flex w-1/2 min-w-0 flex-col">
                 {/* eslint-disable-next-line react-hooks/refs -- runOrAskDiscard/setConfigDirty 仅在回调内访问 ref，renderEditor 渲染期不读 ref 值 */}
                 {config.renderEditor({
@@ -1190,8 +1270,19 @@ export default function ResourceExplorer({
                     {openFileWritable === false && (
                       <span className="ml-2 text-xs text-muted-foreground">({t('files.readOnly')})</span>
                     )}
-                    {openFileWritable === true && (
+                    {openFileWritable === true && !openFile.tailOnly && (
                       <span className="ml-2 text-xs text-muted-foreground">({t('files.writable')})</span>
+                    )}
+                    {openFile.tailOnly && (
+                      <span
+                        className="ml-2 text-xs text-amber-600 dark:text-amber-400"
+                        data-testid="open-file-tail-notice"
+                        title={t('files.tailPreviewNotice', {
+                          size: formatFileSize(openFile.totalSize ?? 0),
+                        })}
+                      >
+                        {t('files.tailPreviewNotice', { size: formatFileSize(openFile.totalSize ?? 0) })}
+                      </span>
                     )}
                   </span>
                   <div className="flex items-center gap-1">
@@ -1218,7 +1309,8 @@ export default function ResourceExplorer({
                       size="sm"
                       variant="outline"
                       className="h-7 gap-1 px-2 text-xs"
-                      disabled={!dirty || saving || openFileWritable === false}
+                      disabled={!dirty || saving || openFileWritable === false || openFile.tailOnly === true}
+                      title={openFile.tailOnly ? t('files.tailPreviewReadOnly') : undefined}
                       onClick={() => void saveOpenFile()}
                     >
                       {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}{' '}
@@ -1239,6 +1331,7 @@ export default function ResourceExplorer({
                   <CodeEditor
                     value={openFile.draft}
                     filename={openFile.name}
+                    readOnly={openFile.tailOnly === true}
                     gotoLine={openFile.gotoLine}
                     gotoNonce={openFile.gotoNonce}
                     onChange={(v) => setOpenFile((f) => (f ? { ...f, draft: v } : f))}
@@ -1370,8 +1463,9 @@ export default function ResourceExplorer({
         </DialogContent>
       </Dialog>
 
-      {/* 历史版本抽屉：配置模式用配置版本抽屉，否则文件版本抽屉。 */}
-      {config ? (
+      {/* 历史版本抽屉：可走配置面的文件用配置版本抽屉，其余（日志/jar 等）用文件版本抽屉。
+          判定取「正在看版本的那个路径」，没有则回退当前打开文件——不能只看 config 是否注入。 */}
+      {config != null && usesConfigSemantics(versionFor ?? openFile?.path ?? '') ? (
         config.renderVersionDrawer({
           instanceId,
           filePath: versionFor,

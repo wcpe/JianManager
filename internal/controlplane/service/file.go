@@ -178,6 +178,25 @@ func (s *FileService) ChmodPath(instanceID uint, path, mode string) (string, err
 
 // ReadFile 读取文件内容。
 func (s *FileService) ReadFile(instanceID uint, path string) ([]byte, error) {
+	res, err := s.ReadFileWindow(instanceID, path, 0)
+	if err != nil {
+		return nil, err
+	}
+	return res.Content, nil
+}
+
+// FileReadResult 文件读取结果：正文 + 是否仅尾部窗口 + 文件总字节数。
+//
+// Truncated 必须由调用方透传给前端：大日志只读尾部时，界面要如实提示
+// 「当前只显示尾部」，而不能把局部内容当成完整正文展示。
+type FileReadResult struct {
+	Content   []byte
+	Truncated bool
+	TotalSize int64
+}
+
+// ReadFileWindow 读取文件内容；tailBytes>0 时只读尾部窗口（Worker 按行对齐）。
+func (s *FileService) ReadFileWindow(instanceID uint, path string, tailBytes int64) (*FileReadResult, error) {
 	if err := validatePath(path); err != nil {
 		return nil, err
 	}
@@ -198,12 +217,13 @@ func (s *FileService) ReadFile(instanceID uint, path string) ([]byte, error) {
 	resp, err := client.Worker.ReadFile(ctx, &workerpb.ReadFileRequest{
 		InstanceUuid: instance.UUID,
 		Path:         path,
+		TailBytes:    tailBytes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败: %w", err)
 	}
 
-	return resp.Content, nil
+	return &FileReadResult{Content: resp.Content, Truncated: resp.Truncated, TotalSize: resp.TotalSize}, nil
 }
 
 // WriteFile 写入文件内容。

@@ -72,6 +72,43 @@ export async function readFileContent(instanceId: number, path: string): Promise
   return data as string
 }
 
+/** 超大文件在线预览的尾部窗口（字节）。与后端 Worker 硬上限 512KiB 对齐。 */
+export const FILE_TAIL_PREVIEW_BYTES = 256 * 1024
+
+/** 尾部读取结果：正文 + 是否仅为尾部 + 文件总字节数。 */
+export interface FileTailContent {
+  content: string
+  /** true = 仅返回尾部窗口，界面必须如实提示，不得当完整正文。 */
+  truncated: boolean
+  /** 文件总字节数（后端未给出时为 0）。 */
+  totalSize: number
+}
+
+/**
+ * 读取大文件尾部窗口（用于持续追写的日志在线预览）。
+ *
+ * 为何不直接放大全量上限：日志一直在追加，任何固定上限都会被越过；
+ * 只读尾部既让调用方稳定拿到「最新若干行」，也不会把整份大文件搬进浏览器。
+ */
+export async function readFileTail(
+  instanceId: number,
+  path: string,
+  tailBytes: number = FILE_TAIL_PREVIEW_BYTES,
+): Promise<FileTailContent> {
+  const response = await api.get(`/instances/${instanceId}/files/read`, {
+    params: { path, tailBytes },
+    responseType: 'text',
+  })
+  const truncated = response.headers?.['x-file-truncated'] === '1'
+  const totalRaw = response.headers?.['x-file-total-size']
+  const totalSize = totalRaw ? Number(totalRaw) : 0
+  return {
+    content: (response.data as string) ?? '',
+    truncated,
+    totalSize: Number.isFinite(totalSize) ? totalSize : 0,
+  }
+}
+
 /** 写入文件内容（后端改前自动快照）。 */
 export async function writeFileContent(
   instanceId: number,

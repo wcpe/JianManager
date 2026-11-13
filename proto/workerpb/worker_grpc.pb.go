@@ -283,6 +283,8 @@ type WorkerServiceClient interface {
 	// ListFiles 列出实例工作目录下的文件。
 	ListFiles(ctx context.Context, in *ListFilesRequest, opts ...grpc.CallOption) (*ListFilesResponse, error)
 	// ReadFile 读取文件内容。
+	// tail_bytes>0 时只读文件尾部窗口并按行对齐（见 ReadFileRequest.tail_bytes），
+	// 供持续追写的日志等大文本在线预览；响应以 truncated 显式标记内容非完整正文。
 	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (*ReadFileResponse, error)
 	// HashFile 计算实例工作目录内文件的 SHA-256（版本漂移检测）。
 	// 与 ReadFile 分开：哈希只需读盘不需传内容，避免为校验把数十 MB 二进制经 gRPC 搬回 CP。
@@ -1993,6 +1995,8 @@ type WorkerServiceServer interface {
 	// ListFiles 列出实例工作目录下的文件。
 	ListFiles(context.Context, *ListFilesRequest) (*ListFilesResponse, error)
 	// ReadFile 读取文件内容。
+	// tail_bytes>0 时只读文件尾部窗口并按行对齐（见 ReadFileRequest.tail_bytes），
+	// 供持续追写的日志等大文本在线预览；响应以 truncated 显式标记内容非完整正文。
 	ReadFile(context.Context, *ReadFileRequest) (*ReadFileResponse, error)
 	// HashFile 计算实例工作目录内文件的 SHA-256（版本漂移检测）。
 	// 与 ReadFile 分开：哈希只需读盘不需传内容，避免为校验把数十 MB 二进制经 gRPC 搬回 CP。

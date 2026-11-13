@@ -136,6 +136,8 @@ service WorkerService {
   // ListFiles 列出实例工作目录下的文件。
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
   // ReadFile 读取文件内容。
+  // tail_bytes>0 时只读文件尾部窗口并按行对齐（见 ReadFileRequest.tail_bytes），
+  // 供持续追写的日志等大文本在线预览；响应以 truncated 显式标记内容非完整正文。
   rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
   // HashFile 计算实例工作目录内文件的 SHA-256（版本漂移检测）。
   // 与 ReadFile 分开：哈希只需读盘不需传内容，避免为校验把数十 MB 二进制经 gRPC 搬回 CP。
@@ -1218,10 +1220,23 @@ message ChmodPathResponse {
 message ReadFileRequest {
   string instance_uuid = 1;
   string path = 2;
+  // tail_bytes 为「只读文件尾部」的字节窗口（0 = 读全量，保持既有行为）。
+  //
+  // 为什么需要它：在线编辑器护栏把整读上限定在 10MiB，而持续追写的日志很快就越过
+  // 任何固定上限——单纯放大上限既不解决「读不完」，也会把整份文件塞进内存与前端。
+  // 调用方声明只要尾部窗口时，Worker 只读文件末尾并**按行对齐**（丢弃首行残段），
+  // 于是调用方能稳定拿到「最后若干行」而不是半行开头的文本。
+  // 生效上限 = min(tail_bytes, 服务端硬上限)；调用方无法用放大本字段绕过服务端兜底。
+  int64 tail_bytes = 3;
 }
 
 message ReadFileResponse {
   bytes content = 1;
+  // truncated 表示本次内容不是文件开头起算的完整正文（尾部窗口或服务端硬上限截断）。
+  // 调用方据此提示「仅显示尾部」，不得当作完整内容展示。
+  bool truncated = 2;
+  // total_size 为被读文件的总字节数（便于提示「文件共多大、当前显示的是尾部」）。
+  int64 total_size = 3;
 }
 
 // HashFileRequest 计算实例工作目录内某文件的 SHA-256。

@@ -92,10 +92,10 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(within(tree).queryByRole('treeitem', { name: /dir-299/ })).not.toBeInTheDocument()
   })
 
-  it('二进制与超大文件不触发文本读取并保留下载入口', async () => {
+  it('超大文本只读尾部窗口，二进制不触发文本读取', async () => {
     loginMockUser()
     const user = userEvent.setup()
-    const readSpy = vi.fn()
+    const tailSpy = vi.fn()
     server.use(
       http.get(API('/instances/:id/files'), () =>
         HttpResponse.json([
@@ -103,21 +103,32 @@ describe('ResourceExplorer（mock 假后端）', () => {
           { name: 'icon.png', isDir: false, size: 128 * 1024, modTime: 1_700_000_000 },
         ]),
       ),
-      http.get(API('/instances/:id/files/read'), () => {
-        readSpy()
-        return HttpResponse.text('不应读取')
+      http.get(API('/instances/:id/files/read'), ({ request }) => {
+        const tail = new URL(request.url).searchParams.get('tailBytes')
+        if (tail) {
+          tailSpy(tail)
+          return new HttpResponse('[12:00:00] [Server thread/INFO]: tail line\n', {
+            status: 200,
+            headers: { 'X-File-Truncated': '1', 'X-File-Total-Size': String(2 * 1024 * 1024) },
+          })
+        }
+        return HttpResponse.text('不应整份读取超大文件')
       }),
     )
     renderWithProviders(<ResourceExplorer instanceId={1} />)
 
+    // 超大文本：改为可预览，但必须是尾部窗口（带 tailBytes），并明确标注只读尾部。
     await user.dblClick(await screen.findByText('large.log'))
-    expect(await screen.findByText(/文件过大/)).toBeInTheDocument()
-    // 预览区保留「下载」入口（后工具栏的下载仅在有选中时明文出现，此处无选中）。
-    expect(screen.getAllByRole('button', { name: '下载' }).length).toBeGreaterThanOrEqual(1)
+    expect(await screen.findByTestId('open-file-tail-notice')).toHaveTextContent('仅显示末尾')
+    expect(screen.queryByText(/文件过大/)).toBeNull()
+    await waitFor(() => expect(tailSpy).toHaveBeenCalled())
 
+    // 二进制仍降级：不读内容，保留下载入口。
+    const before = tailSpy.mock.calls.length
     await user.dblClick(await screen.findByText('icon.png'))
     expect(await screen.findByText(/二进制文件/)).toBeInTheDocument()
-    expect(readSpy).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('button', { name: '下载' }).length).toBeGreaterThanOrEqual(1)
+    expect(tailSpy.mock.calls.length).toBe(before)
   })
 
   it('粘贴移动串行执行并展示部分失败明细', async () => {

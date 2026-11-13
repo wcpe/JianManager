@@ -4,6 +4,7 @@ import ConfigFileEditor from './ConfigFileEditor'
 import ConfigVersionDrawer from './ConfigVersionDrawer'
 import FavoritesBar from './FavoritesBar'
 import { browserStorage, loadFavorites, saveFavorites, toggleFavorite as toggleFav } from '@/lib/config-explorer/config-favorites'
+import { isConfigPath } from '@/lib/config-explorer/config-path'
 
 /** 
  * 配置管理资源管理器。
@@ -15,6 +16,9 @@ import { browserStorage, loadFavorites, saveFavorites, toggleFavorite as toggleF
  * - 历史 → 配置版本抽屉（版本/diff/回滚）。
  *
  * 树/列表本身呈现工作目录全部文件（含非配置），满足「目录树呈现自动发现的全部配置」。
+ * 非配置文件（日志/jar/无扩展名等）**不进**配置语义：编辑退回普通 CodeEditor（`files/read`），
+ * 历史退回文件版本抽屉（`files/versions`）——后端配置面只接受配置文件，走配置端点会
+ * 422「仅允许操作配置文件」。分流判定经 `isConfigPath` 注入（与后端同一扩展名清单）。
  */
 interface ConfigExplorerProps {
   instanceId: number
@@ -51,6 +55,7 @@ export default function ConfigExplorer({ instanceId, toolbarLeading }: ConfigExp
   }, [])
 
   const config: ConfigCapabilities = {
+    isConfigPath,
     renderEditor: ({ instanceId: iid, path, name, onClose, onAfterSave, onOpenVersions, onDirtyChange, gotoLine, gotoNonce }) => (
       <ConfigFileEditor
         instanceId={iid}

@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -48,7 +49,20 @@ func (s *Server) ListFiles(ctx context.Context, req *workerpb.ListFilesRequest) 
 	return &workerpb.ListFilesResponse{Files: files}, nil
 }
 
+// readFileMaxBytes ReadFile 整读的服务端硬上限（在线编辑器护标）。
+const readFileMaxBytes = 10 * 1024 * 1024
+
+// readFileTailHardMaxBytes ReadFile 尾部窗口的服务端硬上限。
+//
+// 尾部窗口是给「持续追写的日志」在线预览用的，调用方只需要看到最后几行；
+// 再大的窗口对浏览器渲染没有意义，反而把整份大文件搬回 CP。调用方无法用放大
+// tail_bytes 绕过本上限（生效上限 = min(tail_bytes, 本值)）。
+const readFileTailHardMaxBytes = 512 * 1024
+
 // ReadFile 读取文件内容。
+//
+// req.TailBytes>0 时只读文件末尾窗口并按行对齐（丢弃首行残段），用于大日志在线预览：
+// 返回的 truncated=true 表示内容不是从文件开头起的完整正文。
 func (s *Server) ReadFile(ctx context.Context, req *workerpb.ReadFileRequest) (*workerpb.ReadFileResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
@@ -60,17 +74,87 @@ func (s *Server) ReadFile(ctx context.Context, req *workerpb.ReadFileRequest) (*
 		return nil, err
 	}
 
+	if req.TailBytes > 0 {
+		return readFileTail(path, req.TailBytes)
+	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("%s", formatPermError("读取", err))
 	}
 
-	const maxSize = 10 * 1024 * 1024
-	if len(content) > maxSize {
-		content = content[:maxSize]
+	totalSize := int64(len(content))
+	truncated := false
+	if len(content) > readFileMaxBytes {
+		content = content[:readFileMaxBytes]
+		truncated = true
 	}
 
-	return &workerpb.ReadFileResponse{Content: content}, nil
+	return &workerpb.ReadFileResponse{Content: content, Truncated: truncated, TotalSize: totalSize}, nil
+}
+
+// readFileTail 读取 path 末尾 tailBytes 字节并按行对齐。
+//
+// 为何按行对齐：直接按字节切出来的首行通常是半个行，看起来像日志损坏。
+// 丢掉首个残行后，调用方拿到的是完整行集合（空文件/单行无换行的极短文件除外：
+// 这种情形无法对齐，就原样返回切出来的内容，不丢弃数据）。
+func readFileTail(path string, tailBytes int64) (*workerpb.ReadFileResponse, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s", formatPermError("读取", err))
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("%s", formatPermError("读取", err))
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("%s 是目录，不能按文件读取", path)
+	}
+
+	return readFileTailWindow(f, info.Size(), tailBytes)
+}
+
+// readFileTailWindow 从已取得大小的文件快照读取有界尾部。
+// reader 与大小分开传入，以保持 Stat 后文件仍可能被轮转截短的真实语义可回归验证。
+func readFileTailWindow(f io.ReaderAt, totalSize, tailBytes int64) (*workerpb.ReadFileResponse, error) {
+	if tailBytes > readFileTailHardMaxBytes {
+		tailBytes = readFileTailHardMaxBytes
+	}
+	offset := totalSize - tailBytes
+	if offset < 0 {
+		offset = 0
+	}
+
+	buf := make([]byte, totalSize-offset)
+	n, readErr := f.ReadAt(buf, offset)
+	if readErr != nil && readErr != io.EOF {
+		return nil, fmt.Errorf("%s", formatPermError("读取", readErr))
+	}
+	// ReadAt may observe a concurrent copytruncate after Stat. Only the bytes actually read
+	// belong in the response; the rest of the preallocated buffer is zero-filled and must not
+	// escape as NUL bytes.
+	buf = buf[:n]
+
+	// 只有当我们确实不是从文件开头读起时，才需要处理「首行残段」。
+	truncated := offset > 0
+	if truncated {
+		// If the byte immediately before offset is a newline, offset is already at a line
+		// boundary and the first returned line is complete. Otherwise discard the partial line.
+		var previous [1]byte
+		previousN, previousErr := f.ReadAt(previous[:], offset-1)
+		if previousErr != nil && previousErr != io.EOF {
+			return nil, fmt.Errorf("%s", formatPermError("读取", previousErr))
+		}
+		if previousN == 1 && previous[0] != '\n' {
+			if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
+				buf = buf[idx+1:]
+			}
+		}
+	}
+
+	return &workerpb.ReadFileResponse{Content: buf, Truncated: truncated, TotalSize: totalSize}, nil
 }
 
 // hashFileHardMaxBytes HashFile 的**服务端硬上限**（M-3）。
