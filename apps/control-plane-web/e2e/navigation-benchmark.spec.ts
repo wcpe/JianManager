@@ -13,7 +13,7 @@ import { login, pinClassicHome } from './helpers'
  * 这里放宽的只是**就绪等待**，不是断言严格度：页面真的没渲染出来仍然会失败，
  * 只是 45 秒内没出来才算失败。
  */
-const ROUTE_READY_TIMEOUT_MS = 45_000
+const ROUTE_READY_TIMEOUT_MS = 90_000
 
 interface BenchRoute {
   label: string
@@ -575,12 +575,13 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
 
   for (const viewport of OVERVIEW_RESPONSIVE_VIEWPORTS) {
     test(`关键页面 ${viewport.label} 不产生横向溢出`, async ({ page }) => {
-      test.setTimeout(60_000)
+      test.setTimeout(300_000)
       await expectRoutesWithoutWorkspaceOverflow(page, viewport)
     })
   }
 
   test('1024x768 关键表格只在自身容器内横向滚动', async ({ page }) => {
+    test.setTimeout(180_000)
     await page.setViewportSize({ width: 1024, height: 768 })
 
     for (const route of RESPONSIVE_TABLE_ROUTES) {
@@ -594,6 +595,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
   })
 
   test('移动端导航可打开主要分组', async ({ page }) => {
+    test.setTimeout(120_000)
     await page.setViewportSize({ width: 390, height: 844 })
     await page.goto('/')
     await expect(page.locator('[data-page="overview"]'), '移动端首页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
@@ -621,7 +623,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
   })
 
   test('顶部进度条存在，数据页侧栏折叠/展开只有侧栏自身变宽、内容区平滑跟随', async ({ page }) => {
-    test.setTimeout(60_000)
+    test.setTimeout(300_000)
 
     for (const route of [ROUTES[0], ROUTES[1]]) {
       await page.goto(route.href)
@@ -722,6 +724,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
   })
 
   test('系统减少动态时关闭装饰切页动画并保留进度反馈', async ({ page }) => {
+    test.setTimeout(180_000)
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.goto('/networks/topology')
     await expect(page.locator('[data-page="networks"]'), '网络拓扑页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })

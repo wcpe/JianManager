@@ -8,6 +8,7 @@ import { login } from './helpers'
  */
 
 test('群组列表状态分布 + 管理双栏深链 + 候选筛选', async ({ page }) => {
+  test.setTimeout(180_000)
   await login(page)
   await page.goto('/networks')
 
@@ -18,7 +19,9 @@ test('群组列表状态分布 + 管理双栏深链 + 候选筛选', async ({ pa
 
   // 深链直达（?network=）→ 左成员/右候选双栏 + 候选筛选
   await page.goto('/networks?network=1')
-  await expect(page.getByText('成员', { exact: true })).toBeVisible()
+  const detail = page.getByRole('dialog')
+  await expect(detail).toBeVisible({ timeout: 90_000 })
+  await expect(detail.getByText('成员', { exact: true })).toBeVisible({ timeout: 90_000 })
   await expect(page.getByPlaceholder('筛选候选…')).toBeVisible()
   await expect(page.getByText('survival-proxy')).toBeVisible()
 

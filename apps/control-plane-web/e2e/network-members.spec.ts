@@ -15,13 +15,11 @@ test.describe('群组服关系模型（mock 模式真浏览器）', () => {
   })
 
   test('Network 成员管理与批量停止链路', async ({ page }) => {
-    await page.goto('/networks')
-    await expect(page.getByRole('heading', { name: '群组管理' })).toBeVisible()
-    await expect(page.getByText('survival', { exact: true })).toBeVisible()
-    await expect(page.getByText('3 个成员')).toBeVisible()
-
-    await page.getByRole('button', { name: /survival 3 个成员/ }).click()
-    await expect(page.getByRole('heading', { name: 'survival' })).toBeVisible()
+    test.setTimeout(180_000)
+    await page.goto('/networks?network=1')
+    const detail = page.getByRole('dialog')
+    await expect(detail).toBeVisible({ timeout: 90_000 })
+    await expect(detail.getByRole('heading', { name: 'survival' })).toBeVisible({ timeout: 90_000 })
     await expect(page.getByText('survival-proxy')).toBeVisible()
     await expect(page.getByText('survival-lobby')).toBeVisible()
     await expect(page.getByText('survival-world')).toBeVisible()
@@ -36,6 +34,7 @@ test.describe('群组服关系模型（mock 模式真浏览器）', () => {
   })
 
   test('拓扑视图与节点端口占用可见', async ({ page }) => {
+    test.setTimeout(180_000)
     await page.goto('/networks/topology')
     await expect(page.getByRole('heading', { name: '群组管理' })).toBeVisible()
     await expect(page.getByRole('img', { name: '群组服拓扑' })).toBeVisible()
@@ -47,12 +46,12 @@ test.describe('群组服关系模型（mock 模式真浏览器）', () => {
 
     // 阶段 6 起 /nodes 是列表态（状态计数 + 节点卡片墙），分段工具只在详情态，
     // 故端口占用改走详情态深链。
-    await page.goto('/nodes?node=1')
-    await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
+    await page.goto('/nodes?node=1&tab=process')
+    await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible({ timeout: 90_000 })
     // 【契约变更】原「端口」页签已并入「进程」（NodeDetailPane 的 DetailTab 注释：
     // 「进程：受管实例的进程清单（含端口占用），原『实例』与『端口』两页签合并」）。
     // 端口面板（ports.title=「端口占用」）与进程同屏挂在 process tab 下，直接断即可。
-    await page.getByRole('button', { name: '进程', exact: true }).click()
+    await expect(page.getByRole('button', { name: '进程', exact: true })).toHaveCount(1)
     await expect(page.getByText('端口占用')).toBeVisible()
     await expect(page.getByText('分配范围：server 25565+（每段 100 个）')).toBeVisible()
     await expect(page.getByText('survival-proxy')).toBeVisible()

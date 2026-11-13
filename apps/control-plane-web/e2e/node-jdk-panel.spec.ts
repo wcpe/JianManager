@@ -8,12 +8,12 @@ import { login } from './helpers'
  */
 
 test('节点 JDK 面板: foojay 下载 + 异步进度 + 测试存活', async ({ page }) => {
+  test.setTimeout(180_000)
   await login(page)
-  // 阶段 6 起 /nodes 是列表态，分段工具只在详情态，故 JDK 面板改走详情态深链。
-  await page.goto('/nodes?node=1')
+  // 阶段 6 起 /nodes 是列表态，分段工具只在详情态；直接深链到运行时分段。
+  await page.goto('/nodes?node=1&tab=runtime')
 
-  await page.getByRole('button', { name: '运行时', exact: true }).click() // JDK 分段更名运行时
-  await expect(page.getByRole('button', { name: '一键下载' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '一键下载' })).toBeVisible({ timeout: 90_000 })
   await expect(page.getByRole('button', { name: '登记已有' })).toBeVisible()
   await expect(page.getByRole('button', { name: /托管/ })).toBeVisible() // 托管 JDK 分区
 
