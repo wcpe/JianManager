@@ -3890,6 +3890,7 @@
     "vizLevelTitle": "级别分布",
     "vizSourceTitle": "主要来源",
     "vizTimeTitle": "时间分布",
+    "vizTimeUnsupported": "时间分布不可用：时间桶无效或不受支持",
     "vizTimeWindow": "全窗口",
     "vizTimeRangeHelp": "查询窗口：{{from}} 至 {{to}}（来自全量聚合，非当前页估算）",
     "vizCountsUnreliable": "条数不可信",

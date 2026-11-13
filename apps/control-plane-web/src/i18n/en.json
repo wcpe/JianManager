@@ -3936,6 +3936,7 @@
     "vizLevelTitle": "Level distribution",
     "vizSourceTitle": "Top sources",
     "vizTimeTitle": "Time distribution",
+    "vizTimeUnsupported": "Time distribution unavailable: invalid or unsupported time buckets",
     "vizTimeWindow": "full window",
     "vizTimeRangeHelp": "Query window: {{from}} to {{to}} (full-range aggregation, not a page estimate)",
     "vizCountsUnreliable": "counts unreliable",

@@ -4,6 +4,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import zh from './zh.json'
 import en from './en.json'
+import { LOG_FIELD_EXPLORER_LOCALES } from '../components/logs/log-field-explorer-locale-data'
 
 // 全量 i18n key 缺失检测（静态 best-effort）：
 // 扫描 src/**/*.{ts,tsx} 中所有静态 i18next 翻译调用的首参字符串字面量，
@@ -24,6 +25,7 @@ import en from './en.json'
 
 const i18nDir = dirname(fileURLToPath(import.meta.url))
 const srcDir = join(i18nDir, '..')
+const localNamespaceFile = 'components/logs/LogFieldExplorer.tsx'
 
 /**
  * 扫描范围 = app 的 src + 其它消费**同一套语言包**的第一方源。
@@ -51,6 +53,8 @@ function flattenKeys(obj: Record<string, unknown>, prefix = ''): Set<string> {
   }
   return out
 }
+
+const localNamespaceKeys = flattenKeys(LOG_FIELD_EXPLORER_LOCALES.zh)
 
 function listSourceFiles(dir: string): string[] {
   const out: string[] = []
@@ -263,8 +267,18 @@ describe('i18n 语言包完整性', () => {
     const missing = [...used.entries()]
       .filter(([k]) => !zhKeys.has(k) || !enKeys.has(k))
       .filter(([k]) => !KNOWN_MISSING.has(k))
+      .filter(([k, files]) => !(files.length === 1 && files[0] === localNamespaceFile && localNamespaceKeys.has(k)))
       .map(([k, files]) => `${k}  <-  ${files.join(', ')}`)
     expect(missing, '语言包缺失的 key（zh 或 en）').toEqual([])
+  })
+
+  it('本地字段探索命名空间的 key 在两种语言中都有定义', () => {
+    const source = readFileSync(join(srcDir, localNamespaceFile), 'utf-8')
+    const used = extractStaticTKeys(source)
+    const zhLocal = flattenKeys(LOG_FIELD_EXPLORER_LOCALES.zh)
+    const enLocal = flattenKeys(LOG_FIELD_EXPLORER_LOCALES.en)
+    const missing = used.filter((key) => !zhLocal.has(key) || !enLocal.has(key))
+    expect(missing).toEqual([])
   })
 })
 
