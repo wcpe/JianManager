@@ -25,5 +25,6 @@ dist-ssr
 
 # Playwright
 /test-results/
+/test-results-*/
 /playwright-report/
 /playwright/.cache/
