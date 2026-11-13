@@ -29,6 +29,8 @@ type QueryRequest struct {
 	GroupBy           []string
 	TimeBucket        string
 	MetricField       string
+	// ExploreFields enables bounded document-field discovery for Fields/Facets only.
+	ExploreFields bool
 	// AllowProjectionDrift 标记兼容的 CP 导出请求，触发共享导出预留。
 	// 普通查询与导出均读取同一冻结投影，不豁免破坏性变更。
 	AllowProjectionDrift bool
@@ -143,21 +145,23 @@ type CapabilitiesResponse struct {
 
 // FieldsResponse 对应字段枚举查询。
 type FieldsResponse struct {
-	RequestID string      `json:"request_id"`
-	View      *ViewRef    `json:"view,omitempty"`
-	Coverage  Coverage    `json:"coverage"`
-	Fields    []string    `json:"fields,omitempty"`
-	Err       *QueryError `json:"error,omitempty"`
+	ExploreApplied bool        `json:"explore_applied,omitempty"`
+	RequestID      string      `json:"request_id"`
+	View           *ViewRef    `json:"view,omitempty"`
+	Coverage       Coverage    `json:"coverage"`
+	Fields         []string    `json:"fields,omitempty"`
+	Err            *QueryError `json:"error,omitempty"`
 }
 
 // FacetsResponse 对应受控维度查询。
 type FacetsResponse struct {
-	RequestID string       `json:"request_id"`
-	View      *ViewRef     `json:"view,omitempty"`
-	Coverage  Coverage     `json:"coverage"`
-	Values    []FacetValue `json:"values,omitempty"`
-	Truncated bool         `json:"truncated"`
-	Err       *QueryError  `json:"error,omitempty"`
+	ExploreApplied bool         `json:"explore_applied,omitempty"`
+	RequestID      string       `json:"request_id"`
+	View           *ViewRef     `json:"view,omitempty"`
+	Coverage       Coverage     `json:"coverage"`
+	Values         []FacetValue `json:"values,omitempty"`
+	Truncated      bool         `json:"truncated"`
+	Err            *QueryError  `json:"error,omitempty"`
 }
 
 // StreamsResponse 是 stream 枚举结果。
@@ -217,7 +221,7 @@ type ArchiveBackend interface {
 	ArchiveStatus(ctx context.Context, req QueryRequest, objectIDs []string) ArchiveStatusResponse
 }
 
-// Service 是 FR-479 查询面 foundation：消费 planner ranges + budget。
+// Service 是查询面 foundation：消费 planner ranges + budget。
 type Service struct {
 	planner *Planner
 	client  RangeClient
@@ -275,6 +279,9 @@ func (s *Service) GetCapabilities(req CapabilitiesRequest) CapabilitiesResponse 
 		}
 		if _, ok := s.client.(FollowLiveRangeClient); ok {
 			caps = append(caps, "tail_follow_live")
+		}
+		if _, ok := s.client.(NativeLiveClient); ok {
+			caps = append(caps, "tail_native_stream")
 		}
 	}
 	return CapabilitiesResponse{
@@ -867,6 +874,7 @@ func (s *Service) planFromRequest(req QueryRequest) PlanResult {
 	return s.planner.Plan(PlanRequest{
 		RequestID:      req.RequestID,
 		TimeRange:      req.TimeRange,
+		Filter:         req.Filter,
 		TargetIDs:      req.AuthorizedTargets,
 		Budget:         req.Budget,
 		ViewRef:        req.View,

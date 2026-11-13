@@ -15,9 +15,9 @@ type fakeStrategy struct {
 	startCount int
 	stopCount  int
 	killCount  int
-	// disarmCount 记录收到「禁用自动重启」的次数（FR-459 熔断的 daemon 生效路径）。
+	// disarmCount 记录收到「禁用自动重启」的次数（熔断的 daemon 生效路径）。
 	disarmCount int
-	// rearmCount 记录收到「恢复自动重启」的次数（FR-459 终验 Major：人工解除熔断的复位路径）。
+	// rearmCount 记录收到「恢复自动重启」的次数（终验 Major：人工解除熔断的复位路径）。
 	rearmCount int
 	state      InstanceState
 	// onStart 可选钩子：在 Start 记账为 RUNNING 后、返回前同步触发，用于确定性地模拟

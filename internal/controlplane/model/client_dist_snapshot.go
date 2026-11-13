@@ -2,9 +2,9 @@ package model
 
 import "time"
 
-// ClientDistSnapshot 客户端分发观测时序快照：每「频道 × 小时桶」一行（FR-217，见 ADR-049）。
+// ClientDistSnapshot 客户端分发观测时序快照：每「频道 × 小时桶」一行。
 //
-// 由后台任务把 client_dist_event（FR-093）+ client_telemetry（FR-094）离线卷积而来，
+// 由后台任务把 client_dist_event+ client_telemetry离线卷积而来，
 // 与玩家热路径的写时聚合（client_dist_daily/client_telemetry_daily）解耦——观测富维度交给离线卷积，
 // 热路径零新增负担。ChannelID 可为空串（制品端点跨频道共享、明细 channel 可空 → 归入空频道桶；
 // 查询「总」时含之）。分布维度以 JSON map 存 TEXT 列，免随版本/平台/滞后基数增长改表结构。
@@ -19,8 +19,8 @@ type ClientDistSnapshot struct {
 	ManifestPulls int64 `gorm:"default:0;not null" json:"manifestPulls"` // 桶内 manifest 拉取次数
 	ArtifactPulls int64 `gorm:"default:0;not null" json:"artifactPulls"` // 桶内制品拉取次数
 	DownloadBytes int64 `gorm:"default:0;not null" json:"downloadBytes"` // 桶内总响应字节
-	// ActiveMachines 桶内 machineId 精确去重计数（排空串）。machineId 不可信（ADR-023），仅统计近似；
-	// 跨桶不可简单求和（同客户端跨小时会重复），跨区间去重口径见 ADR-049 §4。
+	// ActiveMachines 桶内 machineId 精确去重计数（排空串）。machineId 不可信，仅统计近似；
+	// 跨桶不可简单求和（同客户端跨小时会重复），跨区间去重口径。
 	ActiveMachines int64 `gorm:"default:0;not null" json:"activeMachines"`
 	// VersionDist 版本分布 JSON map[version]count（manifest 拉取按 version 计数）。
 	VersionDist string `gorm:"column:version_dist;type:text" json:"-"`

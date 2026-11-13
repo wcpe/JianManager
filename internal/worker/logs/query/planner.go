@@ -16,6 +16,8 @@ type PlanRequest struct {
 	RequestID string
 	// TimeRange 绝对 UTC；为空表示不限制分区日。
 	TimeRange TimeRange
+	// Filter is frozen for explicit document-field exploration.
+	Filter string
 	// TargetIDs CP 计算后的授权目标（storage_namespace 或 ns/day）；空 = 本 Worker 全部 Catalog 分区。
 	TargetIDs []string
 	Budget    Budget
@@ -209,6 +211,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		ViewID:             viewID,
 		OrderVersion:       SortVersion,
 		TimeRange:          req.TimeRange,
+		Filter:             req.Filter,
 		TargetIDs:          make([]string, 0, len(keys)),
 		ClosedVisibleSeq:   make(map[string]uint64, len(keys)),
 		Generations:        make(map[string]uint64, len(keys)),
@@ -268,7 +271,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			// 而这里的真相是「权威在归档、本地未恢复」。原因不同，处置动作也不同
 			// （一个是查配置，一个是执行 rehydrate），故按 owner 分开取首个原因。
 			lead := ReasonNoCatalogAuthority
-			// 归档对象已按保留期清除（FR-501 归档对象回收）时，原因**必须**是 ARCHIVE_PURGED。
+			// 归档对象已按保留期清除（归档对象回收）时，原因**必须**是 ARCHIVE_PURGED。
 			//
 			// 与 ARCHIVE_NOT_RESTORED 分开的理由是**处置动作相反**：前者是「平台按保留期
 			// 删掉了，取不回来」，后者是「副本还在归档里，去 rehydrate」。
@@ -454,7 +457,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 	return res
 }
 
-// purgedArchive 报告该分区的归档副本是否已按保留期清除（FR-501 归档对象回收）。
+// purgedArchive 报告该分区的归档副本是否已按保留期清除（归档对象回收）。
 //
 // 抽成单函数而不是在多处各写一遍判断：这个条件决定「用户看到的是『已清除』还是
 // 『去恢复一下』」，而两处措辞一旦分叉，用户就会在两条互斥的引导之间来回。

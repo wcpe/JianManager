@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-497③ 验收补足 · 任务 2 的公共夹具：真实 wrapper 子进程 + 真实 java 游戏服夹具 + 真 Manager。
+// 验收补足 · 任务 2 的公共夹具：真实 wrapper 子进程 + 真实 java 游戏服夹具 + 真 Manager。
 //
 // 这一层刻意**不注入任何桩**：归属复核走 DefaultVerifyAdoptOwnership（读真实 /proc）、存活探测走
 // 真内核、拨号走真 Unix socket、Stop 走真控制帧与真进程树。测试里唯一被替换的东西是
@@ -62,14 +62,14 @@ func newRealAdoptHarnessPorts(t *testing.T, recordProbePort, javaListenPort int)
 	classes := compileMCStub(t)
 
 	// pidDir 必须短：Unix socket 路径上限 ≈107 字节。
-	pidDir, err := os.MkdirTemp("", "fr497p-")
+	pidDir, err := os.MkdirTemp("", "adopt-p-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(pidDir) })
-	workDir, err := os.MkdirTemp("", "fr497d-")
+	workDir, err := os.MkdirTemp("", "adopt-d-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(workDir) })
 
-	uuid := "fr497-" + filepath.Base(pidDir)
+	uuid := "adopt-" + filepath.Base(pidDir)
 	javaLog := filepath.Join(workDir, "latest.log")
 	h := &realAdoptHarness{pidDir: pidDir, workDir: workDir, uuid: uuid, audits: &[]scanAudit{}, javaLog: javaLog}
 

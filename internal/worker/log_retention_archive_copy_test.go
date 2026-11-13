@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// 本文件守 FR-501「导出归档」的**配置面**：开关默认关、缺目的地启动即拒、
+// 本文件守「导出归档」的**配置面**：开关默认关、缺目的地启动即拒、
 // 三闸里第三闸（VL 侧）读的是 `log_vl.delete_enabled`。
 //
 // 为什么这些都要走完整链路（YAML → viper → RetentionPolicy）：
@@ -172,10 +172,10 @@ log_retention:
 	}
 }
 
-// ── FR-501 收尾：导出归档目的地的 s3 / minio 分支 ──
+// ── 收尾：导出归档目的地的 s3 / minio 分支 ──
 //
 // 本组用例只守「配置面能表达、启动期能拒错」这两件事，不碰装配层的真实网络。
-// 真实 S3/MinIO 的 SigV4 往返已由 FR-478 的 `storage/s3_realminio_test.go`（env 门控）
+// 真实 S3/MinIO 的 SigV4 往返已由 `storage/s3_realminio_test.go`（env 门控）
 // 与 `storage_test.go` 的假服务器签名往返覆盖；这里再搭一套假 S3 只会把
 // 「配置是否正确传递」与「S3 协议是否正确实现」两件事混进一条用例。
 

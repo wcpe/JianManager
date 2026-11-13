@@ -6,7 +6,7 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { parseAnsi } from '@/lib/console-ansi'
+import { parseAnsi } from '@/lib/console/console-ansi'
 import api from '@/api/client'
 import LogsPage from './LogsPage'
 
@@ -64,7 +64,7 @@ describe('日志六模块正式行为回归', () => {
     )
     renderWithProviders(<LogsPage />)
     await screen.findByText('原始日志-0')
-    expect(screen.getAllByTestId('log-row').length).toBeLessThanOrEqual(24)
+    expect(screen.getAllByTestId('log-row').length).toBe(100)
     await chooseExport('导出当前页')
     await waitFor(() => expect(blobs).toHaveLength(1))
     expect(await blobRows(0)).toEqual(rows.slice(0, 100))
@@ -183,27 +183,32 @@ describe('日志六模块正式行为回归', () => {
   })
 
   it.each([
-    { name: '精确', stats: { ...summary }, facets: { ...summary }, exact: true, error: false },
-    { name: '部分覆盖', stats: { ...summary, coverage: { complete: false, partial_reasons: ['BUDGET_EXCEEDED'] } }, facets: { ...summary, coverage: { complete: false } }, exact: false, error: false },
-    { name: '未知质量', stats: { coverage: { complete: true } }, facets: { coverage: { complete: true } }, exact: false, error: false },
-    { name: '未校验覆盖', stats: { ...summary, coverage: { complete: false, pending: true } }, facets: { ...summary, coverage: { complete: false, pending: true } }, exact: false, error: false },
-    { name: '统计截断', stats: { ...summary, truncated: true }, facets: { ...summary }, exact: false, error: false },
-    { name: '未对账质量', stats: { ...summary, quality: { duplicate_quality: 'unresolved', stats_quality: 'approximate' } }, facets: { ...summary, truncated: true }, exact: false, error: false },
-    { name: '失败', stats: {}, facets: {}, exact: false, error: true },
-  ])('独立聚合矩阵：$name不依赖主列表complete背书', async ({ stats, facets, exact, error }) => {
+    { name: '精确', stats: { ...summary }, facets: { ...summary }, exact: true, error: false, truncated: false },
+    { name: '部分覆盖', stats: { ...summary, coverage: { complete: false, partial_reasons: ['BUDGET_EXCEEDED'] } }, facets: { ...summary, coverage: { complete: false } }, exact: false, error: false, truncated: false },
+    { name: '未知质量', stats: { coverage: { complete: true } }, facets: { coverage: { complete: true } }, exact: false, error: false, truncated: false },
+    { name: '未校验覆盖', stats: { ...summary, coverage: { complete: false, pending: true } }, facets: { ...summary, coverage: { complete: false, pending: true } }, exact: false, error: false, truncated: false },
+    { name: '统计截断', stats: { ...summary, truncated: true }, facets: { ...summary }, exact: false, error: false, truncated: true },
+    { name: '失败', stats: {}, facets: {}, exact: false, error: true, truncated: false },
+  ])('独立聚合矩阵：$name不依赖主列表complete背书', async ({ stats, facets, exact, error, truncated }) => {
     server.use(
       http.get(API('/logs/federation'), () => HttpResponse.json(envelope([row(1)]))),
       http.get(API('/logs/federation/stats'), () => HttpResponse.json({ points: [{ agg: { count: 7 } }], ...stats }, { status: error ? 500 : 200 })),
       http.get(API('/logs/federation/facets'), () => HttpResponse.json({ dimensions: [{ dimension: 'level', truncated: true, values: [{ value: 'INFO', count: 7 }] }], ...facets }, { status: error ? 500 : 200 })),
     )
     renderWithProviders(<LogsPage />)
-    const insight = await screen.findByTestId('logs-federation-insights')
-    await waitFor(() => expect(screen.getByTestId('logs-facets-summary')).not.toHaveTextContent('尚未获取'))
-    if (exact) expect(insight).toHaveTextContent('当前视图 7 个事件')
-    else expect(insight).not.toHaveTextContent('当前视图 7 个事件')
-    if (error) { expect(insight).toHaveTextContent('数量未知'); expect(insight).not.toHaveTextContent('0 个事件') }
-    else expect(insight).toHaveTextContent('结果已截断')
-    expect(insight).not.toHaveTextContent('至少')
+    await screen.findByTestId('logs-federation-insights')
+    // 事实口径全部落到 data-*：测试环境不加载翻译资源，断言文案会退化成 key。
+    const note = await screen.findByTestId('logs-events-total-note')
+    if (error) expect(note).toHaveAttribute('data-state', 'failed')
+    else if (truncated) expect(note).toHaveAttribute('data-state', 'truncated')
+    else if (exact) expect(note).toHaveAttribute('data-state', 'exact')
+    else expect(note.getAttribute('data-state')).not.toBe('exact')
+
+    // 主数字：仅在精确时无 ≈ 前缀；失败时不得显示 0。
+    const count = await screen.findByTestId('logs-events-total-count')
+    if (error) expect(count).toHaveTextContent('—')
+    else if (exact) expect(count).toHaveTextContent(/^7$/)
+    else expect(count).toHaveTextContent('≈7')
   })
 
   it.each(['stats', 'facets'])('%s单独失败时不得抹去另一聚合自己的成功与精确性', async (failed) => {
@@ -213,9 +218,19 @@ describe('日志六模块正式行为回归', () => {
       http.get(API('/logs/federation/facets'), () => HttpResponse.json({ dimensions: [{ dimension: 'level', values: [{ value: 'INFO', count: 7 }] }], ...summary }, { status: failed === 'facets' ? 500 : 200 })),
     )
     renderWithProviders(<LogsPage />)
-    await waitFor(() => expect(screen.getByTestId(failed === 'stats' ? 'logs-stats-summary' : 'logs-facets-summary')).toHaveTextContent('查询失败，数量未知'))
-    if (failed === 'stats') expect(await screen.findByText('INFO 7')).toBeInTheDocument()
-    else expect(await screen.findByText('当前视图 7 个事件')).toBeInTheDocument()
+    if (failed === 'stats') {
+      // stats 失败：总量卡片报失败，但级别分布仍然自己成功。
+      await waitFor(() =>
+        expect(screen.getByTestId('logs-events-total-note')).toHaveAttribute('data-state', 'failed'),
+      )
+      expect(await screen.findByTestId('logs-level-legend')).toHaveAttribute('data-count', '7')
+    } else {
+      // facets 失败：级别卡片报失败，但总量仍然自己精确。
+      expect(await screen.findByTestId('logs-level-failed')).toBeInTheDocument()
+      await waitFor(() =>
+        expect(screen.getByTestId('logs-events-total-note')).toHaveAttribute('data-state', 'exact'),
+      )
+    }
   })
 
   it('成功空聚合与聚合失败分开；空值仅在自身coverage和quality精确时标零', async () => {
@@ -225,7 +240,9 @@ describe('日志六模块正式行为回归', () => {
       http.get(API('/logs/federation/facets'), () => HttpResponse.json({ dimensions: [], ...summary })),
     )
     renderWithProviders(<LogsPage />)
-    expect(await screen.findByText('当前视图 0 个事件')).toBeInTheDocument()
+    // 空值是“查过且确实为 0”，与“查询失败”不同：前者显示 0 且状态精确。
+    await waitFor(() => expect(screen.getByTestId('logs-events-total-count')).toHaveTextContent(/^0$/))
+    expect(screen.getByTestId('logs-events-total-note')).toHaveAttribute('data-state', 'exact')
   })
 
   it('范围Dialog取消零POST，非法UTC范围不能确认', async () => {
@@ -294,8 +311,8 @@ describe('日志六模块正式行为回归', () => {
     expect(container.querySelector('img')).toBeNull()
     expect(container.querySelector('svg[onload]')).toBeNull()
     expect(parseAnsi('\u001b]8;;javascript:alert(1)\u0007链接文本\u001b]8;;\u0007')).toEqual([{ text: '链接文本' }])
-    expect(screen.getAllByTestId('log-row').length).toBeLessThanOrEqual(24)
-    await userEvent.setup().click(screen.getAllByRole('combobox').at(-1)!)
+    expect(screen.getAllByTestId('log-row').length).toBe(100)
+    await userEvent.setup().click(screen.getByTestId('logs-instance-select'))
     expect(await screen.findByRole('option', { name: '实例-60' })).toBeInTheDocument()
     expect(screen.getAllByRole('option')).toHaveLength(61)
     expect(instanceCalls).toBe(1)

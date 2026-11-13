@@ -52,7 +52,7 @@ func Dial(addr string) (net.Conn, error) {
 	return platformDial(addr)
 }
 
-// DialTimeout 以超时拨号到指定地址（FR-456 F9）：地址未就绪/对端 accept 队列打满时避免无限阻塞。
+// DialTimeout 以超时拨号到指定地址（F9）：地址未就绪/对端 accept 队列打满时避免无限阻塞。
 // timeout<=0 时退化为无超时拨号。
 func DialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
 	if addr == "" {
@@ -64,7 +64,7 @@ func DialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
 	return platformDialTimeout(addr, timeout)
 }
 
-// platformDialDefaultTimeout 无显式超时拨号的默认上限（FR-456 F9）：
+// platformDialDefaultTimeout 无显式超时拨号的默认上限（F9）：
 // 地址存在但对端未 accept 时避免无限阻塞，调用方据失败重试。
 const platformDialDefaultTimeout = 2 * time.Second
 

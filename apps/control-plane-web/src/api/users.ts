@@ -40,7 +40,7 @@ export function useUsers() {
   })
 }
 
-/** GET /users 分页信封（带 limit 时的响应形态，FR-336）。 */
+/** GET /users 分页信封（带 limit 时的响应形态）。 */
 export interface UserPage {
   items: UserInfo[]
   total: number
@@ -48,15 +48,15 @@ export interface UserPage {
   offset: number
 }
 
-/** 服务端搜索/分页参数（FR-336）。limit 是信封形态开关，调用方必须携带。 */
+/** 服务端搜索/分页参数。limit 是信封形态开关，调用方必须携带。 */
 export interface UserSearchParams {
   q?: string
   limit?: number
   offset?: number
 }
 
-/**
- * 服务端搜索用户（FR-336）：GET /users?q=&limit=&offset= 返回分页信封。
+/** 
+ * 服务端搜索用户：GET /users?q=&limit=&offset= 返回分页信封。
  * queryKey 前缀复用 ['users']，写操作的 invalidateQueries({queryKey:['users']}) 前缀命中可联动刷新；
  * placeholderData 保留上一页结果，避免键入/加载更多时列表闪烁。
  */

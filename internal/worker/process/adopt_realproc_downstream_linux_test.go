@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 )
 
-// FR-497③ 验收缺口 ②：收养之后的三条下游链路，全部走**真实进程**。
+// 验收缺口 ②：收养之后的三条下游链路，全部走**真实进程**。
 //
 // 被补的缺口原文：「收养完成后的心跳 RUNNING / 健康巡检 / Stop 链路只有单测，且用的是 `sleep`
 // 假进程」。三条链路各自的 `sleep` 失真点：
@@ -28,11 +28,11 @@ import (
 //
 // 下面的用例一律经由真实 wrapper 子进程 + 真实 java 夹具（testdata/mcstub），不注入任何桩。
 
-// TestFR497_AdoptedHeartbeatReportsRunning 收养后心跳快照必须报 RUNNING，且 PID 是夹具真实 PID。
+// TestAdoptedHeartbeatReportsRunning 收养后心跳快照必须报 RUNNING，且 PID 是夹具真实 PID。
 //
-// 这条链路是 CP 面板从「无此实例」收敛回来的唯一入口：心跳是 CP 认状态的唯一真源（ADR-093 决策 3
-// 之外，实例清单本身由 `GetAllInstanceStates` 提供）。若收养登记了却没进快照，CP 依旧看不见它。
-func TestFR497_AdoptedHeartbeatReportsRunning(t *testing.T) {
+// 这条链路是 CP 面板从「无此实例」收敛回来的唯一入口：心跳是 CP 认状态的唯一真源
+// （除此之外，实例清单本身由 `GetAllInstanceStates` 提供）。若收养登记了却没进快照，CP 依旧看不见它。
+func TestAdoptedHeartbeatReportsRunning(t *testing.T) {
 	h := newRealAdoptHarness(t, 0)
 	h.adopt(t)
 
@@ -50,7 +50,7 @@ func TestFR497_AdoptedHeartbeatReportsRunning(t *testing.T) {
 	require.True(t, isPIDAliveLocal(rec.JavaPID), "被托管的 java 也必须仍存活（收养未碰进程）")
 }
 
-// TestFR497_AdoptedHealthScanCoversHealthy 收养实例被真巡检**检查到**且判为健康（探针可达形态）。
+// TestAdoptedHealthScanCoversHealthy 收养实例被真巡检**检查到**且判为健康（探针可达形态）。
 //
 // 这里要同时钉住两件事，缺一不可：
 //  1. 巡检没有跳过它（`scanOne` 对 `state != RUNNING` 直接跳过；若收养没把状态记成 RUNNING，
@@ -59,7 +59,7 @@ func TestFR497_AdoptedHeartbeatReportsRunning(t *testing.T) {
 //     真实监听的 `/metrics`（`HTTPHealthProbe` 真实 HTTP GET）。若有人把响应维度退化成
 //     「存活即健康」，`Readiness` 与 `Healthy` 仍为 true，但下面「停掉监听后必须转不健康」的
 //     姊妹用例会转红——两条一起才算把响应维度钉住。
-func TestFR497_AdoptedHealthScanCoversHealthy(t *testing.T) {
+func TestAdoptedHealthScanCoversHealthy(t *testing.T) {
 	port := freeTCPPort(t)
 	h := newRealAdoptHarness(t, port)
 
@@ -99,13 +99,13 @@ func TestFR497_AdoptedHealthScanCoversHealthy(t *testing.T) {
 	require.Equal(t, StateRunning, instStateOf(t, h.m, h.uuid), "巡检不得改动健康实例的状态")
 }
 
-// TestFR497_AdoptedHealthScanDeadWhenProbeUnreachable 探针不可达形态：3 拍后判 HealthFaultDead。
+// TestAdoptedHealthScanDeadWhenProbeUnreachable 探针不可达形态：3 拍后判 HealthFaultDead。
 //
 // 这条同时是「收养实例没有 ServerPort」这一**真机隐患的可执行记录**（详见下面的宽限期用例）：
 // 收养记录里只有 ProbePort（来自 PID 文件）、没有 ServerPort，响应维度于是只能落在 ProbePort 上；
 // 未部署 ServerProbe 的实例该端口无人监听 → 恒失败 → 到期判假死。这是当前实现的**既有行为**，
 // 本用例把它钉成可回归的事实，而不是假装它不存在。
-func TestFR497_AdoptedHealthScanDeadWhenProbeUnreachable(t *testing.T) {
+func TestAdoptedHealthScanDeadWhenProbeUnreachable(t *testing.T) {
 	// 记录里声明了 ProbePort，但**无人监听**（未部署 ServerProbe 的真实形态）：响应维度必然失败。
 	deadPort := freeTCPPort(t)
 	h := newRealAdoptHarnessPorts(t, deadPort, 0)
@@ -135,9 +135,9 @@ func TestFR497_AdoptedHealthScanDeadWhenProbeUnreachable(t *testing.T) {
 	require.Equal(t, 1, h.countAudit("health.dead_detected"))
 }
 
-// TestFR497_AdoptedHealthScanHasStartupWarmup 收养实例**必须有**启动宽限期（缺陷回归）。
+// TestAdoptedHealthScanHasStartupWarmup 收养实例**必须有**启动宽限期（缺陷回归）。
 //
-// 缺陷形态（本 FR 补验时在真机上确认）：收养的两条登记路径都没有写 `Instance.StartedAt`，而
+// 缺陷形态（补验时在真机上确认）：收养的两条登记路径都没有写 `Instance.StartedAt`，而
 // `warmupRemaining` 在纪元为零值时返回 0 —— 「做了宽限」变成「完全没有宽限」。叠加收养实例的另一
 // 个特征（PID 记录只有 ProbePort，未部署 ServerProbe 时无人监听），一个**刚刚才被接管、完全可能
 // 正在正常服务**的服务器会在 3 拍（默认 30s 一拍 ≈ 90s）后被判 `HealthFaultDead`；若 CP 把动作
@@ -147,7 +147,7 @@ func TestFR497_AdoptedHealthScanDeadWhenProbeUnreachable(t *testing.T) {
 // 转红方式（改回缺陷行为）：删掉 adopt_orphan.go 两条登记路径里的 `StartedAt`（以及
 // recover_orphan.go registerAdoptedDaemon 里那条），本用例立即转红——第 1 拍就拿到
 // fault=suspected_dead 而不是 Warmup。
-func TestFR497_AdoptedHealthScanHasStartupWarmup(t *testing.T) {
+func TestAdoptedHealthScanHasStartupWarmup(t *testing.T) {
 	deadPort := freeTCPPort(t)
 	h := newRealAdoptHarnessPorts(t, deadPort, 0)
 	h.adopt(t)
@@ -184,7 +184,7 @@ func TestFR497_AdoptedHealthScanHasStartupWarmup(t *testing.T) {
 	require.Equal(t, HealthFaultDead, fault, "宽限期过后必须恢复正常判定（否则是掩盖而非宽限）")
 }
 
-// TestFR497_AdoptedStopGoesThroughWrapperControlFrame 收养后 Stop：
+// TestAdoptedStopGoesThroughWrapperControlFrame 收养后 Stop：
 //   - java 进程真的退出、实例记 STOPPED；
 //   - 没有误杀无关进程；
 //   - **并记录停止走的是哪条路径**（wrapper 控制帧 vs 强杀）——这是规格一致性问题。
@@ -206,7 +206,7 @@ func TestFR497_AdoptedHealthScanHasStartupWarmup(t *testing.T) {
 // 为什么要用日志文件而不是 `Manager.SetOutputHandler` 的 stdio：wrapper 收到 stop 后立即关闭控制
 // 连接（readLoop 退出），java 关服序列的最后几行常常来不及经 stdio 帧转发回 Worker。用 stdio 做
 // 断言会把「转发还没跟上」误判成「停止没走控制帧」——那是夹具的观测面选错了，不是产品缺陷。
-func TestFR497_AdoptedStopGoesThroughWrapperControlFrame(t *testing.T) {
+func TestAdoptedStopGoesThroughWrapperControlFrame(t *testing.T) {
 	h := newRealAdoptHarness(t, 0)
 	inst := h.adopt(t)
 
@@ -252,14 +252,14 @@ func TestFR497_AdoptedStopGoesThroughWrapperControlFrame(t *testing.T) {
 	require.False(t, pidFileExists(daemon.PIDFileName(h.pidDir, h.uuid)), "wrapper 退出时应清理 PID 文件")
 }
 
-// TestFR497_AdoptedStopKeepsUnrelatedDaemon 负例侧写：让**另一个**实例（同 pidDir、不同 UUID）
+// TestAdoptedStopKeepsUnrelatedDaemon 负例侧写：让**另一个**实例（同 pidDir、不同 UUID）
 // 在收养实例被 Stop 时保持运行，钉住「Stop 只作用于目标实例」。
 //
 // 为什么值得单独一条：收养与 Stop 都按 PID/进程组操作，而 wrapper 的 `KillPIDTree` 走的是
 // `kill(-pgid)`——一旦两个 wrapper 落在同一进程组（例如都没有 setsid），停一个就会带走另一个。
 // 生产里 wrapper 由 `setDetachedAttr` 保证独立会话，但收养路径**没有**重新 spawn，因此这条属性
 // 是否真的成立只能实测。
-func TestFR497_AdoptedStopKeepsUnrelatedDaemon(t *testing.T) {
+func TestAdoptedStopKeepsUnrelatedDaemon(t *testing.T) {
 	other := newRealAdoptHarness(t, 0)
 	other.adopt(t)
 	otherRec := waitPIDRecord(t, other.pidDir, other.uuid)
@@ -290,7 +290,7 @@ func instStateOf(t *testing.T, m *Manager, uuid string) InstanceState {
 // waitJavaListen 返回「等 java 夹具监听就绪」的预算：JVM 冷启动 + 类加载在慢机上可达数秒。
 func waitJavaListen(t *testing.T) time.Duration {
 	t.Helper()
-	if v := os.Getenv("FR497_JAVA_LISTEN_BUDGET_SEC"); v != "" {
+	if v := os.Getenv("JM_ADOPT_JAVA_LISTEN_BUDGET_SEC"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return time.Duration(n) * time.Second
 		}

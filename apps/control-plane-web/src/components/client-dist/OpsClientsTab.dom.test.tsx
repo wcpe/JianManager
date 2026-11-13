@@ -6,8 +6,8 @@ import { loginMockUser } from '@/test/auth'
 import type { ClientRuntimeOverview } from '@/api/clientRuntimeStates'
 import OpsClientsTab from './OpsClientsTab'
 
-/**
- * OpsClientsTab（FR-430，迁自旧监控页用例④与 ObsOverviewSection 测试）：
+/** 
+ * OpsClientsTab（迁自旧监控页用例④与 ObsOverviewSection 测试）：
  * - 更新侧总览（洞察卡 + 热力图 + 机器排行）随 Tab 呈现（ObsOverviewSection 自取 devmock）；
  * - 运行态 KPI/明细由 `overview` prop 驱动，机器行「看日志」触发 onLink 联动回调。
  */
@@ -47,7 +47,7 @@ describe('OpsClientsTab（机器 / 客户端）', () => {
       <OpsClientsTab channelId={undefined} window={{ range: '7d' }} overview={OVERVIEW} isError={false} onLink={onLink} />,
     )
 
-    // 更新侧总览（FR-426/427/428）。
+    // 更新侧总览（427/428）。
     expect(await screen.findByTestId('client-dist-insight-cards')).toBeInTheDocument()
     expect(await screen.findByTestId('update-heatmap')).toBeInTheDocument()
     expect((await screen.findAllByTestId('machine-row')).length).toBeGreaterThan(0)

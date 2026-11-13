@@ -203,6 +203,11 @@ func TestMetric_InstanceRanking_QueryCountAndIndex(t *testing.T) {
 	}
 	db2, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), cb)
 	require.NoError(t, err)
+
+	// 关闭底层连接（共享内存库在最后一个连接关闭后才释放，见 testdb_test.go）。
+	if sqlDB, derr := db2.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db2.AutoMigrate(&model.MetricSeries{}, &model.MetricSampleRaw{},
 		&model.MetricRollup5m{}, &model.MetricRollup1h{}, &model.Instance{}))
 
@@ -229,7 +234,7 @@ func TestMetric_InstanceRanking_QueryCountAndIndex(t *testing.T) {
 		"排行应为常数条 SQL（聚合 + 计数），不得随实例数 N+1：%v", queries)
 }
 
-// TestMetric_InstanceRanking_AllSupportedMetricsOrder （FR-469 验收 1）5 个白名单指标
+// TestMetric_InstanceRanking_AllSupportedMetricsOrder （验收 1）5 个白名单指标
 // **逐个**锁住默认排序方向与入榜行为：仅 tps 为 asc（吞吐越低越差），
 // 其余 mspt / cpu / heap / players 均为 desc。缺任一指标的方向断言时，
 // rankingOrder 的「其余 desc」语义只靠实现存在、可被静默改坏。

@@ -35,17 +35,26 @@ func (s *Service) Close() error { return s.planner.Close() }
 // ReleaseView 用于创建失败、取消交付或本地调用方主动结束读取。
 func (s *Service) ReleaseView(viewID string) error { return s.planner.ReleaseView(viewID) }
 
-// foregroundAdmission 在规划深拷贝和 sidecar IO 前先做轻量准入；实际读前仍复核资源变化。
-func (s *Service) foregroundAdmission() *QueryError {
+// readOnlyAdmission 在规划深拷贝和 sidecar IO 前先做轻量只读准入；实际读前仍复核资源变化。
+// admission 为查询入口统一转换资源拒绝；readOnly 不创建导出物，foreground 保留给原生实时/高成本工作。
+func (s *Service) admission(work vlsup.WorkClass) *QueryError {
 	s.resourceMu.RLock()
 	budget := s.resourceBudget
 	s.resourceMu.RUnlock()
 	if budget != nil {
-		if err := budget.Admit(vlsup.WorkForeground); err != nil {
+		if err := budget.Admit(work); err != nil {
 			return &QueryError{Code: ErrCodeBudgetExceeded, Message: fmt.Sprintf("query admission: %v", err), Retryable: true, RetryAfter: 1000}
 		}
 	}
 	return nil
+}
+
+func (s *Service) readOnlyAdmission() *QueryError {
+	return s.admission(vlsup.WorkReadOnly)
+}
+
+func (s *Service) foregroundAdmission() *QueryError {
+	return s.admission(vlsup.WorkForeground)
 }
 
 func (s *Service) planForRead(ctx context.Context, req QueryRequest) PlanResult {
@@ -53,7 +62,7 @@ func (s *Service) planForRead(ctx context.Context, req QueryRequest) PlanResult 
 		return PlanResult{Err: newErr(ErrCodeCancelled, "query cancelled before planning"),
 			Coverage: Coverage{PartialReasons: []string{ReasonCancelled}, EnumerationState: EnumCancelled}}
 	}
-	if err := s.foregroundAdmission(); err != nil {
+	if err := s.readOnlyAdmission(); err != nil {
 		return PlanResult{Err: err, Coverage: Coverage{PartialReasons: []string{ReasonBudgetExceeded}, EnumerationState: EnumOpen}}
 	}
 	return s.planFromRequest(req)
@@ -77,7 +86,7 @@ func (s *Service) beginRead(ctx context.Context, req QueryRequest, plan *PlanRes
 	s.resourceMu.RUnlock()
 	var unreserve func()
 	if budget != nil {
-		if err := budget.Admit(vlsup.WorkForeground); err != nil {
+		if err := budget.Admit(vlsup.WorkReadOnly); err != nil {
 			return fail(newErr(ErrCodeBudgetExceeded, fmt.Sprintf("query admission: %v", err)))
 		}
 		if req.AllowProjectionDrift {

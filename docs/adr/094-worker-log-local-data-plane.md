@@ -38,7 +38,7 @@
 >
 > #### 代码落点
 > `stateindex.OpenInMemory` · `eventstore.MemoryRoot` · 纯内存 WAL · `ingest.cursor`；
-> 提交 `7456d716`、`f5b882f0`、`eca823ac`。
+> 提交见 git log。
 
 ## 背景
 

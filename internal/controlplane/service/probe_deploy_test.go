@@ -13,6 +13,7 @@ func TestBuildDeployServerProbeDownloadRequest_OnlyCarriesReference(t *testing.T
 		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		"0.2.0",
 		"metrics:\n  enabled: true\n",
+		"", // 不下发托管身份（独立模式）
 	)
 
 	assert.Equal(t, "inst-1", req.InstanceUuid)
@@ -21,4 +22,5 @@ func TestBuildDeployServerProbeDownloadRequest_OnlyCarriesReference(t *testing.T
 	assert.Equal(t, "0.2.0", req.Version)
 	assert.NotEmpty(t, req.DownloadUrl)
 	assert.Len(t, req.Sha256, 64)
+	assert.Empty(t, req.IdentityJson, "不传身份时不得凭空填值")
 }

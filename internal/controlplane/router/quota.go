@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// QuotaHandler 实例运行期配额路由处理器（FR-467）。
+// QuotaHandler 实例运行期配额路由处理器。
 // 只读视图：限额来源 + 实时用量 + 强制状态。限额的写入沿用既有路径
 // （实例级走 PUT /instances/:id 的 CPULimit/MemLimitMB/DiskLimitMB，组级走组配额端点）。
 type QuotaHandler struct {

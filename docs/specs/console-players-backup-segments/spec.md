@@ -90,3 +90,13 @@
 - **proxy 实例的玩家页签**：在线玩家归属后端子服，proxy 实例过滤后恒空；白名单对 proxy 也不可用（探针返回 unavailable）。v1 接受空态+降级提示；是否对 proxy 实例改为展示「其网络内全部后端玩家」待产品定。
 - **备份创建的存储选择**：保留只读下拉是低成本复用，但控制台分区可能希望更克制（缺省本地、隐藏下拉）；先保留，真机走查按信息密度取舍。
 - **定时任务不提供创建**：单实例场景「就地建一条备份定时」是合理诉求，但表单（cron 预设/校验/预览）较重；v1 以链接引导去独立页，若走查反馈强烈再把 `ScheduleFormDialog` 抽公用组件复用进分区。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-339 实例控制台玩家/备份定时分区接真（feat，FR-269 首版占位归真，验收分诊
+
+**需求补充**：两页签停留「第一版原型」静态占位而后端/独立页面/hook 均已就绪）：抽实例作用域 `InstancePlayersSegment`（复用 useOnlinePlayers/useBans/useWhitelist 等）与 `InstanceBackupSegment`（useSchedules(id)+useBackups(id)）接入控制台页签；短期不能全接的分区从 TAB_KEYS 撤下不留假入口；清理占位文案 → `docs/specs/console-players-backup-segments/spec.md`
+
+**交付状态**：✅ 已交付@v0.17.0

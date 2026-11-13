@@ -88,10 +88,16 @@ func TestManager_DaemonRecover(t *testing.T) {
 	m2 := NewManager(pidDir)
 	recovered, err := m2.RecoverDaemonInstances()
 	require.NoError(t, err)
-	assert.Equal(t, 1, recovered)
+	// 不能断言 recovered==1：两阶段化后 RecoverDaemonInstances 只同步做「快速首拨」，
+	// 首拨失败时该记录转入**后台**有界重试、函数立即返回 0，靠后台补上的不计入返回值。
+	// 整包并发下首拨会因调度延迟一时拨不通，直接断言 recovered==1 即间歇红。
+	// 故与 TestManager_DaemonStopAllGraceful 同口径：先让后台重试收敛，再断言终态。
+	require.True(t, m2.WaitStartupTakeover(10*time.Second), "后台接管重试应在超时内收敛")
 
-	st, _ := m2.GetState(uuid)
-	assert.Equal(t, StateRunning, st)
+	st, stErr := m2.GetState(uuid)
+	require.NoError(t, stErr)
+	require.Equal(t, StateRunning, st,
+		fmt.Sprintf("应接管为 RUNNING（同步返回的 recovered=%d，首拨失败时由后台重试补齐）", recovered))
 
 	// 停止并退出，清理 wrapper
 	_ = m2.Stop(uuid)
@@ -132,7 +138,7 @@ func TestManager_DaemonStopAllGraceful(t *testing.T) {
 	recovered, recErr := m.RecoverDaemonInstances()
 	t.Logf("recover: recovered=%d err=%v wrapperPID=%d", recovered, recErr, wrapperPID)
 	// 同 TestManager_DaemonReArm：同步返回值只反映「首拨是否当场成功」，首拨失败的记录会转后台
-	// 有界重试（FR-455 两阶段化）。断言前必须收敛，否则整包并发下是间歇红。
+	// 有界重试（两阶段化）。断言前必须收敛，否则整包并发下是间歇红。
 	require.NoError(t, recErr)
 	require.True(t, m.WaitStartupTakeover(10*time.Second), "后台接管重试应在超时内收敛")
 	st, stErr := m.GetState(uuid)
@@ -178,7 +184,7 @@ type autoRestartToggler interface {
 	EnableAutoRestart() error
 }
 
-// FR-459 终验 Major 端到端回归：熔断禁用自动重启后经人工解除（对称 enable 帧），仍在托管的
+// 终验 Major 端到端回归：熔断禁用自动重启后经人工解除（对称 enable 帧），仍在托管的
 // wrapper 必须恢复「Java 退出后自动重启」。修复前没有 enable 帧，wrapper 收到禁用后收摊退出，
 // 而 Worker/CP 认为熔断已解除 → Java 下次崩溃不再被拉起（假解除）。
 func TestManager_DaemonEnableRestartReArmsWrapper(t *testing.T) {
@@ -212,7 +218,7 @@ func TestManager_DaemonEnableRestartReArmsWrapper(t *testing.T) {
 	require.NoError(t, m.Create(uuid, "Daemon", exitAfterCmd(4), "", pidDir, nil, true, ProcessTypeDaemon, "", "", 0, 0))
 	recovered, recErr := m.RecoverDaemonInstances()
 	require.NoError(t, recErr)
-	// RecoverDaemonInstances 现在只同步做「快速首拨」（FR-455 两阶段化）：首拨失败时该记录转
+	// RecoverDaemonInstances 现在只同步做「快速首拨」（两阶段化）：首拨失败时该记录转
 	// **后台**有界重试、函数立即返回 0，靠后台重试补上的不计入返回 —— 见
 	// recover_orphan.go startStartupTakeoverRetries 与 recover_orphan_test.go 的说明。
 	// 因此不能直接断言 recovered==1（整包并发下首拨可能一时拨不通，造成间歇红），

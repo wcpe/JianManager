@@ -54,7 +54,7 @@ func makeDecompileJar(t *testing.T, path, blobName string, blobMethod uint16, bl
 	require.NoError(t, zw.Close())
 }
 
-// TestPrepareDecompileTarget_JarEntryUsesEntrySizeNotJarSize 复现 FR-075 缺陷：
+// TestPrepareDecompileTarget_JarEntryUsesEntrySizeNotJarSize 复现缺陷：
 // 宿主 jar 远超上限（如 server.jar 43MB），但其中单个 class 仅几字节，
 // 单条目反编译不得被整 jar 体积拒绝——否则服务端核心 jar 内 class 永远无法单条目反编译。
 func TestPrepareDecompileTarget_JarEntryUsesEntrySizeNotJarSize(t *testing.T) {

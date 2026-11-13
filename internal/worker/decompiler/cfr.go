@@ -2,7 +2,7 @@
 // 并经实例/系统 JDK 受控调起 CFR 把 class/jar 反编译为 Java 源码。
 //
 // 全程只读 + 超时 + 体积上限 + 受控 exec（CFR 静态分析字节码，不加载/运行目标代码、
-// 不写工作目录、不联网执行）。参见 ADR-018。
+// 不写工作目录、不联网执行）。
 package decompiler
 
 import (
@@ -19,7 +19,7 @@ import (
 
 // CFR 版本与内容指纹（构建期常量，升级 CFR 时同步改这三项）。
 // SHA-256 pin 用于校验「按需下载」的内容可信（不信任传输通道，只信内容指纹，
-// 与 ADR-022 客户端 manifest 信任模型同构）。
+// 与客户端 manifest 信任模型同构）。
 const (
 	// CFRVersion 是本 Worker 约定的 CFR 版本。
 	CFRVersion = "0.152"
@@ -34,7 +34,7 @@ const (
 type EmbeddedJarFunc func() []byte
 
 // Provider 负责解析出一个可用的 CFR jar 路径并缓存结果。
-// 解析优先级（ADR-018 决策 3）：
+// 解析优先级：
 //  1. 显式配置路径（configPath）；
 //  2. 内嵌 jar（embedded，写到缓存目录复用）；
 //  3. 数据根缓存（cacheDir/cfr-<ver>.jar）；
@@ -52,7 +52,7 @@ type Provider struct {
 	allowDownload bool
 	// httpClient 用于按需下载（可注入，便于测试）。
 	httpClient *http.Client
-	// httpProvider 运行时出站持有者（FR-185/ADR-043）：非 nil 时每次下载取当前 client，
+	// httpProvider 运行时出站持有者：非 nil 时每次下载取当前 client，
 	// 使 CP 经心跳下发的代理改动即时生效。优先于 httpClient。
 	httpProvider func() *http.Client
 	// downloadURL 是 CFR jar 下载地址（默认 Maven Central，可注入便于测试）。
@@ -72,10 +72,10 @@ type Config struct {
 	Embedded EmbeddedJarFunc
 	// AllowDownload 是否允许从 Maven Central 按需下载（默认应开启）。
 	AllowDownload bool
-	// HTTPClient 按需下载 CFR 所用出站 client（经进程级代理，FR-174/ADR-037）。
+	// HTTPClient 按需下载 CFR 所用出站 client（经进程级代理）。
 	// 为 nil 时回退一个 60s 超时的默认 client（向后兼容；测试也可经此注入 httptest client）。
 	HTTPClient *http.Client
-	// HTTPClientProvider 运行时出站持有者（FR-185/ADR-043）：非空时每次下载取当前 client，
+	// HTTPClientProvider 运行时出站持有者：非空时每次下载取当前 client，
 	// 使 CP 经心跳下发的代理改动即时生效。优先于 HTTPClient。
 	HTTPClientProvider func() *http.Client
 }

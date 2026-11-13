@@ -1,7 +1,7 @@
 # Spec: 多语言 monorepo 统一布局与命令面（FR-283~288）
 
 - **状态**: ✅ done（v0.16.0 交付：已整合回 dev；bot 真机 spawn e2e 双链路过、`make dist` 全量绿、线上部署 bundle 哈希对齐本地构建；真 CI 待 push 后触发验证，见 `.tmp/acceptance-version-v0.16.0-2026-07-14.md`）
-- **落地 commit**: FR-283 `5cfec2a2`（纯移动 682 rename+workspace 骨架）/`896ccaaf`（真依赖接线+构建链）/`41d6e861`（Tailwind @source）/`adf46df9`（tsconfig+eslint-config 抽包）；FR-285 `cee6f697`；FR-286 `a63800b8`；FR-284 `d4fbb153`（contracts 反转+69 消费文件）；FR-287 `4082aba5`；FR-288 `7df8e676`
+- **落地**: FR-283 分四步（纯移动 682 rename+workspace 骨架 / 真依赖接线+构建链 / Tailwind @source / tsconfig+eslint-config 抽包）；FR-285 抽包收尾；FR-286 依赖归一；FR-284 contracts 反转+69 消费文件；FR-287 构建链收口；FR-288 收尾（提交见 git log）
 - **迁移实录五坑**（后人引以为鉴）: ①pnpm 全新 resolve 丢 npm 钉扎→`pnpm import` 继承；②多 importer peer-hash 分裂致单例库（react-i18next/i18next）双实例、i18n context 断→peer 化+根 overrides 钉版；③Tailwind v4 不扫 node_modules→CSS 入口显式 `@source`；④重复 JSON 键（devDependencies×2）后块覆盖前块→依赖静默丢；⑤install EPERM 中断致原生 binding 半残（有 .node 无 package.json，oxide 残则 Tailwind 扫描静默全崩、rolldown 残则 UNRESOLVED_ENTRY）→删 .pnpm 残目录重物化；vitest/build 不检 CSS，此类损坏仅 e2e 能抓
 - **关联**: ADR-064（accepted，布局与命令面决策）、ADR-005（go:embed 单二进制，重申不变）、ADR-047（devmock 仅 dev/test 形态）、ADR-058（`@jianmanager/ui` 组件包）、ADR-065（`version.go` 版本唯一真值）、ADR-036（发布管线与产物命名）
 - **计划**: `.tmp/brainstorm-monorepo-unification-2026-07-12.md`；执行序 `283 → (284, 285) → 286 → 287 → 288`，单分支串行
@@ -119,3 +119,22 @@ JianManager/
 - **CI 双真源窗口**：路径改动与 `release.yml` 更新必须同 commit，避免中间态红。
 - **Windows 兼容**：pnpm 默认 junction link，无管理员权限要求；已在本仓开发机形态内。
 - **回退**：各步独立可编译提交，`git revert` 粒度回退；embed 目标不变故 Go 侧回退面极小。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入。
+
+### FR-283 仓库根 pnpm workspace + 前端提升（ref，需 spec）
+
+**需求补充**：引入根 `pnpm-workspace.yaml`；`web/src`→`apps/control-plane-web`、`web/wiki`→`apps/ui-museum`、`web/packages/ui`→`packages/ui`（vite alias 改真实 workspace 依赖）；抽 `packages/tsconfig` + `packages/eslint-config` 共享配置；go:embed 目标不变，仅 `Makefile` embed-web 拷贝源 `web/dist`→`apps/control-plane-web/dist` 改一行。行为不变（关联 ADR-064，重申 ADR-005）→ `docs/specs/monorepo-unification/spec.md`
+
+**交付状态**：✅ 已交付@v0.16.0
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-283~288（多语言 monorepo 统一布局与命令面 2026-07-12）
+
+FR-283~288（多语言 monorepo 统一布局与命令面 2026-07-12）：`apps/`（所有外壳，含 Go/Node/React）+ `packages/`（第一方 JS 库）+ `internal/`（Go 库留根）+ `third_party/` 布局；前端提升为真 pnpm workspace（`web/`→`apps/control-plane-web`、`web/wiki`→`apps/ui-museum`、`web/packages/ui`→`packages/ui`）+ devmock 抽包 + go-task 命令面 + 前端版本接上 `version.go` 真源（ADR-065）；关联新 ADR-064（重申 ADR-005，不取代）→ 共享 spec `docs/specs/monorepo-unification/spec.md`（已落审，含 FR-284/285/286 免 spec 执行边界与 FR-287/288 设计节）。单分支串行执行中（序 283→(284,285)→286→287→288；实现排在 FR-281 反向流之后——内容改动先落、文件移动后落），计划见 `.tmp/brainstorm-monorepo-unification-2026-07-12.md`
+

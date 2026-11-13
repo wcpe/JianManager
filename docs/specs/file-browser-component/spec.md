@@ -179,3 +179,16 @@ export interface FileBrowserAction {
 - 实例资源卡片是高频核心组件，迁移须**行为不变**——靠既有 `explorer`/`config-explorer` 测试守护 + 不删原能力（并存而非替换）。
 - 二进制判定口径（后缀黑名单 + NUL 字节）为启发式，可能误判极少数文本；降级仍可下载，无数据风险；后续如需精确可由 source 适配器升级，不影响组件契约。
 - `buildTree` 泛化勿破 FR-191 `ClientFileTree` 既有用法（保留 `lib/client-publish-wizard` 原函数，新建 `file-browser/tree.ts` 泛型版，二者独立）。
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-213~221（观测体系重构 + 客户端分发观测 + 共享文件浏览器 + 通知中心：导航{监控/日志/统计}+任务中心移系统 / 站内信+告警合并通知中心 / 分发观测时序底座+监控页+统计扩维 / 文件浏览器抽取+实例卡片迁移+分发文件预览 / 平台级统计页 / 时序剖析增强，关联 ADR-048[统一通知模型] / ADR-049[分发观测聚合，复用 ADR-013] + 增强 FR-060/086）
+
+FR-213~221（观测体系重构 + 客户端分发观测 + 共享文件浏览器 + 通知中心：导航{监控/日志/统计}+任务中心移系统 / 站内信+告警合并通知中心 / 分发观测时序底座+监控页+统计扩维 / 文件浏览器抽取+实例卡片迁移+分发文件预览 / 平台级统计页 / 时序剖析增强，关联 ADR-048[统一通知模型] / ADR-049[分发观测聚合，复用 ADR-013] + 增强 FR-060/086）→ FR-213 `docs/specs/file-browser-component/`、FR-215 `docs/specs/observability-ia-redesign/`、FR-216 `docs/specs/notification-center/`、FR-217 `docs/specs/client-dist-observability/`、FR-220 `docs/specs/platform-statistics/`（需 spec，开发中创建）；FR-214/218/219/221 免 spec（前端复用/消费既有）；FIX-1 发布上传复验 + strict/fail-static 等术语中文化（fix 走 sdd-fix-bug，不占 §4）
+
+### FR-213~221（观测体系重构 + 客户端分发观测 + 共享文件浏览器 + 通知中心…
+
+FR-213~221（观测体系重构 + 客户端分发观测 + 共享文件浏览器 + 通知中心：导航{监控/日志/统计}+任务中心移系统 / 站内信+告警合并通知中心 / 分发观测时序底座+监控页+统计扩维 / 文件浏览器抽取+实例卡片迁移+分发文件预览 / 平台级统计页 / 时序剖析增强，关联 ADR-048[统一通知模型] / ADR-049[分发观测聚合，复用 ADR-013] + 增强 FR-060/086） → `docs/specs/file-browser-component`
+

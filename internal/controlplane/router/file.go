@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -68,13 +69,48 @@ func (h *FileHandler) Read(c *gin.Context) {
 		return
 	}
 
-	content, err := h.fileSvc.ReadFile(id, path)
+	// tailBytes>0 时只读文件尾部窗口（用于大日志在线预览）；缺省/非法/超范围一律按全量读，
+	// 保持既有调用方零影响。`0` 与不传等价。
+	tailBytes, err := parseTailBytes(c.Query("tailBytes"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+		return
+	}
+
+	res, err := h.fileSvc.ReadFileWindow(id, path, tailBytes)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
 	}
 
-	c.Data(http.StatusOK, "application/octet-stream", content)
+	// 尾部窗口用响应头回告，而非包装成 JSON：正文必须是纯文本（编辑器直接渲染），
+	// 而 HTML 的 text/plain 无超长上限（与下载同题），故不把正文塞进 JSON 字符串。
+	if res.Truncated {
+		c.Header("X-File-Truncated", "1")
+	}
+	if res.TotalSize > 0 {
+		c.Header("X-File-Total-Size", strconv.FormatInt(res.TotalSize, 10))
+	}
+
+	c.Data(http.StatusOK, "application/octet-stream", res.Content)
+}
+
+// parseTailBytes 解析 tailBytes 查询参数（字节窗口）。
+//
+// 语义：空串/0 → 0（读全量）；负数/非数字 → 明确报错（不静默当成全量，
+// 避免前端以为拿到了尾部却拿到整份大文件）。上限由 Worker 侧硬上限兵底。
+func parseTailBytes(raw string) (int64, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("tailBytes 参数非法: %s", raw)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("tailBytes 不能为负数")
+	}
+	return n, nil
 }
 
 type writeRequest struct {
@@ -103,7 +139,7 @@ func (h *FileHandler) Write(c *gin.Context) {
 		return
 	}
 
-	// FR-051：覆盖已存在文件前先做改前快照（文件不存在则自动跳过）。
+	// 覆盖已存在文件前先做改前快照（文件不存在则自动跳过）。
 	uid, _ := c.Get(middleware.CtxUserID)
 	authorID, _ := uid.(uint)
 	if err := h.versionSvc.SnapshotBeforeWrite(id, req.Path, authorID); err != nil {
@@ -152,7 +188,7 @@ func (h *FileHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
-// Upload 文件流式上传（FR-304）。multipart 流式读、经 Worker UploadFile 流式转发，
+// Upload 文件流式上传。multipart 流式读、经 Worker UploadFile 流式转发，
 // 全程不整块缓冲（修复：曾 io.ReadAll 全量进内存 + WriteFile unary 直传，直拨 >64MB 被
 // gRPC 单消息上限拒收、反向隧道下双侧内存整块缓冲）。
 // 目标路径优先经 query 参数 `path` 传递；兼容先于 file 部分的 multipart path 字段
@@ -217,7 +253,7 @@ func (h *FileHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// FR-051：上传覆盖已存在文件前先做改前快照（新文件则自动跳过）。
+	// 上传覆盖已存在文件前先做改前快照（新文件则自动跳过）。
 	uid, _ := c.Get(middleware.CtxUserID)
 	authorID, _ := uid.(uint)
 	if err := h.versionSvc.SnapshotBeforeWrite(id, path, authorID); err != nil {
@@ -313,12 +349,12 @@ func (h *FileHandler) Download(c *gin.Context) {
 	}
 }
 
-// archiveRequest 批量打包下载请求（FR-070）。
+// archiveRequest 批量打包下载请求。
 type archiveRequest struct {
 	Paths []string `json:"paths" binding:"required"`
 }
 
-// DownloadArchive 批量打包下载：把选中的文件/目录即时打包为 zip 流式返回（FR-070）。
+// DownloadArchive 批量打包下载：把选中的文件/目录即时打包为 zip 流式返回。
 // CP 逐帧 Recv Worker 流并写入响应体并 Flush，全程不缓冲整个归档。
 func (h *FileHandler) DownloadArchive(c *gin.Context) {
 	id, err := parseID(c)
@@ -428,7 +464,7 @@ func (h *FileHandler) Rename(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已重命名"})
 }
 
-// searchRequest 全文搜索 / 文件名快速打开请求（FR-074）。
+// searchRequest 全文搜索 / 文件名快速打开请求。
 type searchRequest struct {
 	Query      string   `json:"query" binding:"required"`
 	Mode       string   `json:"mode"`       // content（默认）| filename
@@ -437,7 +473,7 @@ type searchRequest struct {
 	Extensions []string `json:"extensions"` // 可选：限定扩展名范围
 }
 
-// Search 全文搜索 / 文件名快速打开（FR-074，见 ADR-017）。
+// Search 全文搜索 / 文件名快速打开。
 // 经 gRPC 转发到目标节点 Worker 的本地倒排索引查询；CP 仅转发不持有索引。
 func (h *FileHandler) Search(c *gin.Context) {
 	id, err := parseID(c)
@@ -468,7 +504,7 @@ func (h *FileHandler) Search(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// ArchiveEntries 列出归档（jar/zip）内条目（FR-075）。只读浏览，复用文件「查看」级权限。
+// ArchiveEntries 列出归档（jar/zip）内条目。只读浏览，复用文件「查看」级权限。
 func (h *FileHandler) ArchiveEntries(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -491,7 +527,7 @@ func (h *FileHandler) ArchiveEntries(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// ArchiveRead 读取归档内某条目内容（FR-075）。返回原始字节，截断/二进制经响应头标注。
+// ArchiveRead 读取归档内某条目内容。返回原始字节，截断/二进制经响应头标注。
 func (h *FileHandler) ArchiveRead(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -521,13 +557,13 @@ func (h *FileHandler) ArchiveRead(c *gin.Context) {
 	c.Data(http.StatusOK, "application/octet-stream", res.Content)
 }
 
-// decompileRequest 反编译请求（FR-075）。
+// decompileRequest 反编译请求。
 type decompileRequest struct {
 	Path  string `json:"path" binding:"required"`
 	Entry string `json:"entry"`
 }
 
-// Decompile 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（FR-075）。
+// Decompile 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码。
 // 只读浏览，复用文件「查看」级权限；反编译失败/降级以 success=false 在 200 体内返回。
 func (h *FileHandler) Decompile(c *gin.Context) {
 	id, err := parseID(c)
@@ -551,7 +587,7 @@ func (h *FileHandler) Decompile(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// Versions 列出某文件的历史版本（FR-051）。
+// Versions 列出某文件的历史版本。
 func (h *FileHandler) Versions(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -574,7 +610,7 @@ func (h *FileHandler) Versions(c *gin.Context) {
 	c.JSON(http.StatusOK, versions)
 }
 
-// FileDiff 返回某文件 from→to 版本的差异（FR-051）。to=0/缺省表示与当前文件比较。
+// FileDiff 返回某文件 from→to 版本的差异。to=0/缺省表示与当前文件比较。
 func (h *FileHandler) FileDiff(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -621,7 +657,7 @@ type fileRollbackRequest struct {
 	VersionID uint   `json:"versionId" binding:"required"`
 }
 
-// Rollback 把文件回滚到指定版本（FR-051），回滚前自动快照当前内容。
+// Rollback 把文件回滚到指定版本，回滚前自动快照当前内容。
 func (h *FileHandler) Rollback(c *gin.Context) {
 	if !requireNodes(c, "file.write") {
 		return
@@ -649,7 +685,7 @@ func (h *FileHandler) Rollback(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"versionId": versionID})
 }
 
-// CheckAccess POST /instances/:id/files/check-access — 写前权限探测（FR-373）。
+// CheckAccess POST /instances/:id/files/check-access — 写前权限探测。
 func (h *FileHandler) CheckAccess(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -674,7 +710,7 @@ func (h *FileHandler) CheckAccess(c *gin.Context) {
 	c.JSON(http.StatusOK, access)
 }
 
-// Chmod POST /instances/:id/files/chmod — 单 path 非递归 chmod（FR-373）。
+// Chmod POST /instances/:id/files/chmod — 单 path 非递归 chmod。
 func (h *FileHandler) Chmod(c *gin.Context) {
 	if !requireNodes(c, "file.write") {
 		return
@@ -712,21 +748,21 @@ func (h *FileHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		files.POST("/write", h.Write)
 		files.POST("/upload", h.Upload)
 		files.GET("/download", h.Download)
-		// FR-070 批量下载：选中多文件/目录即时打包 zip 流式返回（加性追加）。
+		// 批量下载：选中多文件/目录即时打包 zip 流式返回（加性追加）。
 		files.POST("/archive", h.DownloadArchive)
-		// FR-075 归档浏览与反编译：只读，加性追加。
+		// 归档浏览与反编译：只读，加性追加。
 		files.GET("/archive/entries", h.ArchiveEntries)
 		files.GET("/archive/read", h.ArchiveRead)
 		files.POST("/decompile", h.Decompile)
-		// FR-074 全文搜索 / 文件名快速打开：转发到 Worker 本地倒排索引（加性追加）。
+		// 全文搜索 / 文件名快速打开：转发到 Worker 本地倒排索引（加性追加）。
 		files.POST("/search", h.Search)
 		files.POST("/rename", h.Rename)
 		files.DELETE("", h.Delete)
-		// FR-051 文件版本：加性追加，不重排既有路由。
+		// 文件版本：加性追加，不重排既有路由。
 		files.GET("/versions", h.Versions)
 		files.GET("/diff", h.FileDiff)
 		files.POST("/rollback", h.Rollback)
-		// FR-373 权限探测与单 path chmod（加性追加）。
+		// 权限探测与单 path chmod（加性追加）。
 		files.POST("/check-access", h.CheckAccess)
 		files.POST("/chmod", h.Chmod)
 	}

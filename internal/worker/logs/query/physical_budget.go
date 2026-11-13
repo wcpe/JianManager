@@ -22,6 +22,7 @@ type physicalReadBudget struct {
 	remaining uint64
 	fanout    uint32
 	calls     uint32
+	parent    *physicalReadBudget
 }
 
 // WithPhysicalReadBudget 在请求上下文登记物理读取预算；派生上下文只能复用，不能扩额。
@@ -41,10 +42,20 @@ func ReservePhysicalRead(ctx context.Context, maxBytes uint64) (uint64, func(uin
 	if err := ctx.Err(); err != nil {
 		return 0, func(uint64) {}, err
 	}
+	// Bounded metadata POSTs reserve at the transport, where actual bytes are
+	// observable. Facets' legacy estimated-byte pre-reservation must not double
+	// charge the same physical read; the transport callback uses the parent ctx.
+	if delegated, _ := ctx.Value(metadataTransportBudgetKey{}).(bool); delegated {
+		return maxBytes, func(uint64) {}, nil
+	}
 	b, ok := ctx.Value(physicalBudgetKey{}).(*physicalReadBudget)
 	if !ok {
 		return maxBytes, func(uint64) {}, nil
 	}
+	return b.reserve(maxBytes)
+}
+
+func (b *physicalReadBudget) reserve(maxBytes uint64) (uint64, func(uint64), error) {
 	b.mu.Lock()
 	if b.remaining == 0 || b.fanout > 0 && b.calls >= b.fanout {
 		b.mu.Unlock()
@@ -52,6 +63,15 @@ func ReservePhysicalRead(ctx context.Context, maxBytes uint64) (uint64, func(uin
 	}
 	if maxBytes > b.remaining {
 		maxBytes = b.remaining
+	}
+	parentRefund := func(uint64) {}
+	if b.parent != nil {
+		var err error
+		maxBytes, parentRefund, err = b.parent.reserve(maxBytes)
+		if err != nil {
+			b.mu.Unlock()
+			return 0, func(uint64) {}, err
+		}
 	}
 	b.remaining -= maxBytes
 	b.calls++
@@ -64,6 +84,7 @@ func ReservePhysicalRead(ctx context.Context, maxBytes uint64) (uint64, func(uin
 				b.remaining += maxBytes - actual
 			}
 			b.mu.Unlock()
+			parentRefund(actual)
 		})
 	}, nil
 }

@@ -4,7 +4,7 @@ import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-mid
 import { db } from '@jianmanager/devmock/db'
 
 /**
- * 节点级日志采集域 mock handler（FR-503 节点端）。
+ * 节点级日志采集域 mock handler（节点端）。
  *
  * 覆盖 api 模块：`api/nodes.ts` 的节点端 3 条（GET/PUT/DELETE
  * `/nodes/:id/settings/log-acquisition`）。
@@ -165,7 +165,7 @@ function putOverride(nodeUuid: string, key: string, value: string): void {
 }
 
 export const handlers = [
-  // ── 节点日志采集对照视图（FR-503）────────────────────────────────────────
+  // ── 节点日志采集对照视图 ─────────────────────────────────────────────────
   domainRoute('get', '/nodes/:id/settings/log-acquisition', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied

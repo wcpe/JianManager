@@ -210,23 +210,45 @@ func (w *Writer) Path() string { return w.cfg.Path }
 // 写入成功后若跨过大小阈值，立即在锁内完成轮转（只有 rename，O(1)）。
 // 轮转失败不影响已经成功的那次写入的返回结果——日志宁可继续写进大文件，
 // 也不能因为轮转失败而让调用方以为写失败了。
+//
+// # 失败必须经 OnError 上报（2026-11-09）
+//
+// 本函数的两个失败分支（已关闭 / fd 重建失败）原本只 `return 0, err`，不经 OnError。
+// 而调用方是 slog：标准库 logger.go 里是 `_ = l.Handler().Handle(...)`，**显式丢弃**
+// Handler 返回的错误（io.MultiWriter 也只透传）。于是这条链路是：
+// 日志写不进去 → 没有文件内容 → OnError 没被调 → stderr 也没输出。
+// 运维看到的是“日志突然停在某一行以后没了”，无任何入口可查。
+// 这正是本包注释开篇批判的“进程完全不报错”那一类事故。
 func (w *Writer) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	if w.closed {
+		// 关闭后仍被写（典型：退出流程中残留的 goroutine 还在打日志）。
+		// 不刷 stderr：退出阶段每个协程都报一遍会变成日志风暴。
 		return 0, os.ErrClosed
 	}
 
 	// 自愈：文件可能被外部删除（见 reopenIfVanishedLocked 的说明）。
 	w.reopenIfVanishedLocked()
 	if w.file == nil {
-		return 0, fmt.Errorf("rollog: 日志文件丢失且重建失败")
+		// 上一次重建失败（ENOSPC/权限）。正常路径里 statInterval 会把重建频率降到 1s 一次，
+		// 但 w.file == nil 意味着**当前每次写都在丢日志**，此时等那 1s 窗口是纯损失。
+		// 代价只有一次 OpenFile，远小于静默丢一行日志。
+		if reopenErr := w.openActiveLocked(); reopenErr == nil {
+			w.cfg.OnError(fmt.Errorf("rollog: 日志文件不可写后已重新打开 %s（此前一段日志丢失）", filepath.Base(w.cfg.Path)))
+		} else {
+			err := fmt.Errorf("rollog: 日志文件丢失且重建失败，本次写入丢弃: %w", reopenErr)
+			w.cfg.OnError(err)
+			return 0, err
+		}
 	}
 
 	n, err := w.file.Write(p)
 	w.size += int64(n)
 	if err != nil {
+		// 磁盘满、fd 失效等：slog 会吞掉这个 error，所以必须在这里上报。
+		w.cfg.OnError(fmt.Errorf("rollog: 写入 %s 失败: %w", filepath.Base(w.cfg.Path), err))
 		return n, err
 	}
 

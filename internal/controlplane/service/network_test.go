@@ -14,6 +14,12 @@ func newNetTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Instance{}, &model.ServerRegistration{}, &model.Network{}, &model.NetworkMember{}, &model.GroupInstance{}))
 	return db
 }
@@ -66,7 +72,7 @@ func TestNetwork_CRUDAndMembers(t *testing.T) {
 	require.Equal(t, int64(2), memberCount)
 }
 
-// 删除群组：成员关系清除，但成员实例与其 server_registrations 不受影响（ADR-007）。
+// 删除群组：成员关系清除，但成员实例与其 server_registrations 不受影响。
 func TestNetwork_DeleteDoesNotAffectRegistrations(t *testing.T) {
 	db := newNetTestDB(t)
 	instSvc := NewInstanceService(db, nil, nil)
@@ -109,15 +115,15 @@ func TestNetwork_BatchRestart_UsesInstanceLongOpGate(t *testing.T) {
 	t.Cleanup(instSvc.Shutdown)
 	svc := NewNetworkService(db, instSvc)
 
-	network, err := svc.Create("fr331-network", "")
+	network, err := svc.Create("network-network", "")
 	require.NoError(t, err)
-	inst := &model.Instance{Name: "fr331-member", NodeID: 1, Type: model.InstanceTypeMinecraftJava,
+	inst := &model.Instance{Name: "network-member", NodeID: 1, Type: model.InstanceTypeMinecraftJava,
 		Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDaemon,
 		StartCommand: "java -jar server.jar", Status: model.InstanceStatusStopped}
 	require.NoError(t, db.Create(inst).Error)
 	_, _, err = svc.AddMembers(network.ID, []uint{inst.ID})
 	require.NoError(t, err)
-	require.NoError(t, db.Create(&model.Task{TaskID: "fr331-network-task", InstanceID: inst.ID,
+	require.NoError(t, db.Create(&model.Task{TaskID: "network-network-task", InstanceID: inst.ID,
 		Kind: model.TaskKindProvision, State: model.TaskStateRunning}).Error)
 
 	result, err := svc.BatchAction(network.ID, "restart")

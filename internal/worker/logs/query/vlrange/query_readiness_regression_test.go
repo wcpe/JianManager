@@ -60,6 +60,6 @@ func TestQueryTieredReadinessRechecksFixedClientWithoutFallback(t *testing.T) {
 	_, err = tiered.Search(context.Background(), rng, q)
 	require.Error(t, err)
 	require.EqualValues(t, 3, checks.Load())
-	require.EqualValues(t, 1, coldCalls.Load(), "恢复后复用原固定地址 client，停机后不再发读")
+	require.EqualValues(t, 2, coldCalls.Load(), "恢复后selection与hydration复用原固定地址client，停机后不再发读")
 	require.Zero(t, hotCalls.Load(), "请求只发往唯一的受管实例，不得发到其他地址")
 }

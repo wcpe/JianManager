@@ -10,7 +10,7 @@ import (
 )
 
 // TestDeriveLogRuleKey 验证由实例的 role + 核心类型（coreKind）+ launch_spec.coreJar
-// 推导日志采集规则名（FR-502 §3.1）。推导结果经 proto 下发给 Worker，决定活动日志的物理路径规则。
+// 推导日志采集规则名。推导结果经 proto 下发给 Worker，决定活动日志的物理路径规则。
 //
 // 前两组用例（coreKind 为空）锁住**历史数据**的兼容口径：老实例的 launch_spec 没有
 // coreKind，只能按 jar 名匹配，行为必须与本项落地前逐字一致。
@@ -92,7 +92,7 @@ func TestDeriveLogRuleKeyWaterfallBeforeBungee(t *testing.T) {
 // 落盘名固定为 server.jar（见 provisionCoreJar），规则只能由 launch_spec.coreKind 推出。
 //
 // 转红方式：把 logRuleKeyForInstance 改回只读 spec.CoreJar——第一条用例立刻
-// 从 bungee 变 bukkit（这正是审查发现的 FR-502 在生产主路径上静默失效）。
+// 从 bungee 变 bukkit（这正是审查发现的在生产主路径上静默失效）。
 func TestLogRuleKeyForInstancePrefersCoreKind(t *testing.T) {
 	svc := &InstanceService{}
 

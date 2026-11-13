@@ -46,7 +46,7 @@ type RangeResult struct {
 }
 
 // RangeClient 是可注入的 range 执行客户端。
-// foundation 不实现真实 VL HTTP；生产实现由后续 FR 接入。
+// foundation 不实现真实 VL HTTP；生产实现留待后续接入。
 type RangeClient interface {
 	// Search 在权威 range 上检索规范事件。
 	Search(ctx context.Context, rng AuthoritativeRange, q RangeQuery) (RangeResult, error)

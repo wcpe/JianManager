@@ -16,6 +16,12 @@ func newMetricSvc(t *testing.T) *MetricService {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.MetricSeries{}, &model.MetricSampleRaw{},
 		&model.ProcessMetricSnapshot{},
@@ -266,7 +272,7 @@ func TestMetric_QuerySeriesBatch_Empty(t *testing.T) {
 	require.Empty(t, out)
 }
 
-// TestMetric_QuerySeriesBatch_SameAsSingle 断言批量响应中某 targetId 的序列与单目标 QuerySeries 同构（FR-340 验收）。
+// TestMetric_QuerySeriesBatch_SameAsSingle 断言批量响应中某 targetId 的序列与单目标 QuerySeries 同构（验收）。
 func TestMetric_QuerySeriesBatch_SameAsSingle(t *testing.T) {
 	svc := newMetricSvc(t)
 	base := metricBase()

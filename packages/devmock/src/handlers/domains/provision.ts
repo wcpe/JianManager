@@ -3,8 +3,8 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 
-/**
- * 供给与模板域 mock handler（FR-202）。
+/** 
+ * 供给与模板域 mock handler。
  * 覆盖三个 api 模块的端点：
  *  - templates.ts：GET/POST /templates、DELETE /templates/:id
  *  - provision.ts：GET /cores（版本列表 / 解析下载信息）、POST /instances/provision/server、POST /instances/provision/proxy
@@ -83,7 +83,7 @@ const CORE_VERSIONS: Record<string, string[]> = {
   bungeecord: ['latest'],
 }
 
-/** 假 MC 版本 → 最低 Java 大版本映射（FR-316，镜像 CP 内置保守映射表的取值）。 */
+/** 假 MC 版本 → 最低 Java 大版本映射（镜像 CP 内置保守映射表的取值）。 */
 const JAVA_REQUIREMENTS: Record<string, number> = {
   '26.1': 25,
   '1.21.1': 21,
@@ -133,7 +133,7 @@ const provisionBackend: HttpResponseResolver = async (info) => {
     tags: '',
     createdAt: new Date().toISOString(),
   })
-  // FR-319 异步化响应形状：{instance, taskId}，下载在任务中心异步推进。
+  // 异步化响应形状：{instance, taskId}，下载在任务中心异步推进。
   return HttpResponse.json({ instance: inst, taskId: `task-provision-${Date.now()}` }, { status: 201 })
 }
 
@@ -203,7 +203,7 @@ export const handlers = [
       filename,
       downloadUrl: `https://example.com/${type}/${mcVersion}/${filename}`,
       sha256: 'a'.repeat(64),
-      // FR-316：解析响应携带该版本所需 Java 大版本；未收录版本省略字段（不设需求）。
+      // 解析响应携带该版本所需 Java 大版本；未收录版本省略字段（不设需求）。
       javaMajorRequired: JAVA_REQUIREMENTS[mcVersion],
       runtime: type === 'spongeforge'
         ? {
@@ -273,7 +273,7 @@ export const handlers = [
       include?: string[]
       exclude?: string[]
     }
-    // 复制模式（FR-231）影响排除集：quick 只留核心+插件+根配置；advanced 用用户 exclude + 运行态垃圾。
+    // 复制模式影响排除集：quick 只留核心+插件+根配置；advanced 用用户 exclude + 运行态垃圾。
     const excluded = body.mode === 'quick'
       ? ['world', 'logs', 'cache', 'crash-reports']
       : [...(body.exclude ?? []), 'session.lock', '*.pid', 'logs']

@@ -29,7 +29,7 @@ type EventService struct {
 	subs   []chan InstanceEvent
 	ctx    context.Context
 	cancel context.CancelFunc
-	// streamMu/streaming 保证每节点只起一条事件流订阅（FR-456 F4）：重复的 StartWorkerStream
+	// streamMu/streaming 保证每节点只起一条事件流订阅（F4）：重复的 StartWorkerStream
 	// 会建立重复长驻订阅，导致 stdout/stderr 双写、事件重复扇出。订阅 goroutine 退出时清除标记，
 	// 使节点真正重连后仍能重建订阅。
 	streamMu  sync.Mutex
@@ -72,7 +72,7 @@ func (es *EventService) Subscribe() (<-chan InstanceEvent, func()) {
 	return ch, unsub
 }
 
-// StartWorkerStream 启动到指定 Worker 的事件流订阅（每节点单飞，FR-456 F4）。
+// StartWorkerStream 启动到指定 Worker 的事件流订阅（每节点单飞F4）。
 // nodeUUID 为空时自动订阅所有已连接节点。
 func (es *EventService) StartWorkerStream(nodeUUID string) {
 	client, ok := es.pool.Get(nodeUUID)

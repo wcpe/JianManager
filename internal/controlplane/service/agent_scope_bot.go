@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-398：Bot 与压测运行的可信目标解析。
+// Bot 与压测运行的可信目标解析。
 // 归属一律从 CP 数据库读取，不接受客户端传入的 instanceId/nodeId 作为授权依据。
 
 // AuthorizeBotAction 解析 Bot 所属实例后执行最终授权。

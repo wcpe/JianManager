@@ -17,14 +17,16 @@ import (
 func TestClientSearchMapsNDJSONAndEnforcesClosedVisibleSeq(t *testing.T) {
 	var seenQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seenQuery = r.URL.Query().Get("query")
+		if !isSearchHydrationRequest(r) {
+			seenQuery = r.URL.Query().Get("query")
+		}
 		if r.URL.Path != "/select/logsql/query" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"_time":"2026-09-22T01:02:03Z","_msg":"kept","event_id":"e1","log_source_id":"src-1","source_generation":"g1","record_start":"1","record_end":"5","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}
+		writeSearchFixtureNDJSON(t, w, r, `{"_time":"2026-09-22T01:02:03Z","_msg":"kept","event_id":"e1","log_source_id":"src-1","source_generation":"g1","record_start":"1","record_end":"5","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}
 {"_time":"2026-09-22T01:02:04Z","_msg":"beyond","event_id":"e2","log_source_id":"src-1","source_generation":"g1","record_start":"6","record_end":"12","level":"INFO","stream":"stdout","canonical_content_hash":"h2"}
-`))
+`)
 	}))
 	defer srv.Close()
 	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL, AllowNonLoopback: true})
@@ -103,7 +105,7 @@ func TestTieredArchiveSearchUsesCoveredSourceSelector(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Items, 1)
 	require.Zero(t, hotCalls)
-	require.Equal(t, 1, deepCalls)
+	require.Equal(t, 2, deepCalls, "canonical selection and exact-identity hydration use the same fixed client")
 }
 
 func TestClientUsesEveryPublishedProjectionGeneration(t *testing.T) {
@@ -166,10 +168,12 @@ func TestClientStatsMapsStatsRows(t *testing.T) {
 func TestClientSearchFetchesLookaheadBeforeDeclaringExhausted(t *testing.T) {
 	var limit string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		limit = r.URL.Query().Get("limit")
-		_, _ = w.Write([]byte(`{"_time":"2026-09-22T01:02:04Z","_msg":"newer","event_id":"e2","record_start":"6","record_end":"7"}
+		if !isSearchHydrationRequest(r) {
+			limit = r.URL.Query().Get("limit")
+		}
+		writeSearchFixtureNDJSON(t, w, r, `{"_time":"2026-09-22T01:02:04Z","_msg":"newer","event_id":"e2","record_start":"6","record_end":"7"}
 {"_time":"2026-09-22T01:02:03Z","_msg":"older","event_id":"e1","record_start":"1","record_end":"2"}
-`))
+`)
 	}))
 	defer srv.Close()
 	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
@@ -184,9 +188,9 @@ func TestClientSearchFetchesLookaheadBeforeDeclaringExhausted(t *testing.T) {
 // 达到查询 top-K 行数时仍可能存在更旧数据，不能把该页标成已耗尽。
 func TestClientDoesNotDeclareExhaustedAtRowLimit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"_time":"2026-09-22T01:02:04Z","_msg":"newer","event_id":"e2"}
+		writeSearchFixtureNDJSON(t, w, r, `{"_time":"2026-09-22T01:02:04Z","_msg":"newer","event_id":"e2"}
 {"_time":"2026-09-22T01:02:03Z","_msg":"older","event_id":"e1"}
-`))
+`)
 	}))
 	defer srv.Close()
 	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
@@ -271,7 +275,7 @@ func TestClientSingleRangeMarksUnresolvedOnSameIDDifferentHash(t *testing.T) {
 `
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(body))
+		writeSearchFixtureNDJSON(t, w, r, body)
 	}))
 	defer srv.Close()
 	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
@@ -304,7 +308,7 @@ func TestClientSingleRangeKeepsExactOnSameIDSameHash(t *testing.T) {
 `
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(body))
+		writeSearchFixtureNDJSON(t, w, r, body)
 	}))
 	defer srv.Close()
 	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})

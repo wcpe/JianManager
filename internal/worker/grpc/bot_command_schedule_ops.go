@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-369 命令编排错误码（Worker 侧同步回执）。
+// 命令编排错误码（Worker 侧同步回执）。
 const (
 	CommandErrorIPCFailed          = "COMMAND_IPC_FAILED"
 	CommandErrorArgumentInvalid    = "COMMAND_ARGUMENT_INVALID"

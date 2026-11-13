@@ -86,8 +86,8 @@ check_api() {
     if [ ! -f "docs/API.md" ]; then fail "缺少 docs/API.md"; return; fi
 
     # 只认真正的端点标题 `### METHOD /path`（或 `|` 合写的 `### M1 /  M2 /path`）。
-    # 旧版用 `^### [A-Z]`，会把 `### FR-352 内部场景契约（非 HTTP endpoint）`、
-    # `### Worker Log RPC 摘要（gRPC...）`、`### FR-264 消费端错误码` 也当成端点
+    # 旧版用 `^### [A-Z]`，会把 `### 内部场景契约（非 HTTP endpoint）`、
+    # `### Worker Log RPC 摘要（gRPC...）`、`### 消费端错误码` 也当成端点
     # ⇒ 永远多报 5 条假缺口（实测）。
     ep_re='^### (GET|POST|PUT|DELETE|PATCH|HEAD) /'
     endpoint_count=$(grep -cE "$ep_re" docs/API.md || true)

@@ -21,7 +21,7 @@ func findSample(samples []Sample, key string) (Sample, bool) {
 
 // TestHeartbeatEmitsMemDiskPct 验证内存/磁盘百分比指标被落库。
 //
-// FR-485 的真实缺口就在这里：心跳早就有 memory_usage / disk_usage（0..1），
+// 真实缺口就在这里：心跳早就有 memory_usage / disk_usage（0..1），
 // Worker 侧也一直在填，但 CP 从未把它们落成指标——于是「内存/磁盘高水位告警」
 // 根本写不出来（只能写绝对字节阈值，而节点磁盘差异很大）。
 //
@@ -77,7 +77,7 @@ func TestHeartbeatIOWaitEmitted(t *testing.T) {
 	req := &workerpb.HeartbeatRequest{NodeUuid: "node-1", Iowait: 0.35}
 	samples := buildNodeSamplesAt(req, time.Now().UTC())
 	io, ok := findSample(samples, model.MetricNodeIOWait)
-	require.True(t, ok, "iowait 必须落点（FR-485 的 IO 瓶颈可见性）")
+	require.True(t, ok, "iowait 必须落点（IO 瓶颈可见性）")
 	require.NotNil(t, io.Value)
 	require.InDelta(t, 35.0, *io.Value, 0.01)
 }

@@ -20,19 +20,19 @@ import (
 	"gorm.io/gorm"
 )
 
-// 本文件是 FR-318 防护的**机制化替代**。原先靠 `SetMaxOpenConns(1)` 消灭「池内同库锁竞争」
+// 本文件是防护的**机制化替代**。原先靠 `SetMaxOpenConns(1)` 消灭「池内同库锁竞争」
 // 这一毒化前提来回避问题；连接数一旦放开该前提即失效，所以必须换成「检测 + 驱逐」：
 //
 //	① 毒化检测与驱逐（guardConn / guardTx）：把「连接带未提交事务」这一状态显式追踪，
 //	   并通过 driver.Validator.IsValid 让 database/sql 在**连接回池前**主动丢弃它；
 //	② WAL（enableSQLiteWAL）：让读不再阻塞写、写不再阻塞读，这是放开连接数的前提
-//	   （rollback journal 模式下读者持 SHARED 锁挡写者 COMMIT，正是 FR-318 的扳机）；
+// 	   （rollback journal 模式下读者持 SHARED 锁挡写者 COMMIT，正是的扳机）；
 //	③ 写闸门（sqliteWriteGate / gatedConnPool）：把 SQLite「同一时刻只有一个写者」的
 //	   语义在应用层显式化并串行排队，消除写-写 SQLITE_BUSY（也让调用方不必依赖
 //	   busy_timeout 是否够长）。
 //
 // 三者正交：② 决定「读能不能并行」，③ 决定「写会不会撞锁」，① 决定「万一还是撞了会怎样」。
-// ① 单独存在也能覆盖 FR-318 故障面，②③ 负责让 ① 极少被触发。
+// ① 单独存在也能覆盖故障面，②③ 负责让 ① 极少被触发。
 
 const (
 	// defaultSQLiteMaxOpenConns 是 SQLite 连接池默认上限，推导依据见 resolveSQLiteMaxOpenConns。
@@ -130,7 +130,7 @@ type sqlitePoolPlan struct {
 //
 // 必须落在 driver.Conn 这一层（而不是在 sql.Open 之后包装 *sql.DB）：driver.Validator /
 // driver.SessionResetter 都是 database/sql 对 driver.Conn 做的**接口断言**，只有包装进
-// 连接生产环节才可能被看到——FR-318 里驱动「不实现 Validator」正是同一层的事。
+// 连接生产环节才可能被看到——里驱动「不实现 Validator」正是同一层的事。
 type guardConnector struct {
 	base  driver.Driver
 	dsn   string
@@ -238,7 +238,7 @@ func (c *guardConn) trackTx(tx driver.Tx, err error, hold *writeHold) (driver.Tx
 	if err != nil {
 		// BEGIN 失败却报「事务内不能开事务」，说明连接上**确实**残留着打开的事务
 		// （例如上一轮 COMMIT 因 BUSY 悬挂、而当时无人驱逐）。此时必须把连接标记为污染，
-		// 否则它会一直被复用并持续撞同一堵墙——这正是 FR-317 线上「重启 CP 即愈」的形态。
+		// 否则它会一直被复用并持续撞同一堵墙——这正是线上「重启 CP 即愈」的形态。
 		if isNestedTransactionError(err) {
 			c.txOpen.Store(true)
 		}
@@ -249,7 +249,7 @@ func (c *guardConn) trackTx(tx driver.Tx, err error, hold *writeHold) (driver.Tx
 	return &guardTx{Tx: tx, conn: c, hold: hold}, nil
 }
 
-// IsValid 实现 driver.Validator，是 FR-318 防护的核心。
+// IsValid 实现 driver.Validator，是防护的核心。
 //
 // database/sql 的 (*DB).putConn 在连接回到池之前**无条件**调用 validateConnection
 // （只要错误不是 driver.ErrBadConn），后者断言 driver.Validator 并取其结果：返回 false 即把
@@ -620,7 +620,7 @@ func openSQLitePool(dsn string) (*sql.DB, *sqliteTxGuard, sqlitePoolPlan, error)
 // enableSQLiteWAL 把日志模式切到 WAL 并校验确实生效。
 //
 // 为什么要 WAL：rollback journal 模式下读事务持 SHARED 锁、写者 COMMIT 需要 EXCLUSIVE，
-// 读者因此能挡住写者提交——这正是 FR-318 毒化的扳机；同时写事务也会挡住所有读，长任务
+// 读者因此能挡住写者提交——这正是毒化的扳机；同时写事务也会挡住所有读，长任务
 // 一旦持锁，只读查询全部排队（本次「日志页慢」的直接成因）。WAL 下读不阻塞写、写不阻塞读，
 // 是放开连接数的前提。
 //

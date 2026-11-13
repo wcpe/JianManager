@@ -1,0 +1,39 @@
+package vlrange
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	"github.com/wcpe/JianManager/internal/worker/logs/query"
+)
+
+func TestStatsNumericSamplesUseNumericDenominator(t *testing.T) {
+	pipe, err := statsPipe(query.RangeQuery{MetricField: "duration_ms", TimeBucket: "5m"})
+	require.NoError(t, err)
+	require.Contains(t, pipe, " | filter duration_ms:range[-inf,inf] | stats")
+	require.Contains(t, pipe, "count() as _jm_count, sum(duration_ms) as _jm_sum, min(duration_ms) as _jm_min, max(duration_ms) as _jm_max, avg(duration_ms) as _jm_avg")
+	require.Less(t, strings.Index(pipe, "filter duration_ms"), strings.Index(pipe, "count()"), "count must measure the same numeric sample set as sum/min/max")
+	plain, err := statsPipe(query.RangeQuery{TimeBucket: "5m"})
+	require.NoError(t, err)
+	require.NotContains(t, plain, "filter", "ordinary volume counts still include every log event")
+	_, err = statsPipe(query.RangeQuery{MetricField: "x) | fields *"})
+	require.Error(t, err)
+}
+
+func TestStatsPipeQuotesDottedAndHyphenatedFields(t *testing.T) {
+	pipe, err := statsPipe(query.RangeQuery{MetricField: "http.status_code", GroupBy: []string{"trace-id"}, TimeBucket: "5m"})
+	require.NoError(t, err)
+	require.Contains(t, pipe, ` | filter "http.status_code":range[-inf,inf] | stats by (_time:5m,"trace-id")`)
+	require.Contains(t, pipe, `sum("http.status_code") as _jm_sum, min("http.status_code") as _jm_min, max("http.status_code") as _jm_max, avg("http.status_code") as _jm_avg`)
+	for _, field := range []string{"http.status_code", "trace-id", "duration_ms"} {
+		require.True(t, validField(field))
+	}
+	for _, field := range []string{"", ".field", "-field", "5field", "field name", "field|stats", "field(x)", `field"`} {
+		require.False(t, validField(field))
+		_, err := statsPipe(query.RangeQuery{MetricField: field})
+		if field != "" {
+			require.Error(t, err)
+		}
+	}
+}

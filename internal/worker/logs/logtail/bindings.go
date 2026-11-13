@@ -13,6 +13,22 @@ import (
 	"sync"
 )
 
+// StaticSource 是一条**非实例**日志源（节点自身日志等）的归属声明。
+//
+// 它与 BindingEntry 的区别在于寻址方式：BindingEntry 按「实例 UUID」寻址、
+// 按 WorkDir 前缀匹配；StaticSource 按**具体文件/目录**寻址，与服务无实例归属。
+//
+// 两者共享同一个 Resolver 口径（TargetID + "/" + stream 作为 log_source_id），
+// 因此查询侧不需要区分“这条日志是实例的还是节点的”。
+type StaticSource struct {
+	// TargetID 是查询侧看到的目标，形如 `node:1`（与 CP 联邦查询的 node:<id> 同口径）。
+	TargetID string
+	// Path 是该源的具体文件路径（也允许目录：目录下的文件全部归本源源）。
+	Path string
+	// Stream 是该源的流名（如 stdout / file / worker）。空时默认 "file"。
+	Stream string
+}
+
 // BindingEntry 是一个实例的日志目标绑定。
 //
 // # 为什么需要落盘
@@ -61,7 +77,12 @@ type Bindings struct {
 
 	mu      sync.RWMutex
 	entries map[string]BindingEntry
-	dirty   bool
+	// static 是非实例源（节点自身日志等）的静态归属，按声明顺序保存。
+	//
+	// 它不落盘：与实例绑定不同，它的来源是配置文件本身，重启后由装配层重新
+	// repopulate 一遍即可。落盘反而会让“改了配置但盘上还是旧的”成为一个隐患。
+	static []StaticSource
+	dirty  bool
 }
 
 // OpenBindings 加载（或初始化）绑定表。
@@ -151,6 +172,67 @@ func (b *Bindings) Path() string {
 		return ""
 	}
 	return b.path
+}
+
+// AddStatic 登记一批非实例源（节点自身日志等）。
+//
+// 与 Put 不同，它不落盘：静态源的权威是配置文件，重启后由装配层重新登记。
+// 落盘会让“改了配置、盘上还是旧的”变成隐患。
+//
+// 空 TargetID / Path 的条目被跳过（配置层已有校验，这里只兜底不 panic）。
+func (b *Bindings) AddStatic(sources []StaticSource) {
+	if b == nil || len(sources) == 0 {
+		return
+	}
+	// 归一：去空白、清理路径、补默认 stream。
+	clean := make([]StaticSource, 0, len(sources))
+	for _, s := range sources {
+		target := strings.TrimSpace(s.TargetID)
+		path := filepath.Clean(strings.TrimSpace(s.Path))
+		if target == "" || path == "" || path == "." {
+			continue
+		}
+		stream := strings.TrimSpace(s.Stream)
+		if stream == "" {
+			stream = "file"
+		}
+		clean = append(clean, StaticSource{TargetID: target, Path: path, Stream: stream})
+	}
+	b.mu.Lock()
+	b.static = clean
+	b.mu.Unlock()
+}
+
+// StaticSources 返回已登记的静态源（供启动日志与排障）。
+func (b *Bindings) StaticSources() []StaticSource {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]StaticSource, len(b.static))
+	copy(out, b.static)
+	return out
+}
+
+// resolveStatic 按静态源解析路径。
+//
+// 匹配规则：路径相等，或路径在静态源的目录下（目录形式的源）。
+// 取**最长**匹配的 Path：允许“一个目录源 + 其中某文件单独归另一个源”这类叠加。
+func (b *Bindings) resolveStatic(clean string) (StaticSource, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	var best StaticSource
+	bestLen := -1
+	for _, s := range b.static {
+		if _, ok := relUnderRoot(clean, s.Path); !ok {
+			continue
+		}
+		if len(s.Path) > bestLen {
+			best, bestLen = s, len(s.Path)
+		}
+	}
+	return best, bestLen >= 0
 }
 
 // Put 登记/更新一个实例的绑定，并立即落盘。
@@ -292,10 +374,17 @@ func (b *Bindings) Resolver() SourceResolver {
 			}
 		}
 		b.mu.RUnlock()
-		if bestLen < 0 {
-			return "", ""
+		if bestLen >= 0 {
+			return best.TargetID + "/file", "stdout"
 		}
-		return best.TargetID + "/file", "stdout"
+		// 3) 静态源（非实例：节点自身日志等）。
+		//
+		// 放在实例匹配之后：实例目录是**更具体**的归属，一个节点级目录源
+		// （如整个日志目录）不应抢走其中某实例自己的文件。
+		if s, ok := b.resolveStatic(clean); ok {
+			return s.TargetID + "/" + s.Stream, s.Stream
+		}
+		return "", ""
 	})
 }
 

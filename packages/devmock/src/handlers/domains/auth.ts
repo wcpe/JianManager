@@ -2,9 +2,9 @@ import { HttpResponse } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 
-/**
- * 身份访问域 mock handler（地基随 FR-199 交付的纵切样例）。
- * 其余域簇（FR-200~210）照本文件结构在 domains/ 各加一个文件，详见 spec §7。
+/** 
+ * 身份访问域 mock handler（地基随交付的纵切样例）。
+ * 其余域簇（~210）照本文件结构在 domains/ 各加一个文件，详见 spec §7。
  */
 
 /** 假后端用户。password 明文仅 mock 用；role：0 组员 / 1 组管理员 / 10 平台管理员（与后端 model.UserRole 对齐）。 */
@@ -41,7 +41,7 @@ function fakeJwt(u: User): string {
 }
 
 export const handlers = [
-  // setup 状态：mock 默认「已初始化」，使 LoginPage 渲染登录表单（FR-199 可注入 setupRequired:true 验引导跳转）。
+  // setup 状态：mock 默认「已初始化」，使 LoginPage 渲染登录表单（可注入 setupRequired:true 验引导跳转）。
   domainRoute('get', '/setup/status', () => HttpResponse.json({ setupRequired: false })),
 
   domainRoute('post', '/auth/login', async ({ request }) => {

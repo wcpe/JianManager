@@ -1,12 +1,13 @@
-/**
- * FR-372 压测运行详情页：`/bots/sessions/:id?tab=overview|bots|metrics|failures|events|config`
+/** 
+ *压测运行详情页：`/bots/sessions/:id?tab=overview|bots|metrics|failures|events|config`
  */
 import { useCallback } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useBotLoadRun } from '@/api/bot-load'
-import { useTabParam } from '@/lib/use-tab-param'
-import { SESSION_TABS, type SessionTab, isTerminalRunState } from '@/lib/bot-load/types'
+import { useTabParam } from '@/lib/hooks/use-tab-param'
+import { SESSION_TABS, isTerminalRunState } from '@/lib/bot-load/bot-load-types'
+import type { SessionTab } from '@/lib/bot-load/bot-load-types'
 import { SessionEventProvider, useSessionEvents } from '@/components/bot-load/session/SessionEventProvider'
 import { SessionHeader } from '@/components/bot-load/session/SessionHeader'
 import { SessionOverview } from '@/components/bot-load/session/SessionOverview'
@@ -16,6 +17,7 @@ import { SessionFailures } from '@/components/bot-load/session/SessionFailures'
 import { SessionEvents } from '@/components/bot-load/session/SessionEvents'
 import { SessionConfig } from '@/components/bot-load/session/SessionConfig'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
+import { PageShell } from '@jianmanager/ui/components/layout'
 
 export default function BotLoadSessionPage() {
   const { t } = useTranslation()
@@ -109,7 +111,11 @@ function SessionPageBody({ runId }: { runId: number | string }) {
   const reportReady = live.reportReady || isTerminalRunState(run.runState)
 
   return (
-    <div className="mx-auto max-w-7xl space-y-4 p-1 sm:p-0" data-testid="bot-load-session-page">
+    // 全量对齐：外壳改用 PageShell，保留 mx-auto max-w-7xl（窄栏内容页）与 data-testid。
+    // 页头由 SessionHeader 渲染，它已改用布局层 ObjectPageHeader：运行名 → title，
+    // 五个实时状态（运行状态/判定/阶段/时长/目标实例）→ metrics（判定保留三态语义色），
+    // 返回 Bots 与实时流状态 → breadcrumbs，停止/取消/报告下载 → actions。
+    <PageShell className="mx-auto max-w-7xl" data-testid="bot-load-session-page">
       <SessionHeader run={run} streamStatus={String(streamStatus)} reportReady={reportReady} />
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -140,6 +146,6 @@ function SessionPageBody({ runId }: { runId: number | string }) {
           {tab === 'config' ? <SessionConfig /> : null}
         </TabsContent>
       </Tabs>
-    </div>
+    </PageShell>
   )
 }

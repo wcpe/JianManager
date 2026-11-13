@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// daemonStrategy 通过独立 wrapper 子进程管理游戏服（ADR-003）。
+// daemonStrategy 通过独立 wrapper 子进程管理游戏服。
 // Worker spawn wrapper 子进程（脱离 Worker 进程组），wrapper 作为 Java 父进程。
 // 两者通过 Unix Socket / Named Pipe + 二进制帧协议通信。
 // Worker 退出/重启时 wrapper 继续运行，Worker 重启后通过 PID 文件 reconnect。
@@ -62,6 +62,27 @@ func newDaemonStrategy(mgr *Manager, spec CommandSpec) *daemonStrategy {
 }
 
 func (d *daemonStrategy) Start(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, err)
+	}
+	// 只有当前 Unix socket 路径明确缺失，才把旧地址记录作为需要人工接管的迁移残留快速拒绝。
+	// 当前 socket 仍存在时，旧代可能已恢复控制且正在优雅退出，必须保留正常的上一代退出等待。
+	// Named Pipe 与文件路径不同；查询出错也不能推断缺失，均继续走既有等待与防双开守卫。
+	canonical := daemon.SocketAddr(d.pidDir, d.spec.UUID)
+	socketMissing := false
+	if runtime.GOOS != "windows" {
+		_, err := os.Lstat(canonical)
+		socketMissing = os.IsNotExist(err)
+	}
+	if rec, err := daemon.NewPIDFile(daemon.PIDFileName(d.pidDir, d.spec.UUID)).ReadRecord(); socketMissing && err == nil &&
+		rec.InstanceUUID == d.spec.UUID && rec.SocketAddr != "" && rec.SocketAddr != canonical &&
+		(d.mgr.pidAlive(rec.WrapperPID) || d.mgr.pidAlive(rec.JavaPID)) {
+		d.mu.Lock()
+		d.state = StateCrashed
+		d.mu.Unlock()
+		return fmt.Errorf("实例 %s 启动中止：旧部署残留需接管/清理，wrapperPid=%d javaPid=%d 记录地址=%s 当前地址=%s；请先恢复控制连接并停止旧实例，或显式接管/清理后再启动，拒绝新旧并存",
+			d.spec.UUID, rec.WrapperPID, rec.JavaPID, rec.SocketAddr, daemon.SocketAddr(d.pidDir, d.spec.UUID))
+	}
 	// 重启前等待上一代 wrapper/Java 完全退出，避免快速 stop→start 时旧进程仍占监听端口/socket
 	// 导致新进程端口冲突崩溃。不持 d.mu，以免长时间阻塞 State()/SendCommand 等查询；
 	// pidDir/UUID 构造后不可变，无锁读取安全；并发启动已由 Manager 的 STARTING 状态串行化。
@@ -217,7 +238,7 @@ func (d *daemonStrategy) readLoop(conn net.Conn) {
 	defer d.readWg.Done()
 	// 连接断开时收回引用（仅在它仍是当前连接时）：否则 controlConnected 会长期误判
 	// 「仍持有长连接」，从而抑制证据采集在缺乏进程证据时的 socket 兜底探活——那会让
-	// FR-455 的存活判定退化（进程其实在跑，却因探活被抑制而报不在跑）。
+	// 的存活判定退化（进程其实在跑，却因探活被抑制而报不在跑）。
 	// 身份比对不可省：换连后旧 readLoop 也会走到这里，不能把新连接一并清掉。
 	defer func() {
 		d.mu.Lock()
@@ -248,7 +269,7 @@ func (d *daemonStrategy) readLoop(conn net.Conn) {
 				d.mgr.onOutput(d.spec.UUID, stream, data)
 			}
 		case daemon.ChannelControl:
-			// wrapper 上抛的进程退出事件（FR-313）：daemon 模式退出码只有 wrapper 能拿到，
+			// wrapper 上抛的进程退出事件：daemon 模式退出码只有 wrapper 能拿到，
 			// 经此扇出崩溃现场供组装快照上报 CP。老 wrapper 不发事件帧，此分支自然不触达。
 			if fr.Type == daemon.TypeEvent {
 				if ev, ok := daemon.DecodeExitEvent(fr.Payload); ok {
@@ -364,7 +385,7 @@ func (d *daemonStrategy) stopViaFreshDial() bool {
 }
 
 // sendControlViaFreshDial 即时拨号 wrapper socket 下发一条控制帧（不缓存连接）。
-// 供「连接尚未建立 / 既有连接已断」的兜底路径复用（FIX-C 停止、FR-459 熔断禁用自动重启）。
+// 供「连接尚未建立 / 既有连接已断」的兜底路径复用（FIX-C 停止熔断禁用自动重启）。
 func (d *daemonStrategy) sendControlViaFreshDial(cmd string) bool {
 	addr := daemon.SocketAddr(d.pidDir, d.spec.UUID)
 	conn, err := daemon.Dial(addr)
@@ -379,7 +400,7 @@ func (d *daemonStrategy) sendControlViaFreshDial(cmd string) bool {
 	return f.Encode(conn) == nil
 }
 
-// DisableAutoRestart 实现 FR-459 崩溃熔断的 daemon 生效路径：向 wrapper 下发「禁用自动重启」
+// DisableAutoRestart 实现崩溃熔断的 daemon 生效路径：向 wrapper 下发「禁用自动重启」
 // 控制帧（粘性），使 wrapper 内部按启动期 env 快照完成的自动重启被真正拦住——Worker 无法
 // 直接触及 wrapper 内部状态，必须经此控制通道。
 //
@@ -395,7 +416,7 @@ func (d *daemonStrategy) DisableAutoRestart() error {
 	return nil
 }
 
-// EnableAutoRestart 实现 FR-459 熔断人工解除的 daemon 复位路径：向 wrapper 下发「恢复自动重启」
+// EnableAutoRestart 实现熔断人工解除的 daemon 复位路径：向 wrapper 下发「恢复自动重启」
 // 控制帧（清 wrapper 内粘性 autoRestartOff），与 DisableAutoRestart 对称。
 //
 // 必要性（终验 Major）：熔断在 Java 仍在运行时触发时只发禁用帧、保 RUNNING；人工解除若只清 Worker

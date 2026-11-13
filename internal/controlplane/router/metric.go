@@ -14,11 +14,11 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// MetricHandler 时序指标查询路由（FR-060）。
+// MetricHandler 时序指标查询路由。
 type MetricHandler struct {
 	metricSvc *service.MetricService
 	authz     *service.AuthzService
-	// capacityTrend 容量趋势告警器（FR-464）；nil 时预测仍返回、仅不发告警。
+	// capacityTrend 容量趋势告警器；nil 时预测仍返回、仅不发告警。
 	capacityTrend *service.CapacityTrendAlerter
 }
 
@@ -179,7 +179,7 @@ func (h *MetricHandler) writeBotRuntimeAuthorizationError(c *gin.Context, err er
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询关联权限失败"})
 }
 
-// metricBatchMaxTargets 批量序列端点的目标数硬上限（FR-340）。去重后超出即 422。
+// metricBatchMaxTargets 批量序列端点的目标数硬上限。去重后超出即 422。
 // 与 processes/top 的 limit 上限（parseProcessTopLimit）对齐取 50。
 const metricBatchMaxTargets = 50
 
@@ -288,7 +288,7 @@ func (h *MetricHandler) Series(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"resolution": res, "from": from, "to": to, "series": series})
 }
 
-// seriesBatchRequest 批量序列请求体（FR-340）。POST 承载只读查询：50 个 UUID 入 query 过长，body 语义清晰。
+// seriesBatchRequest 批量序列请求体。POST 承载只读查询：50 个 UUID 入 query 过长，body 语义清晰。
 type seriesBatchRequest struct {
 	Scope      string   `json:"scope"`
 	TargetIDs  []string `json:"targetIds"`
@@ -297,13 +297,13 @@ type seriesBatchRequest struct {
 	Resolution string   `json:"resolution"`
 }
 
-// skippedTarget 被剔除的目标（无权/不存在），随批量响应返回，供前端区分「无数据」与「被剔除」（FR-340）。
+// skippedTarget 被剔除的目标（无权/不存在），随批量响应返回，供前端区分「无数据」与「被剔除」。
 type skippedTarget struct {
 	TargetID string `json:"targetId"`
 	Reason   string `json:"reason"` // forbidden | not_found
 }
 
-// SeriesBatch 批量返回多个实例目标的历史曲线，消 NodeInstanceCompare 的 N+1 请求（FR-340）。
+// SeriesBatch 批量返回多个实例目标的历史曲线，消 NodeInstanceCompare 的 N+1 请求。
 // 逐目标复用实例访问收敛（等价 CanAccessInstance，走 AccessibleInstanceIDs 集合判定）：
 // 无权/不存在的目标剔除并列入 skipped，不整拒——对比场景个别目标越权不应让整图空白。
 // v1 仅支持 scope=instance（对比场景只有实例维度有 N+1，node 单查询无此问题）。
@@ -434,7 +434,7 @@ func (h *MetricHandler) Overview(c *gin.Context) {
 	c.JSON(http.StatusOK, ov)
 }
 
-// ResourceAttribution 返回首页 Tooltip 使用的有界受管资源归因（FR-400）。
+// ResourceAttribution 返回首页 Tooltip 使用的有界受管资源归因。
 // 节点和跨实例进程明细只对平台管理员开放，避免扩展原 overview 的聚合权限边界。
 func (h *MetricHandler) ResourceAttribution(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
@@ -462,7 +462,7 @@ func (h *MetricHandler) ResourceAttribution(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// ProcessTop 返回受管实例进程 TOPN 快照（FR-170）。
+// ProcessTop 返回受管实例进程 TOPN 快照。
 func (h *MetricHandler) ProcessTop(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil {
@@ -474,6 +474,16 @@ func (h *MetricHandler) ProcessTop(c *gin.Context) {
 		NodeUUID: c.Query("nodeId"),
 		Sort:     c.DefaultQuery("sort", "cpu"),
 		Limit:    parseProcessTopLimit(c.Query("limit")),
+	}
+	// at（RFC3339，可选）：取该时刻之前的最近一拍快照；省略则取最新。
+	// 前端在历史曲线上悬浮时带这个参数，用于回答「那一刻是谁在吃 CPU/内存」。
+	if atStr := c.Query("at"); atStr != "" {
+		at, err := time.Parse(time.RFC3339, atStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_AT", "message": "at 必须为 RFC3339 时间"})
+			return
+		}
+		q.At = at
 	}
 	if q.Sort != "cpu" && q.Sort != "memory" && q.Sort != "io" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_SORT", "message": "sort 必须为 cpu、memory 或 io"})
@@ -571,7 +581,7 @@ func (h *MetricHandler) authorizeInstanceTarget(c *gin.Context, access *service.
 	return targetID, true
 }
 
-// PerformanceAttribution 返回指定实例窗口内目标指标（默认 TPS）劣化的主要贡献因子与权重（FR-465）。
+// PerformanceAttribution 返回指定实例窗口内目标指标（默认 TPS）劣化的主要贡献因子与权重。
 // 权限：instance 维度按 CanAccessInstance 收敛（与 Series 同口径）。
 func (h *MetricHandler) PerformanceAttribution(c *gin.Context) {
 	access := getAccess(c)
@@ -608,7 +618,7 @@ func (h *MetricHandler) PerformanceAttribution(c *gin.Context) {
 // metricRankingWindowMax 排行代表值窗口上限（30d：超出则样本档与窗口语义失真）。
 const metricRankingWindowMax = 30 * 24 * time.Hour
 
-// InstanceRanking 返回跨节点全量实例某指标代表值的排行（FR-469）。
+// InstanceRanking 返回跨节点全量实例某指标代表值的排行。
 // 权限：非管理员按 AccessibleInstanceIDs 在集合内排行（scoped=true），不整拒。
 func (h *MetricHandler) InstanceRanking(c *gin.Context) {
 	access := getAccess(c)
@@ -673,7 +683,7 @@ func (h *MetricHandler) InstanceRanking(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// PlayerTrend 返回全网玩家在线趋势 + 24 时段分布 + 峰值/日均（FR-469）。
+// PlayerTrend 返回全网玩家在线趋势 + 24 时段分布 + 峰值/日均。
 // 权限：聚合总量对认证用户开放（与 Overview 一致，不暴露单实例明细）；时段按时区口径分桶。
 func (h *MetricHandler) PlayerTrend(c *gin.Context) {
 	if access := getAccess(c); access == nil {
@@ -744,7 +754,7 @@ func truncateForEcho(s string, max int) string {
 	return s[:max] + "…"
 }
 
-// SLO 返回窗口内可用率、故障次数、MTTR/MTBF 与误差预算（FR-463）。
+// SLO 返回窗口内可用率、故障次数、MTTR/MTBF 与误差预算。
 // 权限：platform/node 维度对认证用户开放（platform 汇总对非管理员收敛到可访问实例）；
 // instance 维度按 CanAccessInstance 收敛（无权 403）。
 func (h *MetricHandler) SLO(c *gin.Context) {
@@ -850,7 +860,7 @@ func parseFiniteFloat(raw string, ok func(float64) bool) (float64, bool) {
 	return v, true
 }
 
-// metricForecastMaxKeys capacity/forecast 的 `metrics` 参数条数上限（FR-464）。
+// metricForecastMaxKeys capacity/forecast 的 `metrics` 参数条数上限。
 //
 // M-4 修复：`splitMetricKeys` 原先不做条数限制，而 `ForecastCapacity` 对**每个** key
 // 各调一次 `forecastPoints`（1 次 QuerySeries）+ `forecastLimit`（1 次 QuerySeries，
@@ -864,7 +874,7 @@ func parseFiniteFloat(raw string, ok func(float64) bool) (float64, bool) {
 // 因为那两个端点的单个目标成本是 1 次查询、这里单个 key 是 2~3 次。
 const metricForecastMaxKeys = 8
 
-// CapacityForecast 返回关键资源的耗尽预测与 80% 置信区间（FR-464）。
+// CapacityForecast 返回关键资源的耗尽预测与 80% 置信区间。
 // 命中「预计 N 天内耗尽」时经告警体系发趋势告警（去抖）；thresholdDays 可调（默认 7）。
 func (h *MetricHandler) CapacityForecast(c *gin.Context) {
 	access := getAccess(c)
@@ -961,7 +971,7 @@ func parseMetricRange(c *gin.Context) (time.Time, time.Time, bool) {
 	return now.Add(-dur), now, true
 }
 
-// dedupeStrings 去重并保序，剔除空白项（批量目标 UUID 归一，FR-340）。
+// dedupeStrings 去重并保序，剔除空白项（批量目标 UUID 归一）。
 func dedupeStrings(in []string) []string {
 	seen := make(map[string]struct{}, len(in))
 	out := make([]string, 0, len(in))

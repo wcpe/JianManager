@@ -7,9 +7,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// FleetBotReclaimStatus 失效 Bot 自动回收处置状态（FR-460）。
+// FleetBotReclaimStatus 失效 Bot 自动回收处置状态。
 //
-// 与 FR-326 无主运行时处置范式对齐，但对象为「Fleet 归属、workerEpoch 换代后僵死的 Bot」。
+// 与无主运行时处置范式对齐，但对象为「Fleet 归属、workerEpoch 换代后僵死的 Bot」。
 type FleetBotReclaimStatus string
 
 const (
@@ -23,7 +23,7 @@ const (
 	FleetBotReclaimCancelled FleetBotReclaimStatus = "cancelled"
 )
 
-// FleetBotReclaim 记录按 workerEpoch 不匹配判定的失效 Bot 及其回收状态（FR-460）。
+// FleetBotReclaim 记录按 workerEpoch 不匹配判定的失效 Bot 及其回收状态。
 //
 // 仅回收 Fleet 归属 Bot（load_batch_id / stress_session_id 非空）；V1 手动 Bot 只入列表等人工确认，
 // 永不自动删除。回收只改 CP 账本（desired_state/status → stopped）并复用既有 Fleet RPC 去 Worker

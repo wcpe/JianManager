@@ -13,9 +13,9 @@ import java.util.Map;
  *
  * <p>经启动器 JVM 参数 {@code -javaagent:wedge.jar=<gameDir>} 注入；premain 自定位、
  * 根据 API 根 endpoint 拼接 core 端点 → 按需下载 updater-core → 加载并调用其 {@code run} 入口、同步等待，
- * 更新失败 fail-static、楔子自身任何异常 fail-open——绝不挡住游戏启动（ADR-021 决策 6）。
+ * 更新失败 fail-static、楔子自身任何异常 fail-open——绝不挡住游戏启动。
  *
- * <p>FR-258 楔子改 gradle-wrapper 模式：整合包只带 wedge.jar，首次自动拉 core。
+ * <p>楔子改 gradle-wrapper 模式：整合包只带 wedge.jar，首次自动拉 core。
  * 楔子代码冻结后永不变更（§2.5），后续逻辑变动通过 updater-core 自动更新实现。
  *
  * <p>协议见 {@code docs/specs/updater-arch-simplification/spec.md} §2.5/§3.1。
@@ -47,7 +47,7 @@ public final class Wedge {
             try (WedgeLogger log = WedgeLogger.create(gameDirForLog)) {
                 log.error("楔子异常，fail-open 放行游戏: " + t);
             }
-            // 楔子唯一允许的失败模式：放行游戏（ADR-021 决策 6 / FR-089）。
+            // 楔子唯一允许的失败模式：放行游戏。
             System.err.println(msg.get(Messages.Key.WEDGE_FAILOPEN) + " (" + t + ")");
         }
     }
@@ -140,7 +140,7 @@ public final class Wedge {
         int result = CoreLoader.loadAndRun(sel.coreJar, ctx, config.timeoutSec, log);
         log.info("updater-core 返回 result=" + result);
 
-        // 7. 首次 trial 且 core 正常加载运行 → 起 boot-confirm 看门狗（FR-091）。
+        // 7. 首次 trial 且 core 正常加载运行 → 起 boot-confirm 看门狗。
         boolean coreRanOk = result != CoreLoader.RESULT_LOAD_ERROR && result != CoreLoader.RESULT_TIMEOUT;
         if (sel.trial && coreRanOk) {
             CoreSelector.scheduleBootConfirm(coreDir, config.bootConfirmSec, log);
@@ -225,7 +225,7 @@ public final class Wedge {
      * 组装传给 core 的 ctx（§2.5.2 冻结 key）。
      * <p>楔子代码冻结后此 ctx 格式永久固定——后续 core 可从 {@code configJson} 自行扩展解析。
      *
-     * @param coreVersion 选定 core 的版本（FR-091 自更新比对基准）
+     * @param coreVersion 选定 core 的版本（自更新比对基准）
      * @param configJson  jm-updater.json 原文（供 core 自行扩展解析，§2.5.2）
      */
     static Map<String, String> buildContext(String gameDir, WedgeConfig config,
@@ -236,7 +236,7 @@ public final class Wedge {
         ctx.put("key", nullToEmpty(config.key));
         ctx.put("endpoint", nullToEmpty(config.endpoint));
         ctx.put("coreVersion", Long.toString(coreVersion));
-        ctx.put("telemetry", Boolean.toString(config.telemetry)); // FR-094 遥测开关（opt-out）。
+        ctx.put("telemetry", Boolean.toString(config.telemetry)); // 遥测开关（opt-out）。
         ctx.put("timeoutSec", Integer.toString(config.timeoutSec));
         ctx.put("configJson", nullToEmpty(configJson)); // §2.5.2 jm-updater.json 原文透传
         return ctx;

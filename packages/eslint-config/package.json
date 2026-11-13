@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "共享 ESLint flat config（FR-283，见 ADR-064）：React + TS 基线；app 语义规则留各 app 叠加",
+  "description": "共享 ESLint flat config（见 ADR-064）：React + TS 基线；app 语义规则留各 app 叠加",
   "exports": {
     ".": "./index.js"
   },

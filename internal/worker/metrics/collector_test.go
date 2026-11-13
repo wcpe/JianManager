@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// iowait 归一（FR-485）：用构造输入精确验证——改坏归一逻辑或除零保护即转红。
+// iowait 归一：用构造输入精确验证——改坏归一逻辑或除零保护即转红。
 //
 // 为什么不对 Collect 直接断言「IOWait > 0」：真实机器 iowait 常在 0 附近
 // （尤其是低负载的开发机），那种断言会变成随机假红。归一逻辑抽成纯函数后，

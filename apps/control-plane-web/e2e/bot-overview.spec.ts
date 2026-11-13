@@ -7,12 +7,16 @@ const artifactsDir = process.cwd().endsWith(`${path.sep}web`)
   ? path.resolve(process.cwd(), '..', '.tmp')
   : path.resolve(process.cwd(), '.tmp')
 
+/**
+ * 分组卡：`BotWorktableCard` 渲染为 ui 包的 `Card`（`data-slot="card"`）。
+ * 不再按 `div.bg-card` 定位——卡片底色已收敛到 `cardSurface` 常量（`bg-card/95`）。
+ */
 function botGroupCard(page: Page, name: string): Locator {
-  return page.locator('div.bg-card').filter({ has: page.getByRole('button', { name, exact: true }) }).first()
+  return page.locator('[data-slot="card"]').filter({ has: page.getByRole('button', { name, exact: true }) }).first()
 }
 
-/** FR-040 真浏览器纵切：全局 Bot 聚合总览、分组切换、窥视、批量与控制台联动。 */
-test.describe('FR-040 全局 Bot 管理页重构（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：全局 Bot 聚合总览、分组切换、窥视、批量与控制台联动。 */
+test.describe('全局 Bot 管理页重构（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await page.addInitScript(() => {
@@ -24,24 +28,32 @@ test.describe('FR-040 全局 Bot 管理页重构（mock 模式真浏览器）', 
   })
 
   test('聚合总览 → 控制台联动 → 分页窥视 → 分组批量', async ({ page }) => {
+    // 多步用例（总览 → 控制台联动 → 分页窥视 → 分组批量）且含截图。
+    // 实测单跑约 29 秒，正好压在默认 30 秒上限上——全量跑时稍有资源竞争就会翻过去，
+    // 表现为「偶发失败」，而失败点落在当时那一步，看不出是预算问题。
+    test.setTimeout(120_000)
+
     await page.goto('/bots')
     await expect(page.getByRole('heading', { name: 'Bot 管理' })).toBeVisible()
     await expect(page.getByText('2 实例 · 2 节点')).toBeVisible()
     await expect(page.getByText('舰队健康')).toBeVisible()
-    await expect(page.getByRole('button', { name: '压测' })).toBeVisible()
+    // 页头说明已收进问号图标（aria-label 含「压测舰队…」），会与下面的「压测」按钮撞名，
+    // 故这里必须 exact（旧写法会触发 strict mode violation）。
+    await expect(page.getByRole('button', { name: '压测', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '生存服', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '空岛服', exact: true })).toBeVisible()
     await expect(page.getByText('GuardBot')).toHaveCount(0)
     await page.screenshot({ path: path.join(artifactsDir, 'fr040-e2e-overview.png'), fullPage: true })
 
-    await page.getByRole('button', { name: '行为' }).click()
+    // 分组维度已收敛到 `Segments`（role=tablist / 子项 role=tab）——不再是 button。
+    await page.getByRole('tab', { name: '行为', exact: true }).click()
     await expect(page.getByRole('button', { name: 'guard', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'follow', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'patrol', exact: true })).toBeVisible()
     await expect(page.getByText('GuardBot')).toHaveCount(0)
     await page.screenshot({ path: path.join(artifactsDir, 'fr040-e2e-group-dim-behavior.png'), fullPage: true })
 
-    await page.getByRole('button', { name: '实例' }).click()
+    await page.getByRole('tab', { name: '实例', exact: true }).click()
     const survival = botGroupCard(page, '生存服')
     await survival.getByRole('button', { name: '在控制台打开' }).click()
     await expect(page).toHaveURL(/\/instances\/1$/)
@@ -59,7 +71,7 @@ test.describe('FR-040 全局 Bot 管理页重构（mock 模式真浏览器）', 
     await survivalAgain.getByRole('combobox').click()
     await page.getByRole('option', { name: '设为巡逻' }).click()
     await expect(page.getByText('成功 2 · 失败 0')).toBeVisible()
-    await page.getByRole('button', { name: '行为' }).click()
+    await page.getByRole('tab', { name: '行为', exact: true }).click()
     const patrol = botGroupCard(page, 'patrol')
     await expect(patrol.getByText('在线 1 / 共 3')).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr040-e2e-batch-result.png'), fullPage: true })

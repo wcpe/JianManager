@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { usePermissionsStore } from './permissions'
 import { useAuthStore } from './auth'
-import { ALL_PERMISSION_NODE_IDS } from '@/lib/roles'
+import { ALL_PERMISSION_NODE_IDS } from '@/lib/shared/roles'
 
-describe('permissions store（FR-432）', () => {
+describe('permissions store', () => {
   beforeEach(() => {
     usePermissionsStore.getState().reset()
     useAuthStore.setState({ role: null })

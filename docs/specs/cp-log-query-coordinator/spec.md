@@ -235,3 +235,21 @@ CP          生产 CP，PID 1448954，端口 19000，未重启
 `<第二节点目录>/evidence/`（本机实测路径已脱敏）：`online_*` / `offline_*` 对照 JSON、
 `sort_check.txt`、`per_target_stats.csv`、`production_blocker.md`、`raw/` 原始响应。
 第二节点完整复现步骤见同目录 `README.md`。
+
+## 2026-11-09 真机取证（FR-480 双节点验收）
+
+> 按 `.claude/rules/docs-registry.md` 归并回本 spec（证据属于该功能，不另设证据目录）。
+
+真机环境（测试机），部署 VL v1.52.0 后首次跑通全链路。
+
+**冷查询**：p50 **25ms** / max 27ms（每次换 from 绕缓存，8 次）
+
+**并发 20**：p50 217ms / p95 **249ms** / max 254ms —— 落在 FR-498 的 250ms 门限内
+
+**资源**：VL RSS 253.7MB、Worker 49.7MB、CP 101.4MB、
+VL 数据目录 4.9MB（写入 18 万条后）、资产目录 34MB、宿主磁盘 140G/188G(79%)
+
+**采集健康度**：`failedTotal=0` / `gapsTotal=0`
+
+**边界如实登记**：宿主 load 仅 0.8、窗口仅 24h、规模仅 10 实例/38 harvester，
+**不构成 60 源基线**。

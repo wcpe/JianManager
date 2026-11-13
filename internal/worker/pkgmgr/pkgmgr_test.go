@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestRenderNpmrc .npmrc 生成规则（FR-306）：默认源 registry= + @scope 域源 + 带 token 的鉴权行。
+// TestRenderNpmrc .npmrc 生成规则：默认源 registry= + @scope 域源 + 带 token 的鉴权行。
 func TestRenderNpmrc(t *testing.T) {
 	regs := []Registry{
 		{URL: "https://registry.npmmirror.com"},
@@ -85,7 +85,7 @@ func TestWriteNpmrcAtomic(t *testing.T) {
 	}
 }
 
-// TestValidatePM PM 枚举校验（FR-306）。
+// TestValidatePM PM 枚举校验。
 func TestValidatePM(t *testing.T) {
 	for _, ok := range []string{"npm", "pnpm", "yarn"} {
 		if err := validatePM(ok); err != nil {

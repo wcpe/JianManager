@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-497③ 验收补足：**真实 wrapper 进程**的端到端夹具（Linux）。
+// 验收补足：**真实 wrapper 进程**的端到端夹具（Linux）。
 //
 // 为什么不能再用进程内的 `daemon.RunWithReady`（daemon_test.go 里那套）：进程内运行 wrapper 时
 // wrapper 的 PID 就是 `go test` 自己的 PID，于是三件事全部失真——
@@ -30,7 +30,7 @@ import (
 //
 // 本夹具把 wrapper 跑成**独立子进程**，并让它的 argv 与真实包装完全一致：
 // spawn 的是**测试二进制的一份拷贝**，文件名叫 `worker`，argv 是 `<tmp>/worker daemon`；
-// 这份拷贝在 init() 里检查 JM_FR497_WRAPPER_HELPER，命中就直接 `daemon.Run(cfg)` 并退出——
+// 这份拷贝在 init() 里检查 JM_ADOPT_WRAPPER_HELPER，命中就直接 `daemon.Run(cfg)` 并退出——
 // 完全绕过 Go 测试框架（不会被 -test.run 过滤掉，也不会去跑任何用例）。于是：
 //   - `/proc/<pid>/cmdline` == `<tmp>/worker daemon` → looksLikeJianManagerDaemon 通过；
 //   - `/proc/<pid>/environ` 由本夹具按实例注入 JM_DAEMON_WRAPPER_CONFIG（含实例 UUID）；
@@ -41,16 +41,16 @@ import (
 // 真实 worker 二进制的 daemon 分支（apps/worker/main.go 的 `os.Args[1] == "daemon"`）走的正是
 // 同一个 `daemon.Run(cfg)`，故这里替换掉的只有「入口怎么被调到」，不是被测逻辑。
 const (
-	// fr497WrapperHelperEnv 标记「本进程是被夹具 spawn 出来的 wrapper 子进程」。
-	fr497WrapperHelperEnv = "JM_FR497_WRAPPER_HELPER"
-	// fr497WrapperReadyEnv 子进程在 wrapper 监听就绪时写入的文件路径（替代 ready channel）。
-	fr497WrapperReadyEnv = "JM_FR497_WRAPPER_READY_FILE"
+	// adoptWrapperHelperEnv 标记「本进程是被夹具 spawn 出来的 wrapper 子进程」。
+	adoptWrapperHelperEnv = "JM_ADOPT_WRAPPER_HELPER"
+	// adoptWrapperReadyEnv 子进程在 wrapper 监听就绪时写入的文件路径（替代 ready channel）。
+	adoptWrapperReadyEnv = "JM_ADOPT_WRAPPER_READY_FILE"
 )
 
 // init 是 wrapper 子进程的入口。**必须放在 init**：Go 测试框架的 main 只在包内无 TestMain 时由
 // 测试驱动生成，init 一定先于它执行，于是 os.Exit 能干净地拦住后续的测试框架初始化与用例调度。
 func init() {
-	if os.Getenv(fr497WrapperHelperEnv) != "1" {
+	if os.Getenv(adoptWrapperHelperEnv) != "1" {
 		return
 	}
 	cfg, err := daemon.ParseWrapperConfigFromEnv()
@@ -59,7 +59,7 @@ func init() {
 		os.Exit(2)
 	}
 	ready := make(chan struct{}, 1)
-	if path := os.Getenv(fr497WrapperReadyEnv); path != "" {
+	if path := os.Getenv(adoptWrapperReadyEnv); path != "" {
 		go func() {
 			<-ready
 			_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o644)
@@ -88,18 +88,18 @@ type realWrapperProc struct {
 	done chan struct{}
 }
 
-// fr497WorkerBin 把测试二进制复制成一个名为 `worker` 的文件并返回其路径。
+// adoptWorkerBin 把测试二进制复制成一个名为 `worker` 的文件并返回其路径。
 //
 // 目录刻意放在 t.TempDir() 之外一层（系统的 TestXxx 目录已经很深）：Unix socket 路径受
 // sockaddr_un.sun_path（≈107 字节）限制，pidDir 太长会让 wrapper 监听直接失败。
-func fr497WorkerBin(t *testing.T) string {
+func adoptWorkerBin(t *testing.T) string {
 	t.Helper()
 	exe, err := os.Executable()
 	require.NoError(t, err)
 	body, err := os.ReadFile(exe)
 	require.NoError(t, err)
 
-	dir, err := os.MkdirTemp("", "fr497w-")
+	dir, err := os.MkdirTemp("", "adopt-w-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
@@ -114,7 +114,7 @@ func fr497WorkerBin(t *testing.T) string {
 // 返回时 wrapper 已经在监听 socket 上（由 ready 文件同步，不用 sleep 猜）。
 func startRealWrapper(t *testing.T, cfg daemon.WrapperConfig) *realWrapperProc {
 	t.Helper()
-	bin := fr497WorkerBin(t)
+	bin := adoptWorkerBin(t)
 	readyPath := filepath.Join(t.TempDir(), "wrapper-ready")
 
 	cfgBytes, err := json.Marshal(cfg)
@@ -123,14 +123,14 @@ func startRealWrapper(t *testing.T, cfg daemon.WrapperConfig) *realWrapperProc {
 	cmd := exec.Command(bin, "daemon")
 	cmd.Env = append(filterJavaToolOptions(os.Environ()),
 		daemon.EnvWrapperConfig+"="+string(cfgBytes),
-		fr497WrapperHelperEnv+"=1",
-		fr497WrapperReadyEnv+"="+readyPath,
+		adoptWrapperHelperEnv+"=1",
+		adoptWrapperReadyEnv+"="+readyPath,
 		// cgroup 隔离在测试环境里常常迁不动（无 systemd 单元 / 无权限），关掉以免噪声日志与
 		// 与真实 cgroup 层级的意外交互；该开关只影响「迁出 Worker 单元 cgroup」，不影响
 		// 归属复核、登记、巡检与停止。
 		daemon.EnvCgroupIsolation+"=0",
 	)
-	logPath := filepath.Join(os.TempDir(), "fr497-wrapper-"+strconv.Itoa(os.Getpid())+"-"+cfg.InstanceUUID+".log")
+	logPath := filepath.Join(os.TempDir(), "adopt-wrapper-"+strconv.Itoa(os.Getpid())+"-"+cfg.InstanceUUID+".log")
 	logFile, err := os.Create(logPath)
 	require.NoError(t, err)
 	cmd.Stdout = logFile

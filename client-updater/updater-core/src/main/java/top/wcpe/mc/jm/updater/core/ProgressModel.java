@@ -4,7 +4,7 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 
 /**
- * 更新下载进度模型（FR-099）。
+ * 更新下载进度模型。
  *
  * <p>纯逻辑、线程安全（下载线程 {@code advance}，UI 线程读 {@code fraction/speed/eta}）、时间戳注入便于单测。
  *

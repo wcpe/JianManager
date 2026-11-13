@@ -34,6 +34,12 @@ func newIngestChannelHarness(t *testing.T) *ingestChannelHarness {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Asset{}, &model.ArtifactStorageChannel{}, &model.ClientChannel{}, &model.ClientVersion{}))
 	root, err := dataroot.Init(filepath.Join(t.TempDir(), "data"))
 	require.NoError(t, err)
@@ -152,7 +158,7 @@ func TestIngest_S3Active_UploadsToChannel(t *testing.T) {
 	require.Equal(t, model.AssetBackendS3, asset.StorageBackend)
 	require.Equal(t, ch.ID, asset.StorageChannelID)
 	require.Equal(t, model.AssetStorageExternal, asset.StorageState)
-	require.Equal(t, wantRel, asset.RelPath, "RelPath 仍登记 CAS 键（跨后端存储键，ADR-073）")
+	require.Equal(t, wantRel, asset.RelPath, "RelPath 仍登记 CAS 键（跨后端存储键）")
 
 	require.Equal(t, data, fake.objects["jm-artifacts/jm/"+wantRel], "对象键 = bucket/prefix/CAS 相对路径")
 	_, serr := os.Stat(h.root.Abs(wantRel))
@@ -204,7 +210,7 @@ func TestIngest_S3UploadFailure_FailsFast(t *testing.T) {
 	require.Empty(t, entries, "失败不静默回落本地")
 }
 
-// TestIngest_ReuploadHealsLostAsset 失效自愈（FR-349 spec §3.6）：lost 资产重传同内容 →
+// TestIngest_ReuploadHealsLostAsset 失效自愈（spec §3.6）：lost 资产重传同内容 →
 // 去重命中且把对象补传回记录自述的渠道、StorageState 复位 external（下载复通）。
 func TestIngest_ReuploadHealsLostAsset(t *testing.T) {
 	h := newIngestChannelHarness(t)

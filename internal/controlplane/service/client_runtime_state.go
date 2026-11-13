@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ClientRuntimeStateService 管理客户端运行态心跳与聚合查询（FR-265）。
+// ClientRuntimeStateService 管理客户端运行态心跳与聚合查询。
 type ClientRuntimeStateService struct {
 	db *gorm.DB
 }

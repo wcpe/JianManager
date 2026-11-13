@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-503 日志采集配置端点：平台默认（读/写）+ 节点级覆盖（读/写/清除）+ 权限与校验。
+// 日志采集配置端点：平台默认（读/写）+ 节点级覆盖（读/写/清除）+ 权限与校验。
 
 // newLogAcqTestRouter 装配日志采集端点与一个已登记节点，返回引擎与两个服务。
 // isAdmin=false 时用于验证写门禁（无任何权限节点 ⇒ 403）。

@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// InstanceRollingHandler 实例滚动/分批/灰度编排路由处理器（FR-457）。
+// InstanceRollingHandler 实例滚动/分批/灰度编排路由处理器。
 type InstanceRollingHandler struct {
 	svc   *service.InstanceRollingService
 	authz *service.AuthzService
@@ -125,7 +125,7 @@ func (h *InstanceRollingHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, op)
 }
 
-// authorizeOp 加载编排会话并校验调用者对其全部目标有访问权（FR-457 越权修复，IDOR）。
+// authorizeOp 加载编排会话并校验调用者对其全部目标有访问权（越权修复，IDOR）。
 // 平台管理员放行；非管理员要求 op.Targets ⊆ 可访问实例集合，否则以 404 隐藏存在性。
 func (h *InstanceRollingHandler) authorizeOp(c *gin.Context, opID uint) (*model.InstanceRollingOp, bool) {
 	op, err := h.svc.Get(opID)
@@ -201,7 +201,7 @@ func (h *InstanceRollingHandler) control(c *gin.Context, fn func(uint) error, ac
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的编排 ID"})
 		return
 	}
-	// 越权校验（FR-457 IDOR）：非管理员仅能控制其可访问实例集合内的编排。
+	// 越权校验（IDOR）：非管理员仅能控制其可访问实例集合内的编排。
 	if _, ok := h.authorizeOp(c, uint(opID)); !ok {
 		return
 	}

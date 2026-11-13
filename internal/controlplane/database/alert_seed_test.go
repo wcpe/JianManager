@@ -90,11 +90,11 @@ func TestSeedCoversKeyMetrics(t *testing.T) {
 	require.NoError(t, db.Find(&rules).Error)
 
 	want := map[string]bool{
-		model.MetricNodeMemPct:      false,
-		model.MetricNodeDiskPct:     false,
-		model.MetricNodeIOWait:      false,
+		model.MetricNodeMemPct:       false,
+		model.MetricNodeDiskPct:      false,
+		model.MetricNodeIOWait:       false,
 		model.MetricLogIngestHealthy: false,
-		model.MetricLogVLDiskPct:    false,
+		model.MetricLogVLDiskPct:     false,
 	}
 	for _, r := range rules {
 		if _, ok := want[r.Metric]; ok {

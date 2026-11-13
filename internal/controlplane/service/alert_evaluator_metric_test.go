@@ -129,7 +129,7 @@ func TestEvaluator_BaselineROCDetectsStepDown(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, inst.ID, events[0].TargetID)
 	assert.Contains(t, events[0].Message, "下")
-	// FR-462：突降方向应结构化落库（不只用自然语言塞进 message）。
+	// 突降方向应结构化落库（不只用自然语言塞进 message）。
 	assert.Equal(t, model.BaselineDirectionDown, events[0].Direction)
 }
 

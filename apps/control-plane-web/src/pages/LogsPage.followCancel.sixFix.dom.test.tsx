@@ -9,6 +9,12 @@ import { loginMockUser } from '@/test/auth'
 import LogsPage from './LogsPage'
 import api from '@/api/client'
 import { useLogsFederation } from '@/api/logFederation'
+import { LiveLogError, subscribeLiveLogs } from '@/api/logLive'
+
+vi.mock('@/api/logLive', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/logLive')>()
+  return { ...actual, subscribeLiveLogs: vi.fn() }
+})
 
 const item = { event_id: 'follow-1', log_source_id: 'inst:1/stdout', message: '跟随原始行', event_time_utc: '2026-10-22T00:00:00Z' }
 const response = { sourceTag: 'federated', items: [item], exhausted: true, view: { view_id: 'evidence-view' }, coverage: { complete: true, targets: [] }, quality: { duplicate_quality: 'exact', stats_quality: 'exact' } }
@@ -16,6 +22,9 @@ const response = { sourceTag: 'federated', items: [item], exhausted: true, view:
 beforeEach(() => {
   loginMockUser()
   vi.useFakeTimers()
+  // These scheduling regressions exercise the explicit old-server polling fallback.
+  vi.mocked(subscribeLiveLogs).mockReset()
+  vi.mocked(subscribeLiveLogs).mockRejectedValue(new LiveLogError('UNSUPPORTED', 'native tail unsupported by test server'))
   HTMLElement.prototype.hasPointerCapture ??= () => false
   HTMLElement.prototype.setPointerCapture ??= () => {}
   HTMLElement.prototype.releasePointerCapture ??= () => {}
@@ -37,12 +46,18 @@ describe('跟随完成后调度与输入去抖', () => {
   it('首屏只有一个Search，连续输入复用250ms debounce', async () => {
     const keywords: string[] = []
     server.use(http.get(API('/logs/federation'), ({ request }) => {
-      keywords.push(new URL(request.url).searchParams.get('keyword') ?? '')
+      const params = new URL(request.url).searchParams
+      if (params.get('keyword') !== 'independent-proof') {
+        expect(params.get('view')).toBe('node_instance')
+        expect(params.get('source')).toBe('instance')
+      }
+      keywords.push(params.get('keyword') ?? '')
       return HttpResponse.json(response)
     }))
     renderWithProviders(<LogsPage />)
     await advance(300)
     expect(keywords).toEqual([''])
+    expect(screen.getByRole('tab', { name: '实例日志' })).toHaveAttribute('aria-selected', 'true')
     fireEvent.change(screen.getByPlaceholderText('搜索日志内容…'), { target: { value: 'a' } })
     await advance(100)
     fireEvent.change(screen.getByPlaceholderText('搜索日志内容…'), { target: { value: 'ab' } })
@@ -77,12 +92,12 @@ describe('跟随完成后调度与输入去抖', () => {
       await advance(50)
       fireEvent.click(screen.getByRole('option', { name: '全部时间', exact: true }))
       await advance(200)
-      fireEvent.click(screen.getByRole('button', { name: '实时跟随' }))
+      fireEvent.click(screen.getByTestId('logs-live-toggle'))
       await advance(300)
       const independent = get.mock.calls.find(([path, config]) => path === '/logs/federation' && config?.params?.keyword === 'independent-proof')
       expect(independent?.[1]?.signal?.aborted).toBe(false)
       await advance(35000)
-      fireEvent.click(screen.getByRole('button', { name: '实时跟随' }))
+      fireEvent.click(screen.getByTestId('logs-live-toggle'))
       await advance(100)
       expect(independent?.[1]?.signal?.aborted).toBe(false)
       expect(get.mock.calls.some(([path, config]) => path === '/logs/federation' && config?.params?.limit === 100 && config.params.from === undefined && config.params.to === undefined)).toBe(true)
@@ -107,7 +122,7 @@ describe('跟随完成后调度与输入去抖', () => {
     }))
     const view = renderWithProviders(<LogsPage />)
     await advance(300)
-    fireEvent.click(screen.getByRole('button', { name: '实时跟随' }))
+    fireEvent.click(screen.getByTestId('logs-live-toggle'))
     await advance(300)
     expect(calls).toBe(1)
     await advance(15000)

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
@@ -31,7 +32,7 @@ func TestRegisteredTools_Set(t *testing.T) {
 		"node_maintenance_enter",
 		"node_maintenance_leave",
 	}
-	// FR-396/397/398 起工具集加性扩展：只断言既有 11 个仍在，不强制总数。
+	// 397/398 起工具集加性扩展：只断言既有 11 个仍在，不强制总数。
 	// 各扩展域另有专门契约测试。
 	assert.GreaterOrEqual(t, len(tools), len(want))
 	for _, n := range want {
@@ -103,7 +104,7 @@ func TestToolsForPrincipal_V1FullWriteShowsAllLegacyTools(t *testing.T) {
 		WriteAllowlist:    []string{service.AgentWriteInstanceLife, service.AgentWriteNodeMaintenance},
 	}
 	// V1 只能看到兼容解释器允许的 action（V1Allowed=true）；
-	// FR-396/397/398 起新增工具一律 V1Allowed=false，V1 Token 不得因工具集扩容而扩权。
+	// 397/398 起新增工具一律 V1Allowed=false，V1 Token 不得因工具集扩容而扩权。
 	want := 0
 	for _, spec := range allToolSpecs {
 		d, ok := service.DescribeAgentAction(spec.Action)
@@ -181,9 +182,27 @@ func TestCallTool_MissingID(t *testing.T) {
 		ScopedInstanceIDs: []uint{1},
 		WriteAllowlist:    []string{service.AgentWriteInstanceLife},
 	}
-	res := CallTool(context.Background(), ToolDeps{}, p, "instance_stop", map[string]any{})
+	// instance_stop 现在**需审**，未装配审批服务会被失败关闭挡下。
+	// 本用例要测的是「缺 id 参数」，因此必须装配真实审批服务，
+	// 否则断言到的是审批失败而不是参数校验失败（两者都在最前面，顺序决定归属）。
+	deps := newApprovalTestDeps(t)
+	res := CallTool(context.Background(), deps, p, "instance_stop", map[string]any{})
 	assert.True(t, res.IsError)
 	assert.Contains(t, res.Content[0].Text, "id")
+}
+
+// newApprovalTestDeps 装配一个含审批服务的 ToolDeps（内存库）。
+//
+// 存在的理由：之后**高危写工具一律走审批**，任何调用它们的用例
+// 都必须装配审批服务，否则只会撞在「未装配（失败关闭）」上，
+// 而测不到该用例原本想验的行为。
+func newApprovalTestDeps(t *testing.T) ToolDeps {
+	t.Helper()
+	db := newStatelessTestDB(t)
+	if err := db.AutoMigrate(&model.ApprovalTicket{}, &model.ApprovalReceipt{}); err != nil {
+		t.Fatalf("迁移审批表失败: %v", err)
+	}
+	return ToolDeps{Approval: service.NewApprovalService(db)}
 }
 
 func TestCallTool_ContextCanceled(t *testing.T) {

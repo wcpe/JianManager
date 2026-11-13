@@ -1,7 +1,7 @@
 // Package directprobe 定义 Control Plane 与 Worker 之间关于「MC 直探（SLP / Query）」的共享契约值：
 // 默认/上界超时、探针抓取上限、心跳节拍与单拍采集预算。
 //
-// 存在的理由（FR-446 复审 NEW-ISSUE A）：直探超时是**可配项**，而心跳采集有**总预算护栏**，
+// 存在的理由（复审 NEW-ISSUE A）：直探超时是**可配项**，而心跳采集有**总预算护栏**，
 // 二者若各写一份字面量就会自相矛盾——运营把超时调到 CP 接受的上界，Worker 侧却按另一个上界
 // （或按硬编码预算）静默把该实例的时序样本砍掉。故本包是唯一数值来源：
 //
@@ -24,7 +24,7 @@ const (
 	// 但在推导采集预算时必须计入（探针抓取与 SLP/Query 在同一实例任务内**串行**）。
 	ProbeScrapeTimeoutCap = 5 * time.Second
 
-	// HeartbeatInterval 是心跳上报节拍（ADR-013，30s）。apps/worker/main.go 据此启动心跳；
+	// HeartbeatInterval 是心跳上报节拍（30s）。apps/worker/main.go 据此启动心跳；
 	// 采集预算必须显著小于本值，否则一拍未结束下一拍又来，心跳积压。
 	HeartbeatInterval = 30 * time.Second
 

@@ -67,8 +67,10 @@ type ResourceSample struct {
 type WorkClass string
 
 const (
-	// WorkForeground 保留有限查询，明确RSS超限或90%磁盘水位时拒绝新增。
+	// WorkForeground 是连续/高成本前台工作（例如原生实时跟随），RSS超限或90%磁盘水位时拒绝新增。
 	WorkForeground WorkClass = "foreground"
+	// WorkReadOnly 是有界历史只读查询。它不写入日志、不创建导出物，在磁盘暂停水位仍允许读取已有数据；查询自身的行数、字节数和超时预算继续生效。
+	WorkReadOnly WorkClass = "read_only"
 	// WorkBackground 在未知或80%水位时暂停新增物化/校验成本。
 	WorkBackground WorkClass = "background"
 	// WorkWALDrain 保留已有WAL的有界排空，不代表批准新的空间预留。
@@ -136,12 +138,12 @@ func (c *BudgetController) Update(sample ResourceSample) {
 	c.mu.Unlock()
 }
 
-// admissionLocked 不把未知采样当零；未知/降级只挡后台，前台仍由自身窗口/行字节限制约束。
+// admissionLocked 不把未知采样当零；未知/降级只挡后台新增成本，历史只读查询仍由自身有界预算控制。
 func (c *BudgetController) admissionLocked(work WorkClass) error {
 	if work == WorkWALDrain {
 		return nil
 	}
-	if work != WorkForeground && work != WorkBackground {
+	if work != WorkForeground && work != WorkReadOnly && work != WorkBackground {
 		return fmt.Errorf("%w: 未知工作类别", ErrBudgetAdmission)
 	}
 	s := c.sample
@@ -168,6 +170,11 @@ func (c *BudgetController) admissionLocked(work WorkClass) error {
 	}
 	if overRSS {
 		return fmt.Errorf("%w: RSS超过独立内存预算", ErrBudgetAdmission)
+	}
+	if work == WorkReadOnly {
+		// 磁盘水位/数据根字节预算阻止新增写入和物化，但不应让已存在的日志变得不可读。
+		// RSS 超限已在上方检查；查询自身仍受 QueryRequest 的有限预算约束。
+		return nil
 	}
 	if s.DiskKnown && s.DiskUsagePercent >= 90 {
 		return fmt.Errorf("%w: 文件系统达到90%%暂停水位", ErrBudgetAdmission)

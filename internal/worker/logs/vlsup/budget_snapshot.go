@@ -14,11 +14,11 @@ type BudgetSnapshot struct {
 	TakenAt            time.Time
 }
 
-// Snapshot 在常量规模短锁内复制3个namespace/3类预留，绝不采磁盘或发HTTP。
+// Snapshot 在常量规模短锁内复制3个namespace/4类工作/3类预留，绝不采磁盘或发HTTP。
 func (c *BudgetController) Snapshot() BudgetSnapshot {
 	out := BudgetSnapshot{TakenAt: time.Now(), Reserved: map[ReservationKind]int64{}, Allowed: map[WorkClass]bool{}, Reasons: map[WorkClass]string{}}
 	if c == nil {
-		for _, work := range []WorkClass{WorkForeground, WorkBackground, WorkWALDrain} {
+		for _, work := range []WorkClass{WorkForeground, WorkReadOnly, WorkBackground, WorkWALDrain} {
 			out.Allowed[work] = true
 		}
 		return out
@@ -44,7 +44,7 @@ func (c *BudgetController) Snapshot() BudgetSnapshot {
 		out.Reserved[kind] = c.reserved[kind]
 		out.TotalReservedBytes += c.reserved[kind]
 	}
-	for _, work := range []WorkClass{WorkForeground, WorkBackground, WorkWALDrain} {
+	for _, work := range []WorkClass{WorkForeground, WorkReadOnly, WorkBackground, WorkWALDrain} {
 		err := c.admissionLocked(work)
 		out.Allowed[work] = err == nil
 		if err != nil {

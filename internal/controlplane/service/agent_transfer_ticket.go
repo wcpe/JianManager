@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-397 流式传输票据：MCP 只承载小文本，大文件经短时单用途票据走既有数据面。
+// 流式传输票据：MCP 只承载小文本，大文件经短时单用途票据走既有数据面。
 const (
 	// agentTransferTicketTTL 票据有效期；足够发起一次传输，过期即须重新申请。
 	agentTransferTicketTTL = 5 * time.Minute

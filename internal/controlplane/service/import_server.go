@@ -20,23 +20,41 @@ import (
 // 路由映射 422（不存在路径等按 spec 归 4xx）。
 var ErrImportRejected = errors.New("导入被拒绝")
 
-// ImportServerService 导入现有服务器（FR-302，见 ADR-069）：
+// ImportServerService 导入现有服务器：
 // 探测（代理 Worker InspectServerDir）→ 就地接管 / 搬迁托管区 → 登记实例
 // （结构化启动同 provision 路径）+ 探到的内嵌 JDK 登记进 node_jdks（managed=false）。
 type ImportServerService struct {
 	db       *gorm.DB
 	pool     *cpgrpc.ClientPool
 	instance *InstanceService
-	// tasks 任务中心（FR-323）：migrate 搬迁经任务异步；nil 时回退同步（旧行为/测试）。
+	// tasks 任务中心：migrate 搬迁经任务异步；nil 时回退同步（旧行为/测试）。
 	tasks *TaskService
+	// probe 是探针下发器（建服/导入共用）。nil 时导入不碰探针文件，
+	// 保持“目录里已有一套手工放好的探针”的旧行为。
+	probe probeDeployer
 }
+
+// probeDeployer 是“向实例下发探针（jar + config + 托管身份）”的能力接口。
+//
+// 抽成接口而不是直接依赖 *ProvisionService：导入服务只需要这一个动作，
+// 而 ProvisionService 带着一大堆建服依赖（core/artifact/binary…），
+// 把整坨注进来会让导入路径在测试里根本拉不起来。
+//
+// 实现方：*ProvisionService（见 SetProbeDeployer 的装配）。
+type probeDeployer interface {
+	// DeployProbeForInstance 为已存在的实例下发探针；返回是否真的下发了（false=none 无可用制品/未启用）。
+	DeployProbeForInstance(inst *model.Instance, node *model.Node, baseURL string) error
+}
+
+// SetProbeDeployer 注入探针下发器（main 接线）：非 nil 后导入与收养都会顺带下发探针。
+func (s *ImportServerService) SetProbeDeployer(d probeDeployer) { s.probe = d }
 
 // NewImportServerService 创建导入服务。
 func NewImportServerService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *InstanceService) *ImportServerService {
 	return &ImportServerService{db: db, pool: pool, instance: instance}
 }
 
-// SetTaskService 注入任务中心（FR-323，main 接线）：非 nil 后 migrate 搬迁走后台任务。
+// SetTaskService 注入任务中心（main 接线）：非 nil 后 migrate 搬迁走后台任务。
 func (s *ImportServerService) SetTaskService(t *TaskService) { s.tasks = t }
 
 // ImportInspectRequest 探测请求（POST /instances/import/inspect）。
@@ -142,6 +160,7 @@ func (s *ImportServerService) Import(ctx context.Context, req ImportServerReques
 	// ── 就地接管：O(1) 无拷贝，同步建实例即完成（工作目录=原目录绝对路径，托管区外例外）。
 	if inPlace {
 		inst, err := s.instance.Create(CreateInstanceRequest{
+			Kind:   model.InstanceKindPlugin, // 导入的是 MC 服务端目录（插件服）
 			NodeID: req.NodeID, Name: req.Name, Type: model.InstanceTypeMinecraftJava,
 			Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDaemon, JDKID: req.JDKID,
 			LaunchSpec: string(specJSON), ServerPort: inspect.ServerPort, AutoRestart: true,
@@ -151,10 +170,15 @@ func (s *ImportServerService) Import(ctx context.Context, req ImportServerReques
 			return nil, "", err
 		}
 		s.registerJdkPaths(req.NodeID, inspect.Jdks, req.RegisterJdkPaths)
+		// 就地导入的目录里「本来就在跑」是常态（运维用 tmux/systemd 起的服），
+		// 而导入后实例记的是 STOPPED——面板写停止、玩家却能进，是一眼就看得出的分裂。
+		// 故导入后立即尝试一次“不重启”的收养：只把现有进程登记为运行态。
+		// 目录本来就停着 → ErrAdoptInPlaceNoRuntime，属正常结果（保持 STOPPED），不算失败。
+		s.adoptInPlaceAfterImport(inst)
 		return inst, "", nil
 	}
 
-	// ── 搬迁（migrate）：先按目标托管区相对路径建实例，再异步搬迁（FR-323）——大目录跨盘拷贝
+	// ── 搬迁（migrate）：先按目标托管区相对路径建实例，再异步搬迁——大目录跨盘拷贝
 	// 可数十分钟，同步会阻塞 HTTP 请求。有任务中心即秒回 {instance, taskId}，搬迁在 CP 后台推进；
 	// 无任务中心（测试）回退同步搬迁（旧行为）。
 	rel := allocWorkDirRel(req.Name) // var/servers/<slug>-<shortid>
@@ -200,9 +224,10 @@ func (s *ImportServerService) Import(ctx context.Context, req ImportServerReques
 	return inst, taskID, nil
 }
 
-// createImportedInstance 建导入实例（结构化启动同 provision，ADR-008；backend 角色可注册代理/可克隆）。
+// createImportedInstance 建导入实例（结构化启动同 provision，；backend 角色可注册代理/可克隆）。
 func (s *ImportServerService) createImportedInstance(req ImportServerRequest, specJSON []byte, inspect *ImportInspectResult, relWorkDir string) (*model.Instance, error) {
 	return s.instance.Create(CreateInstanceRequest{
+		Kind:   model.InstanceKindPlugin, // 导入的是 MC 服务端目录（插件服）
 		NodeID: req.NodeID, Name: req.Name, Type: model.InstanceTypeMinecraftJava,
 		Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDaemon, JDKID: req.JDKID,
 		LaunchSpec: string(specJSON), ServerPort: inspect.ServerPort, AutoRestart: true,
@@ -210,7 +235,7 @@ func (s *ImportServerService) createImportedInstance(req ImportServerRequest, sp
 	})
 }
 
-// migrateOnWorker 委托 Worker 搬迁原目录到托管区 slug（stage 非 nil 上报阶段，FR-323）。
+// migrateOnWorker 委托 Worker 搬迁原目录到托管区 slug（stage 非 nil 上报阶段）。
 func (s *ImportServerService) migrateOnWorker(ctx context.Context, client *cpgrpc.Client, path, slug string, stage func(int, string)) error {
 	if stage != nil {
 		stage(20, "搬迁目录到托管区…")

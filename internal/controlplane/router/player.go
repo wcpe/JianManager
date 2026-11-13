@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// PlayerHandler 玩家管理路由处理器（FR-054 + FR-066 实时玩家事件）。
+// PlayerHandler 玩家管理路由处理器（实时玩家事件）。
 type PlayerHandler struct {
 	playerSvc *service.PlayerService
 	eventSvc  *service.PlayerEventService
@@ -23,7 +23,7 @@ type PlayerHandler struct {
 }
 
 // NewPlayerHandler 创建玩家管理路由处理器。
-// eventSvc 提供探针经反向 WS 实时上报的玩家事件流与在线名册（FR-066）。
+// eventSvc 提供探针经反向 WS 实时上报的玩家事件流与在线名册。
 func NewPlayerHandler(playerSvc *service.PlayerService, eventSvc *service.PlayerEventService, authz *service.AuthzService, audit *service.AuditService) *PlayerHandler {
 	return &PlayerHandler{playerSvc: playerSvc, eventSvc: eventSvc, authz: authz, audit: audit}
 }
@@ -216,7 +216,7 @@ func (h *PlayerHandler) Bans(c *gin.Context) {
 	c.JSON(http.StatusOK, bans)
 }
 
-// PlayersEvents SSE 推送某实例（及其后端子服）的实时玩家事件（join/quit/chat/cross_server，FR-066）。
+// PlayersEvents SSE 推送某实例（及其后端子服）的实时玩家事件（join/quit/chat/cross_server）。
 // 仅订阅当前实例的事件（按实例 UUID 过滤），探针未连入时事件流为空，前端据此降级提示。
 // 首帧附带当前在线名册快照，使前端打开即见在线列表（之后由事件流实时增量）。
 func (h *PlayerHandler) PlayersEvents(c *gin.Context) {
@@ -298,7 +298,7 @@ func (h *PlayerHandler) recordAudit(c *gin.Context, action, player string, detai
 	h.audit.RecordSafe(h.actorID(c), action, "player", player, marshalAuditDetail(payload), c.ClientIP())
 }
 
-// RegisterRoutes 注册玩家管理路由（FR-054）。
+// RegisterRoutes 注册玩家管理路由。
 func (h *PlayerHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/players", h.Online)
 	rg.GET("/instances/:id/players/events", h.PlayersEvents)

@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// BotLoadTemplate 是 FR-370 命令压测可复用模板（个人所有权，不绑定目标实例）。
+// BotLoadTemplate 是命令压测可复用模板（个人所有权，不绑定目标实例）。
 type BotLoadTemplate struct {
 	ID        uint   `gorm:"primaryKey" json:"id"`
 	UUID      string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`

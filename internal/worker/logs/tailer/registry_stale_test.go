@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -58,16 +59,23 @@ func TestDifferentInodesKeepSeparateEntries(t *testing.T) {
 }
 
 // TestTruncateRewriteEndToEnd 端到端：截断重写后内容长回原样，新内容必须被采到。
+//
+// 注意 got 的同步：SinkFunc 在 collector 协程里 append，主协程读它判断进度，
+// 两边直接读写同一个切片就是数据竞争（race detector 实测会报，且在本次
+// 改造前的 HEAD 上同样可复现——不是改造引入的）。这里用 mutex 包一层。
 func TestTruncateRewriteEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "latest.log")
 
+	var mu sync.Mutex
 	var got []string
 	cfg := CollectorConfig{
 		Paths: []string{filepath.Join(dir, "*.log")}, ReadFromHead: true,
 		ScanInterval: 150 * time.Millisecond, ProgressInterval: 150 * time.Millisecond,
 	}
 	c := NewCollector(cfg, nil, SinkFunc(func(_ context.Context, lines []Line) error {
+		mu.Lock()
+		defer mu.Unlock()
 		for _, l := range lines {
 			got = append(got, string(l.Content))
 		}
@@ -77,10 +85,21 @@ func TestTruncateRewriteEndToEnd(t *testing.T) {
 	defer cancel()
 	go c.Run(ctx)
 
+	snapshot := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]string, len(got))
+		copy(out, got)
+		return out
+	}
+
 	wait := func(n int, d time.Duration) bool {
 		dl := time.Now().Add(d)
 		for time.Now().Before(dl) {
-			if len(got) >= n {
+			mu.Lock()
+			n2 := len(got)
+			mu.Unlock()
+			if n2 >= n {
 				return true
 			}
 			time.Sleep(50 * time.Millisecond)
@@ -90,17 +109,17 @@ func TestTruncateRewriteEndToEnd(t *testing.T) {
 
 	os.WriteFile(p, []byte("A\nB\nC\n"), 0o644)
 	if !wait(3, 3*time.Second) {
-		t.Fatalf("首轮未采到: %v", got)
+		t.Fatalf("首轮未采到: %v", snapshot())
 	}
 	// 截断重写且变短
 	os.WriteFile(p, []byte("X\nY\n"), 0o644)
 	if !wait(5, 4*time.Second) {
-		t.Fatalf("截断后新内容未采到: %v", got)
+		t.Fatalf("截断后新内容未采到: %v", snapshot())
 	}
 	// 内容长回原样 —— 修复前这里一条不采
 	os.WriteFile(p, []byte("A\nB\nC\n"), 0o644)
 	if !wait(8, 4*time.Second) {
-		t.Fatalf("内容长回后未采到（这是修复前的缺陷）：%v", got)
+		t.Fatalf("内容长回后未采到（这是修复前的缺陷）：%v", snapshot())
 	}
-	t.Logf("三轮内容全部采到: %v ✓", got)
+	t.Logf("三轮内容全部采到: %v ✓", snapshot())
 }

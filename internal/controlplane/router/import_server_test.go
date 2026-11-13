@@ -28,7 +28,12 @@ func (f *fakeImportRouterWorker) CreateInstance(_ context.Context, _ *workerpb.C
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
-// 非平台管理员访问导入端点回 403（FR-302：平台管理员专属）。
+// AdoptInPlaceRuntime 导入后自动调用：回“无活进程”以保持 STOPPED（本用例的目录是停着的）。
+func (f *fakeImportRouterWorker) AdoptInPlaceRuntime(_ context.Context, _ *workerpb.InstanceActionRequest, _ ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
+	return &workerpb.InstanceActionResponse{Success: false, Error: "工作目录下没有可收养的活进程"}, nil
+}
+
+// 非平台管理员访问导入端点回 403（：平台管理员专属）。
 func TestImportServer_RequiresAdmin(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -110,7 +115,7 @@ func TestImportServer_EndToEndWithFakeWorker(t *testing.T) {
 	w = makeRequest(r, http.MethodPost, "/api/v1/instances/import",
 		map[string]any{"nodeId": node.ID, "path": "/srv/old", "mode": "in_place", "name": "老服", "jarPath": "server.jar"}, token)
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
-	// FR-323：响应形状为 {instance, taskId}（就地接管 taskId 空）。
+	// 响应形状为 {instance, taskId}（就地接管 taskId 空）。
 	created := parseJSON(t, w)
 	inst, ok := created["instance"].(map[string]any)
 	require.True(t, ok, "响应应含 instance 对象: %s", w.Body.String())

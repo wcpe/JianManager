@@ -245,9 +245,11 @@ func (s *fakeVLStore) handler(t *testing.T) http.HandlerFunc {
 				limit = n
 			}
 		}
-		s.mu.Lock()
-		s.windows = append(s.windows, fakeVLWindow{start: start, end: end, limit: limit})
-		s.mu.Unlock()
+		if !isSearchHydrationRequest(r) {
+			s.mu.Lock()
+			s.windows = append(s.windows, fakeVLWindow{start: start, end: end, limit: limit})
+			s.mu.Unlock()
+		}
 
 		matched := make([]fakeVLRow, 0, len(s.rows))
 		for _, row := range s.rows {
@@ -257,7 +259,7 @@ func (s *fakeVLStore) handler(t *testing.T) http.HandlerFunc {
 			matched = append(matched, row)
 		}
 		sort.SliceStable(matched, func(i, j int) bool { return matched[i].eventTime.After(matched[j].eventTime) })
-		if len(matched) > limit {
+		if len(matched) > limit && !isSearchHydrationRequest(r) {
 			matched = matched[:limit]
 		}
 
@@ -276,7 +278,9 @@ func (s *fakeVLStore) handler(t *testing.T) http.HandlerFunc {
 				"canonical_content_hash": "h-" + row.eventID,
 			})
 			require.NoError(t, err)
-			_, _ = w.Write(append(line, '\n'))
+			if searchFixtureLineMatches(t, r, line) {
+				_, _ = w.Write(append(line, '\n'))
+			}
 		}
 	}
 }

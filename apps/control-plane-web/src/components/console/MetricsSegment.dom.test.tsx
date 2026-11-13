@@ -148,7 +148,7 @@ describe('MetricsSegment（mock 假后端）', () => {
     expect(screen.getByText('CPU 危险 90%')).toBeInTheDocument()
   })
 
-  it('探针不可用：当前健康 TPS/MSPT 显「不可用」（FR-447），CPU 仍显值', async () => {
+  it('探针不可用：当前健康 TPS/MSPT 显「不可用」，CPU 仍显值', async () => {
     mockInject('get', '/instances/:id/metrics', {
       kind: 'status',
       status: 200,
@@ -177,7 +177,7 @@ describe('MetricsSegment（mock 假后端）', () => {
     expect(container.querySelectorAll('[data-health-level="unavailable"]')[0]).toHaveTextContent('不可用')
   })
 
-  it('直探（SLP/Query）有数据：展示直探信息卡与来源芯片（FR-446/447）', async () => {
+  it('直探（SLP/Query）有数据：展示直探信息卡与来源芯片（447）', async () => {
     mockInject('get', '/instances/:id/metrics', {
       kind: 'status',
       status: 200,
@@ -223,7 +223,7 @@ describe('MetricsSegment（mock 假后端）', () => {
     expect(chip).toHaveTextContent('探针')
   })
 
-  // FR-454：ServerProbe 是 Bukkit 插件，代理/Beacon/通用二进制都加载不了——
+  // ServerProbe 是 Bukkit 插件，代理/Beacon/通用二进制都加载不了——
   // 与后端 model.IsProbeApplicable 同口径，这类实例不渲染探针卡（不出现必失败的「更新探针」按钮）。
   it.each([
     { name: '代理实例', type: 'minecraft_java', role: 'proxy' },

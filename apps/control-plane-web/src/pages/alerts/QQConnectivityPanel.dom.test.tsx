@@ -11,7 +11,7 @@ import type { AlertChannelInfo, QQDiscoveredGroup } from '@/api/alerts'
 import { ChannelDialog } from './ChannelDialog'
 
 /**
- * QQ 接入状态只读观测区（FR-495）的 DOM 回归。
+ * QQ 接入状态只读观测区的 DOM 回归。
  *
  * 存在的理由：网关状态与已发现群之前**只在 API 层存在**，没有任何界面调用点——一旦网关
  * 掉线（`1<<25` 权限失效 4014、会话失效 4006），运维只能翻日志。本文件钉住四件事：
@@ -84,7 +84,7 @@ const GROUP_B: QQDiscoveredGroup = {
   sourceAppId: '102000001',
 }
 
-describe('QQ 接入状态只读观测区（FR-495）', () => {
+describe('QQ 接入状态只读观测区', () => {
   it('① connected：已连接徽章 + appId + 最近事件时间', async () => {
     stubGateway({
       appId: '102000001',

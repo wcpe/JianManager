@@ -153,3 +153,14 @@ message UploadFileResponse {
   gRPC 拒收兜底并同样话术报错）；是否需要更保守（如 60MB 提前拒）留实现时按报错可读性定夺。
 - **批量扇出并发内存**：流式后每实例并发流各持 64KB 缓冲 + 制品文件盘读，内存放大问题随本 FR 消除；
   扇出并发度沿用既有实现不另调。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入。
+
+### FR-304 文件上传链路流式化（增强 FR-009 文件域 + FR-052/053 插件部署，需 spec）
+
+**需求补充**：`POST /instances/:id/files/upload` 现为 CP `io.ReadAll` 全量内存缓冲 + Worker `WriteFile` unary 直传（下载修复 a6a3713 的对称隐患）。复现结论：**直拨模式** >64MB 被 Worker `MaxRecvMsgSize` 显式拒收（65MB → `ResourceExhausted` 68157492 vs 67108864）；**隧道模式**（FR-281）grpctunnel 分帧 16KB、逻辑消息上限 4GB，同载荷**不设防直接吞** → 双模式行为不一致；≤64MB 也双侧整块缓冲，且 CP `FileService.WriteFile` 硬编码 10s 超时慢链路大文件必超时。新增 client-stream `UploadFile` RPC（与 `DownloadFile` 对称：分块传输 + 落临时文件校验后原子改名），CP 上传 handler 改流式转发不再 `ReadAll`；FR-052/053 插件单发/批量扇出复用 `WriteFile` 的部署路径同步兼容改造（阈值/是否保留小文件 unary 由 spec 定）；老 Worker `Unimplemented` 回退 `WriteFile` 保兼容（沿用 ≤64MB 上限并给明确报错）
+
+**交付状态**：✅ 已交付@v0.15.0·真机验收（70MiB 上传 sha 逐字节一致/13.2s/零临时残留，隧道+直拨双通道在线；六项 spec 验收全过）
+

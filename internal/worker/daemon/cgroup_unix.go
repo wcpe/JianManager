@@ -327,7 +327,7 @@ func parseSystemctlProps(out string) map[string]string {
 // WarnIfUnitKillModeUnprotected 启动自检：若本 Worker 所在 systemd 单元的 KillMode 会让
 // `systemctl restart <单元>` 连坐杀掉全部 daemon 子树（wrapper + 游戏服 java），则显式告警。
 //
-// 为什么要做这个自检（2026-10-09 真机事故）：ADR-097 的运行期隔离在「源与目标的共同祖先不可写」
+// 为什么要做这个自检（2026-10-09 真机事故）：运行期隔离在「源与目标的共同祖先不可写」
 // 时必然失败（真机 13 个 wrapper 位于 root 所属的 /system.slice/ssh.service，非特权用户在任何
 // cgroup 祖先下都无可写位置），此时**唯一**防线就是单元自身的 `KillMode=process`。而该属性是
 // 部署期属性：安装脚本（scripts/install-worker.sh）生成的单元带它，但**手工 systemd-run / 手写

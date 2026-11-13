@@ -11,7 +11,7 @@ import java.time.Duration;
 import java.util.function.LongConsumer;
 
 /**
- * 生产 manifest/制品拉取（契约 §4，ADR-022）。
+ * 生产 manifest/制品拉取（契约 §4）。
  *
  * <p>携带 {@code X-Client-Key}（拉取密钥）+ {@code X-Machine-Id}（机器码）；
  * manifest 走 {@code /client-channels/{channel}/manifest}，制品走 {@code /client-artifacts/{sha256}}。
@@ -97,7 +97,7 @@ final class HttpTransport implements Transport {
     }
 
     /**
-     * 流式拉取制品（FR-257）：返回 InputStream 供调用方边读边写盘，不再全量读进 byte[]。
+     * 流式拉取制品：返回 InputStream 供调用方边读边写盘，不再全量读进 byte[]。
      * {@code offset>0} 时带 {@code Range: bytes=<offset>-} 请求头从断点续传（HTTP 206）。
      * 返回的流关闭时断开底层连接（释放 socket），调用方必须关闭。
      */
@@ -231,7 +231,7 @@ final class HttpTransport implements Transport {
         return readAll(in, null);
     }
 
-    /** 读尽输入流，按每个分块字节数回调 {@code onBytes}（FR-099 进度，可空）。 */
+    /** 读尽输入流，按每个分块字节数回调 {@code onBytes}（进度用，可空）。 */
     private static byte[] readAll(InputStream in, LongConsumer onBytes) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         byte[] buf = new byte[8192];

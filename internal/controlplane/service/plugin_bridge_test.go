@@ -98,3 +98,31 @@ func TestBuildServerProbeConfig_AppendsBridgeBlock(t *testing.T) {
 	assert.Contains(t, noBridge, "metrics:")
 	assert.NotContains(t, noBridge, "bridge:")
 }
+
+// TestBuildServerProbeConfig_AlwaysEnablesMCP 下发的探针配置**必须**带 `mcp.enabled: true`。
+//
+// 守的是一个真机踩到的静默断链：探针侧 `DEFAULT_MCP_ENABLED = false`，
+// 而 JM 的 `probe_tools` / `probe_diagnose` 全靠探针注册 `core.mcp` 桥动作。
+// 配置里不写 mcp 段时：
+//   - 桥仍然连着（conn=true、probeVersion=2）
+//   - /metrics 仍正常
+//   - 但调任何诊断工具都回「本平台未实现治理执行」
+//
+// 这种“一半正常一半全废”的形态极难定位，所以用回归测试钉死。
+func TestBuildServerProbeConfig_AlwaysEnablesMCP(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		bridge string
+	}{
+		{"带 bridge 段（普通 daemon 部署）", "bridge:\n  enabled: true\n"},
+		{"无 bridge 段（托管模式）", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := buildServerProbeConfig(29940, c.bridge)
+			assert.Contains(t, cfg, "mcp:", "必须写出 mcp 段")
+			assert.Contains(t, cfg, "enabled: true", "mcp 必须显式启用")
+			// 托管模式下不应开出本地端口：port 必须为 0。
+			assert.Contains(t, cfg, "port: 0", "托管传输走插件桥，不得监听本地端口")
+		})
+	}
+}

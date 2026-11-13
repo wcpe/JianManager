@@ -85,7 +85,7 @@ func TestProductionTargetResolver_AllIncludesNodeWithoutInstances(t *testing.T) 
 // TestProductionTargetResolver_BatchesHolderQueries 平台级解析必须批量取 holder。
 //
 // 回归目标（2026-10-09 生产实证）：原实现对每个实例各发一条 holder 查询，
-// 25 个实例 ⇒ 25 条串行 SQL；CP 的 SQLite 连接池被刻意收敛为单连接（FR-318），
+// 25 个实例 ⇒ 25 条串行 SQL；CP 的 SQLite 连接池被刻意收敛为单连接，
 // 这些查询全部排队并与其它请求互相阻塞（生产 SLOW SQL：同形态 holder 查询 p90≈2.7s、
 // max≈10s）。本用例以「SQL 语句计数」为断言口径，直接证明 N 条降为 1 条。
 func TestProductionTargetResolver_BatchesHolderQueries(t *testing.T) {

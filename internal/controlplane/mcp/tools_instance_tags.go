@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// 实例标签维护工具（FR-440）。
+// 实例标签维护工具。
 //
 // 与 instance_update_config 刻意分离为独立工具：UpdateConfig 走 instance.configure（较重，
 // 覆盖启动命令/JDK/资源限额等），本工具走 instance.write（较轻，只动 tags）。

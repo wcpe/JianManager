@@ -1,0 +1,491 @@
+/** 
+ * 主题配色对比度工具（阶段 2）。
+ *
+ * ── 为什么需要它 ──
+ * 全站有 5 套主题 × 明暗 = 10 组配色，全部定义在 styles/tokens.css 与 styles/themes.css。
+ * 在此之前，这些配色的 WCAG 对比度**全靠人工验算**：themes.css 里至今留着
+ * 「近白对 oklch(0.704) 青绿仅 2.39:1，不达 4.5:1；深青墨实测 7.18:1」这类手算记录。
+ * 手算有两个致命问题：
+ *   1. 不可持续：调一个 --primary 就要重算它到 --primary-foreground 的相对亮度，
+ *      而实际上没人会在每次改色后重算 6 对以上的组合；
+ *   2. 没有闸门：即使算错了、或新主题漏配了一对，也没有任何机制在合并前拦住它——
+ *      「按钮文字看不清」只能等用户肉眼发现。
+ *
+ * 本模块提供最小且可测的底座：解析项目实际使用的颜色写法 + 计算 WCAG 2.x 对比度。
+ * 真正的守护在 color-contrast.test.ts：它**直接读 CSS 文件**取值（不在测试里重抄颜色），
+ * 于是任何颜色改动都会自动过一遍阈值断言，对比度劣化在 CI 就会变红。
+ *
+ * ── 设计约束 ──
+ * - 纯函数、零依赖、不碰 DOM 与 node API：浏览器与测试环境跑同一份实现。
+ * - OKLCH → sRGB 走标准链路（OKLCH → OKLab → linear sRGB → sRGB gamma），
+ *   不用 HSL 之类的近似替代——近似值算出来的对比度在青绿/橙这类高饱和色上会明显偏差，
+ *   恰好就是最容易出问题的那一批颜色。
+ * - 通道按 8bit 量化（四舍五入到整数）后再算亮度：与浏览器把 oklch 落到屏幕色的精度一致，
+ *   也让 themes.css 里既有的手算记录可复现。
+ */
+
+/** sRGB 三通道，0–255 整数。 */
+export interface Rgb {
+  r: number
+  g: number
+  b: number
+}
+
+/** OKLCH 三分量：l 归一到 0–1，c 为色度（0 起），h 为色相角（度）。 */
+export interface Oklch {
+  l: number
+  c: number
+  h: number
+}
+
+/** 
+ * 可参与对比度计算的颜色输入：CSS 颜色文本，或已解析好的 RGB。
+ * 文本形式支持项目实际用到的四种写法（见 parseColor）。
+ */
+export type ColorInput = string | Rgb
+
+/** 以 10 为底的幂等浮动比较容差：避免浮点误差把恰好达标的配色误判为失败。 */
+const RATIO_EPSILON = 1e-6
+
+// ────────────────────────────── 解析 ──────────────────────────────
+
+/** `#rgb` / `#rrggbb`（也接受 `#rgba` / `#rrggbbaa`，alpha 被忽略，理由见下）。 */
+const HEX_PATTERN = /^#([0-9a-f]{3,8})$/i
+/** `oklch(L C H)` 的函数名。 */
+const OKLCH_FN = 'oklch'
+/** `rgb(r g b)` / `rgba(r, g, b, a)` 的函数名。 */
+const RGB_FN = 'rgb'
+const COLOR_MIX_FN = 'color-mix'
+
+/** 
+ * 判断文本是否「整串就是一个指定函数调用」，是则返回括号内的内容。
+ *
+ * 【为什么不用正则】阶段 2 起分量可能是 `calc(0.011 * 2.2)`，括号内因此含 `)`，
+ * 而 `oklch\(\s*([^)]*?)\s*\)` 这类写法会因不容许右括号而拒绝整条记录。
+ * 配平扫描天然支持任意深度，且能顺带校验「末尾的 ) 正好闭合开头的 (」——
+ * 否则 `oklch(0.2 0.1 30) extra` 这种拼接文本会被误收。
+ */
+function wholeFunctionBody(text: string, fnName: string): string | null {
+  const lower = text.toLowerCase()
+  const prefix = `${fnName}(`
+  if (!lower.startsWith(prefix)) return null
+  if (!text.endsWith(')')) return null
+
+  let depth = 0
+  for (let i = prefix.length - 1; i < text.length; i += 1) {
+    const ch = text[i]
+    if (ch === '(') depth += 1
+    else if (ch === ')') {
+      depth -= 1
+      if (depth === 0) {
+        // 只有闭合处恰是整串末尾，才说明「整串就是这个调用」
+        return i === text.length - 1 ? text.slice(prefix.length, i) : null
+      }
+    }
+  }
+  return null
+}
+/** 裸分量三元组 `20 184 166`——`--brand-shadow` / `--shadow-color` 的真实写法。 */
+const BARE_TRIPLET_PATTERN = /^(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})$/
+
+/** 
+ * 按顶层空白/逗号切分分量，不切进括号内。
+ *
+ * 【为什么不能直接 split(/[\s,]+/)】阶段 2 起分量可能是 `calc(0.011 * 2.2)`，
+ * 其中的空格属于算式内部；朴素切分会把它拆成 4 段，导致 okLCH 三分量判定失败。
+ */
+function splitTopLevel(input: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let current = ''
+  for (const ch of input) {
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth -= 1
+    if (depth === 0 && (ch === ' ' || ch === ',' || ch === '\t')) {
+      if (current) parts.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  if (current) parts.push(current)
+  return parts
+}
+
+/** 
+ * 极小算术求值器：只认数字与 `+ - * / ( )`。
+ *
+ * 【为什么要它】阶段 2 起 token 用 `calc(var(--seed-chroma) * 2.2)` 这类算式从种子派生
+ * 各角色的 chroma，于是分量位置上出现的是算式而非字面量。变量已在 var() 展开阶段
+ * 被替换成数字，剩下就是纯算术。
+ *
+ * 刻意不用 `new Function` / `eval`：本模块在浏览器与测试里跑同一份实现，
+ * 不能假设部署环境的 CSP 允许动态求值。递归下降解析二十来行就够，且失配时能报出位置。
+ */
+function evalArithmetic(expr: string): number {
+  let pos = 0
+
+  const skipSpace = () => {
+    while (pos < expr.length && /\s/.test(expr[pos] as string)) pos += 1
+  }
+
+  const parseExpr = (): number => {
+    let value = parseTerm()
+    for (;;) {
+      skipSpace()
+      const op = expr[pos]
+      if (op !== '+' && op !== '-') return value
+      pos += 1
+      const rhs = parseTerm()
+      value = op === '+' ? value + rhs : value - rhs
+    }
+  }
+
+  const parseTerm = (): number => {
+    let value = parseFactor()
+    for (;;) {
+      skipSpace()
+      const op = expr[pos]
+      if (op !== '*' && op !== '/') return value
+      pos += 1
+      const rhs = parseFactor()
+      value = op === '*' ? value * rhs : value / rhs
+    }
+  }
+
+  const parseFactor = (): number => {
+    skipSpace()
+    if (expr[pos] === '(') {
+      pos += 1
+      const inner = parseExpr()
+      skipSpace()
+      if (expr[pos] !== ')') throw new Error(`calc() 括号不配对：「${expr}」`)
+      pos += 1
+      return inner
+    }
+    if (expr[pos] === '-') {
+      pos += 1
+      return -parseFactor()
+    }
+    const start = pos
+    while (pos < expr.length && /[\d.]/.test(expr[pos] as string)) pos += 1
+    if (start === pos) {
+      throw new Error(`calc() 在位置 ${pos} 处遇到无法识别的记号：「${expr}」`)
+    }
+    const value = Number(expr.slice(start, pos))
+    if (!Number.isFinite(value)) throw new Error(`calc() 里的数字无法解析：「${expr}」`)
+    return value
+  }
+
+  const result = parseExpr()
+  skipSpace()
+  if (pos !== expr.length) throw new Error(`calc() 有未消费的内容：「${expr}」`)
+  return result
+}
+
+/** 
+ * 解析单个分量为数字。
+ * @param token 分量文本，如 `0.704`、`70.4%`、`183deg`、`calc(0.011 * 2.2)`
+ * @param percentScale 百分比换算基准（rgb 分量按 255 折算，oklch 的 L 按 1 折算）
+ */
+function parseComponent(token: string, percentScale: number): number | null {
+  const text = token.trim().toLowerCase()
+  // CSS Color 4 的 `none` 语义等价于 0，容错处理以免整条记录解析失败
+  if (text === 'none') return 0
+  // 阶段 2 起的种子派生算式：先化简再按普通数字处理
+  if (/^calc\(/i.test(text) && text.endsWith(')')) {
+    const computed = evalArithmetic(text.slice(5, -1))
+    return Number.isFinite(computed) ? computed : null
+  }
+  if (text.endsWith('%')) {
+    const pct = Number(text.slice(0, -1))
+    return Number.isFinite(pct) ? (pct / 100) * percentScale : null
+  }
+  const num = Number(text)
+  return Number.isFinite(num) ? num : null
+}
+
+/** 解析色相角为「度」，支持 CSS 的 deg/rad/grad/turn 单位（缺省为 deg）。 */
+function parseAngleDegrees(token: string): number | null {
+  const text = token.trim().toLowerCase()
+  const value = Number.parseFloat(text)
+  if (!Number.isFinite(value)) return null
+  if (text.endsWith('turn')) return value * 360
+  if (text.endsWith('rad')) return (value * 180) / Math.PI
+  if (text.endsWith('grad')) return value * 0.9
+  return value
+}
+
+/** 把任意数值夹到 0–255 并四舍五入为整数通道值。 */
+function quantizeChannel(value: number): number {
+  if (Number.isNaN(value)) return 0
+  return Math.min(255, Math.max(0, Math.round(value)))
+}
+
+/** 组装 RGB，顺带做 8bit 量化与区间夹取。 */
+function makeRgb(r: number, g: number, b: number): Rgb {
+  return { r: quantizeChannel(r), g: quantizeChannel(g), b: quantizeChannel(b) }
+}
+
+/** 
+ * 按**顶层逗号**切分（跳过括号内的逗号）。
+ *
+ * 不能复用 splitTopLevel：它连空格一起切，而 `in srgb` 与 `#36d58a 82%` 里的空格是语义
+ * 的一部分，切了就拿不到「颜色 + 百分比」的配对。
+ */
+function splitByTopLevelComma(input: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let current = ''
+  for (const ch of input) {
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth -= 1
+    if (ch === ',' && depth === 0) {
+      out.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  out.push(current)
+  return out
+}
+
+/** 拆出「颜色 + 可选百分比」：`#36d58a 82%` → `{ color: '#36d58a', pct: 82 }`。 */
+function splitMixOperand(input: string): { color: string; pct: number | null } | null {
+  const text = input.trim()
+  if (text === '') return null
+  const m = /^(.*?)\s+([\d.]+)%$/.exec(text)
+  if (!m) return { color: text, pct: null }
+  const color = m[1]
+  const pctText = m[2]
+  if (color === undefined || pctText === undefined) return null
+  const pct = Number(pctText)
+  if (!Number.isFinite(pct)) return null
+  return { color: color.trim(), pct }
+}
+
+/** 
+ * 解析 `color-mix(in srgb, A P%, B)`。
+ *
+ * 【为什么必须支持】暗色 token 的 weak/ink/line 全部用 color-mix 从状态色与卡片色混出
+ * （见 tokens.css 的 `.dark`）。解析器此前不认这种写法，对比度门禁遇到这些对只能抛错 ——
+ * 于是**暗色下的状态色对长期没有校验**，而它们恰恰是最容易在换主题时失守的。
+ *
+ * 仅支持本项目实际用到的形态：`in srgb` + 两个颜色、其中一个带百分比（另一个按 100−p 补足）。
+ * alpha 本模块本就忽略（见模块注释声明的边界）。
+ */
+function parseColorMix(text: string): Rgb | null {
+  const body = wholeFunctionBody(text, COLOR_MIX_FN)
+  if (body === null) return null
+  const parts = splitByTopLevelComma(body).map((p) => p.trim())
+  const space = parts[0]
+  if (space === undefined || space.toLowerCase() !== 'in srgb') return null
+  if (parts.length !== 3) return null
+  const a = splitMixOperand(parts[1] ?? '')
+  const b = splitMixOperand(parts[2] ?? '')
+  if (!a || !b) return null
+  if (a.pct === null && b.pct === null) return null
+  const aPct = a.pct ?? 100 - (b.pct ?? 0)
+  const bPct = b.pct ?? 100 - aPct
+  if (aPct < 0 || bPct < 0) return null
+  const ca = parseColor(a.color)
+  const cb = parseColor(b.color)
+  if (!ca || !cb) return null
+  return makeRgb(
+    (ca.r * aPct + cb.r * bPct) / 100,
+    (ca.g * aPct + cb.g * bPct) / 100,
+    (ca.b * aPct + cb.b * bPct) / 100,
+  )
+}
+
+/** 
+ * 解析 oklch() 文本为 OKLCH 分量。
+ * L 支持小数（0.704）与百分数（70.4%）；alpha 被忽略（见 parseColor 注释）。
+ */
+export function parseOklch(value: string): Oklch | null {
+  const body = wholeFunctionBody(value.trim(), OKLCH_FN)
+  if (body === null) return null
+
+  // 先剥离可选 alpha（`/ 0.5`），对比度校验只关心不透明色
+  const [colorPart, alphaPart, ...rest] = body.split('/')
+  // split 至少产出一段，首段恒存在；判 undefined 仅用于类型收窄
+  if (colorPart === undefined) return null
+  if (rest.length > 0) return null
+  if (alphaPart !== undefined && parseComponent(alphaPart, 1) === null) return null
+
+  const parts = splitTopLevel(colorPart.trim())
+  if (parts.length !== 3) return null
+
+  // 上方已断言恰 3 段，三个分量文本恒存在
+  const [lText, cText, hText] = parts
+  if (lText === undefined || cText === undefined || hText === undefined) return null
+  const l = parseComponent(lText, 1)
+  // CSS Color 4 里 oklch 色度百分比基准是 0.4（100% 对应 C=0.4）
+  const c = parseComponent(cText, 0.4)
+  const h = parseAngleDegrees(hText)
+  if (l === null || c === null || h === null) return null
+
+  return { l, c, h }
+}
+
+/** 
+ * 解析 CSS 颜色文本为 RGB；无法识别时返回 null。
+ *
+ * 支持的写法（均为项目 styles/ 里真实出现的形态）：
+ *   hex      `#158053`、`#ffffff`、`#fff`
+ *   oklch    `oklch(0.704 0.123 183)`、`oklch(70.4% 0.123 183)`
+ *   rgb()    `rgb(20 184 166)`、`rgb(20, 184, 166)`、`rgb(20% 72% 65%)`
+ *   裸分量   `20 184 166`（--brand-shadow / --shadow-color 的写法，视作 0–255）
+ *
+ * 说明：带 alpha 的写法（`#rrggbbaa`、`rgba(..., 0.5)`、`oklch(... / 0.5)`）会被解析出
+ * 不透明基色并忽略 alpha——本模块不做背景合成，主题 token 也全是不透明色；
+ * 若将来有半透明 token 参与对比度断言，必须先在此处补上合成逻辑。
+ */
+export function parseColor(value: string): Rgb | null {
+  const text = value.trim()
+
+  const hex = HEX_PATTERN.exec(text)
+  if (hex) {
+    // 捕获组为必选组，正则命中即存在；判 undefined 仅用于类型收窄
+    const digits = hex[1]
+    if (digits === undefined) return null
+    if (digits.length === 3 || digits.length === 4) {
+      // #rgb / #rgba：每位复制一份（4 位的 alpha 由 makeRgb 忽略，与注释口径一致）
+      const [r, g, b] = digits
+      // 上方已断言长度 ≥ 3，三位必存在；判 undefined 仅用于类型收窄
+      if (r === undefined || g === undefined || b === undefined) return null
+      return makeRgb(
+        Number.parseInt(r + r, 16),
+        Number.parseInt(g + g, 16),
+        Number.parseInt(b + b, 16),
+      )
+    }
+    if (digits.length === 6 || digits.length === 8) {
+      return makeRgb(
+        Number.parseInt(digits.slice(0, 2), 16),
+        Number.parseInt(digits.slice(2, 4), 16),
+        Number.parseInt(digits.slice(4, 6), 16),
+      )
+    }
+    return null
+  }
+
+  if (wholeFunctionBody(text, OKLCH_FN) !== null) {
+    const oklch = parseOklch(text)
+    return oklch ? oklchToSrgb(oklch) : null
+  }
+
+  // color-mix(...)：暗色 token 的 weak/ink/line 大量用它从状态色与卡片色混出。
+  // 不支持则门禁遇到这些值只能抛错跳过 —— 暗色的状态色对因此长期无人校验。
+  if (wholeFunctionBody(text, COLOR_MIX_FN) !== null) return parseColorMix(text)
+
+  // rgba() 不以 rgb( 开头，故两种函数名各试一次
+  const rgbBody = wholeFunctionBody(text, RGB_FN) ?? wholeFunctionBody(text, 'rgba')
+  if (rgbBody !== null) {
+    const [colorPart, alphaPart, ...rest] = rgbBody.split('/')
+    // 同上：split 至少产出一段，首段恒存在
+    if (colorPart === undefined) return null
+    if (rest.length > 0) return null
+    if (alphaPart !== undefined && parseComponent(alphaPart, 1) === null) return null
+    const parts = splitTopLevel(colorPart.trim())
+    // 传统逗号写法允许第 4 个分量是 alpha：`rgba(255, 0, 0, 0.5)`，与 `/ alpha` 等价
+    if (parts.length === 4) {
+      const alphaText = parts[3]
+      if (alphaText === undefined) return null
+      if (parseComponent(alphaText, 1) === null) return null
+      parts.length = 3
+    }
+    if (parts.length !== 3) return null
+    const channels = parts.map((part) => parseComponent(part, 255))
+    if (channels.some((channel) => channel === null)) return null
+    return makeRgb(channels[0]!, channels[1]!, channels[2]!)
+  }
+
+  const bare = BARE_TRIPLET_PATTERN.exec(text)
+  if (bare) {
+    return makeRgb(Number(bare[1]), Number(bare[2]), Number(bare[3]))
+  }
+
+  return null
+}
+
+/** 把颜色输入解析成 RGB，失败即抛错——让 CSS 里的笔误立刻现形，而不是静默算出 NaN。 */
+export function resolveRgb(color: ColorInput): Rgb {
+  if (typeof color !== 'string') return color
+  const parsed = parseColor(color)
+  if (!parsed) {
+    throw new Error(`无法解析颜色值「${color}」：parseColor 只支持 hex / oklch() / rgb() / 裸分量三元组`)
+  }
+  return parsed
+}
+
+// ─────────────────────── OKLCH → sRGB 转换 ───────────────────────
+
+/** sRGB 传输函数的反函数（linear → gamma 编码）。 */
+function encodeGamma(channel: number): number {
+  return channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055
+}
+
+/** 
+ * OKLCH → sRGB（标准链路：OKLCH → OKLab → linear sRGB → gamma 编码）。
+ * 矩阵系数取自 Björn Ottosson 的 OKLab 原始推导，输出按 8bit 量化并夹到 sRGB 色域。
+ */
+export function oklchToSrgb(color: Oklch): Rgb {
+  const radians = (color.h * Math.PI) / 180
+  const a = color.c * Math.cos(radians)
+  const b = color.c * Math.sin(radians)
+
+  // OKLab → LMS（立方前的中间量）
+  const lPrime = color.l + 0.3963377774 * a + 0.2158037573 * b
+  const mPrime = color.l - 0.1055613458 * a - 0.0638541728 * b
+  const sPrime = color.l - 0.0894841775 * a - 1.291485548 * b
+
+  const l = lPrime ** 3
+  const m = mPrime ** 3
+  const s = sPrime ** 3
+
+  // LMS → linear sRGB
+  const linearR = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s
+  const linearG = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s
+  const linearB = -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s
+
+  return makeRgb(encodeGamma(linearR) * 255, encodeGamma(linearG) * 255, encodeGamma(linearB) * 255)
+}
+
+// ───────────────────────── 对比度计算 ─────────────────────────
+
+/** 单个 sRGB 通道的线性化（WCAG 2.x 定义的 gamma 解码）。 */
+function linearizeChannel(channel: number): number {
+  const normalized = channel / 255
+  return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4
+}
+
+/** WCAG 2.x 相对亮度（0=黑，1=白）。 */
+export function relativeLuminance(color: ColorInput): number {
+  const { r, g, b } = resolveRgb(color)
+  return 0.2126 * linearizeChannel(r) + 0.7152 * linearizeChannel(g) + 0.0722 * linearizeChannel(b)
+}
+
+/** 
+ * WCAG 2.x 对比度，返回 1–21 之间的无量纲比值。
+ * 公式：(L亮 + 0.05) / (L暗 + 0.05)，与前景/背景书写顺序无关。
+ */
+export function wcagContrast(colorA: ColorInput, colorB: ColorInput): number {
+  const luminanceA = relativeLuminance(colorA)
+  const luminanceB = relativeLuminance(colorB)
+  const lighter = Math.max(luminanceA, luminanceB)
+  const darker = Math.min(luminanceA, luminanceB)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+/** 断言用的容差比较：浮点误差不应把恰好达标的配色判红。 */
+export function meetsContrast(colorA: ColorInput, colorB: ColorInput, minRatio: number): boolean {
+  return wcagContrast(colorA, colorB) + RATIO_EPSILON >= minRatio
+}
+
+/** 输出 `#rrggbb`，用于失败信息里定位到具体色值。 */
+export function toHex(color: ColorInput): string {
+  const { r, g, b } = resolveRgb(color)
+  return `#${[r, g, b].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
+}

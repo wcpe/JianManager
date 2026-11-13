@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// FR-497③ 归属复核收紧的跨平台用例。
+// 归属复核收紧的跨平台用例。
 //
 // 依赖 /proc 的真实进程用例在 adopt_ownership_linux_test.go（`//go:build linux`）：强特征就是
 // 「实例 UUID 出现在 cmdline / 进程环境」，而进程环境只有 /proc 能读，故那些用例按平台隔离；

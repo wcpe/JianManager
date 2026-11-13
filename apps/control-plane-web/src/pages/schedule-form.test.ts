@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  EMPTY_SCHEDULE_FORM,
-  formFromSchedule,
-  toCreateBody,
-  toUpdateBody,
-  type ScheduleFormState,
-} from './schedule-form'
+import { EMPTY_SCHEDULE_FORM, formFromSchedule, toCreateBody, toUpdateBody } from '@/lib/schedules/schedule-form'
+import type { ScheduleFormState } from '@/lib/schedules/schedule-form'
 import type { ScheduleInfo } from '@/api/schedules'
 
 const sample: ScheduleInfo = {
@@ -83,7 +78,7 @@ describe('toUpdateBody', () => {
     expect(Object.keys(body).sort()).toEqual(['action', 'cronExpr', 'enabled'])
   })
 
-  it('command 动作携带 payload，使编辑可改命令（FR-153）', () => {
+  it('command 动作携带 payload，使编辑可改命令', () => {
     const form: ScheduleFormState = {
       instanceId: '3',
       name: '原名',

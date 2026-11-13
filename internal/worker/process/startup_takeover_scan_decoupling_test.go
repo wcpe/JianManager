@@ -20,7 +20,7 @@ import (
 //
 // 缺陷形态：旧实现 `RecoverDaemonInstances` 对每条 PID 记录做「初拨 + 就地有界重试」
 // （默认 1s→2s→4s→8s→16s→32s→64s ≈127s）。这些重试**串行阻塞**启动主流程，于是一条不可达记录
-// 就把运行期孤儿扫描器（FR-456）的启用推迟到 Worker 启动后约 127 秒（N 条僵死记录线性累加），
+// 就把运行期孤儿扫描器的启用推迟到 Worker 启动后约 127 秒（N 条僵死记录线性累加），
 // 该窗口内完全没有运行期扫描能力（真机证据：T7 的 D 臂扫描器 127s 后才启用）。
 //
 // 修复后：`RecoverDaemonInstances` 只同步做**快速首拨**，首拨失败的记录转**后台**继续重试，
@@ -216,7 +216,7 @@ func TestStartupTakeoverRetriesDoNotBlockOrphanScanner(t *testing.T) {
 }
 
 // TestStartupTakeoverPendingAdoptionStillWorksAfterRetries 修复不得让「自动收养」永久失能：
-// 接管重试耗尽后，扫描器下一轮仍应收养该实例（FR-497③ 的既有出口）。
+// 接管重试耗尽后，扫描器下一轮仍应收养该实例。
 func TestStartupTakeoverPendingAdoptionStillWorksAfterRetries(t *testing.T) {
 	serversDir := t.TempDir()
 	const uuid = "pending-then-adopt"

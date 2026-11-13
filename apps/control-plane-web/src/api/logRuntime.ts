@@ -90,3 +90,11 @@ export function useMigrateLogPartition(nodeId: number) {
     onSuccess: (_data, variables) => qc.invalidateQueries({ queryKey: ['log-runtime', variables.targetNodeId ?? nodeId] }),
   })
 }
+
+export function useResolveLogIngestGaps(nodeId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => (await api.post(`/nodes/${nodeId}/log-runtime/ingest/resolve-gaps`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['log-runtime', nodeId] }),
+  })
+}

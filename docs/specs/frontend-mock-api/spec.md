@@ -379,3 +379,16 @@ E2E 是基座的**消费方**：跑 `VITE_MOCK` 整站、真浏览器、无需�
 - **验收**：① PR 上 CI 跑出 lint/vitest/e2e 并在失败时 check 变红（**真机由用户在一条 PR 上确认**——故意引入 lint 错/失败测试/失败 E2E 各验一次）；② 三者全过 PR 才显绿。
 
 > 真机维度（须用户确认）：FR-211 整站 E2E 在真浏览器走通；FR-212 在真实 PR 上看到 CI 拦截生效。CI 行为无法纯本地断言，列为显式手动验收。
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-196~212（前端 mock API 与测试基座：MSW v2 内存假后端[有状态、跨 endpoint 全联动] + 双运行形态[`VITE_MOCK` 整站 mock 模式 + jsdom/@testing-library 强断言测试] + 成功默认/按需注入错误 + 实时流全仿真[WS 终端 / SSE 日志·事件·指标] + Playwright E2E + CI 门禁，关联新 ADR-047）
+
+FR-196~212（前端 mock API 与测试基座：MSW v2 内存假后端[有状态、跨 endpoint 全联动] + 双运行形态[`VITE_MOCK` 整站 mock 模式 + jsdom/@testing-library 强断言测试] + 成功默认/按需注入错误 + 实时流全仿真[WS 终端 / SSE 日志·事件·指标] + Playwright E2E + CI 门禁，关联新 ADR-047）→ FR-196/197/198/211/212 `docs/specs/frontend-mock-api/spec.md`（**需 spec**，地基三条＋域簇范式契约＋E2E/CI，开发中创建）；FR-199~210 **免 spec**（域簇机械套用 FR-196/197/198 既定范式 + 既有 `docs/API.md` / `web/src/api/*.ts` 类型契约，不引入新模型/新契约/新 ADR）；FR-211 Playwright E2E（mock 模式整站）+ FR-212 CI 前端质量门禁（PR/push 拦截 lint+vitest+E2E，扩 `release.yml` test 闸）；登录失败整页刷新 = fix 走 `sdd-fix-bug`（不占 §4），其页面级回归并入 FR-199
+
+### FR-196~212（前端 mock API 与测试基座…
+
+FR-196~212（前端 mock API 与测试基座：MSW v2 内存假后端[有状态、跨 endpoint 全联动] + 双运行形态[`VITE_MOCK` 整站 mock 模式 + jsdom/@testing-library 强断言测试] + 成功默认/按需注入错误 + 实时流全仿真[WS 终端 / SSE 日志·事件·指标] + Playwright E2E + CI 门禁，关联新 ADR-047） → `docs/specs/frontend-mock-api/spec.md`
+

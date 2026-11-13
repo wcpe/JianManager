@@ -91,3 +91,14 @@ token 入库存明文（节点级配置，与 proxy.url 同密级），**API 出
 - corepack `enable` 需写 node bin 目录——托管 Node 目录可写（我们装的），OK；若节点手动登记的外部 Node 只读则 corepack enable 可能失败，回报「PM 激活失败，请用 npm 或托管 Node」。
 - pnpm 与 npm 的项目根参数不同——FR-307 按 PM 分派为 npm `--prefix`、pnpm `--dir`；不再处理 global dir。yarn 因缺少本范围内一致且已验证的受控根语义继续明确拒绝。
 - proto/worker.proto 与并行会话（FR-281/304/305）同文件演进——RPC 追加文件尾段，整合时 make proto 重生成收敛。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入。
+
+### FR-306 节点包管理器与多 registry 配置（feat，泛化 FR-298 运行时库 + 承 FR-299/300 Node 生态，需 spec）
+
+**需求补充**：Node 22 自带 corepack，节点级选 npm/pnpm/yarn 偏好（默认 npm，pnpm/yarn 经 `corepack enable`+指定版本激活，零额外下载）；多 registry 配置——默认 registry + `@scope` 域源 + 镜像（CN 走 npmmirror 提速），写节点 `.npmrc`/托管配置（含凭据脱敏）。数据模型存 PM 选择 + registry 列表（节点级），Worker RPC 读写 PM/registry 配置 + `corepack enable`；被 FR-307/308 依赖。→ `docs/specs/node-package-management/spec.md`
+
+**交付状态**：✅ 已交付@v0.15.0·真机验收（corepack 激活 pnpm 11.12.0、.npmrc 三类行落盘、token 脱敏+掩码保存不清空、审计；顺带修 FR-299 tar 符号链接丢弃缺陷）
+

@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// SnapshotKind 快照类型（FR-466 §2.1）。
+// SnapshotKind 快照类型（§2.1）。
 type SnapshotKind string
 
 const (
@@ -52,7 +52,7 @@ const (
 	SnapshotBackingUnchecked SnapshotBackingState = ""
 )
 
-// InstanceSnapshot 实例整机快照（FR-466）：一次快照 = 一个时间点语义的整机可回滚点。
+// InstanceSnapshot 实例整机快照：一次快照 = 一个时间点语义的整机可回滚点。
 //
 // 设计决策（spec §2.1）：**不把 Kind 直接加到 Backup 表**。Backup 已承载全量/增量/
 // 远程存储/校验和等归档语义，且其 ParentID 链语义与快照的「独立时间点」语义冲突
@@ -70,7 +70,7 @@ type InstanceSnapshot struct {
 	State SnapshotState `gorm:"type:varchar(16);not null;default:pending;index" json:"state"`
 	// RootBackupID 本次快照底层落地的 Backup 记录 ID（全量）。
 	RootBackupID uint `gorm:"not null;index" json:"rootBackupId"`
-	// BinaryName / BinarySHA256 快照时刻的启动二进制指纹（与 FR-468 协同）：
+	// BinaryName / BinarySHA256 快照时刻的启动二进制指纹（与协同）：
 	// 保证「数据 + 版本」成对恢复时可核对，回滚时若不一致只提示不越权替换可执行文件。
 	BinaryName   string `gorm:"type:varchar(255)" json:"binaryName"`
 	BinarySHA256 string `gorm:"type:char(64)" json:"binarySha256"`
@@ -81,7 +81,7 @@ type InstanceSnapshot struct {
 	// TriggeredBy 操作人用户 ID（0=系统）。
 	TriggeredBy uint `gorm:"index" json:"triggeredBy"`
 	// TriggeredByRollbackID 该快照是由哪次回滚触发的（仅 pre_rollback 有值），
-	// 形成「回滚 → 退回」可视链（FR-466 §2.4）。
+	// 形成「回滚 → 退回」可视链（§2.4）。
 	TriggeredByRollbackID uint `gorm:"default:0" json:"triggeredByRollbackId"`
 	// SizeMB 归档大小（MiB，来自底层 Backup）。
 	SizeMB float64 `gorm:"default:0" json:"sizeMb"`

@@ -3,8 +3,8 @@ import { server } from '@jianmanager/devmock/server'
 import { db, resetDb } from '@jianmanager/devmock/db'
 import type { RankingResultInfo } from '@jianmanager/devmock/contracts'
 
-/**
- * 跨实例排行（FR-469）假后端契约测试。
+/** 
+ * 跨实例排行假后端契约测试。
  *
  * 背景：真后端 `GET /metrics/instances/ranking` 的 `nodeId` 参数是**节点 UUID**（router/metric.go
  * 的 `nodeUUID := c.Query("nodeId")` → `service.RankingQuery.NodeUUID` → 按
@@ -47,7 +47,7 @@ afterEach(() => {
 })
 afterAll(() => server.close())
 
-describe('排行假后端契约（FR-469）', () => {
+describe('排行假后端契约', () => {
   it('每条排行项的 nodeUuid 都必须属于已 seed 的节点集合', async () => {
     const token = await login()
     const body = await fetchRanking(token, '?metric=inst_tps&limit=50')

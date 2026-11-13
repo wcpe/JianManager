@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-459 复审项 3（FR-312 回归）：巡检上报的**泛化**崩溃原因不得覆盖 CP 已写入的具体原因。
+// 复审项 3（回归）：巡检上报的**泛化**崩溃原因不得覆盖 CP 已写入的具体原因。
 func TestSyncInstanceStates_DoesNotClobberSpecificCrashReason(t *testing.T) {
 	h, db, node := newStateSyncFixture(t)
 
@@ -32,11 +32,11 @@ func TestSyncInstanceStates_DoesNotClobberSpecificCrashReason(t *testing.T) {
 	var got model.Instance
 	require.NoError(t, db.Where("uuid = ?", "i-specific").First(&got).Error)
 	require.Equal(t, "实例未绑定 JDK：请先在实例配置中选择 JDK", got.StatusReason,
-		"CP 已写入的具体崩溃原因不得被巡检泛化原因覆盖（FR-312 回归）")
+		"CP 已写入的具体崩溃原因不得被巡检泛化原因覆盖（回归）")
 	require.Equal(t, model.InstanceStatusCrashed, got.Status)
 }
 
-// FR-459 终验 Major 回归（第二轮修复引入）：RUNNING 且带**非空**巡检原因（假死）的实例真崩溃后，
+// 终验 Major 回归（第二轮修复引入）：RUNNING 且带**非空**巡检原因（假死）的实例真崩溃后，
 // status 必须变 CRASHED——不得因 status_reason 非空而让「库中原因为空」条件连带冻结整条 UPDATE。
 func TestSyncInstanceStates_CrashedUpdatesStatusDespiteStaleReason(t *testing.T) {
 	h, db, node := newStateSyncFixture(t)
@@ -143,7 +143,7 @@ func TestSyncInstanceStates_ClearsReasonWhenHealthy(t *testing.T) {
 	require.Empty(t, got.StatusReasonSource, "清空后来源标记应复位，避免残留 worker 标记误伤后续 CP 写入的原因")
 }
 
-// FR-312 回归（本轮修复）：心跳不得抹平 CP 写入的生命周期失败原因。
+// 回归（本轮修复）：心跳不得抹平 CP 写入的生命周期失败原因。
 // 场景：CP 异步委托失败写入具体原因（来源标记为空）后，下一拍 Worker 上报 RUNNING+healthy 且不带原因，
 // 旧行为无条件把 status_reason 置空，刚写下的原因下一拍就被抹掉——用户只看得到「运行中」而无任何原因。
 func TestSyncInstanceStates_HealthyHeartbeatKeepsCPFailureReason(t *testing.T) {
@@ -162,7 +162,7 @@ func TestSyncInstanceStates_HealthyHeartbeatKeepsCPFailureReason(t *testing.T) {
 
 	var got model.Instance
 	require.NoError(t, db.Where("uuid = ?", "i-cp-reason").First(&got).Error)
-	require.Equal(t, cpReason, got.StatusReason, "CP 写入的具体失败原因必须留存，不得被心跳抹平（FR-312）")
+	require.Equal(t, cpReason, got.StatusReason, "CP 写入的具体失败原因必须留存，不得被心跳抹平")
 	require.Equal(t, model.InstanceStatusRunning, got.Status, "status 仍按心跳推进（原因留存不得连带冻结状态）")
 	require.Empty(t, got.StatusReasonSource, "来源标记不得被心跳改写为 worker（否则下一拍会被当成心跳自有原因清掉）")
 }
@@ -266,6 +266,63 @@ func TestSyncInstanceStates_ReconcileReasonClearedAfterReappear(t *testing.T) {
 
 	_, reason = statusOf(t, db, "i-reappear")
 	require.Empty(t, reason, "实例回归心跳清单并健康后不得残留过期对账文案")
+}
+
+// 心跳明确上报 STOPPED/CRASHED 且未带原因时，心跳自己写的过期巡检文案必须被清掉：
+// 否则面板会停在「已停止 + 进程侧证据显示仍在运行」这种自相矛盾的组合上。
+// 真机现象：lobby-1 已落 STOPPED，却仍挂着上一拍对账写的「仍在运行」文案。
+func TestSyncInstanceStates_StoppedHeartbeatClearsStaleReconcileReason(t *testing.T) {
+	h, db, node := newStateSyncFixture(t)
+	require.NoError(t, db.Create(&model.Instance{
+		UUID: "i-stale", NodeID: node.ID, Name: "stale",
+		Status:             model.InstanceStatusStopped,
+		StatusReason:       "进程侧证据显示实例仍在运行（心跳清单暂缺，已延迟对账）",
+		StatusReasonSource: "worker",
+	}).Error)
+
+	h.syncInstanceStates(node.UUID, []*workerpb.InstanceState{{
+		InstanceUuid: "i-stale",
+		State:        string(model.InstanceStatusStopped),
+	}})
+
+	_, reason := statusOf(t, db, "i-stale")
+	require.Empty(t, reason, "心跳报 STOPPED 后不得残留上一拍的对账巡检文案")
+}
+
+// 反向用例：STOPPED 心跳不得清掉 CP 写入的生命周期失败原因（来源非 worker）。
+func TestSyncInstanceStates_StoppedHeartbeatKeepsCPReason(t *testing.T) {
+	h, db, node := newStateSyncFixture(t)
+	const cpReason = "启动失败: 未绑定 JDK"
+	require.NoError(t, db.Create(&model.Instance{
+		UUID: "i-cp-keep", NodeID: node.ID, Name: "cp-keep",
+		Status:       model.InstanceStatusStopped,
+		StatusReason: cpReason,
+	}).Error)
+
+	h.syncInstanceStates(node.UUID, []*workerpb.InstanceState{{
+		InstanceUuid: "i-cp-keep",
+		State:        string(model.InstanceStatusStopped),
+	}})
+
+	_, reason := statusOf(t, db, "i-cp-keep")
+	require.Equal(t, cpReason, reason, "STOPPED 心跳不得清掉 CP 写入的失败原因")
+}
+
+// 对账集合只应包含运行类状态：已停实例不得被对账写上「仍在运行」文案。
+// （异步派发下快照可能过期，写入侧另有 status 守卫兼容；本用例守查询侧。）
+func TestReconcileMissingInstances_DoesNotStampStopped(t *testing.T) {
+	h, db, node := newReconcileFixture(t)
+	require.NoError(t, db.Create(&model.Instance{
+		UUID: "i-stopped-snapshot", NodeID: node.ID, Name: "stopped-snapshot",
+		Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDaemon,
+		Status: model.InstanceStatusStopped, StartCommand: "java -jar server.jar",
+	}).Error)
+
+	// 直接走对账路径（模拟快照之后状态已落 STOPPED）。
+	h.reconcileMissingInstances(*node, nil)
+
+	_, reason := statusOf(t, db, "i-stopped-snapshot")
+	require.Empty(t, reason, "已停实例不得被对账写成「仍在运行」")
 }
 
 // 老 Worker 不上报 health/status_reason（均空）：不得触碰库中现有原因。

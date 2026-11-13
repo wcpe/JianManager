@@ -7,8 +7,8 @@ import { loginMockUser } from '@/test/auth'
 import { useAuthStore } from '@/stores/auth'
 import ResourceExplorer from './ResourceExplorer'
 
-/**
- * 文件操作 → 文件列表/树联动强断言（FR-204 文件归档域 / FR-070）。
+/** 
+ * 文件操作 → 文件列表/树联动强断言（文件归档域）。
  *
  * 覆盖 ResourceExplorer.dom.test.tsx 浏览测试之外的写操作：新建、删除、重命名各自经
  * 对应 mock 端点（POST /files/write、DELETE /files、POST /files/rename）改写假后端文件树，
@@ -37,7 +37,7 @@ async function fileListEl(): Promise<HTMLElement> {
   return ul as HTMLElement
 }
 
-describe('文件操作 → 列表联动（mock 假后端，FR-204）', () => {
+describe('文件操作 → 列表联动（mock 假后端）', () => {
   it('新建文件 → 列表出现该文件', async () => {
     loginMockUser()
     const user = userEvent.setup()

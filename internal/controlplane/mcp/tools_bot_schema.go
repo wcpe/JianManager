@@ -2,7 +2,7 @@ package mcp
 
 import "encoding/json"
 
-// FR-398：Bot 域工具共用的 InputSchema 构造与参数读取helpers。
+// Bot 域工具共用的 InputSchema 构造与参数读取helpers。
 
 // objectSchema 构造 object 型 InputSchema；required 为空时不写该字段。
 func objectSchema(properties map[string]any, required []string) map[string]any {

@@ -1,5 +1,5 @@
 # JianManager — worker 配置样例
-# 配置由 Worker 启动时真正加载（FR-080，见 ADR-020）；JIANMANAGER_ 前缀环境变量按路径覆盖。
+# 配置由 Worker 启动时真正加载；JIANMANAGER_ 前缀环境变量按路径覆盖。
 name: node-01
 control_plane: localhost:9100
 node_secret: ${JIANMANAGER_NODE_SECRET}
@@ -8,8 +8,8 @@ node_secret: ${JIANMANAGER_NODE_SECRET}
 # host: ""
 
 # WS 终端 / 插件桥 token 校验密钥。新版 CP 在注册/心跳时自动下发专用密钥并持久化到
-# <data_dir>/etc/node-identity.json（FR-275，见 ADR-061），其生效优先级高于本项——通常无需配置。
-# 本项仅作旧 CP（< FR-275）兼容回退：届时须与 CP 的 jwt.secret 一致（生产经 JIANMANAGER_JWT_SECRET 覆盖）。
+# <data_dir>/etc/node-identity.json，其生效优先级高于本项——通常无需配置。
+# 本项仅作旧 CP（不下发专用密钥的版本）兼容回退：届时须与 CP 的 jwt.secret 一致（生产经 JIANMANAGER_JWT_SECRET 覆盖）。
 jwt_secret: dev-secret-change-me
 
 # enrollment token（一次性节点准入凭据）绝不写入本文件——经 JIANMANAGER_ENROLL_TOKEN
@@ -21,14 +21,14 @@ grpc:
 ws:
   port: 9102
 
-# 项目自包含数据根（FHS 式布局，见 ADR-010）。默认 ./data，可经 JIANMANAGER_DATA_DIR 覆盖。
+# 项目自包含数据根（FHS 式布局）。默认 ./data，可经 JIANMANAGER_DATA_DIR 覆盖。
 # JDK 装入 <data_dir>/opt/jdks，服务器工作目录在 <data_dir>/var/servers，整体可迁移。
 data_dir: ./data
 
 # 兼容旧部署：显式指定时覆盖数据根派生的 var/servers；留空则用 <data_dir>/var/servers。
 # servers_dir: ./servers
 
-# 节点本地制品缓存（FR-178）：按 sha256 缓存下载过的服务端核心 jar（<data_dir>/var/artifact-cache），
+# 节点本地制品缓存：按 sha256 缓存下载过的服务端核心 jar（<data_dir>/var/artifact-cache），
 # 建实例命中即秒拷免重下。max_bytes=0 不限；设上限后存入超限按 lastUsedAt 升序 LRU 淘汰。
 # 也可经 CP 端点 PUT /nodes/:id/artifact-cache/cap 运行时下发覆盖。
 # artifact_cache:
@@ -277,7 +277,7 @@ log:
 #     provider: local                  # local（默认）| s3 | minio。
 #                                      # 为什么允许 s3/minio：导出归档的价值在「另存一份」——若目的地只能
 #                                      # 与热层同机同盘，单盘故障/整机报废时副本跟着没，「删前归档」只剩
-#                                      # 「省空间」而丢了「保一份」。复用 FR-478 已在真机 RustFS 验过的
+#                                      # 「省空间」而丢了「保一份」。复用已在真机 RustFS 验过的
 #                                      # SigV4 客户端，不新造协议也不新造凭证模型。
 #     root: /var/lib/jianmanager/log-archive
 #                                      # [provider=local] 归档根目录（启用且 provider=local 时必填，

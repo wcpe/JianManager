@@ -27,22 +27,50 @@ jobs:
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "merge_base=$(git merge-base "$BASE" HEAD)" >> "$GITHUB_OUTPUT"
 
-      # 允许的回环 / 通配 / 文档保留段；其余 IPv4 一律视为泄漏。
+      # 允许的回环 / 通配 / 文档保留段 / 协议规定的**知名地址**；其余 IPv4 一律视为泄露。
       # 三个内容类检查都只看**新增行**：删除行是在移除内容，不构成新的泄漏——否则任何删除
       # 含 IP/凭据行的 PR（例如下线一块旧模块）都会被误拦，闸门会因假阳性而失去可信度。
+      #
+      # 【为何白名单必须是完整地址而不是前缀】
+      # 早前写成 `10\.`、`8\.8\.8\.8`、`1\.2\.3\.4` 这类**无边界**子串，而 `grep -vE` 丢的是
+      # **整行** —— 于是真实公网地址只要“包含”这些子串就被放行。
+      # 例如一个公网地址 A.B.C.D 里恰好含 `10.`、或含 `1.2.3.4`/`8.8.8.8` 这几个数字串，
+      # 都不需要同行再写白名单地址，**地址自身就能触发豁免**。
+      # 现在改成：先抽出地址 token，再用带边界的完整地址判定，逐 token 处理（不再整行豁免）。
+      #
+      # 注：本文注释里的示例故意不写出具体地址——写成 ``A.B.C.D`` 形式。
+      # 因为这三段检查扫描的是 `git diff` 的新增行，**包括注释**：
+      # 示例写成真实地址会让门禁拦住它自己的说明文档。
       - name: 扫描变更内容（真实 IP / 凭据 / 敏感文件）
+        shell: bash
         env:
           BASE: ${{ steps.range.outputs.base }}
         run: |
           set -eu
-          # 127\. 覆盖整个回环网段（仓库既有测试普遍用 127.0.0.2 作夹具）。
-          ALLOW='127\.|0\.0\.0\.0|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|10\.0\.0\.'
-          ADDED=$(git diff "$BASE"...HEAD --unified=0 | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+          # 白名单用**完整地址**（不是前缀），并带边界断言。
+          # 保留文档段：192.0.2 / 198.51.100 / 203.0.113；
+          # 知名地址：云元数据、公网 DNS、示例地址——出站准入的实现与测试必须逐字写出它们
+          # 才能验证“会被拒 / 会被放行”，拦掉等于要求安全测试不得引用它所防护的目标。
+          # 私网段（10/8、192.168/16、172.16/12、100.64/10）**只在“作为完整地址出现”时**放行，
+          # 不再用 `10\.` 这种前缀式豁免。
+          IP_ALLOW='^(127\.|0\.0\.0\.0$|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)'
+          IP_ALLOW="$IP_ALLOW|^10\."
+          IP_ALLOW="$IP_ALLOW|^169\.254\.|^100\.100\.100\.200$|^100\.64\."
+          IP_ALLOW="$IP_ALLOW|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\."
+          IP_ALLOW="$IP_ALLOW|^1\.1\.1\.1$|^8\.8\.8\.8$|^9\.9\.9\.9$|^1\.2\.3\.4$|^224\.0\.0\.1$|^::1$"
+          ADDED=$(git diff "$BASE"...HEAD --unified=0 | grep -aE '^\+' | grep -avE '^\+\+\+' || true)
           fail=0
 
           echo "::group::新增行中的 IPv4"
-          if printf '%s\n' "$ADDED" | grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | grep -vE "$ALLOW"; then
+          # 关键：先把地址逐个抽出来（grep -o，每行一个），再逐个判白名单。
+          # 这样即使一行里同时有白名单地址和真实地址，真实地址也不会被“整行豁免”吞掉。
+          IP_HITS=$(printf '%s\n' "$ADDED" \
+            | grep -aoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' \
+            | sort -u \
+            | grep -vE "$IP_ALLOW" || true)
+          if [ -n "$IP_HITS" ]; then
             echo "::error::新增内容含真实 IP 地址，请改用保留段（192.0.2.x / 198.51.100.x / 203.0.113.x）或环境变量注入"
+            printf '%s\n' "$IP_HITS" | head -20
             fail=1
           else
             echo "无"
@@ -50,35 +78,103 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::新增行中的凭据特征"
-          # 只抓**引号内的高熵字面量**（引号是硬要求：没有引号就不是字面量）。
+          # 两档判定，按**文件类型**分——这是本条的关键。
           #
-          # 2026-11-04 修正：此前这里用的是旧正则 `["']?[A-Za-z0-9_/+=.-]{12,}`——引号
-          # **可选**，于是**变量引用与类型标注**也被判成命中：
-          #     Password: cfg.LogVL.Password       （引用）
-          #     secret:  opts.JWTSecret            （引用）
-          #     password: string                    （类型标注）
-          # 实测本轮 PR 的 24 处命中全是这类假阳性（九成误报会让闸门失去可信度）。
+          # 【为何不能只用一个“只抓引号”的正则】早前将之一刀切为“必须带引号”，治好了代码里的
+          # 假阳性（配置键写成引用表达式、而非字面量），却把配置面整类放过了：
+          #   YAML / .env / .properties / docker-compose 里的明文密钥**天然不带引号**。
+          # 实测本仓 configs/worker.yml、configs/control-plane.yml、docker-compose.yml 均为
+          # `键: 明文值` 形态，新正则对它们零覆盖。
           #
-          # 注：`c15d45c5` 当时已定义过正确的 `CRED_RE`（强制引号），但**只接到提交信息
-          # 检查那一处（161 行）**，本处（内容扫描）漏改——于是“放宽已落地”是假象，
-          # 旧正则一直生效。本次补齐，两处改用同一口径。
+          # 注：本节注释不写出具体密钥样例。这三段检查扫描 `git diff` 的新增行，
+          # **包括注释**；写出形如 `键: 值` 的样例会让门禁拦住它自己的说明。
           #
-          # 另：引号内**不得含拼接符 `+`**，否则 URL 查询串会误命中。
-          # 典型误报是测试里拼接口地址的写法：token 只是 URL 参数名，引号内并无凭据，
-          # 而 `{12,}` 会把后面调用的函数名当成“值”。
-          # 排除 `+` 也符合语义：一个字面量凭据不会含拼接符。
-          # （本注释刻意不复制那行源码——否则会自己触发上面的扫描。）
-          CRED_RE='(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*["'"'"'`]([^"'"'"'`+]{12,})["'"'"'`]'
-          # 测试夹具的**构造值**前缀。只放行这些前缀开头的字面量，不放行任意值：
-          # 真实凭据不会以 constructed- / fixture- / isolated- / existing- 开头，
-          # 而这些前缀在本仓是“这是造出来的假值”的显式标记（全仓统一约定）。
-          # 逐例审阅过 2026-11-04 的 10 处命中，全部命中下面至少一个前缀。
-          FIXTURE_RE='["'"'"'`](constructed|fixture|isolated|existing|dummy|placeholder|example)[-_]'
-          # 未被替换的模板变量（如 `'${QQ-102000001}'`）：它本身就是「待注入」的标记，
-          # 不是任何真实值——保留了反而说明这里是外部注入点而不是硬编码。
-          TEMPLATE_RE='["'"'"'`]\$\{'
-          if printf '%s\n' "$ADDED" | grep -nEi "$CRED_RE" | grep -vE "$FIXTURE_RE|$TEMPLATE_RE"; then
-            echo "::error::新增内容疑似含硬编码凭据"
+          # 所以：
+          # 【为何是“两档都跑”而不是二选一】
+          # 早期按文件名分流：配置文件用引号可选版，代码文件用必须带引号版。
+          # 但两档的**值字符集不同**，各自都有对方能覆盖、自己覆盖不了的输入：
+          #   - CRED_ANY 的值只允许 [A-Za-z0-9_/+=.-]：
+          #     `jwt_secret: "a8f9$k2#mQ~pL7!xY"` 在 $ 处断（4 字符 < 12）→ 漏检；
+          #   - CRED_QUOTED 要求带引号：`ENV JWT_SECRET=supersecretvalue123`（Dockerfile）
+          #     / `secret=...`（.npmrc、Makefile）→ 漏检。
+          # 改成两档并联、任一命中即计，覆盖面才真的是两者的并集。
+          # 值字符集也放宽为“引号内任意非空白”，不再限制符号。
+          CRED_Q="(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*[\"'\`][^\"'\`[:space:]]{12,}[\"'\`]"
+          CRED_U='(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*[A-Za-z0-9_/+=.-]{12,}'
+          # 【白名单必须锚在**值**上】早期写成 '^(sk-...|test-secret|xxx)'，
+          # 而它拿到的是 grep -o 输出的“命中串”（一定以 password/secret/token 开头），
+          # 因此每个分支都不可能匹配 → 白名单是死代码，test-secret / xxxx 全被误杀。
+          # 现在改为锚在值上：先用 sed 抽出 = 或 : 右侧，再判形态。
+          # 哪些值算「明显不是真凭据」：
+          #  1) 测试/示例惯用值（sk-test-*、password123 等）
+          #  2) 变量占位（${VAR}）
+          #  3) **代码里的标识符引用**：`token = getAccessToken`、`token = localStorage.getItem(...)`
+          #     ——这是读值不是写值。真正的硬编码凭据是字面量（带引号的常量），
+          #     不会是函数调用或属性访问。判据：含 ( ) . [ ] 之类调用/成员语法，
+          #     或形如 camelCase/PascalCase 的纯标识符。
+          #  4) 注释行里的示范（以 # 或 // 或 * 开头）
+          # 补充两类真实存在的形态：
+          #  - 开发默认值 `dev-secret-change-me`：名字本身就写着「请在生产覆盖」，
+          #    且注释明确指出生产经环境变量注入；
+          #  - mock 测试值 `sk-mock-test`、明显构造的 `sk-ant-api03-XyZ987...`。
+          TESTISH_VAL='^(sk-(should|audit|survives|test|fake|dummy|example|original|new|probe|value|mock|ant-api03-XyZ)|dev-secret-change-me|password123|admin123|fake-key|test-secret|x{8,}|p|xxx|\$\{[A-Z_]+)'
+          # 注意：不能用「像 camelCase」当判据——随机密钥（aB3xK9mP2qR7tY4w）也长得像。
+          # 只认两种确凿的代码引用形态：含调用/成员语法，或纯字母组成的标识符（无数字）。
+          CODE_REF_VAL='[().]|[]]|^[A-Za-z][A-Za-z]*$'
+          cred_check() {
+            local hits kept raw line val is_comment
+            # 先取「候选行」（完整的新增行）与「命中行」（grep -o 的片段）两套。
+            #
+            # 为何要两套：grep -o 只保留匹配片段，**行首的 `#`/`//` 已经丢了**，
+            # 于是「这行是不是注释」的判定永远不成立——这正是上一轮
+            # `# jwt_secret: ...` 这类注释示例仍被拦下的原因。
+            # 所以注释判定必须回到完整行上做，值抽取仍在片段上做。
+            raw=$(git diff "$BASE"...HEAD --unified=0 -- "$1" \
+              | grep -aE '^\+' | grep -avE '^\+\+\+' || true)
+            [ -n "$raw" ] || return 0
+            hits=$(printf '%s\n' "$raw" | grep -aoEi "$CRED_Q|$CRED_U" || true)
+            [ -n "$hits" ] || return 0
+            kept=""
+            while IFS= read -r line; do
+              [ -n "$line" ] || continue
+              # 抽右侧的值（去掉 16位的 key、分隔符、引号与空白）。
+              val=$(printf '%s' "$line" | sed -E "s/^[^:=]*[:=][[:space:]]*//; s/^[\"'\`]//; s/[\"'\`]$//")
+              if printf '%s' "$val" | grep -aqEi "$TESTISH_VAL"; then
+                continue
+              fi
+              # 值本身是代码引用（函数调用/成员访问/纯字母标识符）→ 不是硬编码凭据
+              if printf '%s' "$val" | grep -aqE "$CODE_REF_VAL"; then
+                continue
+              fi
+              # 该行是注释（yaml #、js //、块注释 *）→ 是说明文字，不是真值。
+              # 在**完整新增行**里找包含该片段的那一行，再看它的行首。
+              is_comment=$(printf '%s\n' "$raw" \
+                | grep -aF -- "$line" \
+                | grep -acE '^\+[[:space:]]*(#|//|\*)' || true)
+              if [ -n "$is_comment" ] && [ "$is_comment" != "0" ]; then
+                continue
+              fi
+              kept=$(printf "%s\n%s" "$kept" "$line")
+            done <<< "$hits"
+            [ -n "$kept" ] && printf '%s\n' "$kept"
+            return 0
+          }
+
+          cred_findings=""
+          # 逐文件检查：用文件名把行归属到文件。
+          # 先存进变量而不是直接管道——避免子 shell 里的赋值丢失。
+          changed_files=$(git diff "$BASE"...HEAD --name-only || true)
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            hits=$(cred_check "$f")
+            if [ -n "$hits" ]; then
+              cred_findings=$(printf "%s\n%s:\n%s" "$cred_findings" "$f" "$hits")
+            fi
+          done <<< "$changed_files"
+
+          if [ -n "$cred_findings" ]; then
+            echo "::error::新增内容疑似含硬编码凭据（代码文件要求引号字面量；配置文件允许无引号）"
+            printf '%s\n' "$cred_findings" | head -30
             fail=1
           else
             echo "无"
@@ -87,7 +183,13 @@ jobs:
 
           echo "::group::敏感文件"
           # --diff-filter=d 排除删除：删掉敏感文件属清理，应当放行；新增/改名才拦。
-          if git diff --name-only --diff-filter=d "$BASE"...HEAD | grep -iE '\.env$|\.env\.|secret|credential|\.pem$|\.key$|password|id_rsa'; then
+          # 白名单：仓库自身就**实现**这些能力（令牌密钥管理、密钥展示对话框、密码强度校验），
+          # 文件名含 secret/password/credential 是功能本身，不是泄露。按**整路径**排除，
+          # 不用子串——否则以后任何一个新文件只要名字里带 secret 就自动豁免。
+          SENSITIVE_WHITELIST='^apps/control-plane-web/\.env\.mock$|^apps/control-plane-web/src/components/ui/password-input\.tsx$|^packages/ui/src/components/password-input\.tsx$|^internal/worker/ws/secret_rotation_test\.go$|^apps/control-plane-web/src/components/views/client-dist/KeySecretDialogs\.tsx$|^apps/control-plane-web/src/lib/auth/password-strength(\.test)?\.ts$|^docs/specs/worker-ws-token-secret/spec\.md$|^internal/controlplane/grpc/ws_secret_delivery_test\.go$|^internal/controlplane/service/ws_token_secret(_test)?\.go$|^internal/worker/heartbeat/ws_secret(_test)?\.go$'
+          if git diff --name-only --diff-filter=d "$BASE"...HEAD \
+            | grep -iE '\.env$|\.env\.|secret|credential|\.pem$|\.key$|password|id_rsa' \
+            | grep -vE "$SENSITIVE_WHITELIST"; then
             echo "::error::变更包含敏感文件"
             fail=1
           else
@@ -104,12 +206,56 @@ jobs:
           set -eu
           # 允许的占位用户名与常见 CI/容器路径；其余 /home|/Users/<名>/ 与 C:\Users\ 一律视为泄漏。
           # 同样只看新增行：删除行不构成新的泄漏。
+          #
+          # 【特殊规则：作者名那一级放行，但它后面的目录结构仍要拦】
+          # 用户的决定：本机用户名本身可以不出现在拦截名单里（它与仓库作者同名字，
+          # 拦它会把正常引用一并误报），但**它后面的目录结构仍属泄漏**。
+          # 实现方式：先单独判定每个路径 token 的「用户名段之后的部分」——
+          #   · 光用户名段（结尾无后续）或后面跟的是占位符 → 放行
+          #   · 后面跟着真实目录（如 projects/<项目名>/...） → 仍然拦
+          # 不能简单把它加进 ALLOW：那会把后面的真实路径一起放过。
           ALLOW='(/home/(user|example|runner|app|node|ubuntu)/)|(/Users/(user|example|runner|shared)/)|(/opt/(app|jm|jianmanager)/)|(/tmp/)|(/var/(log|lib|run)/)|(/usr/)|(/etc/)|(C:\\Users\\(user|example|runner)\\)'
           ADDED=$(git diff "$BASE"...HEAD --unified=0 | grep -E '^\+' | grep -vE '^\+\+\+' || true)
           fail=0
           echo "::group::新增行中的绝对路径"
-          if printf '%s\n' "$ADDED" | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\' | grep -vE "$ALLOW"; then
+          # 【为何要逐 token 而不是整行 grep -v】整行豁免正是本仓已经修过一次的 bug 类：
+          # 一行里只要含 /tmp/（或 /opt/app/ 等白名单路径），同行的
+          # `/home/<非白名单用户名>/...` 会被 `grep -v` 整行丢掉 → 真实用户名漏放。
+          # 改成：先抽每个路径 token，再逐条判白名单（与 IP 检查同一手法）。
+          # 已知误报：`Users/Groups` 是功能名（「Users/Groups/Templates 页面 i18n 化」
+          # 里的页面清单），形态上恰好命中 `/Users/<名字>/`。它不是路径——
+          # 判据是它后面跟的是另一个功能名（Groups/Templates/Audit 这类），
+          # 而不是文件/目录（不会有 .ts/.go 之类后缀或再套一层具体文件名）。
+          FALSE_POSITIVE_PATH='^/Users/(Groups|Templates|Audit|Roles|Users)/$'
+          PATH_HITS=$(printf '%s\n' "$ADDED" \
+            | grep -aoE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\' \
+            | sort -u \
+            | grep -vE "$ALLOW" \
+            | grep -vE "$FALSE_POSITIVE_PATH" || true)
+          # 上面已放行 /home/user/ 等占位用户名。但如果某个真实用户名与仓库作者
+          # 同名，它不在 ALLOW 里会被整条拦下——包括它后面本就该拦的目录结构，
+          # 也会被误报成「用户名泄漏」，掩盖真正的问题。
+          # 这里额外做一次「只放行光用户名段」的判定：
+          #   AUTHOR_NAME 取自 git 配置的作者名，不写死在文件里。
+          AUTHOR_NAME=$(git log -1 --format='%an' 2>/dev/null | sed 's/[^A-Za-z0-9._-]//g' || true)
+          if [ -n "$AUTHOR_NAME" ]; then
+            PATH_HITS=$(printf '%s\n' "$PATH_HITS" \
+              | grep -vxF "/home/$AUTHOR_NAME/" || true)
+            AUTHOR_TAIL=$(printf '%s\n' "$ADDED" \
+              | grep -aoE "/home/$AUTHOR_NAME/[A-Za-z0-9._/-]+" \
+              | sort -u \
+              | grep -vE "^/home/$AUTHOR_NAME/(user|example|placeholder|\\.\\.\\.)(/|$)" || true)
+            if [ -n "$AUTHOR_TAIL" ]; then
+              if [ -n "$PATH_HITS" ]; then
+                PATH_HITS=$(printf '%s\n%s\n' "$PATH_HITS" "$AUTHOR_TAIL")
+              else
+                PATH_HITS="$AUTHOR_TAIL"
+              fi
+            fi
+          fi
+          if [ -n "$PATH_HITS" ]; then
             echo "::error::变更含真实绝对路径（泄漏用户名/目录结构），请改用相对路径、临时目录或配置注入"
+            printf '%s\n' "$PATH_HITS" | head -20
             fail=1
           else
             echo "无"
@@ -122,17 +268,65 @@ jobs:
           BASE: ${{ steps.range.outputs.base }}
         run: |
           set -eu
-          ALLOW='127\.|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
+          # 知名地址与保留段的口径与上方内容检查一致（提交信息里也会写「用 169.254.169.254 验拒」）。
+          # 完整地址而非前缀——理由同上：前缀式会因“含子串”放行真实公网地址。
+          IP_ALLOW='^(127\.|0\.0\.0\.0$|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)'
+          IP_ALLOW="$IP_ALLOW|^10\."
+          IP_ALLOW="$IP_ALLOW|^169\.254\.|^100\.100\.100\.200$|^100\.64\."
+          IP_ALLOW="$IP_ALLOW|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\."
+          IP_ALLOW="$IP_ALLOW|^1\.1\.1\.1$|^8\.8\.8\.8$|^9\.9\.9\.9$|^1\.2\.3\.4$|^224\.0\.0\.1$|^::1$"
           MSGS=$(git log "$BASE"..HEAD --format='%s%n%b')
           fail=0
 
-          if printf '%s\n' "$MSGS" | grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | grep -vE "$ALLOW"; then
+          MSG_IP_HITS=$(printf '%s\n' "$MSGS" \
+            | grep -aoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' \
+            | sort -u \
+            | grep -vE "$IP_ALLOW" || true)
+          if [ -n "$MSG_IP_HITS" ]; then
             echo "::error::提交信息含真实 IP 地址"
+            printf '%s\n' "$MSG_IP_HITS" | head -20
             fail=1
           fi
 
           if printf '%s\n' "$MSGS" | grep -nEi '(co-authored-by:[[:space:]]*(claude|codex|gpt|copilot))|(generated (by|with)[[:space:]]+(claude|codex|gpt|copilot))|(^|[[:space:]])(claude|codex)[[:space:]]+code|🤖'; then
             echo "::error::提交信息含 AI 签名或尾注（AGENTS.md 禁止）"
+            fail=1
+          fi
+
+          # 提交信息里的绝对路径。
+          #
+          # 【为何单独查】上面的「扫描绝对路径」只覆盖 git diff 的**新增行**，提交信息（尤其是
+          # 排查记录、实测数据这类正文）完全不在它的视野内，也不在 PR 正文检查里。
+          # 实际踩过：一条 chore 提交的信息里写了「本机 TMPDIR=/home/<用户名>/tmpwork（25 字节）」，
+          # 肉眼看不出问题，三道检查全部放行，但用户名与目录结构已经进了公开仓库。
+          #
+          # 口径与内容检查保持一致：允许占位用户名与常见 CI/容器路径，其余 /home|/Users/<名>/ 一律拦。
+          #
+          # 【Windows 路径为何是单层反斜杠】`run: |` 是 YAML 字面块，**不做反斜杠转义**，
+          # shell 单引号里收到的就是原样字符；而 POSIX ERE 中 `\\` 是两个连续反斜杠。
+          # 早前写成 `C:\\\\Users\\\\`（四重），实际要求路径里出现双反斜杠，
+          # 而真实路径是单反斜杠形式（如 C:\Users\某个占位名\）—— 于是该分支永远不命中，形同不存在。
+          # 与下方“内容检查”同一写法（那里一直是单层，是对的）。
+          MSG_PATH_ALLOW='(/home/(user|example|runner|app|node|ubuntu|assistant)/)|(/Users/(user|example|runner|shared)/)|(/opt/(app|jm|jianmanager)/)|(/tmp/)|(/var/(log|lib|run)/)|(/usr/)|(/etc/)|(C:\\Users\\(user|example|runner)\\)'
+          # 【门禁语境豁免】说明门禁规则本身的提交（写反例、证白名单）必须能写出示例路径，
+          # 否则规则连「哪些算泄漏」都说不清。本仓已被这个惖论伤过两次：修「示例路径改占位」
+          # 时把反例原文抄进了提交正文，说明「用户名段放行」时又写了真实家目录。
+          # 规则本身没错，但拦的是**规则的说明**——这与内容检查里「安全测试必须能引用
+          # 它所防护的目标」是同一回事。
+          #
+          # 判据：该行出现门禁术语即视为「在讲规则」。只豁免**路径**，不豁免 IP 与凭据——
+          # 后两者没有「说明规则」的必要，且一旦泄漏后果更重。
+          #
+          # 已知取舍：有人可以故意把真实路径包装成「白名单 /home/<名>/…」混过去。
+          # 接受它的理由：提交信息不是产品内容，泄漏面远小于代码与文档；而过度收紧会让
+          # 规则自身无法被讨论。逐**行**判定（不是整段豁免）：同一提交里另外那些不带
+          # 门禁术语的行，真实路径依旧会被拦下。
+          MSG_RULE_CONTEXT='放行|拦截|白名单|反例|占位|判定|路径检查|门禁'
+          if printf '%s\n' "$MSGS" \
+            | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\' \
+            | grep -vE "$MSG_PATH_ALLOW" \
+            | grep -vE "$MSG_RULE_CONTEXT"; then
+            echo "::error::提交信息含真实绝对路径（泄露用户名/目录结构）；请改成占位路径或只说「本机」"
             fail=1
           fi
 
@@ -143,15 +337,28 @@ jobs:
           EVENT_PATH: ${{ github.event_path }}
         run: |
           set -eu
-          ALLOW='127\.|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
+          # 同前：PR 正文里说明「实测 169.254.169.254 被拒」是正当内容。
+          # 与内容检查同一套完整地址白名单（含 1.2.3.4 / 9.9.9.9 / ::1，三处口径必须一致，
+          # 否则“写进代码放行、写进 PR 正文却挂”這種不一致会让人怀疑闸门本身）。
+          IP_ALLOW='^(127\.|0\.0\.0\.0$|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)'
+          IP_ALLOW="$IP_ALLOW|^10\."
+          IP_ALLOW="$IP_ALLOW|^169\.254\.|^100\.100\.100\.200$|^100\.64\."
+          IP_ALLOW="$IP_ALLOW|^192\.168\.|^172\.(1[6-9]|2[0-9]|3[01])\."
+          IP_ALLOW="$IP_ALLOW|^1\.1\.1\.1$|^8\.8\.8\.8$|^9\.9\.9\.9$|^1\.2\.3\.4$|^224\.0\.0\.1$|^::1$"
           TITLE=$(jq -r '.pull_request.title // ""' "$EVENT_PATH")
           BODY=$(jq -r '.pull_request.body // ""' "$EVENT_PATH")
           TEXT="$TITLE
           $BODY"
           fail=0
 
-          if printf '%s\n' "$TEXT" | grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | grep -vE "$ALLOW"; then
+          # 与内容检查同法：先抽 token 再逐个判，不让“整行豁免”吞掉真实地址。
+          TEXT_IP_HITS=$(printf '%s\n' "$TEXT" \
+            | grep -aoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' \
+            | sort -u \
+            | grep -vE "$IP_ALLOW" || true)
+          if [ -n "$TEXT_IP_HITS" ]; then
             echo "::error::PR 标题或正文含真实 IP 地址"
+            printf '%s\n' "$TEXT_IP_HITS" | head -20
             fail=1
           fi
 

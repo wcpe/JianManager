@@ -25,7 +25,7 @@ func (w *bigPayloadWorker) WriteFile(context.Context, *workerpb.WriteFileRequest
 }
 
 // newMsgsizeRunner 普通 Runner（register 回调不自带任何包装）：守卫必须由 Runner 的
-// serveOnce 统一施加（FR-305）——本测试锁死该不变量。修前复现：serveOnce 裸传注册器，
+// serveOnce 统一施加——本测试锁死该不变量。修前复现：serveOnce 裸传注册器，
 // 65MiB unary 一路吃进 grpctunnel 的 4GB 天花板，与直拨 64MiB 拒收行为双轨。
 func newMsgsizeRunner(lis *bufconn.Listener) *Runner {
 	r := New("passthrough:///bufnet", "node-msg", "secret-msg", func(reg grpc.ServiceRegistrar) {
@@ -42,7 +42,7 @@ func newMsgsizeRunner(lis *bufconn.Listener) *Runner {
 }
 
 // TestTunnel_OversizeUnaryRejected 65MiB unary 经反向隧道 → 必须 ResourceExhausted
-// 拒收（与直拨 64MiB 上限同语义，FR-305）。修前：一路吃进、handler 返回 success。
+// 拒收（与直拨 64MiB 上限同语义）。修前：一路吃进、handler 返回 success。
 func TestTunnel_OversizeUnaryRejected(t *testing.T) {
 	handler, lis, events := startFakeCP(t)
 	r := newMsgsizeRunner(lis)

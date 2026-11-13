@@ -1,11 +1,11 @@
 #!/bin/sh
 # JianManager Worker Node 安装脚本（Linux/macOS，POSIX sh）。
-# 见 FR-223 / ADR-051（改写 ADR-020 的安装编排立场）：脚本退化为「取二进制 + 调 worker setup」。
+#  脚本退化为「取二进制 + 调 worker setup」，不再自己拼装安装编排。
 #
 # 两阶段（参考 GitHub Actions Runner「下载」与「config+run」分离）：
 #   [下载阶段] 取 Worker 二进制。安装目录（或 --binary 指向处）已有完整二进制则跳过下载。
 #   [上线阶段] 调 `worker --control-plane ... --token ...`，由 Worker 自己写 worker.yml +
-#              携 enrollment token 首注册 + 持久化身份 + 转入 run（worker 免配置自启 setup，FR-222）。
+#  携 enrollment token 首注册 + 持久化身份 + 转入 run（worker 免配置自启 setup）。
 #              本脚本不再自己写 worker.yml（配置归属回到 Worker 自身）。
 #   可选 --service 注册 systemd 服务常驻：服务 ExecStart 直接跑 worker（首次 setup 写配置 +
 #   持久化身份后，服务重启复用持久化配置，不再依赖 token）。
@@ -24,19 +24,19 @@ set -eu
 
 # ---- 默认值 ----
 CONTROL_PLANE=""        # CP gRPC 地址 host:port（上线阶段必填）
-TOKEN="${JIANMANAGER_ENROLL_TOKEN:-}"  # enrollment token 明文（上线阶段必填；可经 env 传入避免出现在命令行，FR-277）
+TOKEN="${JIANMANAGER_ENROLL_TOKEN:-}"  # enrollment token 明文（上线阶段必填；可经 env 传入避免出现在命令行）
 NODE_NAME=""            # 节点名（可选，留空由 Worker/CP 预设名生效）
 BINARY=""               # 本地已拷贝的 Worker 二进制路径（离线/内网兜底，跳过下载）
 # Worker 二进制下载地址（可选）。优先级见下载阶段注释。
 # 环境变量 JIANMANAGER_WORKER_DOWNLOAD_URL 可指向镜像/内网基址（优先于下方默认 GitHub）。
 # 面板一键命令通常传入 CP-local worker-assets；脚本直接运行时回退 GitHub Releases
-# （ADR-036 产物命名：worker-<os>-<arch>[.exe]）。
+# （产物命名契约：worker-<os>-<arch>[.exe]）。
 DOWNLOAD_URL="${JIANMANAGER_WORKER_DOWNLOAD_URL:-https://github.com/wcpe/JianManager/releases/latest/download}"
 INSTALL_DIR="/opt/jianmanager"   # 安装目录
 DATA_DIR=""             # 数据根（缺省 <install-dir>/data）
 WS_PORT="9102"          # Worker WS 终端端口
 INSTALL_SERVICE="0"     # 是否注册 systemd 服务
-SERVICE_SCOPE="system"  # systemd 档位：system（/etc/systemd/system，需 root）| user（~/.config/systemd/user，普通用户，FR-277/ADR-063）
+SERVICE_SCOPE="system"  # systemd 档位：system（/etc/systemd/system，需 root）| user（~/.config/systemd/user，普通用户）
 SERVICE_EXEC=""         # 可选 systemd ExecStart 路径（版本化部署指向 current）
 SERVICE_NAME_OVERRIDE="" # 可选 systemd 服务名（多 Worker 部署与编排脚本共用）
 DOWNLOAD_ONLY="0"       # 仅下载、不上线
@@ -153,7 +153,7 @@ has_complete_binary() {
 # 用于 slim CP / 离线场景：运维把 release 里的 worker-linux-amd64 解到同目录再装节点。
 # 返回首个命中的绝对/相对路径；无命中打印空串。
 find_local_worker_candidate() {
-    # 顺序：安装目录内正式名 → 安装目录 ADR-036 名 → 当前目录同名 → 当前目录 ADR-036 名
+    # 顺序：安装目录内正式名 → 安装目录约定名 → 当前目录同名 → 当前目录约定名
     set -- \
         "$BIN_PATH" \
         "$INSTALL_DIR/worker-${OS}-${ARCH}" \
@@ -198,7 +198,7 @@ elif has_complete_binary "$BIN_PATH"; then
     # 安装目录已有完整二进制（前一次 --download-only 或手动拷贝）→ 跳过下载。
     echo "      安装目录已有完整二进制，跳过下载 ($BIN_PATH)"
 elif local_src=$(find_local_worker_candidate); then
-    # 工作目录 / 安装目录下的 ADR-036 命名产物 → 拷入正式路径，仍不联网。
+    # 工作目录 / 安装目录下的约定命名产物 → 拷入正式路径，仍不联网。
     if [ "$local_src" = "$BIN_PATH" ]; then
         echo "      已存在完整二进制，跳过下载 ($BIN_PATH)"
     else
@@ -210,7 +210,7 @@ elif [ -n "$DOWNLOAD_URL" ]; then
     case "$url" in
         *"{os}"*|*"{arch}"*) url="$(printf '%s' "$url" | sed "s/{os}/$OS/g; s/{arch}/$ARCH/g")" ;;
     esac
-    # ADR-036 产物命名契约: <base>/worker-<os>-<arch>（os=GOOS、arch=GOARCH）。
+    # 产物命名契约: <base>/worker-<os>-<arch>（os=GOOS、arch=GOARCH）。
     # 若 --download-url 已指向具体产物文件或 CP-local worker-assets 端点则原样用。
     case "$url" in
         */worker-*|*/worker-assets/*/worker*) : ;;
@@ -240,14 +240,14 @@ if [ "$DOWNLOAD_ONLY" = "1" ]; then
 fi
 
 # ---- 上线阶段：调 worker setup（传参/env），由 Worker 自配 + 注册 + run ----
-# Worker 免配置自启 setup（FR-222）：非 TTY 下从 --control-plane/--token/--name/--ws-port/
+#  Worker 免配置自启 setup：非 TTY 下从 --control-plane/--token/--name/--ws-port/
 # --data-dir + JIANMANAGER_* env 读，自己写 worker.yml + 注册 + 持久化身份 + 转 run。
 # 脚本据此把入参喂给 worker，不再自己写 worker.yml。token 仅经 env 传、绝不落盘。
 if [ "$INSTALL_SERVICE" = "1" ]; then
     if ! command -v systemctl >/dev/null 2>&1; then
         echo "错误: 系统无 systemd（systemctl 不存在），无法 --service 注册服务" >&2; exit 1
     fi
-    # 按档位选 unit 路径与 systemctl 形态（FR-277/ADR-063）。user 档面向纯普通用户：
+    #  按档位选 unit 路径与 systemctl 形态。user 档面向纯普通用户：
     # unit 进 $HOME、systemctl --user 管理，并强制 linger——不开 linger 的 user 服务
     # 在 SSH 会话断开后会被 systemd 回收，「装成功但断连即死」比失败更糟，开不了就报错。
     if [ "$SERVICE_SCOPE" = "user" ]; then
@@ -281,7 +281,7 @@ if [ "$INSTALL_SERVICE" = "1" ]; then
         UNIT_DIR="/etc/systemd/system"
         WANTED_BY="multi-user.target"
     fi
-    # systemd unit 名据安装目录派生（FR-282）：同机多 worker（各自不同 --install-dir）各占独立 unit、
+    #  systemd unit 名据安装目录派生：同机多 worker（各自不同 --install-dir）各占独立 unit、
     # 互不覆盖。默认目录（basename=jianmanager，含 /opt/jianmanager 与 ~/jianmanager）保持
     # jianmanager-worker 保向后兼容；其余取 basename 去 jianmanager- 前缀作后缀、非法字符归一为 -。
     SERVICE_NAME="jianmanager-worker"
@@ -329,7 +329,7 @@ $SVC_ENV
 Restart=always
 RestartSec=5
 # KillMode=process：停止/重启时仅向主进程(Worker)发信号，不波及 cgroup 内经 setsid 脱离的 daemon
-# wrapper，使游戏服在 Worker 重启后存活、由恢复的 Worker 经 socket 重连接管（ADR-003、FR-341）
+#  wrapper，使游戏服在 Worker 重启后存活、由恢复的 Worker 经 socket 重连接管
 KillMode=process
 
 [Install]

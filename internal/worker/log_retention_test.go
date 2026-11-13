@@ -3,6 +3,7 @@ package config
 import (
 	"testing"
 
+	cpconfig "github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/platform/rollog"
 )
 
@@ -106,12 +107,18 @@ func TestWorkerLogConfigRetention(t *testing.T) {
 //
 // 两个包各写一份同样的转换，单看每一份都自洽——错误只在「它们不相等」时显现
 // （见 CONVENTIONS「一个概念出现第二遍就收成类型」与「跨层概念必须有跨层用例」）。
-// 这里把同一组输入同时跑两边，逐字段对比。
 //
-// 注：两个 LogConfig 是不同类型，不能直接互传，所以用同一组**字面输入**驱动，
-// 再比结果——这正是“跨层用例只能在测试里硬编码核心集合”的形态。
+// # 这个用例曾经名不副实（2026-11-09 修正）
+//
+// 旧版本只构造了 **Worker 侧**的 `LogConfig` 并调它的 `Retention()`，
+// `want` 是把转换规则手抄一遍再算——**CP 侧一行未测**。函数名却叫
+// `WorkerAndControlPlaneRetentionAgree`。CP 的 `Retention()` 被改坏它照样绿。
+//
+// 现在真正 import 两侧（`controlplane/config` 不 import `internal/worker`，无环），
+// 用同一个字面输入分别构造两个 **不同类型** 的 LogConfig，各自转换后逐字段比对。
 func TestWorkerAndControlPlaneRetentionAgree(t *testing.T) {
-	// 同一组输入：尺寸/份数/天数/压缩都走非零值，且刻意含负值与指针 false。
+	// 字面输入：尺寸/份数/天数覆盖零值、非零、负值，压缩覆盖 nil/true/false。
+	// 刻意含零值与负值——那里才是两份实现最容易静默分叉的地方。
 	type input struct {
 		sizeMB, backups, ageDays int
 		compress                 *bool
@@ -125,30 +132,53 @@ func TestWorkerAndControlPlaneRetentionAgree(t *testing.T) {
 	}
 
 	for i, in := range inputs {
+		// ① Worker 侧
 		w := LogConfig{
 			MaxSizeMB: in.sizeMB, MaxBackups: in.backups,
 			MaxAgeDays: in.ageDays, Compress: in.compress,
 		}
-		got := w.Retention()
+		gotWorker := w.Retention()
 
-		// 直接比 DefaultRetention 的基线，再叠上输入应有的变换，
-		// 避免本用例变成“两边一起错”的空转。
-		want := rollog.DefaultRetention()
-		if in.sizeMB > 0 {
-			want.MaxSizeBytes = int64(in.sizeMB) << 20
+		// ② CP 侧（真正引用另一个包的类型，而不是复述它的规则）
+		c := cpconfig.LogConfig{
+			MaxSizeMB: in.sizeMB, MaxBackups: in.backups,
+			MaxAgeDays: in.ageDays, Compress: in.compress,
 		}
-		if in.backups != 0 {
-			want.MaxBackups = in.backups
-		}
-		if in.ageDays != 0 {
-			want.MaxAgeDays = in.ageDays
-		}
-		if in.compress != nil {
-			want.Compress = *in.compress
+		gotCP := c.Retention()
+
+		// ③ 跨层断言：两侧转换结果必须逐字段相等。
+		// 这是本用例的**主要契约**——任一侧改了零值/负值语义，这里立刻红。
+		if gotWorker != gotCP {
+			t.Errorf("第 %d 组输入两侧不一致（运维写错文件不应该得到两套保留语义）:\n worker=%+v\n     cp=%+v",
+				i, gotWorker, gotCP)
 		}
 
-		if got != want {
-			t.Fatalf("第 %d 组输入转换不符合预期:\n got=%+v\nwant=%+v", i, got, want)
+		// ④ 再用**显式字面量**钉住期望值，而不是复述实现逻辑。
+		// 两侧一起错（比如都把零值当 0 份）时，③ 会同时绿——只有这里能拦住。
+		want := rollog.Retention{
+			MaxSizeBytes: rollog.DefaultRetention().MaxSizeBytes,
+			MaxBackups:   rollog.DefaultRetention().MaxBackups,
+			MaxAgeDays:   rollog.DefaultRetention().MaxAgeDays,
+			Compress:     true,
+		}
+		switch i {
+		case 1: // {1024,5,30,true}：全等于默认值，结果为默认
+		case 2: // {256,3,14,false}：全量覆盖 + 关压缩
+			want.MaxSizeBytes = 256 << 20
+			want.MaxBackups = 3
+			want.MaxAgeDays = 14
+			want.Compress = false
+		case 3: // {0,-1,-1,nil}：负值是“不限/关闭”，不是零值回退
+			want.MaxBackups = -1
+			want.MaxAgeDays = -1
+		case 4: // {64,0,-1,false}：尺寸覆盖、份数回退默认、天数关闭、压缩关
+			want.MaxSizeBytes = 64 << 20
+			want.MaxAgeDays = -1
+			want.Compress = false
+		}
+		if gotWorker != want {
+			t.Errorf("第 %d 组输入转换结果不符合显式期望（两侧一起错时靠这一条拦住）:\n got=%+v\nwant=%+v",
+				i, gotWorker, want)
 		}
 	}
 }

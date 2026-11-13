@@ -13,9 +13,9 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-497③ 回归：未纳管活进程的全自动收养。
+// ③ 回归：未纳管活进程的全自动收养。
 //
-// 判据与 ADR-093 / docs/specs/restart-resilience/spec.md §2.1 一致：只有「确属本实例」的活进程对
+// 判据与 docs/specs/restart-resilience/spec.md §2.1 一致：只有「确属本实例」的活进程对
 // （wrapper 分支须 /proc cmdline+environ 确证、Java 分支按 cmdline/cwd 匹配）才被收养；复核不过
 // 一律只告警。收养是**非破坏**动作——只重连、不重启、不杀，PID 不变。
 const (
@@ -55,7 +55,7 @@ func newAdoptFixture(t *testing.T) *adoptFixture {
 	// 任何杀/终止动作都要被看见（收养路径必须一次都不调用）。
 	m.recoverKillTree = func(pid int) error { f.kills = append(f.kills, pid); return nil }
 	m.recoverTermTree = func(pid int) error { f.kills = append(f.kills, pid); return nil }
-	// 收养专用的归属复核桩（FR-497③ 收紧后收养走 verifyAdoptOwnership，不再复用强杀路径的宽口径桩）。
+	// 收养专用的归属复核桩（收紧后收养走 verifyAdoptOwnership，不再复用强杀路径的宽口径桩）。
 	m.adoptVerifyOwner = func(int, string, string, bool) (bool, string) { return true, "test_stub" }
 	m.recoverSleep = func(time.Duration) {}
 

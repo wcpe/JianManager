@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-445：四种内置画像的能力集合、MC 世界语义，以及未知组合的回退安全子集。
+// 四种内置画像的能力集合、MC 世界语义，以及未知组合的回退安全子集。
 func TestProfileFor_BuiltinProfiles(t *testing.T) {
 	backend := ProfileFor(model.InstanceTypeMinecraftJava, model.InstanceRoleBackend)
 	assert.True(t, backend.MCSemantics)
@@ -39,7 +39,7 @@ func TestProfileFor_BuiltinProfiles(t *testing.T) {
 	}
 }
 
-// FR-445 零硬编码：动作级能力 clone（可克隆）只由后端子服类实例声明，
+// 零硬编码：动作级能力 clone（可克隆）只由后端子服类实例声明，
 // 前端行菜单据 hasCapability(profile,'clone') 显隐，取代 role === 'backend' 硬编码。
 func TestProfileFor_CloneCapabilityBackendOnly(t *testing.T) {
 	for _, k := range KnownProfileTypes() {

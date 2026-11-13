@@ -6,8 +6,8 @@ import {
   type QQDiscoveredGroupList,
 } from './alerts'
 
-/**
- * QQ 已发现群列表归一化（FR-495）单测。
+/** 
+ * QQ 已发现群列表归一化单测。
  *
  * 存在的理由：真实后端 QQGroups 返回分页信封 `{items,total}`
  * （internal/controlplane/router/alert.go；docs/API.md 同），而 devmock 的
@@ -47,7 +47,7 @@ describe('normalizeQQDiscoveredGroups', () => {
 })
 
 /**
- * 归一化为「一页群 + 总数」（FR-495 只读观测区的计数）。
+ * 归一化为「一页群 + 总数」（只读观测区的计数）。
  *
  * 存在的理由：页面标题写的是「已发现群（N）」。后端默认 pageSize=20，直接用 items.length
  * 当 N 会在群超过 20 个时静默少报——而那正好是运维判断「机器人到底进了多少群」的唯一数字。

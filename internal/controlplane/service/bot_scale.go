@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// Bot 规模化查询/聚合/批量操作（FR-038）。
+// Bot 规模化查询/聚合/批量操作。
 // 万级 Bot 下不全量序列化：列表分页、摘要走 DB 聚合，批量经 gRPC 按节点分片并发委托。
 
 const (
@@ -71,12 +71,27 @@ type BotListQuery struct {
 	PageSize int
 }
 
+// BotListItem Bot 列表项：在 model.Bot 之上补一个实例名。
+//
+// 【为什么用服务层视图而不是给 model.Bot 加字段】model 是 AutoMigrate 的真源，
+// 加一个非持久化字段会被一并映射成列。
+//
+// 【可见性说明——有意为之的取舍，决策记录】instanceName 会把实例名直接暴露给能读 Bot 列表的人，
+// 而本列表当前没有按组收敛 scope。我们**显式接受**这一扩大，理由：改造前前端为了在列表里显示
+// 实例名，是直接拉取**全量实例列表**（`GET /instances`，千级约 1MB 且带 30s 兜底轮询），
+// 那等于把全部实例清单交给每一个能打开本页的人——现在暴露的反而更少、更窄。
+// 若将来为本列表补上 scope 收敛，应同步复查此处。
+type BotListItem struct {
+	model.Bot
+	InstanceName string `json:"instanceName,omitempty"`
+}
+
 // BotListResult 分页列表结果。
 type BotListResult struct {
-	Items    []model.Bot `json:"items"`
-	Total    int64       `json:"total"`
-	Page     int         `json:"page"`
-	PageSize int         `json:"pageSize"`
+	Items    []BotListItem `json:"items"`
+	Total    int64         `json:"total"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"pageSize"`
 }
 
 // BotSummaryGroup 分组聚合的单组计数。
@@ -207,7 +222,13 @@ func (s *BotService) ListPaged(query BotListQuery, scopeIDs []uint, scope bool) 
 	// 列表也回填实时状态：否则重连/连接的 Bot 在聚合页一直显示 connecting。
 	s.refreshStatuses(items)
 
-	return &BotListResult{Items: items, Total: total, Page: page, PageSize: size}, nil
+	// 实例名已在 Preload("Instance.Node") 里，此处只是拷进视图，不产生额外查询。
+	out := make([]BotListItem, len(items))
+	for i := range items {
+		out[i] = BotListItem{Bot: items[i], InstanceName: items[i].Instance.Name}
+	}
+
+	return &BotListResult{Items: out, Total: total, Page: page, PageSize: size}, nil
 }
 
 // refreshStatuses 按节点聚合批量拉取各 Bot 的实时状态并回填 DB（每个 Worker 仅一次 ListBots）。
@@ -537,7 +558,17 @@ func (s *BotService) applyBatchDBChange(req BotBatchRequest, bots []model.Bot) {
 			slog.Warn("批量更新 Bot 行为失败", "error", err)
 		}
 	case BotBatchStop:
-		if err := s.db.Model(&model.Bot{}).Where("id IN ?", ids).Update("status", model.BotStatusStopped).Error; err != nil {
+		// stop 必须对称地写 desired_state=stopped 并 bump generation。
+		//
+		// 此前只写 status，`desired_state` 停留在默认的 stopped —— **碰巧对**，
+		// 但那是"默认值恰好等于期望值"的运气，不是正确实现：一旦 start 把 desired 写成 running
+		// （见 delegateBatchOne），stop 只改 status 就会留下 "desired=running 但实际已停" 的
+		// 漂移状态，reconcile 会按 desired 把它重新拉起来。
+		if err := s.db.Model(&model.Bot{}).Where("id IN ?", ids).Updates(map[string]any{
+			"desired_state":            model.BotDesiredStopped,
+			"desired_state_generation": gorm.Expr("desired_state_generation + 1"),
+			"status":                   model.BotStatusStopped,
+		}).Error; err != nil {
 			slog.Warn("批量更新 Bot 状态失败", "error", err)
 		}
 	case BotBatchDelete:
@@ -611,7 +642,31 @@ func (s *BotService) delegateBatchOne(req BotBatchRequest, bot *model.Bot) error
 			return fmt.Errorf("Worker CreateBot 失败: %s", resp.Error)
 		}
 		// 真实状态由读取时 refreshStatus 回填，这里先置 connecting，不再乐观置 connected；委托成功清 lastError。
-		_ = s.db.Model(&model.Bot{}).Where("id = ?", bot.ID).Updates(map[string]any{"status": model.BotStatusConnecting, "last_error": ""}).Error
+		//
+		// ## 必须同时写 desired_state（真机 bug，2026-10-28）
+		//
+		// 这段此前只写 status，于是：
+		//   接口返回 {"succeeded":1}（它的依据是"Worker gRPC 回了 Success"），
+		//   而 GET /bots/:id 的 desiredState 仍是列默认值 stopped。
+		//
+		// 后果不只是"显示不一致"——`desired_state` 是 CP 侧所有归真机制的唯一筛选条件：
+		//   · bot_freshness.MarkStale 只收敛 desired_state='running' 的行
+		//   · bot_reclaim 的失效回收只扫 desired_state='running' 且 fleet-owned 的行
+		//   · Worker 重启后的 reconcile 也按 desired 生成"应运行但没在跑"的补偿项
+		// 它恒为 stopped 意味着 V1 Bot 被**排除在所有自愈之外**：崩了没人管，
+		// Worker 重启后启动意图彻底丢失（Worker 内存里的 desired 账本也从未收到过它）。
+		//
+		// generation 必须 bump：它是"意图的第几版"，reconcile 靠它判断先后。
+		// 不 bump 的话，先 stop 再 start 会被当成同一个意图的两个版本，状态推进不确定。
+		if err := s.db.Model(&model.Bot{}).Where("id = ?", bot.ID).Updates(map[string]any{
+			"desired_state":            model.BotDesiredRunning,
+			"desired_state_generation": gorm.Expr("desired_state_generation + 1"),
+			"status":                   model.BotStatusConnecting,
+			"last_error":               "",
+		}).Error; err != nil {
+			// 不吞错误：写不进去就意味着意图没落账，调用方必须知道这次 start 是"半成功"。
+			return fmt.Errorf("记录 Bot 启动意图失败: %w", err)
+		}
 	default:
 		return fmt.Errorf("不支持的批量动作: %s", req.Action)
 	}

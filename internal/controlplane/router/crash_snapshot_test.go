@@ -132,7 +132,7 @@ func TestCrashSnapshots_CascadeDeleteWithInstance(t *testing.T) {
 	assert.Zero(t, count, "删除实例后崩溃快照应级联清空")
 }
 
-// seedCrashStat 直接落库一条统计（FR-470 趋势表；写侧在 gRPC 层）。
+// seedCrashStat 直接落库一条统计（趋势表；写侧在 gRPC 层）。
 func seedCrashStat(t *testing.T, db *gorm.DB, instanceID uint, day string, rootCause, signature string, count int) {
 	t.Helper()
 	require.NoError(t, db.Create(&model.InstanceCrashStat{
@@ -141,7 +141,7 @@ func seedCrashStat(t *testing.T, db *gorm.DB, instanceID uint, day string, rootC
 	}).Error)
 }
 
-// TestCrashTrend_Endpoint 趋势端点返回按天/根因聚合 + 同类聚合（FR-470 spec §2.4）。
+// TestCrashTrend_Endpoint 趋势端点返回按天/根因聚合 + 同类聚合（spec §2.4）。
 func TestCrashTrend_Endpoint(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -183,7 +183,7 @@ func daysOrDefault(body map[string]any) int {
 	return 0
 }
 
-// TestCrashOverview_Endpoint 平台总览端点（FR-470 spec §2.5）。
+// TestCrashOverview_Endpoint 平台总览端点（spec §2.5）。
 func TestCrashOverview_Endpoint(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

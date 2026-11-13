@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// BotLoadMetricSample 是 FR-370 每运行 5 秒一行的聚合指标样本。
+// BotLoadMetricSample 是每运行 5 秒一行的聚合指标样本。
 type BotLoadMetricSample struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
 	StressSessionID uint      `gorm:"not null;uniqueIndex:uniq_bot_load_metric_sample,priority:1;index:idx_bot_load_metric_stage,priority:1" json:"stressSessionId"`

@@ -111,4 +111,3 @@ func declaredServerMethods(t *testing.T) map[string]struct{} {
 	require.NotEmpty(t, out, "未解析到任何 Server 方法，源码解析可能失效")
 	return out
 }
-

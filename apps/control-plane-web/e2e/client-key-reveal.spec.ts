@@ -1,14 +1,14 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-192 拉取密钥可查看/可编辑 · 单机（Playwright + mock 模式）验收。
+/** 
+ *拉取密钥可查看/可编辑 · 单机（Playwright + mock 模式）验收。
  * 覆盖：创建密钥（可逆加密存储）→ 密钥行 查看（可随时再看明文）/ 编辑 / 吊销；就绪度步骤器随建密钥推进。
  * （可逆加密存储 + admin 可查看明文 + 非 admin 拒绝由 Go client_key_reveal_test.go 覆盖）
- * 证据落 .tmp/acceptance/FR-192/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-192 拉取密钥 创建 + 可随时查看明文 + 可编辑/吊销', async ({ page }) => {
+test('拉取密钥 创建 + 可随时查看明文 + 可编辑/吊销', async ({ page }) => {
   await login(page)
   await page.goto('/client-channels')
   await page.getByRole('button', { name: /survival-s2/ }).click()
@@ -22,7 +22,9 @@ test('FR-192 拉取密钥 创建 + 可随时查看明文 + 可编辑/吊销', as
   const secret = page.getByRole('dialog', { name: '拉取密钥' })
   await expect(secret).toContainText('此密钥已加密保存，关闭后仍可在密钥列表中随时查看明文。')
   await expect(secret).not.toContainText(/仅此一次|无法再次查看/)
-  await secret.getByRole('button', { name: '关闭' }).click()
+  // 弹窗内有两个可访问名为「关闭」的按钮：内容区的操作按钮，以及右上角的 X
+  // （data-slot="dialog-close"，aria-label 同样是「关闭」）。取内容区那个——它在 DOM 顺序上在前。
+  await secret.getByRole('button', { name: '关闭' }).first().click()
 
   // 密钥行：查看（可随时再看明文）/ 编辑 / 吊销
   await expect(page.getByText('e2e-key')).toBeVisible()
@@ -33,5 +35,5 @@ test('FR-192 拉取密钥 创建 + 可随时查看明文 + 可编辑/吊销', as
   await expect(reveal).toBeVisible() // 可随时再看明文（非仅一次）
   await expect(reveal.getByRole('button', { name: '复制' })).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-192/single-machine-key-reveal.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-key-reveal.png', fullPage: true })
 })

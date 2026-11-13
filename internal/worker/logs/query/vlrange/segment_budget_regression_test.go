@@ -24,9 +24,9 @@ func TestPR61MergedSegmentsShareRemainingBytes(t *testing.T) {
 		t.Run(fmt.Sprint(remaining), func(t *testing.T) {
 			var actual atomic.Uint64
 			var calls atomic.Int32
-			client := pr61ByteClient(t, func(*http.Request) (*http.Response, error) {
+			client := pr61ByteClient(t, func(r *http.Request) (*http.Response, error) {
 				text := newer
-				if calls.Add(1) > 1 {
+				if calls.Add(1) > 1 && !isSearchHydrationRequest(r) {
 					text = older
 				}
 				return &http.Response{StatusCode: 200, Body: &pr61Body{Reader: strings.NewReader(text), read: &actual}}, nil

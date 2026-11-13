@@ -212,7 +212,7 @@ func TestDockerStrategy_StartCreatesContainerWithBindAndPorts(t *testing.T) {
 	assert.Contains(t, fake.createConfig.Env, "EULA=TRUE")
 }
 
-// TestDockerStrategy_StartInjectsResourceLimits 验证 docker 资源限额注入 HostConfig（FR-079）：
+// TestDockerStrategy_StartInjectsResourceLimits 验证 docker 资源限额注入 HostConfig：
 // cpu_limit→NanoCPUs（×1e9）、mem_limit_mb→Memory（×1024×1024）；disk_limit 不注入 HostConfig。
 func TestDockerStrategy_StartInjectsResourceLimits(t *testing.T) {
 	mgr := NewManager(t.TempDir())
@@ -435,7 +435,7 @@ func TestPortConfig(t *testing.T) {
 	}
 }
 
-// TestApplyResourceLimits 验证 CPU/内存限额到 HostConfig 的换算（FR-079）。
+// TestApplyResourceLimits 验证 CPU/内存限额到 HostConfig 的换算。
 func TestApplyResourceLimits(t *testing.T) {
 	tests := []struct {
 		name         string

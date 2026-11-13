@@ -17,7 +17,7 @@ import (
 // reportTimeout 单次上报的超时上限（与心跳单次发送同量级）。
 const reportTimeout = 10 * time.Second
 
-// Snapshot 一条待上报的崩溃快照（FR-313）。
+// Snapshot 一条待上报的崩溃快照。
 type Snapshot struct {
 	// InstanceUUID 崩溃实例。
 	InstanceUUID string

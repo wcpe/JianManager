@@ -9,9 +9,9 @@ import { db } from '@jianmanager/devmock/db'
 import type { MockInstance } from '@jianmanager/devmock/handlers/domains/instance'
 import ConsoleHeader from './ConsoleHeader'
 
-/**
- * FR-294 页眉集群统计浮窗：三徽标（在线节点 / 运行服务器 / 崩溃服务器）点击弹缩略浮窗
- * （复用 FR-216 铃铛 DropdownMenu 范式），行点击 / 底部「查看全部」导航，
+/** 
+ *页眉集群统计浮窗：三徽标（在线节点 / 运行服务器 / 崩溃服务器）点击弹缩略浮窗
+ * （复用铃铛 DropdownMenu 范式），行点击 / 底部「查看全部」导航，
  * 数据仅浮窗打开时拉取（query enabled 绑定 open 态），行数上限 8 超出提示剩余数，崩溃空态友好文案。
  */
 
@@ -35,8 +35,28 @@ function removeCrashedInstances() {
   instances.list((i) => i.status === 'CRASHED').forEach((i) => instances.remove(i.id))
 }
 
-describe('ConsoleHeader 集群统计浮窗（FR-294）', () => {
+/** 
+ * 把假后端节点裁到只剩 [keep] 个（用于覆盖浮窗底部 `viewAllNodes` 分支）。
+ *
+ * 为什么要裁：`StatPopoverFooter` 的文案取决于 remaining = 总数 - 浮窗上限(8)。
+ * 默认 mock 有 37 个节点，remaining 恒为正，只会走 `header.moreCount`；
+ * 只有把总数压到 ≤ 8，才会走另一分支 `header.viewAllNodes`（「查看全部节点」）。
+ * 两个分支都是真实用户可见的文案，各自都该有用例守护。
+ */
+function keepOnlyNodes(keep: number) {
+  const nodes = db<{ id: number }>('nodes')
+  nodes.list().forEach((n, index) => {
+    if (index >= keep) nodes.remove(n.id)
+  })
+}
+
+describe('ConsoleHeader 集群统计浮窗', () => {
   it('在线节点浮窗：行=节点名+运行实例数，底部查看全部→/nodes，行点击定位节点', async () => {
+    // 本用例断言的是**底部 `viewAllNodes` 分支**（「查看全部节点」），
+    // 而该分支只在 `remaining == 0`（总数 ≤ 浮窗上限 8）时渲染；
+    // 默认档位带 34 台压力种子，总数 37 → remaining 恒为正，走的是 `moreCount` 分支。
+    // 因此这里必须先把节点裁到上限以内，否则断言的是另一个分支的文案。
+    keepOnlyNodes(2)
     loginMockUser()
     const user = userEvent.setup()
     renderWithProviders(<ConsoleHeader />, { route: '/instances' })
@@ -51,12 +71,19 @@ describe('ConsoleHeader 集群统计浮窗（FR-294）', () => {
     )
     expect(within(menu).getByRole('menuitem', { name: /beta/ })).toBeInTheDocument()
 
-    // 底部「查看全部节点」→ /nodes。
-    await user.click(within(menu).getByRole('menuitem', { name: '查看全部节点' }))
+    // 底部入口 → /nodes。
+    //
+    // 文案有两个分支（见 ClusterBadges 的 StatPopoverFooter）：
+    //   remaining > 0 → `header.moreCount`（「还有 N 个，查看全部」）
+    //   remaining = 0 → `header.viewAllNodes`（「查看全部节点」）
+    // mock 有 37 个节点、浮窗上限 8，故这里必然走 moreCount 分支。
+    // 早先本行断言的是精确名「查看全部节点」，在 37 节点下永远匹配不到；
+    // 这里放宽为「含『查看全部』」，并把 label 分支单独交给下一个用例覆盖。
+    await user.click(within(menu).getByRole('menuitem', { name: /查看全部/ }))
     expect(window.location.pathname).toBe('/nodes')
     expect(window.location.search).toBe('')
 
-    // 重新打开，行点击 → /nodes?node=<id> 定位该节点（FR-128 深链）。
+    // 重新打开，行点击 → /nodes?node=<id> 定位该节点（深链）。
     await user.click(screen.getByRole('button', { name: /在线节点/ }))
     const reopened = await screen.findByRole('menu')
     await user.click(within(reopened).getByRole('menuitem', { name: /alpha/ }))
@@ -144,8 +171,17 @@ describe('ConsoleHeader 集群统计浮窗（FR-294）', () => {
       await screen.findByRole('button', { name: /运行服务器/ })
       await waitFor(() => expect(requests.urls.some((u) => u.startsWith('/api/v1/instances/aggregate'))).toBe(true))
 
-      // 浮窗未打开：不发实例搜索、不发单实例 metrics、不发 RUNNING 聚合。
-      expect(requests.urls.some((u) => u.includes('/instances/search'))).toBe(false)
+      /* 
+        【契约变更·本轮】崩溃实例（`status=CRASHED`）改为**常驻取数**：
+        它同时供集群徽标的崩溃浮窗与页眉「需要处理」使用，若仍绑定浮窗开合，
+        铃铛里永远看不到崩溃实例——而那是首屏最该报的一类。窗口仍是很小的 8 条。
+
+        其余按需取数的契约不变，仍是本用例真正守护的东西：
+        运行中搜索、单实例 metrics、RUNNING 聚合都必须等到浮窗打开才发。
+      */
+      expect(
+        requests.urls.some((u) => u.includes('/instances/search') && !u.includes('status=CRASHED')),
+      ).toBe(false)
       expect(requests.urls.some((u) => /\/instances\/\d+\/metrics/.test(u))).toBe(false)
       expect(requests.urls.some((u) => u.includes('/aggregate') && u.includes('status=RUNNING'))).toBe(false)
 
@@ -159,5 +195,29 @@ describe('ConsoleHeader 集群统计浮窗（FR-294）', () => {
     } finally {
       requests.stop()
     }
+  })
+  /** 
+   * 底部 `viewAllNodes` 分支（节点数 ≤ 浮窗上限时 remaining = 0）。
+   *
+   * 与上一个用例互补：那边 37 个节点走 `moreCount`（「还有 N 个，查看全部」），
+   * 这边把节点裁到 3 个，remaining 归零，应显示不带计数的「查看全部节点」。
+   */
+  it('节点数不超过浮窗上限时，底部显示不带计数的「查看全部节点」并跳转', async () => {
+    keepOnlyNodes(3)
+    loginMockUser()
+    const user = userEvent.setup()
+    renderWithProviders(<ConsoleHeader />, { route: '/instances' })
+
+    await user.click(await screen.findByRole('button', { name: /在线节点/ }))
+    const menu = await screen.findByRole('menu')
+
+    // remaining = 0 → 走 label 分支
+    const footer = await within(menu).findByRole('menuitem', { name: '查看全部节点' })
+    // 明确断言「不带计数」：多一个「还有 N 个」就说明分支选错了
+    expect(footer).not.toHaveTextContent(/还有 \d+ 个/)
+
+    await user.click(footer)
+    expect(window.location.pathname).toBe('/nodes')
+    expect(window.location.search).toBe('')
   })
 })

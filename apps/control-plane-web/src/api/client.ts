@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { isTokenExpired } from '@/lib/jwt'
+import { isTokenExpired } from '@/lib/auth/jwt'
 import { useAuthStore } from '@/stores/auth'
 
 const api = axios.create({
@@ -132,6 +132,10 @@ export async function ensureFreshToken(): Promise<string | null> {
     }
   }
   return token
+}
+
+export async function refreshAccessToken(): Promise<string> {
+  return refreshTokens()
 }
 
 export default api

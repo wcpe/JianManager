@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "MSW 内存假后端（ADR-047；FR-284 抽包，仅 dev/test 形态、不入生产构建）",
+  "description": "MSW 内存假后端（ADR-047抽包，仅 dev/test 形态、不入生产构建）",
   "scripts": {
     "test": "vitest run"
   },

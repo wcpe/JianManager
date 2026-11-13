@@ -11,7 +11,7 @@ import (
 // # 为什么需要（2026-10-01 生产事故根因）
 //
 // 四层模型 CP → Worker → wrapper(setsid 游离) → sh -c → java 承诺「Worker/CP 重启不牵连服务器」
-// （ADR-003、ADR-093）。`setsid` 让 wrapper 逃脱 Worker 的**进程组**，但逃不出 systemd 的
+// `setsid` 让 wrapper 逃脱 Worker 的**进程组**，但逃不出 systemd 的
 // **cgroup**：`systemctl restart <worker 单元>` 时 systemd 按 KillMode（默认 `control-group`，
 // KillSignal=15）向该单元 cgroup 内的**全部**进程发 SIGTERM。真机复现（本机 jm-prod-worker.service）：
 // Worker 与其 11 个 wrapper、11 个 java 同处 `/user.slice/…/app.slice/jm-prod-worker.service`，
@@ -21,7 +21,7 @@ import (
 // 只下发 `strategy.Close()`（`internal/worker/process/manager.go` 的 daemon 分支，日志
 // `daemon 实例已断开连接（wrapper 继续运行）`），全程没有任何杀 wrapper 的调用。
 //
-// 部署层已有对策（`scripts/install-worker.sh` 的 `KillMode=process`，FR-341 的 K2），但它是
+// 部署层已有对策（`scripts/install-worker.sh` 的 `KillMode=process`的 K2），但它是
 // **部署期**属性：单元漂移（手写单元、旧版本单元、非 systemd 托管）一旦缺该项，运行期零保障，
 // 每次重启就赔上全部服务器。本文件把该承诺下沉到**运行期**：让 wrapper 把自身（以及由它 fork 的
 // java 子树）迁到 Worker 单元 cgroup **之外**的同级目录，于是「重启单元」在 cgroup 维度也碰不到它们，

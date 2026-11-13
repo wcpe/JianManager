@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 进度模型（FR-099）：完成比例 / 滑窗速度 / ETA / 边界，注入时间戳确定性验证。 */
+/** 进度模型：完成比例 / 滑窗速度 / ETA / 边界，注入时间戳确定性验证。 */
 class ProgressModelTest {
 
     @Test

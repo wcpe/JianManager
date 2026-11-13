@@ -10,7 +10,7 @@ type InstanceLogCollector interface {
 	AppendInstanceOutput(uuid, stream string, data []byte) error
 }
 
-// InstanceLogSourceOverrides 提供实例日志路径的配置化覆盖（FR-502 §3.4）。
+// InstanceLogSourceOverrides 提供实例日志路径的配置化覆盖。
 //
 // 实现方按实例的日志命名空间（`inst:<id>`）查 `log_sources` 配置；
 // 命中时以配置的 path 覆盖规则默认路径。返回空串表示无覆盖。
@@ -21,7 +21,7 @@ type InstanceLogSourceOverrides func(targetID string) (relativePath string, ok b
 // SetInstanceLogCollector is installed before accepting CP instance RPCs.
 func (s *Server) SetInstanceLogCollector(collector InstanceLogCollector) { s.instanceLogs = collector }
 
-// SetInstanceLogSourceOverrides 注入实例日志路径覆盖查询（FR-502）。可选；nil 时不做覆盖。
+// SetInstanceLogSourceOverrides 注入实例日志路径覆盖查询。可选；nil 时不做覆盖。
 func (s *Server) SetInstanceLogSourceOverrides(fn InstanceLogSourceOverrides) {
 	s.logSourceOverrides = fn
 }
@@ -33,7 +33,7 @@ func (s *Server) registerInstanceLogs(req *workerpb.CreateInstanceRequest, workD
 	if existing, ok := s.manager.GetInstance(req.InstanceUuid); ok {
 		workDir = existing.WorkDir
 	}
-	// FR-502：规则名与相对路径覆盖由 CP 推导下发；空值分别回退 bukkit 规则与规则默认路径。
+	// 规则名与相对路径覆盖由 CP 推导下发；空值分别回退 bukkit 规则与规则默认路径。
 	relativePath := req.GetLogRelativePath()
 	// 路径覆盖优先级（高 → 低）：
 	//   1. CP 心跳下发的实例级覆盖（`log.acq.path_overrides`，即 policy.PathOverrides）

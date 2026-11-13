@@ -281,11 +281,13 @@ type queryResourceRecorder struct {
 	deny       bool
 	reserved   atomic.Int64
 	admissions atomic.Int32
+	lastWork   atomic.Value
 }
 
 func (r *queryResourceRecorder) Admit(work vlsup.WorkClass) error {
 	r.admissions.Add(1)
-	if work != vlsup.WorkForeground || r.deny {
+	r.lastWork.Store(string(work))
+	if work != vlsup.WorkForeground && work != vlsup.WorkReadOnly || r.deny {
 		return errors.New("前台预算拒绝")
 	}
 	return nil
@@ -335,6 +337,7 @@ func TestQueryResourceAdmissionAndExportReservationFollowActualIO(t *testing.T) 
 		done <- svc.Search(ctx, QueryRequest{AuthorizedTargets: []string{key.String()}, AllowProjectionDrift: true, Budget: Budget{MaxBytes: 512}})
 	}()
 	<-entered
+	require.Equal(t, string(vlsup.WorkReadOnly), budget.lastWork.Load(), "历史查询应走可读的只读准入，不应被90%磁盘暂停误伤")
 	cancel()
 	require.EqualValues(t, 512, budget.reserved.Load(), "取消不能在真实 IO 退出前归还导出预留")
 	close(exit)

@@ -10,7 +10,7 @@ import java.security.NoSuchAlgorithmException;
 /**
  * 文件/字节哈希工具（契约 §2/§3）。
  *
- * <p>sha256 = 信任校验（强）；md5 = 本地快筛（弱，绝不作信任依据，ADR-022 决策 3）。
+ * <p>sha256 = 信任校验（强）；md5 = 本地快筛（弱，绝不作信任依据）。
  * 仅用 JDK {@link MessageDigest}。
  */
 final class Hashes {

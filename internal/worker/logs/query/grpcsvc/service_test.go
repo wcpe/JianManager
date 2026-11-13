@@ -8,11 +8,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
-	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
+	"github.com/wcpe/JianManager/internal/worker/logutil"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -358,13 +358,17 @@ func TestLogStats_MapsPointsAndClosedVisibleSeq(t *testing.T) {
 			// 显式授权目标：Worker 边界已要求非空（无 View 时空授权=全量读取原语，M-9）。
 			AuthorizedTargets: &workerpb.LogAuthorizedTargets{TargetIds: []string{"ns/game-1/2026-09-20"}},
 		},
-		GroupBy: []string{"level"},
+		GroupBy:     []string{"level"},
+		TimeBucket:  "1h",
+		MetricField: "duration_ms",
 	})
 	require.NoError(t, err)
 	require.Nil(t, resp.GetError())
 	require.Len(t, resp.GetPoints(), 1)
 	require.InDelta(t, 10.0, resp.GetPoints()[0].GetAvg(), 1e-9)
 	require.Equal(t, []string{"level"}, fq.lastGroupBy)
+	require.Equal(t, "1h", fq.lastReq.TimeBucket)
+	require.Equal(t, "duration_ms", fq.lastReq.MetricField)
 	// ClosedVisibleSeq 从 planner view 回填
 	require.Equal(t, "77", resp.GetCoverage().GetTargets()[0].GetClosedVisibleSeq())
 	require.Equal(t, "5", resp.GetCoverage().GetTargets()[0].GetCatalogGeneration())
@@ -710,7 +714,7 @@ func TestLogSearch_RealQueryService_ProtocolMismatchCaps(t *testing.T) {
 // 编译期断言：Service 满足 workerpb.WorkerServiceServer 子集（嵌入 Unimplemented）。
 var _ workerpb.WorkerServiceServer = (*Service)(nil)
 
-// 归档任务状态映射：archive.TaskState 的取值自带 LOG_TASK_ 前缀，RPC 边界必须
+// 归档任务状态映射：logutil.TaskState 的取值自带 LOG_TASK_ 前缀，RPC 边界必须
 // 剥掉前缀后再匹配。只认裸值时带前缀的取值会全部落入 default → 成功回灌被报成
 // FAILED 且 error 为空，调用方无法用 state 判定成功。
 //
@@ -722,14 +726,15 @@ func TestTaskStateFromString_AllTaskStates(t *testing.T) {
 		in   string
 		want workerpb.LogTaskState
 	}{
-		// 全部 archive.TaskState 常量（带前缀形态，生产路径的真实取值）。
-		{"archive.TaskQueued", string(archive.TaskQueued), workerpb.LogTaskState_LOG_TASK_QUEUED},
-		{"archive.TaskRunning", string(archive.TaskRunning), workerpb.LogTaskState_LOG_TASK_RUNNING},
-		{"archive.TaskSucceeded", string(archive.TaskSucceeded), workerpb.LogTaskState_LOG_TASK_SUCCEEDED},
-		{"archive.TaskFailed", string(archive.TaskFailed), workerpb.LogTaskState_LOG_TASK_FAILED},
-		{"archive.TaskCancelled", string(archive.TaskCancelled), workerpb.LogTaskState_LOG_TASK_CANCELLED},
+		// 全部带前缀形态（生产路径的真实取值）。
+		// 2026-11-10：archive 包随冷热分层删除，改写字面量——协议值本身未变。
+		{"prefixed/QUEUED", "LOG_TASK_QUEUED", workerpb.LogTaskState_LOG_TASK_QUEUED},
+		{"prefixed/RUNNING", "LOG_TASK_RUNNING", workerpb.LogTaskState_LOG_TASK_RUNNING},
+		{"prefixed/SUCCEEDED", "LOG_TASK_SUCCEEDED", workerpb.LogTaskState_LOG_TASK_SUCCEEDED},
+		{"prefixed/FAILED", "LOG_TASK_FAILED", workerpb.LogTaskState_LOG_TASK_FAILED},
+		{"prefixed/CANCELLED", "LOG_TASK_CANCELLED", workerpb.LogTaskState_LOG_TASK_CANCELLED},
 		// STALE 覆盖超时/租约过期，必须落到专门枚举，不能被吞成 FAILED。
-		{"archive.TaskStale", string(archive.TaskStale), workerpb.LogTaskState_LOG_TASK_STALE},
+		{"prefixed/STALE", "LOG_TASK_STALE", workerpb.LogTaskState_LOG_TASK_STALE},
 
 		// 裸值形态（历史调用方/测试仍在传），剥前缀后语义必须一致。
 		{"bare/QUEUED", "QUEUED", workerpb.LogTaskState_LOG_TASK_QUEUED},
@@ -757,19 +762,19 @@ func TestTaskStateFromString_AllTaskStates(t *testing.T) {
 		})
 	}
 
-	// 反向不变式：每个 archive 常量映射出来的枚举名必须与它自身**同名**。
-	// 这条断言让「archive 新增状态但忘记映射」必然转红，而不是静默落 FAILED。
-	for _, state := range []archive.TaskState{
-		archive.TaskQueued, archive.TaskRunning, archive.TaskSucceeded,
-		archive.TaskFailed, archive.TaskCancelled, archive.TaskStale,
+	// 反向不变式：每个带前缀状态映射出来的枚举名必须与它自身**同名**。
+	// 这条断言让「新增状态但忘记映射」必然转红，而不是静默落 FAILED。
+	for _, state := range []string{
+		"LOG_TASK_QUEUED", "LOG_TASK_RUNNING", "LOG_TASK_SUCCEEDED",
+		"LOG_TASK_FAILED", "LOG_TASK_CANCELLED", "LOG_TASK_STALE",
 	} {
-		got := taskStateFromString(string(state))
-		require.Equal(t, string(state), got.String(), "archive 状态 %q 应映射到同名 proto 枚举", state)
+		got := taskStateFromString(state)
+		require.Equal(t, state, got.String(), "状态 %q 应映射到同名 proto 枚举", state)
 	}
 
 	// 重点回归：成功不得被报成失败（缺陷原貌）。
-	require.Equal(t, workerpb.LogTaskState_LOG_TASK_SUCCEEDED, taskStateFromString(string(archive.TaskSucceeded)))
-	require.NotEqual(t, workerpb.LogTaskState_LOG_TASK_FAILED, taskStateFromString(string(archive.TaskStale)),
+	require.Equal(t, workerpb.LogTaskState_LOG_TASK_SUCCEEDED, taskStateFromString("LOG_TASK_SUCCEEDED"))
+	require.NotEqual(t, workerpb.LogTaskState_LOG_TASK_FAILED, taskStateFromString("LOG_TASK_STALE"),
 		"STALE 有专门枚举，不能被吞成 FAILED")
 }
 
@@ -794,15 +799,15 @@ func (f *fakeArchiveQuerier) ArchiveStatus(context.Context, query.QueryRequest, 
 func TestLogRehydrate_PrefixedStateSurvivesRPCMapping(t *testing.T) {
 	cases := []struct {
 		name  string
-		state archive.TaskState
+		state logutil.TaskState
 		want  workerpb.LogTaskState
 	}{
-		{"succeeded", archive.TaskSucceeded, workerpb.LogTaskState_LOG_TASK_SUCCEEDED},
-		{"running", archive.TaskRunning, workerpb.LogTaskState_LOG_TASK_RUNNING},
-		{"queued", archive.TaskQueued, workerpb.LogTaskState_LOG_TASK_QUEUED},
-		{"stale", archive.TaskStale, workerpb.LogTaskState_LOG_TASK_STALE},
-		{"cancelled", archive.TaskCancelled, workerpb.LogTaskState_LOG_TASK_CANCELLED},
-		{"failed", archive.TaskFailed, workerpb.LogTaskState_LOG_TASK_FAILED},
+		{"succeeded", logutil.TaskSucceeded, workerpb.LogTaskState_LOG_TASK_SUCCEEDED},
+		{"running", logutil.TaskRunning, workerpb.LogTaskState_LOG_TASK_RUNNING},
+		{"queued", logutil.TaskQueued, workerpb.LogTaskState_LOG_TASK_QUEUED},
+		{"stale", logutil.TaskStale, workerpb.LogTaskState_LOG_TASK_STALE},
+		{"cancelled", logutil.TaskCancelled, workerpb.LogTaskState_LOG_TASK_CANCELLED},
+		{"failed", logutil.TaskFailed, workerpb.LogTaskState_LOG_TASK_FAILED},
 	}
 
 	for _, tc := range cases {

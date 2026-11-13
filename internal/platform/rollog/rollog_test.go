@@ -498,31 +498,28 @@ func TestRetentionKeepsNewestWhenSameSecond(t *testing.T) {
 	}
 
 	// MaxBackups=1：只能留一个，而且必须是 b（同秒内序号更大的）。
+	//
+	// 【为何不靠 Write 触发轮转】写入会**再生成第三份**轮转档，且它是最新的；
+	// MaxBackups=1 只留最新一份，于是 a 与 b 双双被汰，用例必然超时。
+	// 那不是排序缺陷，只是“1 个名额被更新的文件占了”的应有行为。
+	// 这里直接调用维护函数，把被测对象限定为**排序 + 汰旧**本身。
 	w, err := Open(Config{Path: path, MaxSizeBytes: 8, MaxBackups: 1, DisableCompress: true})
 	if err != nil {
 		t.Fatalf("Open 失败: %v", err)
 	}
 	defer w.Close()
 
-	// 触发一次维护。
-	if _, err := w.Write([]byte("0123456789\n")); err != nil {
-		t.Fatalf("Write 失败: %v", err)
+	if err := w.applyRetention(); err != nil {
+		t.Fatalf("applyRetention 失败: %v", err)
 	}
 
-	waitFor(t, "同秒两档收敛到 1 份", func() bool {
-		return len(mustGlob(t, filepath.Join(dir, "app-*.log"))) <= 2 // 本次轮转档 + 可能还没清的旧档
-	})
-
 	// 关键断言：更新的那个必须留下。
-	waitFor(t, "留下的是同秒内更新的那一份", func() bool {
-		if _, statErr := os.Stat(b); statErr != nil {
-			return false
-		}
-		if _, statErr := os.Stat(a); statErr == nil {
-			return false
-		}
-		return true
-	})
+	if _, statErr := os.Stat(b); statErr != nil {
+		t.Fatalf("同秒内序号更大的那份（更新）必须留下，实际被删: %v", statErr)
+	}
+	if _, statErr := os.Stat(a); statErr == nil {
+		t.Fatalf("同秒内无序号的那份（更旧）应被清理，实际仍存在")
+	}
 }
 
 // TestRetentionIgnoresForeignFiles 验证保留策略不删自己认不得的文件。

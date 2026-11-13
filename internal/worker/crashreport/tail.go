@@ -1,4 +1,4 @@
-// Package crashreport 组装并上报实例崩溃快照（FR-313）：
+// Package crashreport 组装并上报实例崩溃快照：
 // 进程非正常退出时把退出码/信号/时长 + 终端环形缓冲的尾部输出，
 // 经与注册/心跳同信道的 gRPC ReportCrashSnapshot 上报 CP 持久化。
 package crashreport

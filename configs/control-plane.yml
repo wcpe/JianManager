@@ -12,8 +12,8 @@ database:
   dsn: data/jianmanager.db
 
 jwt:
-  secret: dev-secret-change-me  # 生产经 JIANMANAGER_JWT_SECRET 覆盖；只签用户会话，自 FR-275 起不再下发 Worker
-  # CP↔Worker WS 令牌密钥（终端/插件桥，FR-275，见 ADR-061）。留空即可：生产自动生成并持久化到
+  secret: dev-secret-change-me  # 生产经 JIANMANAGER_JWT_SECRET 覆盖；只签用户会话，不下发 Worker
+  # CP↔Worker WS 令牌密钥（终端/插件桥）。留空即可：生产自动生成并持久化到
   # 数据根 etc/ws-token-secret.key、经注册/心跳自动下发 Worker；dev 回退开发值。
   # 仅过渡兼容需显式配（如设旧 jwt.secret 值兼容未升级 Worker），生产经 JIANMANAGER_JWT_WS_SECRET 注入。
   # ws_secret: ""
@@ -48,7 +48,7 @@ log:
 #   max_total_mb: 512             # 表内日志总量上限(MB)，<=0 不按总量清理
 #   archive_interval_minutes: 30  # 后台归档/保留巡检周期（分钟）
 
-# 联邦日志导出物化预算（FR-480）。均有默认值，可整体省略。
+# 联邦日志导出物化预算。均有默认值，可整体省略。
 # 导出是「单次请求逐页读全量并在 CP 内存里物化 NDJSON」的操作，上限即为此设。
 # 请求参数只能在其内收紧，放宽一律走这里；默认值与既有编译期常量一字不差，
 # 故零配置部署行为不变。数据量超默认上限的部署须显式调大，否则导出会被判
@@ -57,45 +57,56 @@ log_export:
   max_rows: 10000       # 单次导出行数上限；留空/0 = 默认 10000；负数或 <100 启动即报错
   max_bytes: 67108864   # 单次导出累计字节上限（64MiB）；留空/0 = 默认 64MiB
 
-# 通用文件改前快照与版本回滚（FR-051）
+# 业务事件位点账本。均有默认值，可整体省略。
+# 只存投递元数据（streamSeq/seq/dedupKey），**不存 payload**：位点是「信封的运输单据」，
+# 让业务台能对 (instanceId, domain) 做差集精确定位缺口，只对受影响的实例/域拉快照。
+# 表行数 ≈ 实例数 × 事件速率 × 保留天数（100 实例 × 20 事件/秒 × 7 天约 12 亿行），
+# 高频部署按需调小 retention_days，或自行做分区/归档。
+business_cursor:
+  enabled: true          # 关闭后投递路径完全不变，只是缺口不可检测（业务台退化为保守全量对账）
+  retention_days: 7      # 位点保留天数；<=0 按默认 7 天。后台每小时巡检裁剪，查询不触发删除
+  queue_size: 10000      # 异步写队列容量；满则丢最旧并计数（绝不阻塞事件投递）
+  batch_size: 500        # 单批落库条数（满批或满 1 秒先到者触发）
+
+# 通用文件改前快照与版本回滚
 file_version:
   max_per_file: 20        # 单文件保留版本上限，超出删最旧；<=0 不限制
   max_size_bytes: 5242880 # 触发快照的单文件大小上限（5MiB），超过则跳过；<=0 不限制
 
-# 节点 enrollment 一键安装 / 傻瓜部署（FR-080，见 ADR-020）。均有默认值，可整体省略。
+# 节点 enrollment 一键安装 / 傻瓜部署。均有默认值，可整体省略。
 # 用于拼装面板「添加节点」展示的一键安装命令；留空字段由签发请求的 Host 推断。
 enroll:
   advertise_grpc: ""    # 对外公布的 CP gRPC 地址 host:port（留空=请求 Host + grpc.port）
   script_base_url: ""   # 安装脚本下载基址 scheme://host（留空=请求 scheme://Host）
   binary_url: ""        # Worker 二进制下载地址（留空=签发 CP-local Worker 资产 URL；离线可用脚本 --binary）
 
-# 面板自更新：CP/Worker 二进制在线升级（FR-081 / FR-175 / FR-182，见 ADR-036 §7、ADR-039）。
+# 面板自更新：CP/Worker 二进制在线升级。
 # 均有默认值，可整体省略。默认读 GitHub Releases 源（github_repo=wcpe/JianManager + channel=stable），开箱即可在线升级。
 # github_repo 与 feed_url 均留空才视为「未配置更新源」，检查更新返回 configured=false、不执行升级。
-# 升级前会自动备份当前二进制供一键回滚（FR-182），无需额外配置。
+# 升级前会自动备份当前二进制供一键回滚，无需额外配置。
 update:
   github_repo: "wcpe/JianManager"  # GitHub Releases 源 owner/repo；非空即启用（权威来源）。留空回退 feed_url
-  channel: "stable"                # stable=取最新正式 release（/releases/latest）；prerelease=取滚动 latest 预发布（FR-182）
+  channel: "stable"                # stable=取最新正式 release（/releases/latest）；prerelease=取滚动 latest 预发布
   github_token: ""                 # 可选 GitHub API token，提升限流额度（匿名仅 60 次/时/IP，共享出口 IP 极易耗尽 → 403）；自更新与 ServerProbe 制品版本库同步共用，经 ${ENV} 注入勿硬编码
   feed_url: ""                     # 可选回退：release feed JSON 地址（github_repo 空且此项非空时走原 feed 路径）
   binary_base_url: ""              # 私有二进制基址（可选兜底）：无 feed 时按 <base>/<component>-<os>-<arch> 拼下载地址
   allow_insecure: false            # 是否允许 http 下载源（默认仅 https 防中间人篡改；本地/内网自测可开）
 
-# 客户端分发（OTA）manifest 签名（FR-087，见 ADR-022）。信任根 = manifest 的 Ed25519 签名，
+# 客户端分发（OTA）manifest 签名。信任根 = manifest 的 Ed25519 签名，
 # 客户端内置公钥验签；私钥服务端持有、不入库。
 # - 本文件 dev_mode: true → sign_priv_key 留空时零配置回退内置开发密钥（公钥已回填客户端），仅供开发。
-# - 生产（dev_mode: false）→ 未注入私钥即降级（视为未启用客户端 OTA，签名不可用、CP 照常启动，见 ADR-038）；
+# - 生产（dev_mode: false）→ 未注入私钥即降级（视为未启用客户端 OTA，签名不可用、CP 照常启动）；
 #   误注入源码公开的内置开发密钥则 fail-closed 拒绝启动。要启用 OTA 经环境变量
 #   JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥（绝不用源码公开的开发密钥对外签名）。
 client_dist:
   sign_priv_key: ""  # base64(PKCS#8 DER, Ed25519)；生产经 ${JIANMANAGER_CLIENT_SIGN_PRIVKEY} 注入，勿硬编码
   sign_key_id: k1    # 签名公钥版本标识（轮换用），须与客户端内置公钥 keyId 一致
-  # 拉取密钥可逆加密密钥（FR-192，见 ADR-044）：另存明文 AES-256-GCM 加密副本供管理员查看明文，鉴权仍只用哈希。
+  # 拉取密钥可逆加密密钥：另存明文 AES-256-GCM 加密副本供管理员查看明文，鉴权仍只用哈希。
   # 留空时优雅降级——dev_mode: true 回退内置 dev 密钥（仅开发）；生产留空则新建/轮换的密钥不可查看（不阻断建密钥）。
   # 生产经 ${JIANMANAGER_CLIENT_KEY_ENC_SECRET} 注入 32 字节 base64 密钥，勿硬编码。生成示例：openssl rand -base64 32
   key_enc_secret: ""  # base64(32 字节)；生产经 ${JIANMANAGER_CLIENT_KEY_ENC_SECRET} 注入
 
-# 通用二进制运行时搭建（FR-441，见 ADR-090）。coreType=binary 让非 Minecraft 的预编译二进制
+# 通用二进制运行时搭建。coreType=binary 让非 Minecraft 的预编译二进制
 # （Go/Rust 等配套服务）也能纳入平台的搭建/任务追踪/制品管理，不适用 server.properties/EULA/版本构建号。
 # node_file_roots 是 kind=node_file 来源的受控放行根（节点上的绝对路径）：
 #   - 默认空集 = 该来源整体关闭（不设限即等于「可读节点任意文件」的通道，故默认安全关闭）；
@@ -106,7 +117,7 @@ client_dist:
 #   node_file_roots:
 #     - /opt/binaries
 
-# Beacon 协同（FR-443 推送 / FR-444 拉取，见 ADR-090）。**可选协同，非依赖**：
+# Beacon 协同（拓扑变更推送 / 区服结构拉取）。**可选协同，非依赖**：
 # endpoint 留空 = 整体不启用协同，本平台全部能力不受影响（兼容非依赖的硬要求）。
 # 启用推送（push-enabled: true）时 namespace 为**启动期强校验项**——Beacon 需据此解析归属
 # 才能落 server 行与身份，缺失会导致推送必然被拒，故缺失即拒绝启动（fail-fast）而非静默跳过。
@@ -119,7 +130,7 @@ client_dist:
 #   push-enabled: false           # 拓扑变更推送（实例创建/删除/改归属时增量推送）
 #   pull-enabled: false           # 允许手动拉取区服结构并映射为分组树
 
-# 出站网络代理（FR-174，见 ADR-037；可视化配置 + 节点下发见 FR-185 / ADR-043）。CP 所有出站下载
+# 出站网络代理（可视化配置 + 节点下发）。CP 所有出站下载
 #（自更新 feed/二进制、服务端 jar、客户端制品入库等）经此代理。url 留空=直连（仍尊重
 # HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），不破坏现状；非空时优先于环境变量。
 # scheme 决定类型：http:// / https:// / socks5://。含凭据时经 ${ENV} 注入、勿硬编码。

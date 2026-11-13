@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-396 节点域工具：详情/指标/Docker/排空/归档列表与清理。
+// 节点域工具：详情/指标/Docker/排空/归档列表与清理。
 func init() {
 	registerToolSpecs(
 		toolSpec{

@@ -15,24 +15,24 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// OrphanAuditRecorder 落孤儿处置审计（FR-455/456）。由 service.AuditService 实现。
+// OrphanAuditRecorder 落孤儿处置审计（456）。由 service.AuditService 实现。
 // 在 grpc 包内以接口声明，避免 grpc→service 反向依赖（service 已 import grpc）。
 type OrphanAuditRecorder interface {
 	RecordResultSafe(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string)
 }
 
-// SetOrphanAuditRecorder 注入孤儿处置审计落库器（FR-455/456）。不注入则丢弃（保持向后兼容/测试默认）。
+// SetOrphanAuditRecorder 注入孤儿处置审计落库器（456）。不注入则丢弃（保持向后兼容/测试默认）。
 func (h *ControlPlaneHandler) SetOrphanAuditRecorder(r OrphanAuditRecorder) {
 	h.orphanAudit = r
 }
 
-// orphanAuditAllowedActions 是允许落库的孤儿审计 action 白名单（FR-456 N2）。
+// orphanAuditAllowedActions 是允许落库的孤儿审计 action 白名单（N2）。
 //
 // 与 docs/specs/restart-resilience/spec.md §审计动作表、proto/worker.proto 的 action 注释逐一对应：
 //   - orphan.scan_detected / scan_disposed / scan_dispose_blocked：运行期周期扫描三态发现与处置；
 //   - orphan.dispose_blocked / dispose_reaped：启动期接管兜底的误杀拦截与真孤儿清理；
 //   - health.dead_detected / health.selfheal_restart / health.selfheal_exhausted /
-//     health.circuit_broken / health.circuit_released：FR-459 健康巡检的假死告警、自愈重启、
+//     health.circuit_broken / health.circuit_released：健康巡检的假死告警、自愈重启、
 //     自愈重启达上限（重启风暴护栏）、崩溃熔断与熔断解除（detail 内标 operator=auto）。
 //
 // 白名单是**强校验**（不在表内一律拒绝）：审计库是运维追责面，不能让 Worker 侧以任意 action 名写入。
@@ -43,31 +43,48 @@ var orphanAuditAllowedActions = map[string]struct{}{
 	"orphan.scan_dispose_blocked": {},
 	"orphan.dispose_blocked":      {},
 	"orphan.dispose_reaped":       {},
-	// orphan.auto_adopted / adopt_blocked / adopt_failed：FR-497 全自动收养三态
+	// orphan.auto_adopted / adopt_blocked / adopt_failed：全自动收养三态
 	//（纳管成功 / 归属复核不过只告警 / 拨号失败），与 docs/specs/auto-adopt-orphans/spec.md §6 对齐。
 	"orphan.auto_adopted":  {},
 	"orphan.adopt_blocked": {},
 	"orphan.adopt_failed":  {},
-	// cgroup.isolate_failed：ADR-097「无隔离保护必须成为可观测事实」的**唯一 CP 侧留痕通道**
+	// cgroup.isolate_failed：「无隔离保护必须成为可观测事实」的**唯一 CP 侧留痕通道**
 	//（接管路径在零迁移且 wrapper 仍存活时落该审计）。缺此项时该上报被本表以 InvalidArgument
-	// 拒收、Worker 侧仅 Warn 后丢弃 ⇒「这批实例已失去 cgroup 隔离」对 CP 不可见，恰是 ADR-097
+	// 拒收、Worker 侧仅 Warn 后丢弃 ⇒「这批实例已失去 cgroup 隔离」对 CP 不可见，恰是
 	// 要消除的形态。与 docs/adr/097-cgroup-isolation-*.md 及 spec 审计动作表对齐。
 	"cgroup.isolate_failed": {},
-	// orphan.startup_detected_not_reaped：启动恢复路径发现孤儿但按 FR-471 非破坏策略**只观测不处置**。
+	// orphan.startup_detected_not_reaped：启动恢复路径发现孤儿但按非破坏策略**只观测不处置**。
 	// 必须入库：它是「重启没杀人」的唯一留痕（否则该次观测静默丢失，事故复盘无据）。
 	"orphan.startup_detected_not_reaped": {},
-	// orphan.foreign_runtime_adopt_blocked / _adopted：FR-471 外来运行时接管的失败/成功审计。
+	// orphan.foreign_runtime_adopt_blocked / _adopted：外来运行时接管的失败/成功审计。
 	"orphan.foreign_runtime_adopt_blocked": {},
 	"orphan.foreign_runtime_adopted":       {},
 	"orphan.foreign_runtime_detected":      {},
-	"health.dead_detected":                 {},
-	"health.selfheal_restart":              {},
-	"health.selfheal_exhausted":            {},
-	"health.circuit_broken":                {},
-	"health.circuit_released":              {},
+	// orphan.inplace_runtime_adopted / _released：**就地收养**（不重启）的成败审计。
+	//
+	// 与上面 foreign_runtime_* 是两条不同的路：前者会先停进程再重新拉起（有重启风险），
+	// 后者只登记现有 PID、不动进程（就地导入场景）。两者必须都能入库：
+	// 就地收养是“平台凭空多认领了一个进程”，如果不在审计面留痕，事后无法回答
+	// “这个 PID 是什么时候、凭什么被算成本平台在跑的”——而正是这一点决定了
+	// 平台能不能对那个进程发信号。
+	"orphan.inplace_runtime_adopted":  {},
+	"orphan.inplace_runtime_released": {},
+	// orphan.foreign_runtime_unmatched：实例目录下有活进程，但**都不像游戏服运行时**
+	//（典型：tmux 会话里的 `-bash` 壳进程）。
+	//
+	// 它与 foreign_runtime_detected 的区别是“不认作漂移”：不写观测缓存、不上心跳、
+	// 不上面板、不可被接管。但它仍然**必须入库**——它是“目录里有东西在跑”这个事实的
+	// 唯一留痕；丢掉就会变成“运维看到一个目录被占着却查不到任何记录”。
+	// 漏了本项时 CP 以 InvalidArgument 拒收，Worker 仅 Warn 后丢弃（真机已撞到）。
+	"orphan.foreign_runtime_unmatched": {},
+	"health.dead_detected":             {},
+	"health.selfheal_restart":          {},
+	"health.selfheal_exhausted":        {},
+	"health.circuit_broken":            {},
+	"health.circuit_released":          {},
 }
 
-// auditTargetTypeFor 按 action 归正审计 targetType（FR-459 复审项 11）：
+// auditTargetTypeFor 按 action 归正审计 targetType（复审项 11）：
 // health.* 系动作的靶子是**在册实例**，此前硬编码 "orphan" 会让健康自愈/熔断在审计面
 // 被误标为孤儿处置，按 targetType 过滤时归错类。
 func auditTargetTypeFor(action string) string {
@@ -87,13 +104,13 @@ const (
 	maxOrphanAuditDetailLen = 4096
 )
 
-// ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（FR-455/456）。
+// ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（456）。
 //
 // 走注册/心跳同信道（Worker→CP 出站 gRPC，NAT 节点天然可达），凭 node_uuid+node_secret 鉴权
 // （与 ReportCrashSnapshot 同源校验）。落 CP 审计库（RecordResultSafe），使孤儿处置/rescan/
 // 误杀拦截「不静默」（spec §2.2）。老 CP 返回 Unimplemented，Worker 记日志丢弃。
 //
-// 输入校验（FR-456 N2，与 ReportCrashSnapshot 对齐）：
+// 输入校验（N2，与 ReportCrashSnapshot 对齐）：
 //   - action 必须命中白名单（否则 InvalidArgument，不落库）；
 //   - action/targetId/detail 长度受限，detail 超限截断；
 //   - targetId 能在库中解析为实例时，该实例必须属于上报节点（节点只能报自己的实例）。
@@ -122,7 +139,7 @@ func (h *ControlPlaneHandler) ReportOrphanAudit(ctx context.Context, req *worker
 		return nil, status.Errorf(codes.InvalidArgument, "action 不在允许集合内")
 	}
 
-	// target↔node 绑定（FR-456 N2）：targetId 既可能是实例 UUID（wrapper/docker 孤儿），也可能是
+	// target↔node 绑定（N2）：targetId 既可能是实例 UUID（wrapper/docker 孤儿），也可能是
 	// 工作目录路径（direct 孤儿）。可在库中解析为实例时强制归属校验（负面清单：解析到他节点的实例
 	// 即拒）；解析不到（目录路径 / 实例已从库中消失）时不做绑定——孤儿审计恰恰常发生在实例已被
 	// 清册之后，强绑定会把这些最需要留痕的事件丢掉。

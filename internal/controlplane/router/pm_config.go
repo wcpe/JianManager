@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// PMConfigHandler 节点包管理器与 registry 配置（FR-306）。
+// PMConfigHandler 节点包管理器与 registry 配置。
 type PMConfigHandler struct {
 	svc   *service.PMConfigService
 	audit *service.AuditService
@@ -65,7 +65,7 @@ func (h *PMConfigHandler) Put(c *gin.Context) {
 	c.JSON(http.StatusOK, view)
 }
 
-// ListPackages GET /nodes/:id/packages —— 列出托管全局目录已装包（含可更新标记，FR-307）。
+// ListPackages GET /nodes/:id/packages —— 列出托管全局目录已装包（含可更新标记）。
 func (h *PMConfigHandler) ListPackages(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -82,7 +82,7 @@ func (h *PMConfigHandler) ListPackages(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"pm": pm, "packages": pkgs})
 }
 
-// InstallPackage POST /nodes/:id/packages —— 异步安装/升级全局包（202+taskId，FR-307）。
+// InstallPackage POST /nodes/:id/packages —— 异步安装/升级全局包（202+taskId）。
 func (h *PMConfigHandler) InstallPackage(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -112,7 +112,7 @@ func (h *PMConfigHandler) InstallPackage(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
 }
 
-// RemovePackage DELETE /nodes/:id/packages?name=<pkg> —— 卸载全局包（同步，FR-307）。
+// RemovePackage DELETE /nodes/:id/packages?name=<pkg> —— 卸载全局包（同步）。
 // 包名经 query 传（@scope/name 含斜杠，路径参数会破路由）。
 func (h *PMConfigHandler) RemovePackage(c *gin.Context) {
 	if !requirePlatformAdmin(c) {

@@ -19,7 +19,7 @@ const (
 	BotStatusStopped      BotStatus = "stopped"
 )
 
-// BotDesiredState 是 CP 对 Bot 的期望状态（desired-state 真源，FR-365）。
+// BotDesiredState 是 CP 对 Bot 的期望状态（desired-state 真源）。
 type BotDesiredState string
 
 const (
@@ -37,7 +37,7 @@ type Bot struct {
 	LoadBatchID     *uint     `gorm:"index" json:"loadBatchId,omitempty"`
 	Name            string    `gorm:"type:varchar(128);not null" json:"name"`
 	Status          BotStatus `gorm:"type:varchar(32);default:pending" json:"status"`
-	// DesiredState 是 CP 对 Bot 的期望运行态（running/stopped），与 runtime Status 分离（FR-365）。
+	// DesiredState 是 CP 对 Bot 的期望运行态（running/stopped），与 runtime Status 分离。
 	DesiredState           BotDesiredState `gorm:"type:varchar(16);not null;default:stopped;index" json:"desiredState"`
 	WorkerEpoch            string          `gorm:"type:varchar(36);not null;default:''" json:"workerEpoch"`
 	WorkerEpochGeneration  int64           `gorm:"not null;default:0" json:"workerEpochGeneration"`
@@ -46,7 +46,7 @@ type Bot struct {
 	ConnectedAt            *time.Time      `json:"connectedAt,omitempty"`
 	DesiredStateGeneration int64           `gorm:"not null;default:1;index:idx_bots_executor_generation,priority:2" json:"desiredStateGeneration"`
 	ConfigHash             string          `gorm:"type:char(64);not null;default:''" json:"configHash"`
-	// ReconnectCount 累计成功触发的自动重连次数，服务端恢复后不清零（FR-365）。
+	// ReconnectCount 累计成功触发的自动重连次数，服务端恢复后不清零。
 	ReconnectCount int    `gorm:"not null;default:0" json:"reconnectCount"`
 	CohortKey      string `gorm:"type:varchar(64);not null;default:''" json:"cohortKey"`
 	// LastError 最近一次委托 Worker 失败的原因（如 bot-worker 依赖未装、节点未连）。
@@ -87,7 +87,7 @@ const (
 	BotStressSessionError   BotStressSessionStatus = "error"
 )
 
-// BotLoadRunState 是 FR-370 运行状态机枚举。
+// BotLoadRunState 是运行状态机枚举。
 type BotLoadRunState string
 
 const (
@@ -131,7 +131,7 @@ type BotStressSession struct {
 	CommandScheduleSnap  string                 `gorm:"type:longtext" json:"commandScheduleSnapshot,omitempty"`
 	AllocationPlan       string                 `gorm:"type:text" json:"allocationPlan,omitempty"`
 	SchemaVersion        int                    `gorm:"type:smallint;not null;default:1;index" json:"schemaVersion"`
-	// FR-370 V2 专属列：schemaVersion=1 历史行允许 null，schemaVersion=2 由 service 强制完整。
+	// V2 专属列：schemaVersion=1 历史行允许 null，schemaVersion=2 由 service 强制完整。
 	TemplateID     *uint            `gorm:"index" json:"templateId,omitempty"`
 	LoadProfile    string           `gorm:"type:longtext" json:"loadProfile,omitempty"`
 	Thresholds     string           `gorm:"type:longtext" json:"thresholds,omitempty"`

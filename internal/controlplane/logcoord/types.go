@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// OrderVersion 稳定复合排序版本（FR-473 §6.3 / §4.5）。
+// OrderVersion 稳定复合排序版本（§6.3 / §4.5）。
 //
 //	(event_time DESC, log_source_id ASC, source_generation ASC,
 //	 record_start DESC, record_end DESC, event_id ASC)
@@ -40,7 +40,7 @@ const (
 	CoverageStale          CoverageState = "stale"
 )
 
-// DuplicateQuality / StatsQuality 独立于覆盖完整性（FR-473 §6.3）。
+// DuplicateQuality / StatsQuality 独立于覆盖完整性（§6.3）。
 type DuplicateQuality string
 
 const (
@@ -86,7 +86,7 @@ type TargetInfo struct {
 	CatalogGeneration string `json:"catalog_generation,omitempty"`
 }
 
-// QueryBudget 结果行预算与扇出/字节预算（FR-473：limit 只限结果数）。
+// QueryBudget 结果行预算与扇出/字节预算（：limit 只限结果数）。
 type QueryBudget struct {
 	Limit     int    `json:"limit"`
 	MaxBytes  uint64 `json:"max_bytes"`
@@ -110,6 +110,8 @@ type Query struct {
 	// Fast 首屏省去 OpenView 往返，汇总 Search 返回的真实 Worker 快照后才公开 CP 视图。
 	// 完整性校验仍以 Pending 标记；导出必须用同一快照重新读取并完成校验。
 	Fast bool `json:"fast,omitempty"`
+	// ExploreFields opts Fields/Facets into bounded document-field discovery.
+	ExploreFields bool `json:"explore_fields,omitempty"`
 	// AllowProjectionDrift：本次查询豁免 Worker 侧「投影清单版本（ManifestVersion）变化」判 VIEW_STALE。
 	//
 	// 只允许**导出路径**（Coordinator.Export 逐页 Search）置位：导出是「单次操作自己 CreateView、
@@ -192,6 +194,8 @@ type Event struct {
 	Stream           string `json:"stream,omitempty"`
 	Message          string `json:"message,omitempty"`
 	CanonicalHash    string `json:"canonical_content_hash,omitempty"`
+	// Fields carries structured values through both historical search and native tail.
+	Fields map[string]string `json:"fields,omitempty"`
 	// TargetID 合并时标注来源目标（便于覆盖侧信道审计，不参与排序）。
 	TargetID string `json:"target_id,omitempty"`
 	// WorkerID 来源 Worker。
@@ -220,6 +224,9 @@ func (e Event) ApproxBytes() uint64 {
 		len(e.EventTimeUTC) + len(e.IngestTimeUTC) + len(e.Level) +
 		len(e.Stream) + len(e.Message) + len(e.CanonicalHash) +
 		len(e.TargetID) + len(e.WorkerID) + 32
+	for key, value := range e.Fields {
+		n += len(key) + len(value) + 6
+	}
 	if n < 0 {
 		return 0
 	}
@@ -309,10 +316,11 @@ type SearchResponse struct {
 }
 
 type FieldsResponse struct {
-	View      View     `json:"view"`
-	Coverage  Coverage `json:"coverage"`
-	Fields    []string `json:"fields"`
-	Truncated bool     `json:"truncated"`
+	ExploreApplied bool     `json:"explore_applied,omitempty"`
+	View           View     `json:"view"`
+	Coverage       Coverage `json:"coverage"`
+	Fields         []string `json:"fields"`
+	Truncated      bool     `json:"truncated"`
 }
 
 // StatsQuery 统计请求。
@@ -412,10 +420,11 @@ type FacetDimension struct {
 
 // FacetsResponse 跨 Worker Facet 汇总。
 type FacetsResponse struct {
-	View       View             `json:"view"`
-	Coverage   Coverage         `json:"coverage"`
-	Quality    Quality          `json:"quality"`
-	Dimensions []FacetDimension `json:"dimensions"`
+	ExploreApplied bool             `json:"explore_applied,omitempty"`
+	View           View             `json:"view"`
+	Coverage       Coverage         `json:"coverage"`
+	Quality        Quality          `json:"quality"`
+	Dimensions     []FacetDimension `json:"dimensions"`
 	// Truncated 任一维度存在截断语义。
 	Truncated bool `json:"truncated"`
 }

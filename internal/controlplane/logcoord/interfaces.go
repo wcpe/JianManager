@@ -16,15 +16,16 @@ type WorkerDialer interface {
 
 // WorkerSearchRequest 单 Worker Search 请求。
 type WorkerSearchRequest struct {
-	TargetIDs    []string    `json:"target_ids"`
-	FromUTC      string      `json:"from_utc"`
-	ToUTC        string      `json:"to_utc"`
-	Filter       string      `json:"filter"`
-	Budget       QueryBudget `json:"budget"`
-	ViewID       string      `json:"view_id"`
-	Cursor       string      `json:"cursor,omitempty"`
-	OrderVersion string      `json:"order_version"`
-	MetricField  string      `json:"metric_field,omitempty"`
+	TargetIDs     []string    `json:"target_ids"`
+	FromUTC       string      `json:"from_utc"`
+	ToUTC         string      `json:"to_utc"`
+	Filter        string      `json:"filter"`
+	Budget        QueryBudget `json:"budget"`
+	ViewID        string      `json:"view_id"`
+	Cursor        string      `json:"cursor,omitempty"`
+	OrderVersion  string      `json:"order_version"`
+	MetricField   string      `json:"metric_field,omitempty"`
+	ExploreFields bool        `json:"explore_fields,omitempty"`
 	// AllowProjectionDrift 请求 Worker 豁免「投影清单版本变化」判 VIEW_STALE。
 	// 只有「单次操作自己创建视图、自己读完」的导出路径置位；见 Query.AllowProjectionDrift。
 	AllowProjectionDrift bool `json:"allow_projection_drift,omitempty"`
@@ -104,7 +105,7 @@ type WorkerFacetsResponse struct {
 	Error       string                 `json:"error,omitempty"`
 }
 
-// WorkerClient 单 Worker 日志查询面（FR-479 契约的协调器侧投影）。
+// WorkerClient 单 Worker 日志查询面（契约的协调器侧投影）。
 // 本包不实现隧道传输；测试注入 fake。
 type WorkerClient interface {
 	OpenView(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error)

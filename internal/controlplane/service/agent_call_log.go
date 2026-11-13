@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Agent 调用客户端约定值（FR-390）。
+// Agent 调用客户端约定值。
 const (
 	AgentClientMCP     = "mcp"
 	AgentClientJmagent = "jmagent"
@@ -43,7 +43,7 @@ var agentClientAllow = map[string]struct{}{
 	AgentClientUnknown: {},
 }
 
-// AgentCallLogService Agent 调用流水（FR-390）。
+// AgentCallLogService Agent 调用流水。
 // 供 Ops 中间件/handler 与日后 MCP 路径调用 Record；失败只打 WARN 不阻断主请求。
 type AgentCallLogService struct {
 	db            *gorm.DB
@@ -249,7 +249,7 @@ func (s *AgentCallLogService) Count24hMap(tokenIDs []uint) (map[uint]int64, erro
 	return out, nil
 }
 
-// TokenActivity 是某 Agent Token 在窗口内的 MCP 活动聚合（ADR-096 决策 6）。
+// TokenActivity 是某 Agent Token 在窗口内的 MCP 活动聚合。
 type TokenActivity struct {
 	TokenID        uint
 	TokenName      string

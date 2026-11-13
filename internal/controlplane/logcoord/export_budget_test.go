@@ -13,7 +13,7 @@ import (
 	workerquery "github.com/wcpe/JianManager/internal/worker/logs/query"
 )
 
-// 导出上限可配置（FR-480 导出闸）回归。
+// 导出上限可配置（导出闸）回归。
 //
 // 缺陷形态：Export 的行/字节上限是编译期常量，而前端导出刻意不传 limit
 // （apps/control-plane-web/src/api/logFederation.ts 删除分页参数），

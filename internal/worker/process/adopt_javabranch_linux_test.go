@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-497③ 验收缺口 ①：**Java 分支负例**的端到端用例（此前只有函数层，T7 的 C 臂也只覆盖 wrapper 分支）。
+// 验收缺口 ①：**Java 分支负例**的端到端用例（此前只有函数层，T7 的 C 臂也只覆盖 wrapper 分支）。
 //
 // 缺口原文：「Java 分支负例未单独构造（T7 的 C 臂）」。当时的现状是：
 //   - `TestDefaultVerifyAdoptOwnership_CwdOnlyRejected`（函数层）确实断言了 `weak_evidence_only`，
@@ -62,7 +62,7 @@ func writePIDRecordFor(t *testing.T, pidDir, uuid, workDir string, wrapperPID, j
 // 的 UUID 不一致」这类形态），故不复用那个把 adoptUUID 写死的版本。
 func newRealOwnershipFixture(t *testing.T) (*adoptFixture, string) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "fr497o-")
+	dir, err := os.MkdirTemp("", "adopt-o-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	workDir := filepath.Join(dir, "server")
@@ -90,7 +90,7 @@ func newRealOwnershipFixture(t *testing.T) (*adoptFixture, string) {
 	return f, workDir
 }
 
-// TestFR497_JavaBranchRejectsCwdOnly_EndToEnd 端到端：**wrapper 分支真实通过**，Java 分支因只有
+// TestJavaBranchRejectsCwdOnly_EndToEnd 端到端：**wrapper 分支真实通过**，Java 分支因只有
 // 弱特征（cwd == workDir、环境无本实例 UUID）被拒为 `weak_evidence_only`。
 //
 // 这条是 T7 的 C 臂缺失的那一格：先前的端到端负例都停在 wrapper 分支（`wrapper_argv_mismatch`），
@@ -98,7 +98,7 @@ func newRealOwnershipFixture(t *testing.T) (*adoptFixture, string) {
 //
 // 转红方式：把 adopt_orphan.go 里的 Java 分支复核删掉（只复核 wrapper），或在
 // DefaultVerifyAdoptOwnership 的 Java 分支里把弱特征也判真 —— 本用例立刻转红（会被收养）。
-func TestFR497_JavaBranchRejectsCwdOnly_EndToEnd(t *testing.T) {
+func TestJavaBranchRejectsCwdOnly_EndToEnd(t *testing.T) {
 	f, workDir := newRealOwnershipFixture(t)
 
 	// wrapper：真实形态（argv `<worker> daemon` + 环境带本实例 UUID）→ wrapper 分支通过。
@@ -139,7 +139,7 @@ func TestFR497_JavaBranchRejectsCwdOnly_EndToEnd(t *testing.T) {
 	require.True(t, pidFileExists(daemon.PIDFileName(f.dir, adoptUUID)), "保留 PID 文件")
 }
 
-// TestFR497_JavaBranchRejectsForeignInstanceUUID Java 环境携带**别的实例**的 UUID → 不判属。
+// TestJavaBranchRejectsForeignInstanceUUID Java 环境携带**别的实例**的 UUID → 不判属。
 //
 // 形态来源：同一台机器上跑着多个实例，Java 进程从 wrapper 继承的 `JM_DAEMON_WRAPPER_CONFIG` 是
 // **它自己那个实例**的。若 PID 记录串号（记录说 javaPid=X 属实例 A，而 X 其实是实例 B 的 Java），
@@ -149,7 +149,7 @@ func TestFR497_JavaBranchRejectsCwdOnly_EndToEnd(t *testing.T) {
 // 实测判据（见断言，非按规格想象）：Java 分支的通过条件是「环境含**本实例** UUID 或 cmdline 含
 // UUID」；他实例 UUID 两个条件都不满足，落到弱特征检查——cwd 若等于 workDir 则是
 // `weak_evidence_only`，否则 `uuid_evidence_missing`。本用例把两种 cwd 形态都钉住。
-func TestFR497_JavaBranchRejectsForeignInstanceUUID(t *testing.T) {
+func TestJavaBranchRejectsForeignInstanceUUID(t *testing.T) {
 	const otherUUID = "99999999-8888-7777-6666-555555555555"
 
 	t.Run("cwd 落在 workDir 下", func(t *testing.T) {
@@ -199,10 +199,10 @@ func TestFR497_JavaBranchRejectsForeignInstanceUUID(t *testing.T) {
 	})
 }
 
-// TestFR497_JavaBranchSubstringPollutionRejected **子串污染**负例：环境里的 UUID 只是本实例 UUID
+// TestJavaBranchSubstringPollutionRejected **子串污染**负例：环境里的 UUID 只是本实例 UUID
 // 的一段更长的十六进制/连字符串的前缀（或紧邻别的 hex 字符），不构成本实例身份。
 //
-// 这是本 FR 补验时发现并修掉的真实缺陷：`processEnvMatchesInstance` 过去对「NUL 换空格后的整块
+// 这是补验时发现并修掉的真实缺陷：`processEnvMatchesInstance` 过去对「NUL 换空格后的整块
 // 环境」做 `strings.Contains`，于是任何一处**出现过**本实例 UUID 这段字符的变量值都会被判成
 // 「我就是这个实例」——最典型的就是他实例 UUID 以本实例 UUID 为前缀（UUID 文本长度可变，
 // 前缀相同完全可能），或某个变量把两个 UUID 拼在一起。
@@ -211,7 +211,7 @@ func TestFR497_JavaBranchRejectsForeignInstanceUUID(t *testing.T) {
 //
 // 转红方式（改回缺陷行为）：把 processEnvMatchesInstance 改回对整块环境 `strings.Contains`，
 // 本用例立即转红（Java 分支会被判通过 → 进程被收养）。
-func TestFR497_JavaBranchSubstringPollutionRejected(t *testing.T) {
+func TestJavaBranchSubstringPollutionRejected(t *testing.T) {
 	t.Run("他实例 UUID 以本实例 UUID 为前缀", func(t *testing.T) {
 		f, workDir := newRealOwnershipFixture(t)
 		wrapperPID := startDaemonArgvProcess(t, t.TempDir(), append(os.Environ(), wrapperConfigEnv(adoptUUID, workDir)))
@@ -284,9 +284,9 @@ func TestFR497_JavaBranchSubstringPollutionRejected(t *testing.T) {
 	})
 }
 
-// TestFR497_WrapperBranchSubstringPollutionRejected wrapper 分支同样不能被子串污染：
+// TestWrapperBranchSubstringPollutionRejected wrapper 分支同样不能被子串污染：
 // 环境里出现本实例 UUID 的一段更长 hex 串时，wrapper 分支也不得判通过（它用的是同一个谓词）。
-func TestFR497_WrapperBranchSubstringPollutionRejected(t *testing.T) {
+func TestWrapperBranchSubstringPollutionRejected(t *testing.T) {
 	_, workDir := newRealOwnershipFixture(t)
 
 	wrapperPID := startDaemonArgvProcess(t, t.TempDir(), append(os.Environ(),

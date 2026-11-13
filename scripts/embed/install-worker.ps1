@@ -1,10 +1,10 @@
 # JianManager Worker Node 安装脚本（Windows PowerShell）。
-# 见 FR-223 / ADR-051（改写 ADR-020 的安装编排立场）：脚本退化为「取二进制 + 调 worker setup」。
+#  脚本退化为「取二进制 + 调 worker setup」，不再自己拼装安装编排。
 #
 # 两阶段（参考 GitHub Actions Runner「下载」与「config+run」分离）：
 #   [下载阶段] 取 Worker 二进制。安装目录（或 -Binary 指向处）已有完整二进制则跳过下载。
 #   [上线阶段] 调 `worker --control-plane ... --token ...`，由 Worker 自己写 worker.yml +
-#              携 enrollment token 首注册 + 持久化身份 + 转入 run（worker 免配置自启 setup，FR-222）。
+#  携 enrollment token 首注册 + 持久化身份 + 转入 run（worker 免配置自启 setup）。
 #              本脚本不再自己写 worker.yml（配置归属回到 Worker 自身）。
 #   可选 -Service 注册 Windows 服务常驻：服务可执行直接跑 worker（首次 setup 写配置 + 持久化身份后，
 #   服务重启复用持久化配置，不再依赖 token）。
@@ -35,7 +35,7 @@ function Install-JianManagerWorker {
         [string]$Binary = "",
         # Worker 二进制下载基址/地址（可选）。也可用环境变量 JIANMANAGER_WORKER_DOWNLOAD_URL 指向镜像。
         # 面板一键命令默认传入 CP-local 地址；脚本直接运行时回退 GitHub Releases latest
-        # （ADR-036 产物命名契约：worker-<os>-<arch>.exe）。
+        # （产物命名契约：worker-<os>-<arch>.exe）。
         [string]$DownloadUrl = $(if ($env:JIANMANAGER_WORKER_DOWNLOAD_URL) { $env:JIANMANAGER_WORKER_DOWNLOAD_URL } else { "https://github.com/wcpe/JianManager/releases/latest/download" }),
         # 安装目录（默认 C:\JianManager）。
         [string]$InstallDir = "C:\JianManager",
@@ -129,7 +129,7 @@ function Install-JianManagerWorker {
     } elseif ($DownloadUrl) {
         $url = $DownloadUrl
         $url = $url.Replace("{os}", "windows").Replace("{arch}", $arch)
-        # ADR-036 产物命名契约: <base>/worker-windows-<arch>.exe；若已指向具体产物文件或 CP-local worker-assets 端点则原样用。
+        # 产物命名契约: <base>/worker-windows-<arch>.exe；若已指向具体产物文件或 CP-local worker-assets 端点则原样用。
         if (($url -notlike "*worker-*") -and ($url -notlike "*/worker-assets/*/worker*")) {
             $url = $url.TrimEnd("/") + "/worker-windows-$arch.exe"
         }
@@ -147,7 +147,7 @@ function Install-JianManagerWorker {
     }
 
     # 上线阶段：调 worker setup（传参/env），由 Worker 自配 + 注册 + run。
-    # Worker 免配置自启 setup（FR-222）：非 TTY 下从 --control-plane/--token/--name/--ws-port/
+    #  Worker 免配置自启 setup：非 TTY 下从 --control-plane/--token/--name/--ws-port/
     # --data-dir + JIANMANAGER_* env 读，自己写 worker.yml + 注册 + 持久化身份 + 转 run。
     # 脚本据此把入参喂给 worker，不再自己写 worker.yml。token 仅经 env 传、绝不落盘。
     if ($Service) {

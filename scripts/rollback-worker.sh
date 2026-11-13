@@ -1,5 +1,5 @@
 #!/bin/sh
-# JianManager Worker 用户级 systemd 版本回滚脚本（FR-410）。
+#  JianManager Worker 用户级 systemd 版本回滚脚本。
 # 仅切换 current 并重启已版本化服务；不会删除任何已部署版本、数据、配置或节点身份。
 set -eu
 

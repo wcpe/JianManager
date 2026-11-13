@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 导入现有服务器（FR-302，见 ADR-069）：InspectServerDir 只读探测现成服务器目录，
+// 导入现有服务器：InspectServerDir 只读探测现成服务器目录，
 // ImportServerDir 按模式就地接管（no-op）或整体搬进托管区（同盘 rename 优先，
 // 跨盘拷贝 + 数量/字节校验 + 清源）。
 
@@ -24,7 +24,7 @@ import (
 // 更深（libraries/ 内的依赖 jar 等）几乎不可能是核心 jar，扫进来只添噪音。
 const importJarScanMaxDepth = 2
 
-// InspectServerDir 只读探测节点上某现成服务器目录（FR-302）。
+// InspectServerDir 只读探测节点上某现成服务器目录。
 // 守卫：路径必须绝对/存在/目录，且不得指向托管区之内（防重复收编已受管实例）
 // 或托管区祖先（防后续搬迁自吞）。
 func (s *Server) InspectServerDir(_ context.Context, req *workerpb.InspectServerDirRequest) (*workerpb.InspectServerDirResponse, error) {
@@ -47,7 +47,7 @@ func (s *Server) InspectServerDir(_ context.Context, req *workerpb.InspectServer
 	return resp, nil
 }
 
-// ImportServerDir 导入现成目录（FR-302）：in_place 模式 no-op 回原路径；
+// ImportServerDir 导入现成目录：in_place 模式 no-op 回原路径；
 // migrate 模式把目录整体搬进托管区 var/servers/<target_slug>。
 func (s *Server) ImportServerDir(_ context.Context, req *workerpb.ImportServerDirRequest) (*workerpb.ImportServerDirResponse, error) {
 	clean, guardErr := s.guardImportPath(req.Path)
@@ -57,7 +57,7 @@ func (s *Server) ImportServerDir(_ context.Context, req *workerpb.ImportServerDi
 
 	switch req.Mode {
 	case "in_place":
-		// 就地接管：目录一个字节不动，工作目录即原目录（托管区外例外，见 ADR-069）。
+		// 就地接管：目录一个字节不动，工作目录即原目录（托管区外例外）。
 		return &workerpb.ImportServerDirResponse{Success: true, WorkDir: clean, Moved: false}, nil
 	case "migrate":
 		if s.root == nil {
@@ -331,7 +331,7 @@ func validImportSlug(slug string) bool {
 
 // moveDirWithFallback 把 src 整体搬到 dst：先试 rename（同盘 O(1) 原子）；失败（跨盘等）
 // 回退递归拷贝 → 文件数/字节数双校验 → 校验通过后清源。校验不一致或拷贝失败时删除
-// 半成品目标、源目录保持原样（宁可失败保源，不产出半截搬迁，见 ADR-069）。
+// 半成品目标、源目录保持原样（宁可失败保源，不产出半截搬迁）。
 // rename 可注入（测试强制走拷贝回退路径）。返回是否经 rename 完成。
 func moveDirWithFallback(src, dst string, rename func(oldpath, newpath string) error) (bool, error) {
 	if err := rename(src, dst); err == nil {

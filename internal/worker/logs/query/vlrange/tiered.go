@@ -136,6 +136,7 @@ var _ query.RangeClient = (*Tiered)(nil)
 var _ query.MergedRangeClient = (*Tiered)(nil)
 var _ query.FieldsRangeClient = (*Tiered)(nil)
 var _ query.FacetsRangeClient = (*Tiered)(nil)
+
 // StreamsRangeClient 断言必须写出来：漏掉转发时靠它当场编译失败，
 // 而不是等到生产上只看到一句 streams unimplemented。
 var _ query.StreamsRangeClient = (*Tiered)(nil)

@@ -2,10 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
 import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
-import { apiErrorMessage } from '@/lib/api-error'
+import { apiErrorMessage } from '@/lib/shared/api-error'
 
-/**
- * 实例整机快照（FR-466）：一次快照 = 一个时间点语义的整机可回滚点。
+/** 
+ * 实例整机快照：一次快照 = 一个时间点语义的整机可回滚点。
  * kind/state 取值与后端 model.InstanceSnapshot 对齐。
  */
 export interface InstanceSnapshot {
@@ -17,9 +17,9 @@ export interface InstanceSnapshot {
   kind: 'manual' | 'pre_rollback' | 'scheduled'
   /** pending/running/completed/failed/rolled_back；仅 completed 与 rolled_back 可回滚。 */
   state: string
-  /** 底层全量备份 ID（复用 FR-013/056 归档通道）。 */
+  /** 底层全量备份 ID（复用056 归档通道）。 */
   rootBackupId: number
-  /** 快照时刻的启动二进制名与摘要（FR-468 协同：数据 + 版本可核对）。 */
+  /** 快照时刻的启动二进制名与摘要（协同：数据 + 版本可核对）。 */
   binaryName: string
   binarySha256: string
   configHash: string
@@ -34,7 +34,7 @@ export interface InstanceSnapshot {
   note: string
   /** 底层备份的可用性（ok=可回滚；missing=底链已缺失）。 */
   rootBackupState?: 'ok' | 'missing' | ''
-  /**
+  /** 
    * 状态显示为可回滚、但**实际不可回滚**时的原因（B-1）：
    * 典型是底层备份已被删除/被保留策略清理，有值即表示不能点回滚。
    */
@@ -43,7 +43,7 @@ export interface InstanceSnapshot {
   updatedAt: string
 }
 
-/** 回滚结果（FR-466）：保留回滚前快照 ID 与二进制差异提示。 */
+/** 回滚结果：保留回滚前快照 ID 与二进制差异提示。 */
 export interface SnapshotRollbackResult {
   taskId: string
   snapshotId: number
@@ -58,7 +58,7 @@ export interface SnapshotRollbackResult {
   finalStatus: string
 }
 
-/**
+/** 
  * 快照是否**真的**可作为回滚目标。
  *
  * 除状态外还必须满足底链可用（B-1）：底层备份被删除/被保留策略清理后，
@@ -78,7 +78,7 @@ export function useInstanceSnapshots(instanceId: number, enabled = true) {
   })
 }
 
-/**
+/** 
  * 快照相关 mutation 成功后统一失效的缓存。
  *
  * **为什么必须失效 `['tasks']`**：快照创建/回滚都是异步任务（后端返回 taskId，kind 为
@@ -111,7 +111,7 @@ export function useCreateSnapshot(instanceId: number) {
   })
 }
 
-/**
+/** 
  * 一键回滚到指定快照（后端强制先建回滚前快照；运行中实例会先停服）。
  *
  * 破坏性操作：后端要求服务端确认要素（m-1），此处固定回填 confirmSnapshotId——

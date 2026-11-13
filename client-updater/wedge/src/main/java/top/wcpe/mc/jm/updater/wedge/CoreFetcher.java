@@ -13,7 +13,7 @@ import java.security.MessageDigest;
 import java.util.Map;
 
 /**
- * core jar 拉取器（FR-258 楔子 gradle-wrapper 模式）。
+ * core jar 拉取器（楔子 gradle-wrapper 模式）。
  *
  * <p>JDK 原生实现（{@link HttpURLConnection} + {@link MessageDigest}），零外部依赖。
  * 负责：①查询 coreEndpoint 获取版本信息；②下载 core jar + sha256 校验。

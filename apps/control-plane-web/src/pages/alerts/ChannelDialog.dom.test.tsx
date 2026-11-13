@@ -6,12 +6,13 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { domainRoute, mockInject } from '@jianmanager/devmock/inject'
 import { server } from '@jianmanager/devmock/server'
-import { QQ_BIND_POLL_MS, type AlertChannelInfo, type ChannelBody } from '@/api/alerts'
+import { QQ_BIND_POLL_MS, type AlertChannelInfo } from '@/api/alerts'
+import type { ChannelBody } from '@/api/alerts'
 import { ChannelDialog } from './ChannelDialog'
 import { MAX_QQ_BIND_AUTO_REFRESH } from './QQBindDialog'
 
-/**
- * ChannelDialog 强断言（FR-208 通知通道对话框）：直接渲染组件并传 props。
+/** 
+ * ChannelDialog 强断言（通知通道对话框）：直接渲染组件并传 props。
  * 共享 Dialog 语义由 role=dialog 锁定。覆盖：字段渲染 + 编辑回填、
  * 创建/更新提交成功（POST/PUT 命中、onClose 回调被调）、凭证 ${ENV} 预校验闸、
  * 500 注入显错误态不崩。渲染前 loginMockUser() 让 requireAuth 保护的 /alerts/* 放行。
@@ -31,7 +32,7 @@ const existingWebhook: AlertChannelInfo = {
   createdAt: new Date().toISOString(),
 }
 
-/**
+/** 
  * 已存在的 QQ 通道（编辑态直接落到 QQ 字段区，省去下拉切换这一步）。
  * 三要素留空：扫码回填用例要断言「从空到填满」的完整效果。
  */
@@ -152,7 +153,7 @@ describe('ChannelDialog（mock 假后端）', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 
-  it('② QQ：字段按类型渲染，明文 AppSecret 被拦，${ENV} 引用后可提交（FR-494）', async () => {
+  it('② QQ：字段按类型渲染，明文 AppSecret 被拦，${ENV} 引用后可提交', async () => {
     loginMockUser()
     // 捕获提交体，锁定与后端 ChannelConfig 契约一致的小驼峰字段名。
     const sent: ChannelBody[] = []
@@ -246,15 +247,15 @@ describe('ChannelDialog（mock 假后端）', () => {
   })
 })
 
-/**
- * FR-494 接入体验改造：通道对话框内置「扫码绑定」，并把群聊路径从界面彻底删除。
+/** 
+ *接入体验改造：通道对话框内置「扫码绑定」，并把群聊路径从界面彻底删除。
  *
  * 轮询用例用假计时器驱动 2s 节拍（同 tasks.polling.dom.test.tsx 套路）：真等 2s 会让用例
  * 又慢又飘。只伪造 setTimeout/clearTimeout，避免波及 React 调度、Radix 与 Date。
  * 因 @testing-library/dom 在 vitest 下不认假计时器（其 jest 探测只认 jest 全局），
  * 这些用例统一用 fireEvent + 显式推进，不用 findBy/waitFor。
  */
-describe('ChannelDialog QQ 扫码绑定与群聊下线（FR-494，mock 假后端）', () => {
+describe('ChannelDialog QQ 扫码绑定与群聊下线（mock 假后端）', () => {
   afterEach(() => {
     vi.clearAllTimers()
     vi.useRealTimers()

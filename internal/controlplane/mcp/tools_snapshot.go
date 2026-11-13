@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-466 实例整机快照：列表 / 创建 / 一键回滚。
+// 实例整机快照：列表 / 创建 / 一键回滚。
 func init() {
 	registerToolSpecs(
 		toolSpec{

@@ -16,7 +16,7 @@ func makeRequiredDeps(t *testing.T, nodeModules string) {
 	}
 }
 
-// TestCheckDeps_MissingGivesGuidance 缺依赖时给『全局包管理』指引并点名缺哪个（FR-308）。
+// TestCheckDeps_MissingGivesGuidance 缺依赖时给『全局包管理』指引并点名缺哪个。
 func TestCheckDeps_MissingGivesGuidance(t *testing.T) {
 	err := CheckDeps(t.TempDir())
 	if err == nil {

@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * FR-257 流式下载 + 断点续传测试：验证 Reconciler 走 {@link InputStream} 边读边写盘（64KB 缓冲）、
+ * 流式下载 + 断点续传测试：验证 Reconciler 走 {@link InputStream} 边读边写盘（64KB 缓冲）、
  * DigestInputStream 流式 sha256、zstd 流式解压、HTTP Range 断点续传，不再全量读进 byte[]。
  *
  * <p>用本地临时 gameDir + 内存 Transport 替身，不依赖真端点。

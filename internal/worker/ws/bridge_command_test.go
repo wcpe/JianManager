@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSendCommandAndWait_RoundTrip 验证 FR-067 治理同步往返：Worker 下发 command 帧、
+// TestSendCommandAndWait_RoundTrip 验证治理同步往返：Worker 下发 command 帧、
 // 探针执行后回 command_result（携带相同 requestId），Worker 把结果同步返回给调用方。
 func TestSendCommandAndWait_RoundTrip(t *testing.T) {
 	s := NewPluginBridgeServer(testSecret)

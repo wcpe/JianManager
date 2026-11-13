@@ -64,7 +64,7 @@ func (h *LogRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 
 // operatorMetadataKey 是 CP→Worker 承载「操作人认证主体」的 gRPC metadata 键。
 //
-// 与 Worker 侧 grpcsvc.OperatorMetadataKey 同源（ADR-101 登记为传输契约：操作人必须由传输层
+// 与 Worker 侧 grpcsvc.OperatorMetadataKey 同源（登记为传输契约：操作人必须由传输层
 // 携带，请求体可被任意伪造）。这里刻意重复一个字面量而不 import Worker 的内部包：CP 依赖 Worker
 // 实现包会引入分层倒挂，而该键本身就是跨进程协议的一部分——改动它属于协议变更，须走 ADR。
 const operatorMetadataKey = "x-jm-operator"
@@ -72,7 +72,7 @@ const operatorMetadataKey = "x-jm-operator"
 // operatorFromRequest 从**认证上下文**（而非请求体）取出可审计的操作人标识。
 //
 // 为什么必须由 CP 注入（2026-10-02 生产现场缺陷）：Worker 侧的「放弃裁定」要求 incoming
-// metadata 带 x-jm-operator，取不到一律拒绝（ADR-101：放弃是唯一允许回收链跨过永久空洞的动作，
+// metadata 带 x-jm-operator，取不到一律拒绝（放弃是唯一允许回收链跨过永久空洞的动作，
 // 不可无痕）。而 CP 转发时不透传任何操作人 ⇒ 这条**唯一**能解开「DELIVER_ERROR 未决缺口永久
 // 阻塞该源恢复采集」的产品面路径实际不可达（现场 5 个源停在暂停态，运维只能绕过产品面直连
 // Worker）。取不到主体时必须在这里就拒绝：把请求下发给 Worker 只会换回一句「请设置

@@ -3,15 +3,16 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 import { capabilityProfileFor, type MockCapabilityProfile } from '@jianmanager/devmock/capability-profile'
+import { mockDataScaleProfile } from '@jianmanager/devmock/runtime-control'
 
-/**
- * 实例核心域 mock handler（FR-201，照 spec §7 范式）。
+/** 
+ * 实例核心域 mock handler（照 spec §7 范式）。
  * 覆盖实例 CRUD / 状态机（start→RUNNING、stop→STOPPED…）/ 端口 / 服务器状态 / 组织分组。
  * 不重定义地基/它域端点：/instances/:id/terminal-token（realtime/terminal-ws）、
  * /instances/events（realtime/instance-events）、/instances/:id/metrics（监控域）。
  */
 
-/**
+/** 
  * 假后端实例行。字段严格对齐 web/src/api/instances.ts 的 InstanceInfo——
  * tags 是 JSON 字符串列（"" / '["env:prod"]' / "null"），与后端一致、前端经 parseTags 解析，
  * 直接当数组用会白屏（见全局记忆「JSON 字符串字段前端解析」）。
@@ -25,7 +26,7 @@ export interface MockInstance {
   role: string
   processType: string
   status: string
-  /** 当前状态原因（对齐 InstanceInfo.statusReason）：CRASHED 时给出具体崩溃原因，供 FR-294 浮窗显示。 */
+  /** 当前状态原因（对齐 InstanceInfo.statusReason）：CRASHED 时给出具体崩溃原因，供浮窗显示。 */
   statusReason?: string
   startCommand: string
   /** 直接绑定的 JDK id；0/缺省表示未直接绑定。 */
@@ -37,7 +38,7 @@ export interface MockInstance {
   cpuLimit: number
   memLimitMb: number
   diskLimitMb: number
-  /** 运行期配额 throttle 档登记的待收紧限额（FR-467）：下次启动/重建容器时生效；0=无。 */
+  /** 运行期配额 throttle 档登记的待收紧限额：下次启动/重建容器时生效；0=无。 */
   throttleCpuLimit?: number
   throttleMemLimitMb?: number
   serverPort: number
@@ -45,11 +46,11 @@ export interface MockInstance {
   autoRestart: boolean
   /** JSON 字符串列（保真返回字符串，勿返数组）。 */
   tags: string
-  /** 运行态漂移 PID（FR-471）：>0=工作目录下有未纳管活进程；缺省/0=无漂移。 */
+  /** 运行态漂移 PID：>0=工作目录下有未纳管活进程；缺省/0=无漂移。 */
   runtimeDriftPid?: number
-  /** 漂移进程命令行摘要（FR-471）。 */
+  /** 漂移进程命令行摘要。 */
   runtimeDriftCmdline?: string
-  /** 漂移最近观测时间（FR-471）；无漂移为 null。 */
+  /** 漂移最近观测时间；无漂移为 null。 */
   runtimeDriftAt?: string | null
   createdAt: string
 }
@@ -70,7 +71,7 @@ export interface MockGroupMembership {
   instanceId: number
 }
 
-/** 滚动编排会话（FR-457）：字段对齐 web/src/api/instanceRolling.ts 的 RollingOp。 */
+/** 滚动编排会话：字段对齐 web/src/api/instanceRolling.ts 的 RollingOp。 */
 export interface MockRollingOp {
   id: number
   action: string
@@ -91,7 +92,7 @@ export interface MockRollingOp {
   updatedAt: string
 }
 
-/** 崩溃快照（FR-313，增强 FR-470）：字段对齐 web/src/api/crashSnapshots.ts 的 CrashSnapshot。 */
+/** 崩溃快照（增强）：字段对齐 web/src/api/crashSnapshots.ts 的 CrashSnapshot。 */
 export interface MockCrashSnapshot {
   id: number
   instanceId: number
@@ -100,14 +101,14 @@ export interface MockCrashSnapshot {
   signal: string
   durationMs: number
   tailOutput: string
-  /** 根因归类（FR-470）；缺失等价于后端旧快照的空值（前端按 unknown 渲染）。 */
+  /** 根因归类；缺失等价于后端旧快照的空值（前端按 unknown 渲染）。 */
   rootCause?: string
-  /** 归一化同类指纹（FR-470）。 */
+  /** 归一化同类指纹。 */
   signature?: string
   /** 命中规则的原文行（后端解析后的数组形态，前端直接渲染）。 */
   evidenceLines?: string[]
   confidence?: number
-  /** 崩溃与资源关联证据（FR-470 §2.3）。 */
+  /** 崩溃与资源关联证据（§2.3）。 */
   correlation?: {
     nearOom: boolean
     rssAtCrash: number
@@ -119,7 +120,7 @@ export interface MockCrashSnapshot {
   createdAt: string
 }
 
-/** 整机快照（FR-466）：字段对齐 web/src/api/snapshots.ts 的 InstanceSnapshot。 */
+/** 整机快照：字段对齐 web/src/api/snapshots.ts 的 InstanceSnapshot。 */
 export interface MockInstanceSnapshot {
   id: number
   uuid: string
@@ -317,14 +318,14 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     autoStart: false,
     autoRestart: true,
     tags: '["env:test","creative","plot","region:r2","zone:z2"]',
-    // 运行态漂移样本（FR-471）：磁盘由 tmux 手工启着、平台记为 STOPPED，用于演示/联调接管入口。
+    // 运行态漂移样本：磁盘由 tmux 手工启着、平台记为 STOPPED，用于演示/联调接管入口。
     runtimeDriftPid: 41237,
     runtimeDriftCmdline: 'java -Xmx2G -jar paper.jar nogui',
     runtimeDriftAt: '2026-02-01T03:20:00Z',
     createdAt: '2026-01-21T00:00:00Z',
   },
   {
-    // 配套服务（FR-450）：Go 原生二进制，type=generic、role=beacon，无 MC 世界语义。
+    // 配套服务：Go 原生二进制，type=generic、role=beacon，无 MC 世界语义。
     id: 30,
     uuid: 'i-beacon',
     nodeId: 1,
@@ -348,7 +349,6 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
   },
 ]
 
-const INSTANCE_SEED_SIZE = 1200
 const STATUS_POOL = ['RUNNING', 'STOPPED', 'CRASHED', 'STARTING', 'STOPPING'] as const
 const ENV_POOL = ['prod', 'test', 'dev'] as const
 
@@ -376,7 +376,7 @@ function buildGeneratedInstance(id: number): MockInstance {
     serverPort: 25565 + id,
     autoStart: id % 3 === 0,
     autoRestart: id % 5 !== 0,
-    // FR-452：多数实例带 region:/zone: 标签（供 region/zone 维度分组），
+    // 多数实例带 region:/zone: 标签（供 region/zone 维度分组），
     // 少数（id%13===0 无 region，id%5===0 无 zone）不带，覆盖「未分组」落末尾场景。
     tags: JSON.stringify([
       `env:${env}`,
@@ -389,8 +389,11 @@ function buildGeneratedInstance(id: number): MockInstance {
 }
 
 function seedInstances(): MockInstance[] {
+  // 规模在**播种时**从运行时档位读（阶段 6 补丁）：写成模块级常量会被本函数在
+  // import 时捕获，调试面板改档位后即便重播种也还是旧规模。
+  const size = mockDataScaleProfile().instanceCount
   const rows = new Map<number, MockInstance>()
-  for (let id = 1; id <= INSTANCE_SEED_SIZE; id++) rows.set(id, buildGeneratedInstance(id))
+  for (let id = 1; id <= size; id++) rows.set(id, buildGeneratedInstance(id))
   for (const row of INSTANCE_SEED_OVERRIDES) rows.set(row.id, row)
   return [...rows.values()].sort((a, b) => a.id - b.id)
 }
@@ -402,8 +405,8 @@ function capabilitiesFor(inst: MockInstance): MockCapabilityProfile {
   return capabilityProfileFor(inst.type, inst.role)
 }
 
-/**
- * 运行态漂移字段默认值补齐（FR-471）：对齐真 CP 模型——`runtimeDriftPid`/`runtimeDriftCmdline`
+/** 
+ * 运行态漂移字段默认值补齐：对齐真 CP 模型——`runtimeDriftPid`/`runtimeDriftCmdline`
  * 恒返回（无漂移为 0 / ""），观测时间为 null。种子大多数行未声明这三列，这里统一兜住，
  * 免得前端拿到 `undefined` 还得各自判空。
  */
@@ -416,8 +419,8 @@ function withDriftDefaults(inst: MockInstance): MockInstance {
   }
 }
 
-/**
- * 列表响应逐行补能力画像（FR-445 §2.4）：列表也优先用后端下发的画像，
+/** 
+ * 列表响应逐行补能力画像（§2.4）：列表也优先用后端下发的画像，
  * 前端仅在画像缺失时才走本地兜底表。与详情响应保持同一真源。
  */
 function withCapabilities(
@@ -437,7 +440,7 @@ const groupMembers = db<MockGroupMembership>('instanceGroupMembers', () => [
   { id: 2, groupId: 3, instanceId: 3 },
 ])
 
-/**
+/** 
  * 相对「今天（UTC）」的 N 天前固定时刻 —— 崩溃种子必须落在**趋势窗口内**。
  *
  * 种子为什么不能用写死的日期：趋势窗口是相对当下算的（后端 `crashDayFloor` =
@@ -455,8 +458,8 @@ function crashDayAgo(days: number): string {
   return crashAtDaysAgo(days).slice(0, 10)
 }
 
-/**
- * 实例 12 的 6 条崩溃快照种子（FR-313 + FR-470）。
+/** 
+ * 实例 12 的 6 条崩溃快照种子。
  *
  * 为什么是 **6** 条：K=5 是后端的滚动保留上限，只有超过它才能让「列表被裁到 5 条、
  * 趋势仍报完整 6 次」这条契约在 mock 下**真的可能失败**——若种子不越过边界，
@@ -491,7 +494,7 @@ function crashSeedRowsForInstance12(): MockCrashSnapshot[] {
   })
 }
 
-// 崩溃快照种子（FR-313）：实例 3 两条 + 实例 12 六条。
+// 崩溃快照种子：实例 3 两条 + 实例 12 六条。
 //
 // **两个集合刻意分离**：真后端的崩溃快照（K=5 滚动裁剪）与崩溃趋势（独立汇总表
 // `InstanceCrashStat`）是**两个数据源**——连崩超过 5 次后列表被裁到 5 条，趋势计数仍完整。
@@ -529,7 +532,7 @@ const crashSnapshots = db<MockCrashSnapshot>('instanceCrashSnapshots', () => [
       rssAtCrash: 1024 * 1024 * 1024,
       memLimitMb: 1024,
       heapUsedMax: 0,
-      gcNote: 'GC 关联待 FR-465 落地（serverprobe_gc_* 尚未入库）',
+      gcNote: 'GC 关联待落地（serverprobe_gc_* 尚未入库）',
     },
     createdAt: crashAtDaysAgo(1, 9, 30),
   },
@@ -537,8 +540,8 @@ const crashSnapshots = db<MockCrashSnapshot>('instanceCrashSnapshots', () => [
   ...crashSeedRowsForInstance12(),
 ])
 
-/**
- * 崩溃统计汇总行（FR-470，对齐后端 `model.InstanceCrashStat`）。
+/** 
+ * 崩溃统计汇总行（对齐后端 `model.InstanceCrashStat`）。
  *
  * 唯一键是 (实例, 天, 根因, **指纹**)——同一「天 × 根因」天然可能有多行（每个指纹一行），
  * 故趋势必须按 (天 × 根因) **求和**后输出（后端 `trendAggregator` 的语义）。
@@ -571,7 +574,7 @@ const crashStats = db<MockCrashStat>('instanceCrashStats', () => [
   { id: 7, instanceId: 12, bucketDay: crashDayAgo(1), rootCause: 'oom', signature: 'Java heap space', count: 2 },
 ])
 
-// 整机快照种子（FR-466）：两条**都挂在实例 3**（creative-1）——一条回滚前快照 + 一条手动快照，
+// 整机快照种子：两条**都挂在实例 3**（creative-1）——一条回滚前快照 + 一条手动快照，
 // 使「一键回滚」与「回滚前留底」两种形态在 mock 下都能看到。
 // 实例 2 刻意无快照，供空态用例使用；实例 1 无快照（如需在实例 1 验证回滚，请自行补种子）。
 const instanceSnapshots = db<MockInstanceSnapshot>('instanceSnapshots', () => [
@@ -620,11 +623,11 @@ const instanceSnapshots = db<MockInstanceSnapshot>('instanceSnapshots', () => [
 /** 每实例滚动保留的崩溃快照条数（后端 maxCrashSnapshotsPerInstance，K=5，写死不可配）。 */
 const CRASH_SNAPSHOT_KEEP = 5
 
-/** 二进制启动命令的固定参数尾部（FR-468 升级/回滚改的只是可执行文件名）。 */
+/** 二进制启动命令的固定参数尾部（升级/回滚改的只是可执行文件名）。 */
 const BINARY_START_ARGS = ' --config config.yaml'
 
-/**
- * 制品库候选版本（FR-468）：按 id 倒序（与后端 View 的排序契约一致，含当前版本）。
+/** 
+ * 制品库候选版本：按 id 倒序（与后端 View 的排序契约一致，含当前版本）。
  * 三档版本使「升级到更新版本」与「回滚到上一版本」两条路径都有真实版本变化可断言。
  */
 const BINARY_CANDIDATES = [
@@ -633,7 +636,7 @@ const BINARY_CANDIDATES = [
   { assetId: 11, filename: 'beacon-1.0.0-linux-amd64', version: '1.0.0', sha256: 'b'.repeat(64), size: 31457280 },
 ]
 
-/** 实例二进制版本绑定（FR-468，可变：升级/回滚交换 Current/Previous）。 */
+/** 实例二进制版本绑定（可变：升级/回滚交换 Current/Previous）。 */
 interface MockBinaryBinding {
   id: number
   currentAssetId: number
@@ -645,8 +648,8 @@ interface MockBinaryBinding {
   previousFilename: string
 }
 
-/**
- * 版本绑定集合（FR-468）：**只有 30（beacon-1）预置可回滚点**，其余绑定实例按需懒建。
+/** 
+ * 版本绑定集合：**只有 30（beacon-1）预置可回滚点**，其余绑定实例按需懒建。
  *
  * 预置回滚点是为了让「二进制回滚」这条路径在 mock 下可达——否则 hasRollback 恒 false，
  * 回滚按钮永远禁用，回滚的二次确认与回滚后的版本变化在 dom 测试里无法覆盖。
@@ -685,8 +688,8 @@ function isInstanceLive(status: string): boolean {
   return status === 'RUNNING' || status === 'STARTING' || status === 'STOPPING'
 }
 
-/**
- * 快照自增 ID 的**可重播**分配（FR-466）。
+/** 
+ * 快照自增 ID 的**可重播**分配。
  *
  * 为什么不用模块级 `let nextSnapshotId = 100`：它是模块顶层可变状态，`resetDb()`
  * 只重播各集合、不会重置它，于是同一 vitest 进程内后执行的用例拿到 101、102…——
@@ -727,12 +730,21 @@ function filterInstancesByQuery(url: URL): MockInstance[] {
   const env = url.searchParams.get('env')
   const tag = url.searchParams.get('tag')
   const networkId = url.searchParams.get('networkId')
+  const groupId = url.searchParams.get('groupId')
+  // uuid 精确匹配：供前端把 URL 里的实例 uuid（下钻深链 ?instance=<uuid>）解析成数字 id，
+  // 不必为此拉全量实例列表（千级约 1MB/轮）。与真后端 /instances/search?uuid= 对齐。
+  const uuid = url.searchParams.get('uuid')
   const q = (url.searchParams.get('q') ?? '').trim().toLowerCase()
+  // 组织分组按**子树**过滤（含自身与全部后代），与 GET /instance-groups/:id/instances 同口径。
+  // 前端侧栏选组后直接带 groupId 走服务端过滤，不能靠本地裁剪窗口——成员可能全在窗口之外。
+  const subtreeOf = groupId ? new Set(subtreeInstanceIds(Number(groupId))) : null
   return instances.list((i) => {
+    if (uuid && i.uuid !== uuid) return false
     if (nodeId && String(i.nodeId) !== nodeId) return false
     if (status && i.status !== status) return false
     if (role && i.role !== role) return false
     if (q && !i.name.toLowerCase().includes(q)) return false
+    if (subtreeOf && !subtreeOf.has(i.id)) return false
     const tags = parseTags(i.tags)
     if (env && !tags.includes(`env:${env}`)) return false
     if (tag && !tags.includes(tag)) return false
@@ -768,7 +780,7 @@ function countBy(rows: MockInstance[], key: 'status' | 'role'): Record<string, n
   }, {})
 }
 
-/** 该组**直接**挂载（不含后代）的实例 ID，对应树视图 memberInstanceIds（FR-452）。 */
+/** 该组**直接**挂载（不含后代）的实例 ID，对应树视图 memberInstanceIds。 */
 function directMemberIds(groupId: number): number[] {
   return groupMembers.list((m) => m.groupId === groupId).map((m) => m.instanceId)
 }
@@ -859,10 +871,13 @@ function pageParam(url: URL): { page: number; pageSize: number } {
 function aggregateRows(rows: MockInstance[]) {
   const byStatus: Record<string, number> = { RUNNING: 0, STOPPED: 0, CRASHED: 0, STARTING: 0, STOPPING: 0 }
   const byRole: Record<string, number> = { backend: 0, proxy: 0, universal: 0 }
+  // 与真后端 ByProcessType 对齐（含全部枚举键零补）：统计页据此画进程类型分布，不必拉全量实例。
+  const byProcessType: Record<string, number> = { direct: 0, daemon: 0, docker: 0, rcon: 0 }
   const byNode = new Map<number, number>()
   for (const row of rows) {
     byStatus[row.status] = (byStatus[row.status] ?? 0) + 1
     byRole[row.role] = (byRole[row.role] ?? 0) + 1
+    byProcessType[row.processType] = (byProcessType[row.processType] ?? 0) + 1
     byNode.set(row.nodeId, (byNode.get(row.nodeId) ?? 0) + 1)
   }
   return {
@@ -870,10 +885,11 @@ function aggregateRows(rows: MockInstance[]) {
     byStatus,
     byNode: [...byNode.entries()].sort((a, b) => a[0] - b[0]).map(([nodeId, count]) => ({ nodeId, count })),
     byRole,
+    byProcessType,
   }
 }
 
-/** 滚动编排会话集合（FR-457）。 */
+/** 滚动编排会话集合。 */
 const rollingOps = db<MockRollingOp>('instanceRollingOps', () => [])
 
 let rollingSeq = 100
@@ -937,7 +953,7 @@ function rollingControl(
 }
 
 export const handlers = [
-  // ---- 滚动/分批/灰度编排（FR-457）；须在 /instances/:id 之前注册（避免 'rolling' 被当 id）----
+  // ---- 滚动/分批/灰度编排；须在 /instances/:id 之前注册（避免 'rolling' 被当 id）----
   domainRoute('post', '/instances/rolling', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1028,6 +1044,8 @@ export const handlers = [
       byStatus: countBy(rows, 'status'),
       byNode,
       byRole: countBy(rows, 'role'),
+      // 与真后端 ByProcessType 对齐（含全部枚举键零补）。
+      byProcessType: { direct: 0, daemon: 0, docker: 0, rcon: 0, ...countBy(rows, 'processType') },
     })
   }),
 
@@ -1109,7 +1127,7 @@ export const handlers = [
     if (denied) return denied
     const inst = instances.get(Number(info.params.id))
     if (!inst) return HttpResponse.json({ error: 'NOT_FOUND', message: '实例不存在' }, { status: 404 })
-    // 详情响应下发能力画像（FR-445），列表不计（前端列表走 lib/capabilities 本地兜底）。
+    // 详情响应下发能力画像，列表不计（前端列表走 lib/capabilities 本地兜底）。
     return HttpResponse.json({ ...withDriftDefaults(inst), capabilities: capabilitiesFor(inst) })
   }),
 
@@ -1139,15 +1157,15 @@ export const handlers = [
     groupMembers
       .list((m) => m.instanceId === id)
       .forEach((m) => groupMembers.remove(m.id))
-    // 级联清崩溃快照（FR-313，对齐真 CP 的级联删除语义）。
+    // 级联清崩溃快照（对齐真 CP 的级联删除语义）。
     crashSnapshots
       .list((s) => s.instanceId === id)
       .forEach((s) => crashSnapshots.remove(s.id))
-    // 级联清整机快照（FR-466，同 FR-313 语义）。
+    // 级联清整机快照（同语义）。
     instanceSnapshots
       .list((s) => s.instanceId === id)
       .forEach((s) => instanceSnapshots.remove(s.id))
-    // 级联清崩溃统计汇总行（FR-470）与版本绑定（FR-468），与真 CP 的实例删除级联同口径。
+    // 级联清崩溃统计汇总行与版本绑定，与真 CP 的实例删除级联同口径。
     crashStats
       .list((s) => s.instanceId === id)
       .forEach((s) => crashStats.remove(s.id))
@@ -1161,7 +1179,7 @@ export const handlers = [
     if (denied) return denied
     const inst = instances.get(Number(info.params.id))
     if (!inst) return HttpResponse.json({ error: 'NOT_FOUND', message: '实例不存在' }, { status: 404 })
-    // 启动预检（FR-471）：工作目录下仍有未纳管活进程时拒绝启动（对齐真机 Worker 预检，
+    // 启动预检：工作目录下仍有未纳管活进程时拒绝启动（对齐真机 Worker 预检，
     // 避免「面板 STOPPED + 磁盘在跑」被直接双开）。前端据此把错误消息透出给用户。
     if ((inst.runtimeDriftPid ?? 0) > 0) {
       return HttpResponse.json(
@@ -1169,7 +1187,7 @@ export const handlers = [
         { status: 409 },
       )
     }
-    // 对齐真 CP：启动 transition 清空 statusReason（FR-312 失败原因横幅随查询刷新消失）。
+    // 对齐真 CP：启动 transition 清空 statusReason（失败原因横幅随查询刷新消失）。
     instances.update(Number(info.params.id), { status: 'RUNNING', statusReason: undefined })
     return HttpResponse.json({ message: '已启动' })
   }),
@@ -1184,7 +1202,7 @@ export const handlers = [
   domainRoute('post', '/instances/:id/restart', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    // 重启同为启动 transition，一并清空 statusReason（FR-312）。
+    // 重启同为启动 transition，一并清空 statusReason。
     instances.update(Number(info.params.id), { status: 'RUNNING', statusReason: undefined })
     return HttpResponse.json({ message: '已重启' })
   }),
@@ -1196,7 +1214,7 @@ export const handlers = [
     return HttpResponse.json({ message: '已终止' })
   }),
 
-  // 接管运行态漂移（FR-471）：对齐真 CP 语义——停掉未纳管进程后以受管方式重新拉起
+  // 接管运行态漂移：对齐真 CP 语义——停掉未纳管进程后以受管方式重新拉起
   // （假后端简化为「清漂移 + 置 RUNNING」），成功后前端刷新列表/详情即看到状态与磁盘一致。
   domainRoute('post', '/instances/:id/adopt-runtime', (info) => {
     const denied = requireAuth(info)
@@ -1265,7 +1283,7 @@ export const handlers = [
     })
   }),
 
-  // ---- 服务器状态（FR-076，原样透传探针 JSON）----
+  // ---- 服务器状态（原样透传探针 JSON）----
   domainRoute('get', '/instances/:id/server-state', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1295,7 +1313,7 @@ export const handlers = [
     })
   }),
 
-  // ---- 崩溃诊断（FR-313）：快照按发生时间倒序（最新在前），空结果回 [] ----
+  // ---- 崩溃诊断：快照按发生时间倒序（最新在前），空结果回 [] ----
   domainRoute('get', '/instances/:id/crash-snapshots', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1311,7 +1329,7 @@ export const handlers = [
     return HttpResponse.json(rows)
   }),
 
-  // ---- 崩溃趋势与同类聚合（FR-470）：来源独立汇总表（instanceCrashStats），不受 K=5 裁剪 ----
+  // ---- 崩溃趋势与同类聚合：来源独立汇总表（instanceCrashStats），不受 K=5 裁剪 ----
   domainRoute('get', '/instances/:id/crash-trend', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1360,7 +1378,7 @@ export const handlers = [
     })
   }),
 
-  // ---- 整机快照（FR-466）：时间点可回滚点；回滚前强制建 pre_rollback 快照 ----
+  // ---- 整机快照：时间点可回滚点；回滚前强制建 pre_rollback 快照 ----
   domainRoute('get', '/instances/:id/snapshots', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1452,7 +1470,7 @@ export const handlers = [
     return HttpResponse.json({ deleted: true })
   }),
 
-  // ---- 运行期配额（FR-467）：限额来源 + 实时用量 + 强制状态 ----
+  // ---- 运行期配额：限额来源 + 实时用量 + 强制状态 ----
   domainRoute('get', '/instances/:id/quota', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1490,7 +1508,7 @@ export const handlers = [
     })
   }),
 
-  // ---- 二进制/Beacon 版本管理（FR-468）：当前版本 + 可升级候选 + 一级回滚 ----
+  // ---- 二进制/Beacon 版本管理：当前版本 + 可升级候选 + 一级回滚 ----
   domainRoute('get', '/instances/:id/binary-version', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1517,7 +1535,7 @@ export const handlers = [
     }
     // 版本绑定是**可变**的：升级/回滚真在本 mock 内交换 Current/Previous，
     // 否则 hasRollback 恒 false、回滚按钮永远禁用——回滚的二次确认、失败提示与
-    // 回滚后的版本变化在 mock 下完全不可达（FR-468 的「可回滚」这一半无法演练）。
+    // 回滚后的版本变化在 mock 下完全不可达（的「可回滚」这一半无法演练）。
     const binding = binaryBindings.get(inst.id) ?? seedBinaryBinding(inst.id)
     return HttpResponse.json({
       instanceId: inst.id,
@@ -1624,7 +1642,7 @@ export const handlers = [
     })
   }),
 
-  // ---- 端口占用（FR-032）----
+  // ---- 端口占用----
   domainRoute('get', '/nodes/:id/ports', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1635,7 +1653,7 @@ export const handlers = [
     return HttpResponse.json({ nodeId, ranges: { serverPortBase: 25565, rangeSize: 100 }, occupied })
   }),
 
-  // ---- 组织分组树（FR-165）----
+  // ---- 组织分组树----
   domainRoute('get', '/instance-groups', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied

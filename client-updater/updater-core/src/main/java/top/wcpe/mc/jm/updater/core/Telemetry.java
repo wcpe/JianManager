@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.TimeZone;
 
 /**
- * 客户端遥测构建（FR-094 / FR-360，契约 §4.3）。
+ * 客户端遥测构建（契约 §4.3）。
  *
  * <p>环境粗粒度 + 更新结果/版本/耗时；required 含 coreVersion/arch，diagnostic 含
  * javaVendor/locale/timezone/memoryTier。机器码经 {@code X-Machine-Id} 请求头携带（不入 body）。
@@ -21,7 +21,7 @@ final class Telemetry {
      * 构建遥测 JSON。
      *
      * @param coreVersion 本进程 updater-core 构建展示版本（required）
-     * @param launchArgs  脱敏后的完整启动参数（FR-426 增补；accessToken 已由调用方脱敏）
+     * @param launchArgs  脱敏后的完整启动参数（accessToken 已由调用方脱敏）
      */
     static String build(String channel, int rc, long fromVersion, long toVersion, long durationMs, String coreVersion,
                         String launchArgs) {
@@ -40,9 +40,9 @@ final class Telemetry {
         m.put("timezone", TimeZone.getDefault().getID());
         m.put("memoryTier", memoryTier(Runtime.getRuntime().maxMemory()));
         m.put("durationMs", durationMs);
-        // bootSuccess：updater 自报口径（reconcile 成功）；细粒度游戏启动确认见 FR-091 boot-confirm。
+        // bootSuccess：updater 自报口径（reconcile 成功）；细粒度游戏启动确认见 boot-confirm。
         m.put("bootSuccess", rc == Updater.OK);
-        // FR-426 增补：完整启动参数（脱敏后），供运营排查启动方式/渠道。
+        // 完整启动参数（脱敏后），供运营排查启动方式/渠道。
         m.put("launchArgs", truncate(launchArgs, 2048));
         return Json.canonical(m);
     }

@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 客户端遥测构建（FR-094 / FR-360）：result 映射、字段齐备、归一/分档、JSON 合法。 */
+/** 客户端遥测构建：result 映射、字段齐备、归一/分档、JSON 合法。 */
 class TelemetryTest {
 
     @Test
@@ -43,7 +43,7 @@ class TelemetryTest {
         Object parsed = Json.parse(json);
         @SuppressWarnings("unchecked")
         java.util.Map<String, Object> m = (java.util.Map<String, Object>) parsed;
-        // FR-426 增补：完整启动参数（脱敏后）应进入遥测体。
+        // 完整启动参数（脱敏后）应进入遥测体。
         assertEquals("net.fabricmc.loader.impl.launch.knot.KnotClient --username Amazon2 --accessToken *** --uuid abc-123",
                 m.get("launchArgs"));
     }

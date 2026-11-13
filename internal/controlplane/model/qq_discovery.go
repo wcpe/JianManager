@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// QQ 机器人扫码接入与已发现群列表（FR-495，增强 FR-494）。
+// QQ 机器人扫码接入与已发现群列表（增强）。
 //
 // 状态说明：
 //   - 已发现群（QQDiscoveredGroup）：网关收到 GROUP_ADD_ROBOT 事件后落库，
@@ -11,7 +11,7 @@ import "time"
 //   - 网关连接（QQGatewayConnection）：按 appId 建模的单连接状态，
 //     预留多连接能力，本期前端只展示「默认机器人」的连接。
 
-// QQDiscoveredGroup QQ 机器人已进入的群（FR-495）。
+// QQDiscoveredGroup QQ 机器人已进入的群。
 // 去重键为 GroupOpenID（唯一约束 + upsert）：入群事件是状态型而非消息型，
 // 无需 msg_seq 去重；重复进群只刷新 LastSeenAt，不产生重复条目。
 type QQDiscoveredGroup struct {
@@ -25,12 +25,12 @@ type QQDiscoveredGroup struct {
 	// LastSeenAt 最近一次入群事件时间（重复进群刷新）。
 	LastSeenAt time.Time `json:"lastSeenAt"`
 	// SourceAppID 发现该群的机器人 appId。
-	SourceAppID string `gorm:"type:varchar(64);index" json:"sourceAppId"`
+	SourceAppID string    `gorm:"type:varchar(64);index" json:"sourceAppId"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
-// QQ 网关连接状态（FR-495）。
+// QQ 网关连接状态。
 const (
 	// QQGatewayConnected 网关已连接（收到 READY / RESUMED）。
 	QQGatewayConnected = "connected"
@@ -43,7 +43,7 @@ const (
 	QQGatewayError = "error"
 )
 
-// QQGatewayConnection QQ 网关连接的持久化状态（FR-495，按 appId 唯一）。
+// QQGatewayConnection QQ 网关连接的持久化状态（按 appId 唯一）。
 type QQGatewayConnection struct {
 	ID uint `gorm:"primaryKey" json:"-"`
 	// AppID 机器人 appId（唯一）。
@@ -55,7 +55,7 @@ type QQGatewayConnection struct {
 	// LastError 最近一次错误（人类可读，4014 时明确指向 intent 权限）。
 	LastError string `gorm:"type:varchar(512)" json:"lastError"`
 	// SessionID 网关会话 ID（READY 后保存，Resume 时使用）。
-	SessionID string `gorm:"type:varchar(128)" json:"-"`
+	SessionID string    `gorm:"type:varchar(128)" json:"-"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }

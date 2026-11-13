@@ -1,10 +1,10 @@
 package top.wcpe.mc.jm.updater.core;
 
 /**
- * 更新进度展示（FR-099）。实现按环境选择：有显示 → {@link SwingProgressView} 独立窗口；
+ * 更新进度展示。实现按环境选择：有显示 → {@link SwingProgressView} 独立窗口；
  * headless / 禁用 → {@link TextProgressView} 文本 / {@link NoopProgressView}。
  *
- * <p>所有实现对异常 fail-open：展示失败绝不阻断更新/游戏（契约 ADR-021）。
+ * <p>所有实现对异常 fail-open：展示失败绝不阻断更新/游戏。
  */
 interface ProgressView extends AutoCloseable {
 

@@ -10,7 +10,7 @@ import java.util.Arrays;
 import java.util.Properties;
 
 /**
- * updater-core 自更新选择状态机（FR-091，wedge 侧）。
+ * updater-core 自更新选择状态机（wedge 侧）。
  *
  * <p>premain 加载 core 前据 {@code <gameDir>/.jm-updater/core/state.properties} +
  * {@code pending.confirmed}/{@code rollback.flag} 标志决定加载哪个 core jar：
@@ -22,7 +22,7 @@ import java.util.Properties;
  * </ul>
  * 状态格式与 core 的 {@code CoreSelectStore} 一致（java.util.Properties）。全程 <b>fail-open</b>：任何异常返回 null。
  *
- * <p>FR-258 起：不再有 bundledJar（整合包只带 wedge.jar），本地无 core 时返回 null。
+ * <p>不再有 bundledJar（整合包只带 wedge.jar），本地无 core 时返回 null。
  */
 final class CoreSelector {
 
@@ -35,7 +35,7 @@ final class CoreSelector {
     private static final String K_PENDING_TRIED = "pendingTried";
     private static final String K_FAILED_VERSION = "failedVersion";
 
-    /** 本地保留的 core jar 数量上限（FR-258）。 */
+    /** 本地保留的 core jar 数量上限。 */
     static final int KEEP_JARS = 3;
 
     /** 加载决策：jar 路径 + 版本 + 是否首次 trial（决定是否起 boot-confirm 看门狗）。coreJar 为 null 表示无可用 core。 */
@@ -224,7 +224,7 @@ final class CoreSelector {
             } else if (tried) {
                 // 上次 trial 未确认（崩溃/早退）→ 回退：弃 pending，保留 selected（N-1）。
                 // 并记失败版本：否则下一次 reconcile 会立刻重暂存同一坏 core，形成「每隔一次启动 trial 崩溃」的
-                // boot-loop（FR-091 真机发现）。楔子据此跳过该版本，仅当出现更高版本（修复版）才再暂存。
+                // boot-loop（真机发现）。楔子据此跳过该版本，仅当出现更高版本（修复版）才再暂存。
                 if (log != null) {
                     log.warn("上次新 core 未确认启动，回退到上一可用版本 version=" + p.getProperty(K_PENDING_VERSION, "0"));
                 }
@@ -270,7 +270,7 @@ final class CoreSelector {
     }
 
     /**
-     * trial 加载且 core 正常运行后起 boot-confirm 看门狗（FR-091）：daemon 线程睡 {@code seconds} 秒，
+     * trial 加载且 core 正常运行后起 boot-confirm 看门狗：daemon 线程睡 {@code seconds} 秒，
      * 游戏仍存活则建 {@code pending.confirmed} 标志（下次 premain 据此 promote）。
      * 游戏崩溃则 daemon 随 JVM 死、标志不建 = 未确认，下次回退。绝不阻塞/挡游戏。
      */
@@ -322,7 +322,7 @@ final class CoreSelector {
         Files.createDirectories(file.getParent());
         Path tmp = file.resolveSibling("state.properties.tmp");
         try (OutputStream out = Files.newOutputStream(tmp)) {
-            p.store(out, "jm-updater core self-update state (FR-091)");
+            p.store(out, "jm-updater core self-update state");
         }
         try {
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);

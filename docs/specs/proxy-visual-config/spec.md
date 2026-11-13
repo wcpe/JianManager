@@ -85,3 +85,12 @@ FR-174（出站网络代理，ADR-037）已交付：CP 与每个 Worker 各从�
 - **心跳 vs 新 RPC**：择一落地；心跳携带需注意 generation 比较避免每次重建。
 - **与 FR-186 同碰 CP self-update 区**：FR-186 改 self-update 缓存、FR-185 改 self-update 取 client 的方式——同文件不同关注点，rebase 可能小冲突（FR-185 改 client 注入、FR-186 改缓存持久化），各自加性、易解。
 - **真机需代理环境**：agent 无代理时单测 + httptest 覆盖逻辑，真机项标「待真机验」由用户确认。
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-185~190（出站代理面板化+节点级下发 / 更新页服务端缓存+markdown / 客户端分发迁运营+全流程向导重做 / 全站模态纪律+复制兜底 / 重度模态重做 / Worker 二进制 CP 下发，关联 ADR-043 + 增强 FR-174/182/086/072/009/004）
+
+FR-185~190（出站代理面板化+节点级下发 / 更新页服务端缓存+markdown / 客户端分发迁运营+全流程向导重做 / 全站模态纪律+复制兜底 / 重度模态重做 / Worker 二进制 CP 下发，关联 ADR-043 + 增强 FR-174/182/086/072/009/004）→ FR-185 `docs/specs/proxy-visual-config/`、FR-186 `docs/specs/update-page-cache/`、FR-187 `docs/specs/client-dist-redesign/`、FR-189 `docs/specs/heavy-modal-redesign/`；FR-188 免 spec（规则 + 全站审计改造 + 复制兜底）；FR-190 `docs/specs/worker-binary-cp-cache/spec.md` + `docs/adr/059-worker-binary-cp-cache-distribution.md`（开发中）
+

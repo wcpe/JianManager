@@ -2,12 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   logLevelStatus,
   timeRangeToParams,
-  normalizeLogScope,
-  logScopeKey,
   computeVirtualWindow,
   TIME_RANGE_PRESETS,
   LOG_VIEWS,
-} from './logs-filters'
+  resolveLogView,
+} from '@/lib/logs/logs-filters'
 
 describe('logLevelStatus', () => {
   it('maps error to danger and warn to warning (unified with alerts semantics)', () => {
@@ -27,10 +26,22 @@ describe('logLevelStatus', () => {
 })
 
 describe('LOG_VIEWS', () => {
-  it('defines the primary views plus the administrator-only full search view', () => {
-    // legacy 已于 2026-10-29 随 CP logs 表下线并从取值域移除：留着它会让 ?view=legacy
-    // 深链落进一个不存在的数据源（不报错也不给数据，静默失效）。
-    expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all'])
+  it('separates platform tails, node tails, instance history and the combined window', () => {
+    expect(LOG_VIEWS).toEqual(['platform', 'node', 'instance', 'all'])
+  })
+})
+
+describe('resolveLogView', () => {
+  it('keeps explicit four views and maps old instance/node links', () => {
+    for (const view of LOG_VIEWS) expect(resolveLogView(view, 'worker', true)).toBe(view)
+    expect(resolveLogView('node_instance', 'worker', true)).toBe('node')
+    expect(resolveLogView('node_instance', null, true)).toBe('instance')
+    expect(resolveLogView(null, 'worker', true)).toBe('node')
+    expect(resolveLogView('legacy', 'worker', true)).toBe('instance')
+    expect(resolveLogView('invalid', null, true)).toBe('instance')
+  })
+  it('restricts all process and combined views to administrators', () => {
+    for (const view of LOG_VIEWS) expect(resolveLogView(view, 'worker', false)).toBe('instance')
   })
 })
 
@@ -61,26 +72,6 @@ describe('timeRangeToParams', () => {
     expect(TIME_RANGE_PRESETS).toContain('all')
     expect(TIME_RANGE_PRESETS).toContain('15m')
     expect(TIME_RANGE_PRESETS).toContain('7d')
-  })
-})
-
-describe('唯一规范化scope', () => {
-  const base = { view: 'node_instance' as const, level: 'error', keyword: '  boom  ', onlineOnly: true, nodeId: 7, instanceId: 11, from: '2026-06-26T11:00:00.000Z', to: '2026-06-26T12:00:00.000Z' }
-
-  it('保留所有实际条件并trim关键字，不携分页或聚合参数', () => {
-    const out = normalizeLogScope({ ...base, ...{ page: 3, cursor: 'opaque', viewId: 'old-view', groupBy: 'level' } })
-    expect(out).toEqual({ ...base, keyword: 'boom' })
-    expect(base.keyword).toBe('  boom  ')
-  })
-
-  it('字段输入顺序与空白不改变指纹', () => {
-    expect(logScopeKey(base)).toBe(logScopeKey({ to: base.to, from: base.from, instanceId: 11, nodeId: 7, onlineOnly: true, keyword: 'boom', level: 'error', view: 'node_instance' }))
-    expect(normalizeLogScope({ keyword: '  ', onlineOnly: false })).toEqual({})
-  })
-
-  it.each(['onlineOnly', 'from', 'to', 'nodeId', 'instanceId', 'keyword'])('%s变化必须产生新视图身份', (field) => {
-    const changed = { ...base, [field]: field === 'onlineOnly' ? false : field.endsWith('Id') ? 99 : 'changed' }
-    expect(logScopeKey(changed)).not.toBe(logScopeKey(base))
   })
 })
 

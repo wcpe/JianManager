@@ -73,7 +73,7 @@ func TestFile_Rename_InstanceNotFound(t *testing.T) {
 //
 // # 为什么断言是「相对基线」而不是绝对条数
 //
-// CP 首次启动会预置 5 条推荐规则（`database/alert_seed.go`，FR-485，全部 enabled=false）。
+// CP 首次启动会预置 5 条推荐规则（`database/alert_seed.go`，全部 enabled=false）。
 // 旧断言写的是 `Len(rules, 1)` / `Len(rules, 0)`——那是预置功能上线**之前**的世界。
 // 直接改成 6 / 5 同样脆弱：预置清单增删一条就会再红一次，而那种红与该用例真正
 // 想守的东西（创建→列表→删除这条闭环）毫无关系。

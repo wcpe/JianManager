@@ -33,7 +33,7 @@ func (h *AgentTokenHandler) RegisterAdminRoutes(rg *gin.RouterGroup) {
 	g.POST("", h.Issue)
 	g.GET("", h.List)
 	g.DELETE("/:id", h.Revoke)
-	// 调用流水查询（FR-390）
+	// 调用流水查询
 	rg.GET("/agent/call-logs", h.ListCallLogs)
 }
 
@@ -156,7 +156,7 @@ func (h *AgentTokenHandler) Issue(c *gin.Context) {
 }
 
 // List GET /api/v1/agent/tokens
-// 响应含 lastUsedAt（模型字段）与 callCount24h（24h 聚合，FR-390）。
+// 响应含 lastUsedAt（模型字段）与 callCount24h（24h 聚合）。
 func (h *AgentTokenHandler) List(c *gin.Context) {
 	list, err := h.svc.List()
 	if err != nil {
@@ -290,12 +290,22 @@ type AgentOpsHandler struct {
 	nodeSvc     *service.NodeService
 	audit       *service.AuditService
 	callLog     *service.AgentCallLogService
+	// approval 审批服务。nil 时需审的 action **失败关闭**（拒绝执行），
+	// 与 MCP 侧 Approval=nil 的语义一致：放行一个该审的操作是安全事故，拒绝只是功能不可用。
+	approval *service.ApprovalService
 }
 
 // NewAgentOpsHandler 创建运维处理器（callLog 可为 nil，则不记流水）。
 func NewAgentOpsHandler(agent *service.AgentTokenService, inst *service.InstanceService, node *service.NodeService, audit *service.AuditService, callLog *service.AgentCallLogService) *AgentOpsHandler {
 	return &AgentOpsHandler{agentSvc: agent, instanceSvc: inst, nodeSvc: node, audit: audit, callLog: callLog}
 }
+
+// SetApproval 注入审批服务（装配层调用）。
+//
+// 存在的理由：要求 CLI / MCP / curl **三入口同策略**。此前审批拦截只接在
+// MCP 的 CallTool 上，`POST /agent/instances/:id/stop` 会直接执行——
+// 同一个 Agent Token 换用 curl 即可跳过人工审批，等于审批机制只堵了一半的门口。
+func (h *AgentOpsHandler) SetApproval(a *service.ApprovalService) { h.approval = a }
 
 // RegisterOpsRoutes 挂在已通过 AgentAuth 的组上。
 func (h *AgentOpsHandler) RegisterOpsRoutes(rg *gin.RouterGroup) {
@@ -400,7 +410,7 @@ func (h *AgentOpsHandler) ListNodes(c *gin.Context) {
 }
 
 // ListInstances GET /api/v1/agent/instances
-// V1 仅显式实例 scope；V2 为显式实例 ∪ 授权节点当前实例（FR-395）。
+// V1 仅显式实例 scope；V2 为显式实例 ∪ 授权节点当前实例。
 func (h *AgentOpsHandler) ListInstances(c *gin.Context) {
 	p := h.principal(c)
 	if p == nil {
@@ -447,13 +457,13 @@ func (h *AgentOpsHandler) GetInstance(c *gin.Context) {
 	}
 	auth, inst, err := h.agentSvc.AuthorizeInstanceAction(p, service.AgentActionGetInstance, uint(id))
 	if err != nil {
-		// scope 外与不存在收敛为同一拒绝语义，不泄露存在性（FR-395）。
+		// scope 外与不存在收敛为同一拒绝语义，不泄露存在性。
 		h.recordCall(c, p, service.AgentActionGetInstance, "", "instance", c.Param("id"), false, "forbidden")
 		h.forbid(c, "实例不在 scope 或操作被拒绝")
 		return
 	}
 	h.recordCall(c, p, service.AgentActionGetInstance, auth.Capability, "instance", c.Param("id"), true, "")
-	// 仅本路径（get_instance 的响应体会被序列化出去）挂能力画像（FR-445 §2.4）；
+	// 仅本路径（get_instance 的响应体会被序列化出去）挂能力画像（§2.4）；
 	// 其它实例级动作不附加无用字段，故画像不在 ResolveInstanceTarget 内统一加。
 	service.AttachCapabilities(inst)
 	c.JSON(http.StatusOK, inst)
@@ -505,7 +515,14 @@ func (h *AgentOpsHandler) lifecycle(c *gin.Context, action string, fn func(id, e
 		h.forbid(c, "能力/scope 不足或操作被拒绝")
 		return
 	}
-	// 授权通过后携带可信归属执行；派发前锁内重验归属（FR-395）。
+	// 审批闸：与 MCP 同策略。
+	//
+	// 位置在授权之后、执行之前：越权请求不应变成一张等人批准的票
+	// （审批是「有权限的人决定要不要做」，不是给没有权限的人开后门）。
+	if h.gateApproval(c, p, action, uint(id)) {
+		return
+	}
+	// 授权通过后携带可信归属执行；派发前锁内重验归属。
 	if err := fn(uint(id), inst.NodeID); err != nil {
 		h.auditAgent(c, p, action, "instance", c.Param("id"), false, err.Error())
 		h.recordCall(c, p, action, auth.Capability, "instance", c.Param("id"), false, err.Error())
@@ -530,6 +547,66 @@ func (h *AgentOpsHandler) Stop(c *gin.Context) {
 // Restart POST .../restart
 func (h *AgentOpsHandler) Restart(c *gin.Context) {
 	h.lifecycle(c, service.AgentActionInstanceRestart, h.instanceSvc.RestartForExpectedNode)
+}
+
+// gateApproval 对需审的 agent 运维 action 做审批拦截（的 HTTP/CLI 入口）。
+//
+// 返回 true 表示已被拦截，调用方**必须直接返回**、不得执行——
+// 这是「未审批零副作用」在这条入口上的落点。
+//
+// ## 与 MCP 侧的差异
+//
+// MCP 返回 `{status:"awaiting_approval", requestId}`；HTTP 用 **202 Accepted** 承载同一语义：
+// 请求已被接受处理，但业务动作尚未发生。不用 200，是因为 200 会被调用方当作「已完成」；
+// 不用 4xx，是因为这不是拒绝，而是等待人工决定。
+func (h *AgentOpsHandler) gateApproval(c *gin.Context, p *service.AgentPrincipal, action string, id uint) bool {
+	toolName, needs := service.AgentActionNeedsApproval(action)
+	if !needs {
+		return false
+	}
+	// 需审但审批服务未装配 → 失败关闭（与 MCP 侧 Approval=nil 同一取向）。
+	if h.approval == nil {
+		h.auditAgent(c, p, action, "instance", c.Param("id"), false, "approval unavailable")
+		h.recordCall(c, p, action, "", "instance", c.Param("id"), false, "approval unavailable")
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   "APPROVAL_UNAVAILABLE",
+			"message": "审批服务未装配，该高危操作已被拒绝（失败关闭）",
+		})
+		return true
+	}
+
+	targetID := strconv.FormatUint(uint64(id), 10)
+	res := h.approval.InterceptForApproval(service.ApprovalInterceptParams{
+		ToolName:        toolName,
+		Action:          action,
+		Operation:       service.AgentOperationWrite,
+		TargetType:      "instance",
+		TargetID:        targetID,
+		Payload:         map[string]any{"id": id},
+		Evidence:        service.CaptureTargetSnapshot(h.instanceSvc, h.nodeSvc, "instance", targetID),
+		ApplicantUserID: h.agentSvc.TokenOwnerUserID(p.TokenID),
+		ApplicantKind:   model.ApprovalApplicantAgent,
+		TokenID:         strconv.FormatUint(uint64(p.TokenID), 10),
+	})
+	if !res.Blocked {
+		return false
+	}
+	if res.Err != nil {
+		h.auditAgent(c, p, action, "instance", c.Param("id"), false, res.Message)
+		h.recordCall(c, p, action, "", "instance", c.Param("id"), false, res.Message)
+		c.JSON(http.StatusForbidden, gin.H{"error": "APPROVAL_REJECTED", "message": res.Message})
+		return true
+	}
+	// 已落票：零副作用，返回 requestId 供轮询。
+	h.auditAgent(c, p, action, "instance", c.Param("id"), false, "awaiting approval")
+	h.recordCall(c, p, action, "", "instance", c.Param("id"), false, "awaiting approval")
+	c.JSON(http.StatusAccepted, gin.H{
+		"status":    "awaiting_approval",
+		"requestId": res.RequestID,
+		"ticketId":  res.TicketID,
+		"message":   res.Message,
+	})
+	return true
 }
 
 func (h *AgentOpsHandler) maintenance(c *gin.Context, action string, enabled bool) {

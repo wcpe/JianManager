@@ -138,6 +138,9 @@ func auditExportDetail(filter service.AuditFilter, status string) string {
 	if filter.TargetType != nil {
 		filters["targetType"] = *filter.TargetType
 	}
+	if filter.TargetID != nil {
+		filters["targetId"] = *filter.TargetID
+	}
 	if filter.From != nil {
 		filters["from"] = filter.From.Format(time.RFC3339)
 	}
@@ -164,6 +167,10 @@ func parseAuditFilter(c *gin.Context) service.AuditFilter {
 	}
 	if v := c.Query("targetType"); v != "" {
 		filter.TargetType = &v
+	}
+	// targetId：按对象回溯（如「这个节点被改过什么」）。与 targetType 合用才精确。
+	if v := c.Query("targetId"); v != "" {
+		filter.TargetID = &v
 	}
 	if v := c.Query("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

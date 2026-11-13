@@ -16,9 +16,9 @@ import (
 // 而日志里只会有一句容易被人忽略的「未接 hits 数据源」。
 //
 // 这里钉住两件事：
-//   1. nil 客户端必须返回 nil —— 语义是「不做重建」，logtail 会如实打日志，
-//      而不是拿一个恒返回空的结果假装「重建完成、补齐 0 天」；
-//   2. 有客户端时必须返回非 nil —— 即真的接了，不是永远走 nil 分支。
+//  1. nil 客户端必须返回 nil —— 语义是「不做重建」，logtail 会如实打日志，
+//     而不是拿一个恒返回空的结果假装「重建完成、补齐 0 天」；
+//  2. 有客户端时必须返回非 nil —— 即真的接了，不是永远走 nil 分支。
 func TestHitsSourceAdapterNilClientDisablesRebuild(t *testing.T) {
 	if got := hitsSourceAdapter(nil); got != nil {
 		t.Fatalf("nil 客户端必须返回 nil HitsSource（语义是「不做重建」，要能如实上报），实际 %v", got)

@@ -78,7 +78,7 @@ type ScenarioActionEventService struct {
 	runCancel  map[string]context.CancelFunc
 }
 
-// NewScenarioActionEventService 创建 FR-352 场景动作事件处理链。
+// NewScenarioActionEventService 创建场景动作事件处理链。
 func NewScenarioActionEventService(results *ActionResultService, barriers *BarrierCoordinator, router *ActionSignalRouter, expected BarrierExpectedBotProvider) *ScenarioActionEventService {
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &ScenarioActionEventService{

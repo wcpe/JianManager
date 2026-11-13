@@ -50,7 +50,7 @@ func EnforceReserveRatio(budget CacheBudget) error {
 	return nil
 }
 
-// CacheBudget 记录进程级 cache 预算与 Worker 日志总预算的区分（FR-473 §6.5/§7、FR-476 §3.1）。
+// CacheBudget 记录进程级 cache 预算与 Worker 日志总预算的区分（§6.5/§7§3.1）。
 //
 // 关键区分（不得混用）：
 //   - HotCacheBytes：VL HOT 实例 -memory.allowedBytes（默认模板 512MiB），是**进程 cache 预算**；
@@ -69,7 +69,7 @@ type CacheBudget struct {
 }
 
 // DefaultCacheBudget 返回 HOT cache 模板 512MiB 的预算骨架。
-// ProcessRSS / Total 留 0 表示尚未由 FR-473 冻结数值注入，不作自动推断。
+// ProcessRSS / Total 留 0 表示尚未由冻结数值注入，不作自动推断。
 func DefaultCacheBudget() CacheBudget {
 	return CacheBudget{
 		HotCacheBytes: DefaultHotCacheBytes,
@@ -81,7 +81,7 @@ func DefaultCacheBudget() CacheBudget {
 //
 // cacheBytes 对应 -memory.allowedBytes（进程级 cache），**不是** RSS，也**不是** Worker 日志总预算。
 // 本函数拒绝负数；0 表示“未配置，由实例模板决定”（HOT 回退 512MiB）。
-// 真实预算降级（暂停采集 / 可见缺口 / 不静默删除未确认前缀）由 FR-476 Runbook C 验收。
+// 真实预算降级（暂停采集 / 可见缺口 / 不静默删除未确认前缀）由Runbook C 验收。
 func EnforceCacheBudget(cacheBytes int64) error {
 	if cacheBytes < 0 {
 		return fmt.Errorf("vlsup: cache budget must be >= 0, got %d", cacheBytes)
@@ -107,7 +107,7 @@ func (b CacheBudget) DistinguishesProcessRSS() bool {
 	return true
 }
 
-// DegradationState 日志资源预算的降级状态（FR-473 §6.6/§7）。
+// DegradationState 日志资源预算的降级状态（§6.6/§7）。
 //
 // OK：全部预算内；DEGRADED：逼近/超出子预算（应暂停低优先级采集或切换受控 Raw，并暴露缺口）；
 // PAUSED：触及不可恢复写的暂停阈值（磁盘 ≥ pause%），必须暂停不可恢复写入。

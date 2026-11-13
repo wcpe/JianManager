@@ -19,7 +19,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// ---- 制品来源校验（FR-441 §3.1/3.2）----
+// 制品来源校验（§3.1/3.2）----
 
 // TestResolveBinarySource_URLRequiresHTTPS https 是硬约束：明文传输的二进制可被中间人替换，
 // 与自更新/JDK 下载源同口径。
@@ -198,7 +198,7 @@ func TestBinaryProvisionStageFromBytes(t *testing.T) {
 	require.Less(t, mid, binaryStageFetchTo)
 }
 
-// ---- 异步搭建端到端（FR-441 验收项 4/6/7/8）----
+// 异步搭建端到端（验收项 4/6/7/8）----
 
 // binaryWorkerStub 记录 FetchBinary 请求并按需回放进度帧与终态。
 type binaryWorkerStub struct {
@@ -216,7 +216,7 @@ func (f *binaryWorkerStub) CreateInstance(_ context.Context, _ *workerpb.CreateI
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
-// HashFile 实现磁盘内容比对（FR-468 §2.5）的 Worker 侧契约（N-4）。
+// HashFile 实现磁盘内容比对（§2.5）的 Worker 侧契约（N-4）。
 //
 // 必须显式实现：嵌入的 workerpb.WorkerServiceClient 是**接口**，零值 nil——未实现的方法
 // 一旦被调用就是 nil 解引用 panic。N-4 修正 View 的 status 漏选后，停止态实例的磁盘比对

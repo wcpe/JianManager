@@ -40,8 +40,20 @@ func parseFlatYAML(content string) []*workerpb.ConfigField {
 			continue
 		}
 		indent := len(raw) - len(strings.TrimLeft(raw, " "))
-		// 弹出更浅层
-		for len(stack) > 0 && stack[len(stack)-1].indent >= indent {
+		// 列表项（`- key: value` / `- item`）的 `- ` 先占掉两个字符，其后才是内容缩进。
+		//
+		// 这个偏移必须显式加回来：否则 `listeners:` 下缩进 2 的 `- host: ...` 会被算成
+		// 缩进 2 的「普通键」，而父级 `listeners` 的缩进是 0，两者不成包含关系，
+		// 拍平后键退化成裸的 `host` —— form 模式按 `listeners.host` 找不到它。
+		// 实测就是这样丢掉了整张 servers/permissions 表的层级。
+		isListItem := strings.HasPrefix(strings.TrimSpace(raw), "- ")
+		contentIndent := indent
+		if isListItem {
+			contentIndent = indent + 2
+		}
+
+		// 弹出更浅层：用内容缩进比较，使列表项与同级普通键落在同一层。
+		for len(stack) > 0 && stack[len(stack)-1].indent >= contentIndent {
 			stack = stack[:len(stack)-1]
 		}
 		key, value, ok := parseYAMLLine(raw)
@@ -49,11 +61,18 @@ func parseFlatYAML(content string) []*workerpb.ConfigField {
 			continue
 		}
 		path := key
-		for _, e := range stack {
-			path = e.key + "." + path
+		// 自内向外拼接：stack 是「外层在前」的，而每轮都是把 e.key 前缀到 path 上，
+		// 故必须从栈顶（最内层）往回走。
+		//
+		// 这里曾写成正向遍历，结果 3 层以上嵌套的前缀整段反序：`servers: {lobby: {motd: x}}`
+		// 产出的是 `lobby.servers.motd` 而不是 `servers.lobby.motd`。2 层时栈里只有一个元素，
+		// 正向反向结果相同，所以那个 bug 长期没被发现；而 BungeeCord 的 servers 表、Paper 的
+		// world-settings 都是 3 层，真实配置一律解析错位（schema 绑不上、补丁写不进去）。
+		for i := len(stack) - 1; i >= 0; i-- {
+			path = stack[i].key + "." + path
 		}
 		if value == "" {
-			stack = append(stack, indentEntry{indent: indent, key: key})
+			stack = append(stack, indentEntry{indent: contentIndent, key: key})
 			continue
 		}
 		fields = append(fields, &workerpb.ConfigField{Key: path, Value: value, Type: inferScalarType(value), Line: int32(lineNo)})

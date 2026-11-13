@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { buildBusinessPayload, coerceBusinessArg, isWriteAction } from './business-actions'
+import { buildBusinessPayload, coerceBusinessArg, isWriteAction } from '@/lib/console/business-actions'
 import type { BusinessAction } from '@/api/business'
 
 function action(name: string, readOnly?: boolean): BusinessAction {
   return { action: name, readOnly }
 }
 
-describe('isWriteAction（FR-121 写动作判定）', () => {
+describe('isWriteAction（写动作判定）', () => {
   it('readOnly=true 为读动作', () => {
     expect(isWriteAction(action('balance', true))).toBe(false)
   })
@@ -20,7 +20,7 @@ describe('isWriteAction（FR-121 写动作判定）', () => {
   })
 })
 
-describe('coerceBusinessArg（FR-119 泛化台入参取值）', () => {
+describe('coerceBusinessArg（泛化台入参取值）', () => {
   it('对象型文本还原为真嵌套对象（getObject 才拿得到）', () => {
     const parsed = coerceBusinessArg('{"dataVersion":42,"basicAttrs":{"health":18}}')
     expect(parsed).toEqual({ dataVersion: 42, basicAttrs: { health: 18 } })
@@ -53,7 +53,7 @@ describe('coerceBusinessArg（FR-119 泛化台入参取值）', () => {
   })
 })
 
-describe('buildBusinessPayload（FR-119 混合标量/对象入参下发）', () => {
+describe('buildBusinessPayload（混合标量/对象入参下发）', () => {
   it('对象入参嵌套、标量入参保持字符串', () => {
     const json = buildBusinessPayload({
       player: 'Steve',

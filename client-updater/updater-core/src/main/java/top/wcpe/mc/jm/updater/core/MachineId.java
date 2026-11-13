@@ -15,13 +15,13 @@ import java.util.Enumeration;
 import java.util.List;
 
 /**
- * 客户端机器码身份（FR-092）：稳定、跨平台、<b>不可逆</b>的机器标识，随 manifest/制品/遥测携带（X-Machine-Id）。
+ * 客户端机器码身份：稳定、跨平台、<b>不可逆</b>的机器标识，随 manifest/制品/遥测携带（X-Machine-Id）。
  *
  * <p>多硬件/环境特征（NIC MAC / CPU / 内存 / 主机名 / os）组合 SHA-256（64 hex），不暴露原始硬件信息。
  * 首次计算后<b>持久化</b>于 {@code <userHome>/.jm-updater/machine-id}（per-machine 稳定、硬件部分变化容错）；
  * 后续直接读持久值。全程 best-effort、<b>绝不抛</b>——任一特征采集失败即跳过，极端兜底返回固定串的 hash。
  *
- * <p><b>客户端生成、不可信</b>：仅统计 + 辅助限流，不作信任/授权依据（ADR-023，限流以 IP 为主）。
+ * <p><b>客户端生成、不可信</b>：仅统计 + 辅助限流，不作信任/授权依据（限流以 IP 为主）。
  * 不引外部依赖、不 shell 外部命令（避免拖慢游戏启动 / 权限问题）。
  */
 final class MachineId {

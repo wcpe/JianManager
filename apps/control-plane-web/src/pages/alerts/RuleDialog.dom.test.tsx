@@ -3,13 +3,16 @@ import { fireEvent, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
+import { http, HttpResponse } from 'msw'
 import { mockInject } from '@jianmanager/devmock/inject'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import api from '@/api/client'
 import type { AlertChannelInfo, AlertRuleInfo } from '@/api/alerts'
 import { RuleDialog } from './RuleDialog'
 
-/**
- * RuleDialog 强断言（FR-208 告警规则对话框）：直接渲染组件并传 props。
+/** 
+ * RuleDialog 强断言（告警规则对话框）：直接渲染组件并传 props。
  * 共享 Dialog 语义由 role=dialog 锁定，再取字段。覆盖：字段渲染 + 编辑回填、
  * 创建/更新提交成功（POST/PUT 命中、onClose 回调被调）、500 注入显错误态不崩。
  * 渲染前 loginMockUser() 让 requireAuth 保护的 /alerts/* 端点放行。
@@ -29,7 +32,7 @@ const seedChannels: AlertChannelInfo[] = [
   },
 ]
 
-/**
+/** 
  * 已存在的指标规则（编辑回填靶子）。id 取 1 命中 observ.ts 种子集合，
  * 使 PUT /alerts/rules/1 能更新到行（否则 mock update 找不到行返 404）。
  */
@@ -64,7 +67,7 @@ function panelByTitle(title: string): HTMLElement {
   return heading.closest('[role="dialog"]') as HTMLElement
 }
 
-/**
+/** 
  * 打开组件库 Select（Radix 组合控件）并选中指定选项——原生 <select> 的 selectOptions 不适用。
  * 选项按文本定位而非 getByRole('option')：role 查询要为整棵 DOM 逐个算可访问名，本对话框有
  * 6 个 Select、单次查询开销可达秒级；定位后仍断言它挂在真正的 Radix 选项（role=option）上。
@@ -79,6 +82,16 @@ async function pickSelectOption(trigger: HTMLElement, optionName: string) {
   expect(option).not.toBeNull()
   // Radix 选项在「非鼠标指针类型」分支下由 click 提交选中，fireEvent 足以覆盖。
   fireEvent.click(option as HTMLElement)
+}
+
+/** 
+ * 选实例：该维度已由 Radix Select 改为 InstancePicker（Popover 基座 + 普通 button 选项），
+ * 选项不再是 role=option，故不能复用 pickSelectOption。
+ */
+async function pickInstanceOption(trigger: HTMLElement, optionName: string) {
+  HTMLElement.prototype.scrollIntoView ??= () => {}
+  await userEvent.click(trigger.closest('button') ?? trigger)
+  await userEvent.click(await screen.findByRole('button', { name: optionName }))
 }
 
 describe('RuleDialog（mock 假后端）', () => {
@@ -126,6 +139,36 @@ describe('RuleDialog（mock 假后端）', () => {
   // 本对话框含 6 个 Radix Select，jsdom 下一次「展开 + 选中」约 2s；本用例两次交互（切触发类型 +
   // 选目标实例）叠加，默认 10s 上限在并行满载时会擦边，故显式放宽（同 CloneInstanceDialog.dom.test）。
   it('② 切到日志关键字：目标自动改为实例并提交 targetId/keyword', async () => {
+    // 实例维度改走服务端搜索：devmock 的实例种子被 padding 到千级且按名升序，survival-1
+    // 排不进前 50 条候选，故这里显式给一个只含它的搜索响应。
+    server.use(
+      http.get(API('/instances/search'), () =>
+        HttpResponse.json({
+          items: [
+            {
+              id: 1,
+              uuid: 'i-survival-1',
+              nodeId: 1,
+              name: 'survival-1',
+              type: 'minecraft_java',
+              role: 'backend',
+              processType: 'daemon',
+              status: 'RUNNING',
+              startCommand: '',
+              workDir: '/srv/survival-1',
+              serverPort: 25565,
+              autoStart: false,
+              autoRestart: false,
+              tags: null,
+              createdAt: '2026-01-01T00:00:00Z',
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 50,
+        }),
+      ),
+    )
     loginMockUser()
     const postSpy = vi.spyOn(api, 'post')
     const onClose = vi.fn()
@@ -135,8 +178,8 @@ describe('RuleDialog（mock 假后端）', () => {
     fireEvent.change(within(panel).getAllByRole('textbox')[0], { target: { value: '日志异常告警' } })
     await pickSelectOption(within(panel).getByText('指标阈值'), '日志关键字')
 
-    // 切到日志关键字后目标维度自动落到实例：下拉当前显示「全部实例」，改选种子实例 survival-1（id=1）。
-    await pickSelectOption(await within(panel).findByText('全部实例'), 'survival-1')
+    // 切到日志关键字后目标维度自动落到实例：控件当前显示「全部实例」，改选种子实例 survival-1（id=1）。
+    await pickInstanceOption(await within(panel).findByText('全部实例'), 'survival-1')
     fireEvent.change(within(panel).getByPlaceholderText('OutOfMemoryError'), { target: { value: 'OutOfMemoryError' } })
     fireEvent.click(within(panel).getByRole('button', { name: '保存' }))
 
@@ -200,7 +243,7 @@ describe('RuleDialog（mock 假后端）', () => {
     }
   })
 
-  it('④ 指标规则可切换目标维度，并以实例维度提交（FR-464 实例级容量告警前置）', async () => {
+  it('④ 指标规则可切换目标维度，并以实例维度提交（实例级容量告警前置）', async () => {
     // 真机缺陷：metric 触发原先被硬编码为「必须 node 目标」，导致实例级 metric 规则
     // 建不出来 → CapacityTrendAlerter 按 target_type="instance" 查规则恒为空 →
     // 实例维度容量趋势告警静默失效。本用例锁定「可切到实例维度并成功提交」。

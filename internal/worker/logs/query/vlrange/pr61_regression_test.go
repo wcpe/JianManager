@@ -80,6 +80,8 @@ func pr61CursorFixture(t *testing.T, tied bool) (*query.Service, query.QueryRequ
 			}
 		}
 		switch {
+		case isSearchHydrationRequest(r):
+			// Exact selected identities do not need a full-width sort.
 		case strings.Contains(values.Get("query"), "| sort by (_time desc, log_source_id, source_generation, record_start desc, record_end desc, event_id)"):
 			sort.SliceStable(matched, func(i, j int) bool { return query.LessSortKey(fakeSortKey(matched[i]), fakeSortKey(matched[j])) })
 		case strings.Contains(values.Get("query"), "| sort by (_time desc)"):
@@ -89,20 +91,21 @@ func pr61CursorFixture(t *testing.T, tied bool) (*query.Service, query.QueryRequ
 			http.Error(w, "排序不支持", http.StatusBadRequest)
 			return
 		}
-		if len(matched) > limit {
+		if len(matched) > limit && !isSearchHydrationRequest(r) {
 			matched = matched[:limit]
 		}
 		ids := make([]string, 0, len(matched))
 		for _, row := range matched {
 			ids = append(ids, row.eventID)
 		}
-		mu.Lock()
-		calls = append(calls, fmt.Sprintf("end=%s take=%d HTTP-limit=%q 返回=%v", end.Format(time.RFC3339Nano), limit, values.Get("limit"), ids))
-		mu.Unlock()
+		if !isSearchHydrationRequest(r) {
+			mu.Lock()
+			calls = append(calls, fmt.Sprintf("end=%s take=%d HTTP-limit=%q 返回=%v", end.Format(time.RFC3339Nano), limit, values.Get("limit"), ids))
+			mu.Unlock()
+		}
 		w.Header().Set("Content-Type", "application/json")
-		encoder := json.NewEncoder(w)
 		for _, row := range matched {
-			err := encoder.Encode(map[string]string{
+			line, err := json.Marshal(map[string]string{
 				"_time": row.eventTime.Format(time.RFC3339Nano), "_msg": "m-" + row.eventID,
 				"event_id": row.eventID, "log_source_id": "inst:7/stdout", "source_generation": "g1",
 				"record_start": strconv.FormatUint(row.recordStart, 10), "record_end": strconv.FormatUint(row.recordEnd, 10),
@@ -111,6 +114,9 @@ func pr61CursorFixture(t *testing.T, tied bool) (*query.Service, query.QueryRequ
 			if err != nil {
 				t.Errorf("编码夹具失败: %v", err)
 				return
+			}
+			if searchFixtureLineMatches(t, r, line) {
+				_, _ = w.Write(append(line, '\n'))
 			}
 		}
 	}))

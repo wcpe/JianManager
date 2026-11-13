@@ -15,10 +15,30 @@ import (
 // ensureBotManager 懒重拉永不触发，后续 IPC 全部写入死管道（Bot 永远 connecting）。
 // 期望：子进程退出后 IsRunning() 归 false，且可再次 Start 重拉。
 
+// requireNode 确认环境里有**满足最低版本**的 node，否则 skip。
+//
+// 【为何必须查版本而不只查存在】被测代码（noderesolver.go）要求
+// Node.js >= 22.13.0；只做 LookPath 的守卫在“装了但版本低”的机器上不会 skip，
+// 而是让整个包变红。那些用例本身没问题，报错却出现在与开发者改动无关的地方。
+// 这里刻意复用被测代码自己的 parseNodeVersion / minimumBotNodeVersion，
+// 不另写一份比较逻辑——两处判据一旦漂移，守卫就会与实现对不上。
 func requireNode(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("node"); err != nil {
+	path, err := exec.LookPath("node")
+	if err != nil {
 		t.Skip("测试环境无 node，跳过子进程生命周期测试")
+	}
+	raw, err := probeNodeVersion(path)
+	if err != nil {
+		t.Skipf("无法探测 node 版本（%v），跳过子进程生命周期测试", err)
+	}
+	version, ok := parseNodeVersion(raw)
+	if !ok {
+		t.Skipf("node 版本格式无法解析（%q），跳过子进程生命周期测试", raw)
+	}
+	if version.compare(minimumBotNodeVersion) < 0 {
+		t.Skipf("node 版本 %s 低于要求的 %s，跳过子进程生命周期测试",
+			version, minimumBotNodeVersion)
 	}
 }
 

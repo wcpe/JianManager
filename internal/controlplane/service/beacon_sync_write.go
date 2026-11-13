@@ -10,14 +10,14 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Beacon 拓扑映射的事务内写入段（FR-444 §4.4）。
+// Beacon 拓扑映射的事务内写入段（§4.4）。
 //
 // 本文件所有函数都在 BeaconSyncService.apply 的同一事务内调用：任一函数返回错误，
 // 整个事务回滚——既保证「拉取失败/数据不合法 → 本地零改动」，也保证失败不留半棵树。
 
 // ensurePlanGroups 在事务内确保计划中的分组节点全部存在（父先于子），返回 key → 分组 ID。
 //
-// 冲突处理（FR-444 §4.3）：同名同父的既有节点直接复用，不重复创建。
+// 冲突处理（§4.3）：同名同父的既有节点直接复用，不重复创建。
 // 返回本轮实际新建的节点数。
 func ensurePlanGroups(tx *gorm.DB, groups *InstanceGroupService, p *beaconPlan, resolved map[string]uint) (map[string]uint, error) {
 	groupIDByKey := make(map[string]uint, len(resolved)+len(p.nodes))
@@ -48,7 +48,7 @@ func ensurePlanGroups(tx *gorm.DB, groups *InstanceGroupService, p *beaconPlan, 
 	return groupIDByKey, nil
 }
 
-// applyAssignments 在事务内把实例移入 Beacon 对应分组（Beacon 为拓扑真源，FR-444 §4.3）。
+// applyAssignments 在事务内把实例移入 Beacon 对应分组（Beacon 为拓扑真源§4.3）。
 //
 // 只 ADD 成员关系、不删除实例的其它分组归属：分组树是「一个人为归类 + Beacon 归属」的叠加视图，
 // 一台实例可同时属于多个分组（模型即 M:N），删除关系会破坏人工归类。重复拉取因唯一约束天然幂等。
@@ -75,10 +75,10 @@ func applyAssignments(tx *gorm.DB, p *beaconPlan, groupIDByKey map[string]uint) 
 	return nil
 }
 
-// applyTags 在事务内为实例覆盖 region:/zone:/role: 维度标签（FR-444 §4.1）。
+// applyTags 在事务内为实例覆盖 region:/zone:/role: 维度标签（§4.1）。
 //
 // 刻意直接更新 tags 列而不经 InstanceService.Update：后者会触发 Worker 启动规格同步与
-// FR-443 拓扑推送（改名/改归属视为拓扑变更）。补标签是 Beacon 侧的派生结果，不应反向
+// 拓扑推送（改名/改归属视为拓扑变更）。补标签是 Beacon 侧的派生结果，不应反向
 // 触发一次推送，否则「拉取 → 推送」会形成回声。其它维度标签（如 env:）原样保留。
 func applyTags(tx *gorm.DB, p *beaconPlan, instancesByID map[uint]*model.Instance, groupIDByKey map[string]uint) error {
 	for i := range p.assignments {

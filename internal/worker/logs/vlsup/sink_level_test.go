@@ -77,6 +77,6 @@ func (h *captureLevelHandler) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 func (h *captureLevelHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
-func (h *captureLevelHandler) WithGroup(_ string) slog.Handler     { return h }
+func (h *captureLevelHandler) WithGroup(_ string) slog.Handler      { return h }
 
 func errString(s string) error { return errors.New(s) }

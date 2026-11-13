@@ -13,9 +13,9 @@ import (
 )
 
 // failingCreateBotWorker CreateBot 恒返回 Success=false（模拟 bot-worker 依赖未装/node 缺失），
-// 其余复用 fakeFR038BotWorker 的成功桩。
+// 其余复用 fakeBotScaleWorker 的成功桩。
 type failingCreateBotWorker struct {
-	fakeFR038BotWorker
+	fakeBotScaleWorker
 	reason string
 }
 
@@ -27,11 +27,11 @@ func (w *failingCreateBotWorker) CreateBot(context.Context, *workerpb.CreateBotR
 // 此前只 slog.Warn 吞掉、API 照发 201，bot 永卡 pending、两侧零反馈。修复后失败必须写进
 // Bot 本身（status=error + lastError）随创建响应带回，前端据此显示可操作原因。
 func TestBotCreate_DelegateFailureSurfacesInBot(t *testing.T) {
-	db := newFR038BotScaleDB(t)
+	db := newBotScaleDB(t)
 	pool := cpgrpc.NewClientPool()
 	svc := NewBotService(db, pool)
-	node := createFR038Node(t, db, "节点A", "node-feedback-a")
-	inst := createFR038Instance(t, db, node.ID, "生存服", 25565)
+	node := createBotScaleNode(t, db, "节点A", "node-feedback-a")
+	inst := createBotScaleInstance(t, db, node.ID, "生存服", 25565)
 
 	const reason = "启动 bot-worker 失败: bot 依赖未安装：请到节点『全局包管理』安装 mineflayer 与 mineflayer-pathfinder"
 	pool.SetWorkerClientForTest(node.UUID, &failingCreateBotWorker{reason: reason})
@@ -50,12 +50,12 @@ func TestBotCreate_DelegateFailureSurfacesInBot(t *testing.T) {
 // TestBotCreate_DelegateSuccessClearsLastError 委托成功路径：状态置 connecting 且 lastError 清空
 // （覆盖「上次失败→依赖装好重连成功」翻篇）。
 func TestBotCreate_DelegateSuccessClearsLastError(t *testing.T) {
-	db := newFR038BotScaleDB(t)
+	db := newBotScaleDB(t)
 	pool := cpgrpc.NewClientPool()
 	svc := NewBotService(db, pool)
-	node := createFR038Node(t, db, "节点B", "node-feedback-b")
-	inst := createFR038Instance(t, db, node.ID, "空岛服", 25566)
-	pool.SetWorkerClientForTest(node.UUID, &fakeFR038BotWorker{})
+	node := createBotScaleNode(t, db, "节点B", "node-feedback-b")
+	inst := createBotScaleInstance(t, db, node.ID, "空岛服", 25566)
+	pool.SetWorkerClientForTest(node.UUID, &fakeBotScaleWorker{})
 
 	bot, err := svc.Create(CreateBotRequest{InstanceID: inst.ID, Name: "OkBot", Config: `{"auth":"offline"}`, Behavior: "idle"})
 	require.NoError(t, err)

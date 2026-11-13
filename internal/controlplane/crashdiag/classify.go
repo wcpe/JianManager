@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// 崩溃根因枚举（FR-470 spec §2.1）。分类为启发式规则，返回置信度 + 证据原文供人复核。
+// 崩溃根因枚举（spec §2.1）。分类为启发式规则，返回置信度 + 证据原文供人复核。
 const (
 	CrashRootCauseOOM           = "oom"
 	CrashRootCausePortInUse     = "port_in_use"
@@ -19,7 +19,7 @@ const (
 	CrashRootCauseUnknown       = "unknown"
 )
 
-// CrashClassification 一次崩溃快照的分类结果（FR-470）。
+// CrashClassification 一次崩溃快照的分类结果。
 type CrashClassification struct {
 	// SnapshotID 关联快照 ID（读侧回填；纯分类时为 0）。
 	SnapshotID uint `json:"snapshotId"`
@@ -130,7 +130,7 @@ var signatureHints = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(FATAL|ERROR)[:\]]\s*(.+)`),
 }
 
-// ClassifyCrashSnapshot 对一个崩溃现场做根因归类（FR-470 §2.1）。
+// ClassifyCrashSnapshot 对一个崩溃现场做根因归类（§2.1）。
 //
 // 输入：退出码、终止信号名、崩溃前终端尾部输出。纯函数、无副作用、确定性
 // （同输入恒同输出），可在入库事务内同步调用，也可对历史快照批量重跑。

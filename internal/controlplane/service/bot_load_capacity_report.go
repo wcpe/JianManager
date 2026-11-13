@@ -142,7 +142,7 @@ func buildBotLoadCapacityReport(sess model.BotStressSession, rows []model.BotLoa
 		TargetHostMemory: memory, SafetyMarginRatio: botLoadCapacitySafetyMargin, Stages: capacityStages(samples),
 		MeasuredPeak: capacityMeasuredPeak(samples, peakBots), Recommended: capacityRecommended(samples),
 		Environment: BotLoadCapacityEnvironment{Target: map[string]any{}, Executors: []any{}, Unavailable: []string{"target.metadata:UNAVAILABLE", "executors.metadata:UNAVAILABLE"}},
-		Disclaimer:  "资源报告不证明玩法正确性；命令成功边界见 ADR-075。measured 为实测，recommended 为 measured×(1+safetyMarginRatio)。",
+		Disclaimer:  "资源报告不证明玩法正确性；命令成功边界。measured 为实测，recommended 为 measured×(1+safetyMarginRatio)。",
 	}
 }
 

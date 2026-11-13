@@ -39,7 +39,7 @@ func TestResolveStopCommand(t *testing.T) {
 }
 
 // TestStopJavaWritesConfiguredCommand 验证优雅停止时写入 Java stdin 的是「按配置派生」
-// 的停止命令，而非硬编码的 "stop"。这是 FR-035 代理实例停止缺陷的回归测试：
+// 的停止命令，而非硬编码的 "stop"。这是代理实例停止缺陷的回归测试：
 // 代理（StopCommand="end"）必须收到 "end" 而非 "stop"，否则代理不退出、端口不释放。
 func TestStopJavaWritesConfiguredCommand(t *testing.T) {
 	tests := []struct {

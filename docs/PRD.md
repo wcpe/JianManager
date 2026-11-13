@@ -90,10 +90,11 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 - FR-498：[功能收口与延期专项][s176]，原门限保留、不记通过。
 - FR-499/500/501：[登记锁][s171]、[cgroup隔离][s170]、[成本治理][s172]。
 - 合并索引：FR-238→FR-078、FR-239→FR-236、FR-242→FR-241、FR-245→FR-240。
-- **已退役编号索引**（2026-11-01 立，2026-11-03 修订）：以下六个编号**一律保留在 §4 表内并标
-  `❌ 已废弃`**，不删除条目、不重排后续编号——它们都已进 `origin/master`，
-  spec / ADR / 包注释 / 跨分支工单大量引用（实测 FR-474/478/481/496 合计 155 处）。
-  序号不代表还有待办，只代表「这个编号曾经存在且不得复用」。
+- **已退役编号索引**（2026-11-01 立，2026-11-03 修订，2026-11-09 校正）：以下六个编号**一律不得复用**；
+  其中**五个**（FR-474/478/481/484/496）保留在 §4 表内并标 `❌ 已废弃`，**FR-504 例外——
+  它从引入起就只存在于本索引、从未进过 §4 主表**（详见下方注）。不删除条目、不重排后续编号——
+  它们都已进 `origin/master`，spec / ADR / 包注释 / 跨分支工单大量引用（实测 FR-474/478/481/496
+  合计 155 处）。序号不代表还有待办，只代表「这个编号曾经存在且不得复用」。
 
   | 编号 | 退役原因 | 退役时点 |
   |---|---|---|
@@ -103,6 +104,15 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
   | FR-484 | canonical 事件体（tmpfs 段）——事件段与重建链已整体删除 | 2026-11-03 |
   | FR-496 | 纯 Go SQLite 增量索引——索引库改 `:memory:`，不再有本地索引文件 | 2026-11-01 |
   | FR-504 | 实时停续采与 gz 导入——gz 归档采集已删 | 2026-11-01 |
+
+  > **注：FR-504 为何表内无条目**（2026-11-09 核实）：本索引声称六个编号「一律保留在 §4 表内」，
+  > 实测只有五个成立。git 史可证：2026-11-09 那次「日志采集改 tailer / VL 唯一事实源」的提交
+  > **一次性引入 FR-502～512，主表只落了 502/503/505～512 共 10 条，独缺 504**——它的父提交
+  > 里整段都还不存在。同一次提交把 FR-504 直接写进了本索引（缩进 2 空格的三列表）。
+  > 也就是说它是**「建档即退役」**：搬入这批日志 FR 时，FR-504 对应的「实时停续采 + gz 导入」
+  > 在架构上已被判定删除，作者跳过了「先建主表条目、再标废弃」这一步。
+  > **结论**：FR-504 表内没有条目是**有意的、可追溯的**，不是文档缺漏；按「已合入 master 的废弃号
+  > 不得复用」它仍占位，Web 重构批的「内容页布局规范层」因此改用 FR-548 而非 504。
 
   **这六个编号不得复用**：
   它们在规格与 ADR 里被当作功能标签引用（如 `stateindex` 包注释、`log-index-sqlite/spec.md` 标题）。
@@ -363,10 +373,10 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-258 | 楔子首次拉 core、sha256 校验、保留三版回滚与配置透传 [规格][s045] | — | ✅ 已交付@v0.13.0·四档验收 |
 | FR-259 | CP core 多版本归档、鉴权下载、面板切换回滚与 hotfix 上传 [规格][s045] [规格][s046] | — | ✅ 已交付@v0.13.0·四档验收 |
 | FR-260 | 更新器简化 UI/ADR/文档同步、配置下载与受引用 core 防删 | — | ✅ 已交付@v0.13.0·四档验收 |
-| FR-263 | 拉取密钥加密器自动生成持久化、env 优先与密钥有效期编辑 | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-264 | 单节点源站限流/配额/IP 封禁/密钥态/频道降速与安全画像 [规格][s047] | P1 | ✅ 已交付@v0.13.0·四档验收 |
 | FR-261 | 发布文件树多选/重命名/拖放/zip 解压/冲突处理，发布才上传 | P1 | ✅ 已交付@v0.13.0·四档验收 |
 | FR-262 | 清理目录树右键标记、多选与父子联动，产出清理/排除范围 | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-263 | 拉取密钥加密器自动生成持久化、env 优先与密钥有效期编辑 | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-264 | 单节点源站限流/配额/IP 封禁/密钥态/频道降速与安全画像 [规格][s047] | P1 | ✅ 已交付@v0.13.0·四档验收 |
 | FR-265 | 分发统计/监控/请求日志/客户端四视图与运行态心跳联动 [规格][s048] | P1 | ✅ 已交付@v0.13.0·四档验收 |
 | FR-266 | core 构建版本/commit/dirty/时间内嵌展示，缺元信息仍准 hotfix [规格][s049] | P1 | ✅ 已交付@v0.13.0·四档验收 |
 | FR-267 | A+C Jian绿高密度设计底座：细边框/小圆角/紧凑表/状态数字 [规格][s050] | P1 | ✅ 已交付@v0.13.0·四档验收 |
@@ -571,32 +581,32 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-471 | 运行漂移观测/冲突预检/显式接管；启动恢复不强杀，周期策略可处置 | P1 | ✅ 已交付@v0.23.0 |
 | FR-472 | running零在线且停滞10分钟会话先收敛后补足；有在线Bot不回收 | P1 | ✅ 已交付@v0.24.0 |
 | FR-473 | 日志共享契约/ADR/查询所有权与资源性能门禁；位置模型为 Read/Reclaim 两水位（Durable/Delivery 已降为进程内派生读数） [规格][s152] | P0 | ✅ 已交付@v0.24.0·契约冻结及已覆盖回归；不代表下游全部验收·**2026-11-01 重写**：原「四水位」表述已收窄——`Durable`（已进队列）与 `Delivery`（可从 REQUEST_DONE 区间派生）在索引库 `:memory:` + WAL 纯内存下**没有跨进程意义**，不再作为独立持久水位；真正承重的只有 `Read`（采集游标）与 `Reclaim`（投递证据连续前缀）。`Positions` 结构字段保留（供进程内观测与既有测试），但契约不再要求它们跨重启 |
-| FR-474 | Worker 日志采集与持久化通道（feat）：FileTailer + StdIO + ArchiveImporter **共用采集账本**；源分段身份与 `latest.log→轮转→.gz` 关联；cursor/WAL/分水位回收/坏记录隔离；STDIO 受管 Raw 分段；容量耗尽与缺口可见；**hash+size 仅识别归档对象**；不引入 Filebeat 等。**验收含 Runbook A**（Worker WAL 强杀/ACK 丢失/reclaim/恢复分段释放与 hold 保护真实 PASS）→ `docs/specs/worker-log-acquisition/spec.md` | — | ❌ 已废弃·**gz 归档采集与 ArchiveImporter 已整体删除（2026-11-03 起 ingest 只走 WAL → 投递 VL）；「FileTailer + StdIO + ArchiveImporter 共用采集账本」的对象不再存在**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·生产采集/投影/ACK恢复/reclaim 已通过；**Runbook A 真机（强杀 `-9` 重启）通过并修复重启时序缺陷**；磁盘容量**真实填盘验收通过**（容器内受限 tmpfs：真实越过 80%→`DEGRADED_STORAGE`、91.67%→`PAUSED` 且必记缺口；经真实 `Pipeline.Ingest` 落账本 `AcquirePaused`+缺口+未投递；**真实 ENOSPC** 填至 100% 观测到 `no space left on device`；见 `worker-log-acquisition/acceptance-real.md`）；**2026-10-02 缺陷加固（缺口风暴）**：登记合并（相邻同因）+ 按原因数量级上限 + 投递成功/已发布投影两条自动消解出口 + 暂停源限频自愈（只投递不读取），人工解算接口与 `ResumeAcquire` 门禁语义不变；转红回归见 CHANGELOG [Unreleased] 与 `worker-log-acquisition/spec.md` §3.3 |
+| FR-474 | Worker 日志采集与持久化通道（feat）：FileTailer + StdIO + ArchiveImporter **共用采集账本**；源分段身份与 `latest.log→轮转→.gz` 关联；cursor/WAL/分水位回收/坏记录隔离；STDIO 受管 Raw 分段；容量耗尽与缺口可见；**hash+size 仅识别归档对象**；不引入 Filebeat 等。**验收含 Runbook A**（Worker WAL 强杀/ACK 丢失/reclaim/恢复分段释放与 hold 保护真实 PASS）→ `（规格已归档：对应 spec 已删除）` | — | ❌ 已废弃·**gz 归档采集与 ArchiveImporter 已整体删除（2026-11-03 起 ingest 只走 WAL → 投递 VL）；「FileTailer + StdIO + ArchiveImporter 共用采集账本」的对象不再存在**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·生产采集/投影/ACK恢复/reclaim 已通过；**Runbook A 真机（强杀 `-9` 重启）通过并修复重启时序缺陷**；磁盘容量**真实填盘验收通过**（容器内受限 tmpfs：真实越过 80%→`DEGRADED_STORAGE`、91.67%→`PAUSED` 且必记缺口；经真实 `Pipeline.Ingest` 落账本 `AcquirePaused`+缺口+未投递；**真实 ENOSPC** 填至 100% 观测到 `no space left on device`；验收记录已归档）；**2026-10-02 缺陷加固（缺口风暴）**：登记合并（相邻同因）+ 按原因数量级上限 + 投递成功/已发布投影两条自动消解出口 + 暂停源限频自愈（只投递不读取），人工解算接口与 `ResumeAcquire` 门禁语义不变；转红回归见 CHANGELOG [Unreleased]  |
 | FR-475 | Java/MC多行归并、编码/时间/级别归一，失败保原文与事件口径 [规格][s154] | P0 | ✅ 已交付@v0.24.0·仅Linux；Windows运行时未测/未认证 |
 | FR-476 | CP只分发VL资产，Worker本地鉴权supervisor与资源预算 [规格][s155] | P0 | ✅ 已交付@v0.24.0·Windows包校验解包已验，Windows运行时未覆盖 |
 | FR-477 | Catalog 唯一 owner 与分区代次/生命周期，分区可查询性判定 [规格][s156] | P0 | ✅ 已交付@v0.24.0·Runbook B已验·**2026-11-01 重写**：删「冷热迁移」（2026-10-31 已废，mover 恒 nil）与「迟到路由」（单 VL、无跨层路由对象）。Catalog 现存职责收窄为三件：① 分区唯一 owner 与代次（防止重投写错代次）；② 分区可查询性判定（哪些 UTC 天有可读投影）；③ 启动时投影代次一致性自愈 |
-| FR-478 | Deep Archive 与 Rehydrate（feat，**发布必需**）：Provider local/S3/MinIO；VL 分区按 namespace+UTC 日+generation；manifest 含 schema/parser/engine；受管 Raw Archive；Rehydrate 任务化（租约/合并/超时/预留/generation 隔离）；幂等重恢复 → `docs/specs/worker-log-deep-archive/spec.md` | — | ❌ 已废弃·**单 VL 架构下 Deep Archive 与 Rehydrate 已无对象（冷层与 Rehydrate 已删）；archive 包只余 `archive_copy` 导出用的 Provider 抽象（归 FR-501）**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·**真机 RustFS S3 验收通过**（登记/幂等/manifest/对象往返/Rehydrate 租约+复用+预留拒绝+完成/发布 generation 清理矩阵）；manifest 记录真实 VL build_id |
+| FR-478 | Deep Archive 与 Rehydrate（feat，**发布必需**）：Provider local/S3/MinIO；VL 分区按 namespace+UTC 日+generation；manifest 含 schema/parser/engine；受管 Raw Archive；Rehydrate 任务化（租约/合并/超时/预留/generation 隔离）；幂等重恢复 → `（规格已归档：对应 spec 已删除）` | — | ❌ 已废弃·**单 VL 架构下 Deep Archive 与 Rehydrate 已无对象（冷层与 Rehydrate 已删）；archive 包只余 `archive_copy` 导出用的 Provider 抽象（归 FR-501）**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·**真机 RustFS S3 验收通过**（登记/幂等/manifest/对象往返/Rehydrate 租约+复用+预留拒绝+完成/发布 generation 清理矩阵）；manifest 记录真实 VL build_id |
 | FR-479 | Worker 本地查询面：Search/Stats/Fields/Facets/Tail 五类 + 固定 view 快照 + 预算与租约 [规格][s158] | P0 | ✅ 已交付@v0.24.0·功能回归收口·**2026-11-01 重写**：删「按**权威副本**查询」——事件段已落 tmpfs 且不跨重启，「权威副本」这个概念在现架构下不再成立，VL 自身数据就是唯一长期真源。保留并明确：五类查询共用同一固定 view 快照（Search/Stats/Facets 必须同 view，否则统计与列表对不上）；旧 cursor 遇 view 失效须显式 `VIEW_STALE`，不得静默重查。首屏性能延期未达标 |
 | FR-480 | CP全授权目标联邦/覆盖/排序与同快照导出，缺口不交成功附件 [规格][s159] | P0 | ✅ 已交付@v0.24.0·功能回归收口；真机/浏览器限既有scope·**2026-11-01 双节点真机验收**：首次用**两个真 Worker**实装验证跨节点能力（历史上只有单节点，合并/排序从未真被执行过）。通过：目标扇出、K-way 合并排序（14 相邻对 0 违规）、覆盖区分、离线如实降级、**缺口不交成功附件**（停掉节点后 `export_incomplete=true` + `artifact=null`，无 NDJSON）。部分：全平台 `range=all` 导出交不出附件——根因是 13 个目标**确实从未产生过日志**（Catalog 无可查分区，单目标查为 `target_no_data`），不是校验缺陷；此前归因于「VL hot 未运行」已复核否定。**2026-11-04 补齐第 9、10 项**：① 「max_bytes 整请求预算 + 零份额不拨号」——`reserveWorkerBudgets` 的零份额分支已由 `TestReserveWorkerBudgetsZeroShareSkipsTarget` / `…MaxFanoutBoundsShares` 钉住，并做变异验证（把 `continue` 改成「零也拨号」即转红，因为那会让 Worker 把 0 解释成「未声明额度 ⇒ 32MiB 默认」，整请求预算被静默放大）；② 「权限覆盖全部端点，越权无侧信道」——`TestLogFederation_Unauthorized403_NoToken` 已从 4 个端点扩到全部 7 个（facade/search/tail/stats/fields/facets/export），另有 no-log.read 与跨实例越权两条；变异验证（注释掉一条路由注册即转红）。**仍未验：性能/RSS/磁盘门限**（需独占宿主作性能证据，与 FR-498 长稳互斥） |
-| FR-481 | 日志入库切换与 Legacy 只读（feat）：停止**实例与 Worker/Node**日志新入 CP `logs`；platform/audit + **LegacyLogReader**；Legacy 独立保留预算与到期规则；容量预检不足不切换；逐 Worker 切换水位；控制台订阅与持久化推送分离；历史 Multiline 可追溯原文；未统一口径禁止拼精确趋势 → `docs/specs/log-ingest-cutover/spec.md` | — | ❌ 已废弃·**cutover（CP `logs` 表 → Worker VL）已整体下线，没有可切换的两侧；Legacy 只读随之失效**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·地基/接线·cutover+Legacy+DualPath + **HTTP 管理面已注册**（默认关闭）；Legacy/cutover 行为由 service/router 单测覆盖；DualPath federated 侧由 `/logs/federation` 承担（无生产调用方，保留 API 不加投机接线） |
+| FR-481 | 日志入库切换与 Legacy 只读（feat）：停止**实例与 Worker/Node**日志新入 CP `logs`；platform/audit + **LegacyLogReader**；Legacy 独立保留预算与到期规则；容量预检不足不切换；逐 Worker 切换水位；控制台订阅与持久化推送分离；历史 Multiline 可追溯原文；未统一口径禁止拼精确趋势 → `（规格已归档：对应 spec 已删除）` | — | ❌ 已废弃·**cutover（CP `logs` 表 → Worker VL）已整体下线，没有可切换的两侧；Legacy 只读随之失效**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·地基/接线·cutover+Legacy+DualPath + **HTTP 管理面已注册**（默认关闭）；Legacy/cutover 行为由 service/router 单测覆盖；DualPath federated 侧由 `/logs/federation` 承担（无生产调用方，保留 API 不加投机接线） |
 | FR-482 | 日志中心/统计/导出与失败态；游标结束不冒历史完整 [规格][s161] | P1·发布必需 | ✅ 已交付@v0.24.0·live限基础15项及第16项确认409·**2026-11-01 真机端到端验收**：dev 全栈（CP 30100 + Worker 30102 + 真 VL 30461 + Playwright Chromium）实测——列表/统计/维度/导出全部 200 且数据正确（21 条真实日志、导出 25725B/50 行 ndjson）；**失败态如实降级**（不可达目标 `coverage.complete=false` + `ENGINE_NOT_READY` + `export_incomplete`，不冒充成功）。**2026-11-01 重写**：删「**分层**」——冷热双层已废（单 VL），日志中心不再有层级切换语义。保留：联邦查询聚合、覆盖/质量门禁、导出带缺口标注（不交成功附件）、游标翻页与失败态 |
 | FR-483 | 日志契约/许可/恢复/损失/预算/配置文档与实现对账 [规格][s152] | — | ✅ 已交付@v0.24.0·按实现/已覆盖验收/延期专项对账·**2026-11-01 重写**：删「**切换**」——cutover（CP `logs` 表 → Worker VL）已整体下线，无切换对象 |
-| FR-484 | canonical 事件体落盘 compact（feat）：把 FR-473 §4.3/§5.3「VL 数据根重建的权威事件集合」由 state.json 内联+内存常驻改为追加式磁盘段存储（NDJSON + MANIFEST 原子替换），**内容与语义不变、仍不可按 reclaim 裁剪**；含旧格式迁移、崩溃/截断恢复语义、`persist()` 流式写元数据；并加界三处跨轮无界累积结构（`n.events`/`linePos`/`delivered`）收敛采集期峰值。目标单 Worker 150 源稳态 RSS ≤300MiB → `docs/specs/worker-log-canonical-eventstore/spec.md` + ADR-095 | — | ❌ 已废弃·**2026-11-03 退废**：事件段（canonical 事件体）整体删除——`eventstore` 包 4854 行 + `appendEvents` + 重建写入链一并移除（用户裁定：只保留 WAL → 投递 VL，不做重建）。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·**真机验收通过**（host-1 + 真 VictoriaLogs v1.52.0：64/128/150 源稳态 RSS 22.5/22.3/20.0MiB、峰值 56.0/62.0/61.8MiB，判据 ≤300MiB；state.json 77 803KiB→177.9KiB 并与事件数解耦；**342 源逐一核对 1 026 000 条事件零丢失零重复**）；五个门禁回归 + 幂等回归 + 四条累积结构回归（均含变异验证）全绿；**曾发布错误读数已更正**（未保活致 GC 回收） |
+| FR-484 | canonical 事件体落盘 compact（feat）：把 FR-473 §4.3/§5.3「VL 数据根重建的权威事件集合」由 state.json 内联+内存常驻改为追加式磁盘段存储（NDJSON + MANIFEST 原子替换），**内容与语义不变、仍不可按 reclaim 裁剪**；含旧格式迁移、崩溃/截断恢复语义、`persist()` 流式写元数据；并加界三处跨轮无界累积结构（`n.events`/`linePos`/`delivered`）收敛采集期峰值。目标单 Worker 150 源稳态 RSS ≤300MiB → `（规格已归档：对应 spec 已删除）` + ADR-095 | — | ❌ 已废弃·**2026-11-03 退废**：事件段（canonical 事件体）整体删除——`eventstore` 包 4854 行 + `appendEvents` + 重建写入链一并移除（用户裁定：只保留 WAL → 投递 VL，不做重建）。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·**真机验收通过**（host-1 + 真 VictoriaLogs v1.52.0：64/128/150 源稳态 RSS 22.5/22.3/20.0MiB、峰值 56.0/62.0/61.8MiB，判据 ≤300MiB；state.json 77 803KiB→177.9KiB 并与事件数解耦；**342 源逐一核对 1 026 000 条事件零丢失零重复**）；五个门禁回归 + 幂等回归 + 四条累积结构回归（均含变异验证）全绿；**曾发布错误读数已更正**（未保活致 GC 回收） |
 | FR-485 | 日志采集/WAL/投递/SQL及节点iowait/内存磁盘比率指标告警 | P1 | ✅ 已交付@v0.24.0·**2026-11-01 补齐**：投递链路 13 条指标 + 磁盘缓冲 6 条 + 节点内存/磁盘利用率 + 5 条预置告警规则（默认不启用）。**2026-11-04 补齐最后一项**：SQL 慢查询计数已落地——`stateindex` 在 4 条热路径 SQL（批量 upsert / 逐行 upsert / 批量 delete / 镜像 select）上按语句级计时，超过 `slowQueryThreshold`（50ms）即计数、更新最大值并按节流留痕；读数经 `Manager.IndexSQLSnapshot` → `retention.IndexSQLSource` 暴露三条 Prometheus 序列（`jm_log_index_slow_queries_total` / `_max_seconds` / `_last_timestamp_seconds`）。两条回归含变异验证（去掉零份额分支即转红） |
 | FR-486 | Worker启动注册进度与首轮采集耗时观测、超阈告警 | P1 | ✅ 已交付@v0.24.0·**2026-11-01 实现**：4 阶段分段计时（config/bootstrap/logIngest/wsReady）+ 30s 超阈 Warn + slowestPhase 点名。真机实测 totalMs=6846（logIngest 占 97.9%）。**2026-10-31 标题修订**：原「启动**加载分段**计时/日志、**流式/引用化加载优化**」已无对象——索引库改 `:memory:` 后重启即空库，没有「加载索引」这个阶段可计时/可优化。保留仍有意义的部分：注册前进度、首轮采集耗时、超阈告警 |
 | FR-489 | MCP请求独立鉴权、去协议会话与Token活动视图，保留SSE兼容 [规格][s163] | P1 | ✅ 已交付@v0.24.0·主干真机/E2E通过，无状态与SSE兼容均已验 |
-| FR-490 | 审批状态机、冻结载荷证据、24h过期/幂等/CAS/强审计与自查撤回 | P0 | 📋 计划·批准仅人类JWT，Agent Token服务层永久拒绝 |
-| FR-491 | 审批执行器/事务回执与审计、漂移失败零副作用；优先复用RunAsync | P0 | 📋 计划·重试幂等，保留批准事实与失败原因 |
-| FR-492 | 按action目录穷举高危审批，票据/命令/二进制/快照回滚防绕过 | P0 | 📋 计划·MCP只落票据零副作用；start/restart/热重载按原确认直执 |
-| FR-493 | 审批中心/历史与RBAC节点，deny永胜/唯一超管、无权限403 | P1 | 📋 计划·依赖FR-490 |
+| FR-490 | 审批状态机、冻结载荷证据、24h过期/幂等/CAS/强审计与自查撤回 | P0 | ✅ 已交付@v0.24.0·**2026-11-09 按验收清单逐条核实**：状态机（pending/withdrawn/rejected/expired/executing/succeeded/failed）、24h TTL 回写、pending 幂等（同 owner+action+target+payload 返回同一张票）、CAS 并发批准只有一个成功、payload 篡改检出、撤回仅 pending 且需归属、**Agent Token 在服务层永久不可批准**、reason 必填 —— 均有对应可转红测试（`approval_test.go` 19 条全绿）。 |
+| FR-491 | 审批执行器/事务回执与审计、漂移失败零副作用；优先复用RunAsync | P0 | ✅ 已交付@v0.24.0·**2026-11-09 核实**：执行器 `approval_executor.go` 经 `ClaimForExecution` 取回执，失败保留批准事实与 `FailureReason`；目标漂移（`approval_target_drift.go`）与载荷篡改均在执行前拦截且**零副作用**；长操作经 `TaskService.RunAsync` 承载、与票据状态联动（`approval_executor_test.go` / `approval_finish_cas_test.go` / `approval_target_drift_test.go` 全绿）。 |
+| FR-492 | 按action目录穷举高危审批，票据/命令/二进制/快照回滚防绕过 | P0 | ✅ 已交付@v0.24.0·**2026-11-09 核实**：`approval_registry.go` 按 action 目录穷举高危口子，并有门禁 `TestRegistryCoversAllDangerousTools` 防漏登记；`instance_stop` 需审而 `instance_start` 不需审（粒度断言）；三入口同策略已验 —— `TestAgentOps_StopRequiresApprovalAndHasNoSideEffect`（HTTP 202 + requestId 且实例状态未变）、`…StartDoesNotRequireApproval`、`…StopWithoutApprovalServiceFailsClosed`（未装配审批服务时失败关闭，不放行）。 |
+| FR-493 | 审批中心/历史与RBAC节点，deny永胜/唯一超管、无权限403 | P1 | ✅ 已交付@v0.24.0·**2026-11-09 核实**：审批中心页 `ApprovalsPage.tsx`（待审列表/批准/驳回/历史，7 条 DOM 测试全绿）；路由 `/approvals/*` 要求 `approval.read`/`approval.decide`，`/approvals/own/*` 按 session 归属限域；权限节点已注册进 `permission_catalog.go` 权限树。**2026-11-09 补齐 spec §8.4**：MCP 工具面新增 `approval_list` / `approval_get` / `approval_withdraw` 三个自查工具，Agent 提交后能自己轮询票据结果、闭环不再盲等；限域口径按 **TokenID**（比按申请人更窄：同一用户的多把 Token 互不可见），无 Token 的助手委托链直接拒绝，越权与不存在共用同一文案（不给探测接口）。 |
 | FR-494 | QQ告警官方主动推送（CP纯出站，不做群内被动回复） [规格][s164] | P1 | ✅ 已交付@v0.24.0·仅单聊真机送达；群主动消息平台限制，前端已下线 |
 | FR-495 | QQ扫码绑定/密钥引用与出站网关群发现（群聊前端已下线） [规格][s165] | P1 | 开发中·扫码/网关/入群落库真机通过；**群通道前端与「QQ接入」视图已主动拆除**（非待验），仅保留只读接入状态观测（网关状态/已发现群）；建群通道需平台开放后新立工作 |
-| FR-496 | 采集索引迁移至本地 SQLite（feat，增强 FR-473~484 底座；spec：`docs/specs/log-index-sqlite/spec.md`）：现索引为单一 JSON 整本重写——实测 307MB/13 源，60 实例外推 1.5–3GB，单次持久化将达秒级（历史事故：~1.2GB 时 >5s 触发 `vlsup` 超时、采集停摆）。改为纯 Go 嵌入式 SQLite（WAL、单写者、只写变更行）+ 旧文件一次性迁移归档。验收：60 源下单次持久化 ≤50ms；迁移逐字段一致；`kill -9` 不丢索引。**2026-10-01 加固（FR-498 实测发现）**：迁移后索引里唯一随总量线性增长的表变成 `delivery_batch`（≈**5 MB/天 @60 源**）且原先无裁剪路径，长跑会把索引无界撑大——按 `reclaim` 水位裁剪历史批次（判据有证明：`End <= Reclaim` 的条目对 `delivery_position` 的连续前缀计算是**恒等元**，且水位单调；失败只告警不阻断，有自证守卫；配置键 `log_index.batch_prune.*` 见 spec §6）。60 源 × 6000 批/源夹具实测：360 000 行 / 库 25.6 MB → **0 行 / 864 KB**；水位滞后窗口内保留量只与滞后有关、与累计总量无关（spec §2.4/§3.8） | — | ❌ 已废弃·**索引库已改 `:memory:`（FR-505 不落盘采集架构），不再有本地 SQLite 索引文件可迁移；该 FR 的实现对象已不存在**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：🔨 开发中（实现与 `log_index.*` 配置接线已落地；**2026-10-11 生产真机实测**：生产采集面 164 源下索引持久化 p50 2 ms / p95 6 ms / max 152 ms，远优于「60 源单次持久化 ≤50 ms」验收线。**取证口径（可复算）**：数据源＝生产 Worker journal 的「持久化耗时」分钟打点行（现含 p50/p95/max 与采样周期数），按窗口聚合即得；本项无 `.tmp/` 路径引用。生产累计重启未复现 2026-10-01 二启卡死。**已归真（2026-10-11）**：spec 顶部状态行已由 `📋 计划` 改为 `🔨 开发中`；**剩余边界**：spec §3 第 7 条「迁移→首启→二启→三启 + 脏环境 + 部署后复验」缺形式化复验产物） |
+| FR-496 | 采集索引迁移至本地 SQLite（feat，增强 FR-473~484 底座；spec 已归档）：现索引为单一 JSON 整本重写——实测 307MB/13 源，60 实例外推 1.5–3GB，单次持久化将达秒级（历史事故：~1.2GB 时 >5s 触发 `vlsup` 超时、采集停摆）。改为纯 Go 嵌入式 SQLite（WAL、单写者、只写变更行）+ 旧文件一次性迁移归档。验收：60 源下单次持久化 ≤50ms；迁移逐字段一致；`kill -9` 不丢索引。**2026-10-01 加固（FR-498 实测发现）**：迁移后索引里唯一随总量线性增长的表变成 `delivery_batch`（≈**5 MB/天 @60 源**）且原先无裁剪路径，长跑会把索引无界撑大——按 `reclaim` 水位裁剪历史批次（判据有证明：`End <= Reclaim` 的条目对 `delivery_position` 的连续前缀计算是**恒等元**，且水位单调；失败只告警不阻断，有自证守卫；配置键 `log_index.batch_prune.*` 见 spec §6）。60 源 × 6000 批/源夹具实测：360 000 行 / 库 25.6 MB → **0 行 / 864 KB**；水位滞后窗口内保留量只与滞后有关、与累计总量无关（spec §2.4/§3.8） | — | ❌ 已废弃·**索引库已改 `:memory:`（FR-505 不落盘采集架构），不再有本地 SQLite 索引文件可迁移；该 FR 的实现对象已不存在**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：🔨 开发中（实现与 `log_index.*` 配置接线已落地；**2026-10-11 生产真机实测**：生产采集面 164 源下索引持久化 p50 2 ms / p95 6 ms / max 152 ms，远优于「60 源单次持久化 ≤50 ms」验收线。**取证口径（可复算）**：数据源＝生产 Worker journal 的「持久化耗时」分钟打点行（现含 p50/p95/max 与采样周期数），按窗口聚合即得；本项无 `.tmp/` 路径引用。生产累计重启未复现 2026-10-01 二启卡死。**已归真（2026-10-11）**：spec 顶部状态行已由 `📋 计划` 改为 `🔨 开发中`；**剩余边界**：spec §3 第 7 条「迁移→首启→二启→三启 + 脏环境 + 部署后复验」缺形式化复验产物） |
 | FR-497 | 常驻运行期分源×天条数对账补缺与PID/属主校验收养（校验不过不杀） [规格][s167] [规格][s168] | P0 | ✅ 已交付@v0.24.0·**2026-11-01 收口**：常驻对账生产实测连续 6 轮（05:51~07:06）周期精确 15 分钟、8 源/轮、errors=0；计数口径已由测试钉住（pending 分支只计源不计天）。原论证：**2026-10-31 标题修订**：「**重启**对账」这半已无对象——启动对账的输入是「权威集合」，它原先从索引库/事件段重建，而两者改内存后重启即空 ⇒ 启动那一刻没有「应有条数」可比。仍有效的是**常驻对账**（15 分钟一轮，从当前进程内事件段重建）与收养链路。原记录保留：连续强杀零丢失、60源重启≤60s、收养T7四臂已满足；开关关闭时对未纳管活进程对的处置降级（auto_adopt=false 不再被 dispose_policy=auto 误杀）已补并留痕。**2026-10-27 三项缺口已补**（详见 [收养规格][s168]）：① T7 的 Java 分支负例已端到端构造，并顺带修掉一个真缺陷（`processEnvMatchesInstance` 按 NUL 切条目 + UUID 自成 token）；② 心跳/巡检/Stop 改用真实 java 夹具验证；③ Windows 仅到代码层契约与交叉编译通过，**真机未验** |
-| FR-498 | 60源CPU/RSS/VL内存/查询容量基线与错峰建议 [规格][s169] | P0 | ⏸️ 已延后·**2026-10-31 标题修订**：删「持久化」——索引库改 `:memory:` 后不再落盘，原验收线「索引持久化 p95≤50ms」（p95=98–100ms 超线）已无对象。保留 Worker CPU/内存、VL 内存、查询 p95 四条基线。原记录保留：ACKLoss 与 Worker 静默 766 已达标；2026-10-27 降强度重开取证（60源×30行/s×120s，paused=0/gap=0）；fileCPU 分列 `%usr` p50=191 / `%wait` **3** ⇒ Worker 不是在等盘而是在算；机械盘量化 `aqu-sz` 50–76、`w_await`≈56ms、`%util`≈92%。**2026-11-01 容量基线已成文**（spec §8，本机真实环境 60源×4档×2口径）：真机读数 Worker RSS p95 50.2→70.5MB、CPU p95 个位数，内存不随吞吐线性增长。**2026-11-04 进展**：① ~~harness 需用当前 HEAD 重建重跑~~ → **已固化并实测**：负载发生器曾入库为 `scripts/capacity-load/`（`go run ./scripts/capacity-load/ -sources 60 -rate 30 -duration 120s`），自检实测 29.97 行/s/源（目标 30，误差 0.1%）、零写失败——读数从此可复算、不再依赖 `.tmp/`（gitignore）；**该目录已于 2026-11-08 随一次性取证工具清理删除**，读数保留为历史证据（见 [s169] §5.1）；② **当前 HEAD 短窗读数**（`TestCapabilityBaselineShortWindow`，60 源×60 行）：HeapAlloc **8.4 MiB**、每源常驻 **142.6 KiB**（判据 <1 MiB，留 7 倍余量）、3 轮 poll 300ms。这个数字是「事件段删除后每源不再持有事件正文」的直接证据（旧架构该项为生产 77 MB 段占用）——见 [s169] §5.1；③ **2026-11-04 长稳窗已跑通（PASS）**：`TestSoakWindow60Sources` 60 源 × 900 轮 × 真 VL v1.52.0，每 MiB WAL 积压的堆成本 **13.0 → 10.9 MiB/MiB（比值 0.84，在降）**、裸堆 9.6 → 14.3 MiB 且 100% 可由 WAL 积压解释（回归 `heap = 4.58×WAL + 8.01`，残差 std 2.89 MiB 即 GC 噪声）⇒ **不是慢泄漏**。过程中修掉**两个夹具缺陷**（后者曾把夹具行为误读成产品缺陷）：① 从未启动 `Manager.Start`，`DeferredDelivery` 下投递/回收全在后台环 ⇒ 只采不投、WAL 从不回收（WAL 条数 == 60×轮次）；② `newTestManager` 的 `deliverWriteHook` 自己累积 54000 个事件占 3.85 MiB。判据同步改写：裸堆比值必然误报（WAL 是有界缓存，积压震荡就带着堆涨），改为「单位积压成本不得上升 + 积压不得撞跌顶」。详见 [s169] §7。④ **2026-11-04 分段长稳窗（1 行/s/源 真实节奏）段 1–3 已完成，均 PASS**：堆前1/3→后1/3 = 5.7→6.1 / 5.9→6.2 / 5.8→6.3 MiB（比值 1.08/1.05/1.08），poll p50 145–156ms，VL 总数跳段单调递增 331k→439k→547k（投递确实在跑）；**跨段无抬高**——若存在跨重启常驻增长它会表现为每段起点更高，实测没有。执行器曾入库 `scripts/soak-window/run.sh`（先编单一二进制由 9 段共享，带并发检测；**已于 2026-11-08 随一次性取证工具清理删除**，要补跑需按 spec §7.4 描述重建）。**段 4–9 未跑**（用户叫停收尾），故完整 4.5h 墙钟仍未全程覆盖，补跑需先重建执行器。宿主非独占（load 13.7–16.4/40 核 + 其它工程 Java 占 50%+ CPU）⇒ 趋势可信、绝对值不可与静默机比。详见 [s169] §7.4/§7.5。⑤ **仍缺**：250ms 门限（**仍无法判定，卡在环境不是卡在代码**）。2026-11-04 查明口径曾被搞混：250ms 原口径是 **FAST 联邦查询 p95**（`docs/specs/log-acquire-concurrency` §10），**不是**浏览器冷导航；后者在 §10.4 被明确列为「另一个更严、当前无门限」的指标。三个读数不得互相外推：① 生产 CP 空闲无新日志时 p95 = **30.1ms**（达标，但数据集不代表负载，§10.3）；② 本机高负载同口径四次 p95 = 93 / 680 / 1259 / **2486ms**（极差 26.7 倍 ⇒ 本机测不出可信值，HANDOFF 给出 A 换空闲机 / B 接受本机无法判定 / C 立项查长尾三选项，均未选）；③ 本轮生产构建浏览器冷导航 p50 = 2291 / 2735 / 2654ms（**不属此门限**，是另一个指标，三次重跑可复现；分解显示成本在「就绪选择器挂在数据上」——`/api/v1/instances` 单次 921KB、首页 8 接口各 ~740ms，而客户端内路由跳转仅 113–922ms）。e2e 改为默认只记录、`FIRSTPAINT_ENFORCE=1` 才断言，理由是它测的不是那个门限。**2026-11-04 用户裁定选项 B：接受「本机无法判定」为正式记录，250ms 维持未达标状态**（不选 A 换空闲机重跑、不选 C 查长尾）；因此不再在该指标上投入优化——缩 921KB 响应/首页预取/骨架屏都是为了凑一个不可判定的指标。测量工具曾抢救入库 `scripts/search-p95/`（原在 gitignore 的 `.tmp/`，**已于 2026-11-08 随一次性取证工具清理删除**；口径完整记在 [s169] §10，将来走 A 或 C 时照此重写）。详见 [s169] §5.2/§5.2a）、错峰策略认证。详见 [s169] §5.1/§5.2/§7/§8 |
-| FR-500 | daemon自迁及接管后代cgroup隔离；Worker只断连，显式停止照旧 [规格][s170] | P0 | ✅ 已交付·**形式化验收全链完成**（2026-10-27）：三臂实验重做并修正平凡通过缺陷（重做前误将「进程未启动」判为 red PASS，已加前置守卫），red=双双DEAD、fixed-adopt/fixed-self=双双ALIVE 均实测通过；生产实机取证 19/19 实例已在 `jianmanager-daemons/<uuid>` 隔离、单元 cgroup 内零游戏服 java；**主动重启生产单元实测已完成**（spec §4.6，2026-10-27 18:51）：`jm-prod-worker.service`（KillMode=process）重启后 1s 内恢复 active，**19/19 实例的 java PID 与启动时刻均未变**（启动时刻比对比 PID 更有力）。部署形态漂移已收口（CP/Worker 已回到各自 `jm-prod-*.service`）。**2026-11-04 订正**：~~CP `SIGKILL` 臂未测~~ 实为**已实测**——spec §4.4（2026-10-09 生产实机复验）第三条承诺「CP 崩溃不牵连服务器」即该臂：对生产 CP 发 `SIGKILL`（等价 panic/OOM），结果 worker 存活、**21/21 实例存活**，CP 重启后反向隧道自动重建、实例状态自动对账。此前 PRD 记为「未测」是状态列未与 spec 同步所致（该 spec 头部另有一处同类订正记录）。**本项无剩余缺口** |
-| FR-499 | 采集登记与长周期锁解耦，同步建管道/绑定，持久化有界尽力 [规格][s171] | P1 | ✅ 已交付@v0.24.0·**2026-11-01 补端到端计时**：dev 环境真实 CP→Worker 隧道实测 Worker 侧登记本体 `elapsedMs=6.99`、HTTP 全链路 26-39ms；入口埋点超 100ms 走 Warn。原记录：**生产复验产物已补**（2026-10-27，spec §7）：高负载（40 核 / load≈170 / 机械盘）下重测，整轮采集墙钟 11.95s 时登记仍 1.246ms 返回（`idempotent_rebind` 0.518ms），解算 385ms 内采集轮最坏单轮 11.9ms，`m.mu` 单次最长 1.298ms——事故面（登记被长轮次拖死）已有直接回归且读数强化。**2026-11-01 已补端到端计时**（dev 环境 fr504dev，真实 CP→Worker 隧道链路）：Worker 侧 CreateInstance 埋点实测 `elapsedMs=6.99`（登记本体），HTTP 端到端 26-39ms（含 CP 鉴权、DB 写入、gRPC 往返）。埋点超阈 100ms 时用 Warn，正常走 Debug。注意：正常快路径日志在 INFO 级别下不打印，需 `/debug/log-level` 临时开 debug 才能看到。 |
-| FR-501 | 采样与保留策略；抑制汇总事件必须保持区间守恒 R [规格][s172] | P1 | ✅ 已交付@v0.24.0·**2026-11-01 重写**：删「**删前归档硬规则**」与「冷搬运」——单 VL 架构下到期即按 `retention_period`（180d）删除，`archive_copy` 是**可选**导出（默认关），不是删除前置。保留：四类采样策略（默认关）、抑制汇总事件必须保持区间守恒 R、不得绕过缺口 default-deny。**2026-10-31 标题修订**：删「冷搬运」——`retention.NewDriver` 第三个参数 mover 生产传的是 `nil`，冷热分层已废除，`move_to_cold` 不再执行；计划因此直接落到「配了导出 → archive_copy；否则 → blocked（保留原物）」两条路，这正是单 VL 想要的语义。archive_copy 已实现（导出→gzip→manifest 三重校验，次序判在 discard 之前）；热层回收已打通（Catalog ARCHIVED 权威态 + 归档证据，先迁权威态再删热层，删失败回滚 HOT）；查询面显式降级为 `LOG_ARCHIVE_MISSING`/`ARCHIVE_NOT_RESTORED`；导出目的地 local/s3/minio 已接线；删除三闸默认全关；归档对象回收已实现（`log_retention.archive_object_retention.*`，默认关）。**2026-11-01 收口**：删除「长期吸存验证」项——它是**验收活动**不是功能缺口，不该挂在 FR 上当作未完成能力。剩余真实缺口：S3/MinIO 目的地上的归档对象删除未接（装配处如实拒绝而非用 stub 冒充）。 |
+| FR-498 | 60源CPU/RSS/VL内存/查询容量基线与错峰建议 [规格][s169] | P0 | ⏸️ 已延后·**2026-10-31 标题修订**：删「持久化」——索引库改 `:memory:` 后不再落盘，原验收线「索引持久化 p95≤50ms」（p95=98–100ms 超线）已无对象。保留 Worker CPU/内存、VL 内存、查询 p95 四条基线。原记录保留：ACKLoss 与 Worker 静默 766 已达标；2026-10-27 降强度重开取证（60源×30行/s×120s，paused=0/gap=0）；fileCPU 分列 `%usr` p50=191 / `%wait` **3** ⇒ Worker 不是在等盘而是在算；机械盘量化 `aqu-sz` 50–76、`w_await`≈56ms、`%util`≈92%。**2026-11-01 容量基线已成文**（spec §8，本机真实环境 60源×4档×2口径）：真机读数 Worker RSS p95 50.2→70.5MB、CPU p95 个位数，内存不随吞吐线性增长。**2026-11-04 进展**：① ~~harness 需用当前 HEAD 重建重跑~~ → **已固化并实测**：负载发生器曾入库为 `scripts/capacity-load/`（`go run ./scripts/capacity-load/ -sources 60 -rate 30 -duration 120s`），自检实测 29.97 行/s/源（目标 30，误差 0.1%）、零写失败——读数从此可复算、不再依赖 `.tmp/`（gitignore）；**该目录已于 2026-11-08 随一次性取证工具清理删除**，读数保留为历史证据（见 [s169] §5.1）；② **当前 HEAD 短窗读数**（`TestCapabilityBaselineShortWindow`，60 源×60 行）：HeapAlloc **8.4 MiB**、每源常驻 **142.6 KiB**（判据 <1 MiB，留 7 倍余量）、3 轮 poll 300ms。这个数字是「事件段删除后每源不再持有事件正文」的直接证据（旧架构该项为生产 77 MB 段占用）——见 [s169] §5.1；③ **2026-11-04 长稳窗已跑通（PASS）**：`TestSoakWindow60Sources` 60 源 × 900 轮 × 真 VL v1.52.0，每 MiB WAL 积压的堆成本 **13.0 → 10.9 MiB/MiB（比值 0.84，在降）**、裸堆 9.6 → 14.3 MiB 且 100% 可由 WAL 积压解释（回归 `heap = 4.58×WAL + 8.01`，残差 std 2.89 MiB 即 GC 噪声）⇒ **不是慢泄漏**。过程中修掉**两个夹具缺陷**（后者曾把夹具行为误读成产品缺陷）：① 从未启动 `Manager.Start`，`DeferredDelivery` 下投递/回收全在后台环 ⇒ 只采不投、WAL 从不回收（WAL 条数 == 60×轮次）；② `newTestManager` 的 `deliverWriteHook` 自己累积 54000 个事件占 3.85 MiB。判据同步改写：裸堆比值必然误报（WAL 是有界缓存，积压震荡就带着堆涨），改为「单位积压成本不得上升 + 积压不得撞跌顶」。详见 [s169] §7。④ **2026-11-09 真机基线（真机测试环境，6 台真实服务器口径，用户明确不做 60 源）**：部署 VL v1.52.0 后首次跑通全链路，再做 4.5h 长稳窗（270 采样点）。**吞吐**：注入 60 行/s，采集 **58.4 行/s**（齐平），累计 99.1 万行 / 169.7 万条写入 VL，`failedTotal` **0→0**。**内存**：Worker 51.3→52.8MB（**1.03×，平台**）；VL 365→434MB（1.19×，但逐点为 327/356/538/460/462/403/453/465 的**震荡**、有下降段，非泄漏）；CP 149.8→235.3MB（1.57×，压测期间单调上升；**压测后另做 30 分钟观测已判定为非泄漏**：223–307MB 锯齿震荡、p50=248、首末 10 点均值 257→264MB（Δ+7）、斜率仅 +0.43MB/min，且有 288→223 这种 60MB 级回落——典型 Go GC 形态，不是慢泄漏）。**磁盘**：VL 数据 5.3→18.1MB（+12.8MB，**2.84 MB/h**，约 7.5KB/千条；180d 粗算 ~12GB，宿主余 40GB）。**gaps 1→3 的 2 次是本测试方法造成的**（注入脚本用 `open(...,'a')` 追写真实 latest.log，而 MC 进程同时也在写同一文件，双写导致 inode 被替换；另一次是我 `cp -a` 覆盖同名文件）——非采集器丢数据，正是 `RecordGap` 设计要捕捉的形态。**边界**：6 实例 / 60 行/s / 4.5h，**不是 60 源**，不得外推为 60 源容量基线。详见 [s169]。**2026-11-04 分段长稳窗（1 行/s/源 真实节奏）段 1–3 已完成，均 PASS**：堆前1/3→后1/3 = 5.7→6.1 / 5.9→6.2 / 5.8→6.3 MiB（比值 1.08/1.05/1.08），poll p50 145–156ms，VL 总数跳段单调递增 331k→439k→547k（投递确实在跑）；**跨段无抬高**——若存在跨重启常驻增长它会表现为每段起点更高，实测没有。执行器曾入库 `scripts/soak-window/run.sh`（先编单一二进制由 9 段共享，带并发检测；**已于 2026-11-08 随一次性取证工具清理删除**，要补跑需按 spec §7.4 描述重建）。**段 4–9 未跑**（用户叫停收尾），故完整 4.5h 墙钟仍未全程覆盖，补跑需先重建执行器。宿主非独占（load 13.7–16.4/40 核 + 其它工程 Java 占 50%+ CPU）⇒ 趋势可信、绝对值不可与静默机比。详见 [s169] §7.4/§7.5。⑤ **仍缺**：250ms 门限（**仍无法判定，卡在环境不是卡在代码**）。2026-11-04 查明口径曾被搞混：250ms 原口径是 **FAST 联邦查询 p95**（`docs/specs/log-acquire-concurrency` §10），**不是**浏览器冷导航；后者在 §10.4 被明确列为「另一个更严、当前无门限」的指标。三个读数不得互相外推：① 生产 CP 空闲无新日志时 p95 = **30.1ms**（达标，但数据集不代表负载，§10.3）；② 本机高负载同口径四次 p95 = 93 / 680 / 1259 / **2486ms**（极差 26.7 倍 ⇒ 本机测不出可信值，HANDOFF 给出 A 换空闲机 / B 接受本机无法判定 / C 立项查长尾三选项，均未选）；③ 本轮生产构建浏览器冷导航 p50 = 2291 / 2735 / 2654ms（**不属此门限**，是另一个指标，三次重跑可复现；分解显示成本在「就绪选择器挂在数据上」——`/api/v1/instances` 单次 921KB、首页 8 接口各 ~740ms，而客户端内路由跳转仅 113–922ms）。e2e 改为默认只记录、`FIRSTPAINT_ENFORCE=1` 才断言，理由是它测的不是那个门限。**2026-11-04 用户裁定选项 B：接受「本机无法判定」为正式记录，250ms 维持未达标状态**（不选 A 换空闲机重跑、不选 C 查长尾）；因此不再在该指标上投入优化——缩 921KB 响应/首页预取/骨架屏都是为了凑一个不可判定的指标。测量工具曾抢救入库 `scripts/search-p95/`（原在 gitignore 的 `.tmp/`，**已于 2026-11-08 随一次性取证工具清理删除**；口径完整记在 [s169] §10，将来走 A 或 C 时照此重写）。详见 [s169] §5.2/§5.2a）、错峰策略认证。详见 [s169] §5.1/§5.2/§7/§8 |
+| FR-499 | 采集登记与长周期锁解耦，同步建管道/绑定，持久化有界尽力 [规格][s171] | P1 | ⚠️ **口径已变（2026-11-10 真机复核）**·原验收读数「登记本体 6.99ms / 1.246ms」所属的 `ingest` 四水位账本模型**已整体删除**（`internal/worker/logs/ingest/` 与 `ledger/` 在 HEAD 下均为 0 文件），**读数失去对象，不可直接沿用**。现有实现是 `tailer/registry.go`（Filebeat fingerprint 模型：`file_identity → offset`），登记走短临界区锁（6 处 `r.mu.Lock()`），**新模型不需要那道长周期锁去耦**，能力不缺失。真机证据：12 个 stream / 113 万条在采，采集正常。原记录保留于后：✅ 已交付@v0.24.0·**2026-11-01 补端到端计时**：dev 环境真实 CP→Worker 隧道实测 Worker 侧登记本体 `elapsedMs=6.99`、HTTP 全链路 26-39ms；入口埋点超 100ms 走 Warn。原记录：**生产复验产物已补**（2026-10-27，spec §7）：高负载（40 核 / load≈170 / 机械盘）下重测，整轮采集墙钟 11.95s 时登记仍 1.246ms 返回（`idempotent_rebind` 0.518ms），解算 385ms 内采集轮最坏单轮 11.9ms，`m.mu` 单次最长 1.298ms——事故面（登记被长轮次拖死）已有直接回归且读数强化。埋点超阈 100ms 时用 Warn，正常走 Debug；正常快路径日志在 INFO 级别下不打印，需 `/debug/log-level` 临时开 debug 才能看到。**2026-11-10 补：同一诉求在新模型上重新落实**——`tailer.Registry.Flush` 原先把「序列化 + 写文件 + rename」全放在 `r.mu` 内，而登记与查询走同一把锁，一次机械盘落盘就能把 harvester 进度登记全堵住（实测 2000 条时，Flush 期间其他协程只完成 3 次 Get、1 次 Put）。现改为锁内只拷快照 + 清脏标记，序列化与写盘在锁外（实测同一场景 Get 2184 次、Put 522 次）。代价：快照后晚到的 Put 留待下一轮落盘，不影响正确性（与「不 fsync」同一取舍），已有 `TestRegistry_PutsDuringFlushSurviveInMemory` 钉住 |
+| FR-500 | daemon自迁及接管后代cgroup隔离；Worker只断连，显式停止照旧 [规格][s170] | P0 | ✅ 已交付@v0.24.0·形式化验收全链完成 |
+| FR-501 | 采样与保留策略；抑制汇总事件必须保持区间守恒 R [规格][s172] | — | ❌ 已废弃·**实现对象已不存在（2026-11-10 核实）**·**三部分均已不存在**（本节历史记录保留于后）：① 采样 —— 全仓搜 `SamplingPolicy` 只有 2 处命中且都在 docs，**实现为 0**；`configs/worker.yml` 自述「采集侧采样已随旧链路删除（2026-11-06）：新采集器逐行写入、无采样实现」。② 保留执行器 —— `internal/worker/logs/retention/` 在 HEAD 下 **0 个文件**（本轮已删除并提交）。③ 不变量 R 的承重实现 `MergePositionRanges` 全仓 **0 处**，`config.go` 仅余一句注释。**本轮删除**：`retention` 包的保留执行器（Driver/Mover/Sweeper/ArchivePurge/VLDeleter，共 8332 行）连同 `archive_copy` 导出链一并移除；原因是单 VL 架构下这些执行器从未在真机启用过（`jm_log_retention_driver_enabled=0`，`worker.yml` 无 `log_retention` 段），且 `Mover` 生产恒传 `nil`——“搬运到冷层”在单 VL 下等价于“把分区抄到自己身上再删掉”。**到期处置现状**：由 VL 自身按 `-retentionPeriod=180d` 自治删除，不再经应用层三闸编排（这也意味着原设计中的“先导出副本再删”已不可用）。**历史交付记录保留如下**：✅ 已交付@v0.24.0·**2026-11-01 重写**：删「**删前归档硬规则**」与「冷搬运」——单 VL 架构下到期即按 `retention_period`（180d）删除，`archive_copy` 是**可选**导出（默认关），不是删除前置。archive_copy 已实现（导出→gzip→manifest 三重校验，次序判在 discard 之前）；热层回收已打通；查询面显式降级为 `LOG_ARCHIVE_MISSING`/`ARCHIVE_NOT_RESTORED`；导出目的地 local/s3/minio 已接线；删除三闸默认全关。 **2026-11-10 真机复核（纠正上文）**：原文写的「四类采样策略仍在生产」**与代码不符**——全仓搜 `SamplingPolicy` 只有 2 处命中且都在 docs，**实现为零**；`configs/worker.yml` 自己写着「采集侧采样（`log_ingest.sampling.*`）已随旧链路删除（2026-11-06）：新采集器逐行写入、无采样实现」。同理 `retention` 包在 HEAD 下 24 个文件仍在（另一任务正在删除中），但删除完成的版本里这一项也会一并消失。**结论**：本条维持「已延后」，但理由需改写为——**能力对象已不存在**（不是未做完），原属采样与保留-执行器两部分都已被架构变更取销；新采集器（tailer）逐行写入、不采样，到期删除交由 VL 自身 `-retentionPeriod`。本项不记「已交付」，否则会让人以为采样仍可配。 |
 
 | FR-502 | 四核心采集规则/轮转/实例路径覆盖，Velocity用logs/latest.log [规格][s173] | P1 | ✅ 已交付@v0.24.0·既有代码/回归/真机归真，不冒新增生产验收 |
 | FR-503 | 日志配置基线→平台默认→Worker覆盖，心跳≤30s热应用并持久化 [规格][s174] | P1 | ✅ 已交付@v0.24.0·节点只覆盖五个log.acq键 |
@@ -608,6 +618,53 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-510 | VL 不可用时的磁盘缓冲（有界环形，面向机械盘顺序写优化） | P0 | ❌ **已废弃（2026-11-06 整体删除）**·删除原因：`spool` 包**只有写端、没有读端**——`Peek`/`PeekEvents`/`Ack` 在包外零调用（全仓只有它自己的测试在用），所以写进去的事件**永远不会被重投**。那不是缓冲，是「换个地方丢」，而且比直接丢更坏：缺口 detail 会显得数据得救了（误导排障方向），磁盘上还会堆着永远不会被读的数据。代码里 `spoolConsumerReady` 本就是 `false` 的编译期常量，装配层会拒绝挂载——生产配置却写着 `enabled: true`，导致**每次 Worker 启动白报一条 ERROR**。删除范围：`internal/worker/logs/spool/` 整包、`acquire/wal_spool.go`、`ingest/entry_spool_attach.go`、`ingest/entry_spool_metrics.go`、`LogSpoolConfig` 全套配置与 SetDefault、`apps/worker/metrics_compose.go` 的 spoolAdapter、生产 `worker.yml` 的 `log_spool` 段，以及磁盘上的 `ingest.spool`（100MB 预分配文件）。**原始交付记录保留如下**（该 FR 编号不得复用）：✅ 已交付@v0.24.0·**2026-10-31 新立，2026-11-01 交付并生产启用**（但读端从未接线，见上）。动机：当前 VL 不可用时只有纯内存 WAL，满了丢最旧——官方 vlagent 用 `-remoteWrite.tmpDataPath` 磁盘缓冲保投。**边界必须说清**：它只能把「VL 重启几分钟」从丢日志变成不丢；VL 挂很久且缓冲满仍会丢。设计（针对机械盘 `sda` ROTA=1，实测顺序写 **274MB/s**、随机写差一个量级）：① **只 append 不覆盖写**（单文件环形，写头优于随机重建）；② **不 fsync**（用户红线）；③ 定长记录 + CRC 校验（识别掉电导致的截断尾部）；④ 容量 100MB 可配，写满丢最旧（对齐官方 `-remoteWrite.maxDiskUsagePerURL`）；⑤ VL 恢复后顺序读回重投，成功才推进读位。**验收**：VL 断开 3 分钟不丢；掉电后截断尾能被识别且不影响已写记录；顺序写路径 p99 < 5ms |
 | FR-511 | Worker 内置 HTTP 日志接收入口（官方推荐接入方式） | P1 | ✅ 已交付@v0.24.0·**2026-10-31 新立，2026-11-01 交付**（默认无 PUSH_ONLY 源即不生效）。官方明确：非 K8s 环境的文件采集推荐用 Vector/Fluent Bit/Filebeat，然后**推给 VL/vlagent**；VL 支持 `/insert/jsonline`、`/insert/elasticsearch/_bulk`、`/insert/loki/api/v1/push`、`/insert/opentelemetry/v1/logs`。本项让 Worker 自己也能当接收端（便于游戏服进程外推送、其他进程写日志）。**复用现有 pipeline**（不走独立存储），继承攒批/gzip/流标签/背压语义。鉴权与 CP 已有 Worker 鉴权体系一致，不新造凭证模型。边界：不新建日志存储模型，只做「接收 → 归一 → 入同一条管道」 |
 | FR-512 | 采集模式对齐官方：按进程/容器/文件三类来源统一抽象，减少丢日志 | P1 | ✅ 已交付@v0.24.0·**2026-10-31 新立，2026-11-01 交付**。现状：生产 19 个源全部 `FILE_PRIMARY`（tail 活文件），`STDIO_PRIMARY` 有实现未使用；无 HTTP 入口、无 journald、无 syslog。目标（按官方 vlagent 的输入矩阵）：**文件（现有）/ 进程 stdout-stderr（现有，待接）/ HTTP（FR-511）/ journald（可选）** 四类统一为一个 source 抽象，共享同一套 WAL / 攒批 / 投递 / 游标语义。**明确不做**：不恢复 gz 归档回读（2026-10-30 已裁定删）、不引入 Loki/CH 作为第二套存储 |
+| FR-513 | 节点主机级观测采集补全 [规格][s177] | — | ✅ 已交付@v0.24.0·真机截图取证 |
+| FR-514 | AI 供应商、模型与平台配置 [规格][s178] | P0 | ✅ 已交付@v0.24.0·spec §11 全关闭 |
+| FR-515 | Go 内置轻量 Agent 与私有会话 [规格][s179] | P0 | ✅ 已交付@v0.24.0 |
+| FR-516 | 当前用户受限系统工具与逐调用写入确认 [规格][s180] | P0 | ✅ 已交付@v0.24.0 |
+| FR-517 | 外部 Streamable HTTP MCP 客户端与连接治理 [规格][s181] | P0 | ✅ 已交付@v0.24.0·真机闭环 |
+| FR-518 | 类型化页面上下文与实体选择 [规格][s182] | P1 | ✅ 已交付@v0.24.0 |
+| FR-519 | 共享聊天界面与全局上下文面板 [规格][s183] | P1 | ✅ 已交付@v0.24.0 |
+| FR-520 | AI Dashboard 默认首页与经典首页切换 [规格][s184] | P1 | ✅ 已交付@v0.24.0 |
+| FR-521 | 退役 JM 业务能力 [规格][s185] | P0 | ✅ 已交付@v0.24.0 |
+| FR-522 | 业务事件纯透传 + SSE 事件流 [规格][s186] | P0 | ✅ 已交付@v0.24.0 |
+| FR-523 | 业务批量命令接口 [规格][s187] | P0 | ✅ 已交付@v0.24.0 |
+| FR-524 | 写穿与离线禁改 [规格][s188] | P0 | ✅ 已修复（2026-11-10 真机复核后补齐）·写穿链路、审计只记通道事实、幂等键注入均在；但规格 §6 第 1 条「实例离线→409 INSTANCE_OFFLINE」**未实现**：`DispatchWrite → resolveTarget` 只校验实例存在性与节点存在性，不看实例状态，离线时返回 `200 + available=false + error="节点未连接"`。**事实安全**：探针（ServerProbe）跑在游戏服进程内，实例停止则进程消失、探针随之不可达，业务数据无法写入；JM 也不持有业务数据（全仓无业务数据表，仅游标表），所以「库内零变更」结果成立。**坏的是可归因性**：运维看到「节点未连接」会去查网络/Worker，实际原因是该实例未启动；巡检脚本无法据此区分，会把已停服的预期状态报成故障。已加 `TestBusinessWrite_OfflineInstanceMustBeRejected`（断言**必须含** INSTANCE_OFFLINE）。**2026-11-10 已修复**：在 `resolveTarget` 源头统一校验 `inst.Status != Running`，与对账路径同语义同错误码；测试改回严格断言，并做过反向验证（把检查改成 `if false && …` 则立刻转红）。对照证据：对账路径（`business_reconcile.go`）一直有这道检查，两条路径现已一致 |
+| FR-525 | 对账协调接口 [规格][s188] | P1 | ✅ 已交付@v0.24.0 |
+| FR-526 | 桥能力接入 [规格][s188] | P1 | ✅ 已交付@v0.24.0 |
+| FR-527 | 对外只读统计契约 [规格][s189] | P1 | ✅ 已交付@v0.24.0 |
+| FR-528 | 对外 API 规范与错误码统一 | P1 | ✅ 已交付@v0.24.0 |
+| FR-529 | 配置分层覆盖与有效值解析 [规格][s190] | P0 | ✅ 已交付@v0.24.0 |
+| FR-530 | 配置写入经 Worker 落盘 + 读回校验 [规格][s191] | P0 | ✅ 已交付@v0.24.0 |
+| FR-531 | 配置分批灰度与编排 [规格][s191] | P0 | ✅ 已交付@v0.24.0 |
+| FR-532 | 配置生效编排 [规格][s191] | P0 | ✅ 已交付@v0.24.0 |
+| FR-533 | Beacon 配置纳管 [规格][s192] | P1 | ✅ 已交付@v0.24.0 |
+| FR-534 | 业务插件面板 [规格][s193] | P1 | ✅ 已交付@v0.24.0 |
+| FR-535 | 批量目标解析与跨区二次确认 [规格][s187] | P0 | ✅ 已交付@v0.24.0 |
+| FR-536 | SSE 连接治理与慢消费者保护 [规格][s194] | P0 | ✅ 已交付@v0.24.0 |
+| FR-537 | 批量命令流式进度 [规格][s194] | P1 | ✅ 已交付@v0.24.0 |
+| FR-538 | 供应商协议三选与模型自动发现 [规格][s195] | P0 | ✅ 已交付@v0.24.0·契约补测 |
+| FR-539 | 供应商级出站代理 [规格][s195] | P0 | ✅ 已交付@v0.24.0 |
+| FR-540 | 助手默认启用平台自带 MCP 工具 [规格][s195] | P0 | ✅ 已交付@v0.24.0 |
+| FR-541 | 系统提示词、Skill 目录与思考强度 [规格][s195] | P1 | ✅ 已交付@v0.24.0·核实归真 |
+| FR-542 | 对话历史独立页面与检索 [规格][s195] | P1 | ✅ 已交付@v0.24.0 |
+| FR-543 | 历史消息编辑与回退 [规格][s195] | P1 | ✅ 已交付@v0.24.0 |
+| FR-544 | 助手工具渐进式披露与执行路径统一 [规格][s195] | P0 | ✅ 已交付@v0.24.0 |
+| FR-545 | 业务事件位点账本与缺口查询 [规格][s186] | P1 | ✅ 已交付@v0.24.0 |
+| FR-546 | 前端设计底座单一真源与 `dark:` 变体修复 | P1 | ✅ 已交付@v0.24.0 |
+| FR-547 | 主题配色对比度自动校验 | P1 | ✅ 已交付@v0.24.0 |
+| FR-548 | 内容页布局规范层 | P1 | ✅ 已交付@v0.24.0 |
+| FR-549 | 导航外壳组件层 | P1 | ✅ 已交付@v0.24.0 |
+| FR-550 | 工作区导航数据层 | P1 | ✅ 已交付@v0.24.0 |
+| FR-551 | 主控台外壳接入与页面迁移 | P1 | ✅ 已交付@v0.24.0·四项验收达成 |
+| FR-552 | 代码内 FR / ADR 编号全量清理 | P1 | ✅ 已交付@v0.24.0·存量归零 |
+| FR-553 | 侧栏资源面板收敛为「一个分组方式 + 服务器列表」 | — | ✅ 已交付@v0.24.0 |
+| FR-554 | 删除侧栏本地自定义分组并清掉其类型错误 | P1 | ✅ 已交付@v0.24.0 |
+| FR-555 | 侧栏服务器列表精简与虚拟化 | — | ✅ 已交付@v0.24.0·**2026-11-10 复核**：「精简」已完成（删服务器选择器、只留收藏+最近两区，27 条 dom 用例验收藏置顶与 LRU 排序）；「虚拟化」**未做且不必要**——侧栏数据源天然有界：`RECENT_LIMIT=8` + `FAVORITES_LIMIT=32`（`lib/console/server-selection.ts`），最多 40 条，在这个量级上做虚拟化只有复杂度没有收益。新增 `server-selection.dom.test.tsx`（4 条用例）钉住两个上限：将来若有人调大上限，测试会红并提醒重新评估要不要虚拟化 |
+| FR-556 | 侧栏服务器行标注「服务端类别」三分法 | — | ✅ 已交付@v0.24.0 |
+| FR-557 | 实例日志检索分析与字段探索 [规格][s196] | P1 | ✅ 已交付@v0.24.0 |
+| FR-558 | 实例日志安全高级查询表达式与预算控制 [规格][s197] | P1 | ✅ 已交付@v0.24.0 |
+| FR-559 | 实例日志浏览器端实时流式跟随 [规格][s198] | P1 | ✅ 已交付@v0.24.0 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
@@ -802,7 +859,7 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 
 **历史切段**：原按主题分v0.13～v0.16四版的计划已放弃，三～六期代码归入v0.13.0。
 
-- **v0.13.0**：三～六期累积交付；含经济FR-115～123与背包FR-124～127代码。当时记本地tag `69dd647` 未push，仅为历史记录。
+- **v0.13.0**：三～六期累积交付；含经济FR-115～123与背包FR-124～127代码。当时记本地 tag 未 push，仅为历史记录。
 - **v0.14.0**：解锁CoreLib环境后背包FR-124～127真机交付，并收口发布向导、探针玩家/业务入参与版本文档修复。
 
 > 产品成熟（1.0 后稳态）不再加「第 N 期」，改按版本（CHANGELOG / tag）+ 功能（§4 / specs）组织。某期是否完成看 §4 该期 FR 状态是否都 `已交付`。
@@ -826,7 +883,7 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 [s003]: specs/plugin-batch-deploy/spec.md
 [s004]: specs/serverprobe-ops-inflight/spec.md
 [s005]: specs/probe-dependency-cache/spec.md
-[s006]: specs/business-integration/fr-124-127-inventory.md
+[s006]: specs/archive/business-integration/fr-124-127-inventory.md
 [s007]: specs/console-ux-enhancement/spec.md
 [s008]: specs/ui-redesign/design.md
 [s009]: specs/process-metrics/spec.md
@@ -973,20 +1030,15 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 [s150]: specs/cross-instance-ranking/spec.md
 [s151]: specs/crash-diagnostics-enhancement/spec.md
 [s152]: specs/worker-log-platform-contract/spec.md
-[s153]: specs/worker-log-acquisition/spec.md
 [s154]: specs/worker-log-normalizer/spec.md
 [s155]: specs/worker-victorialogs-runtime/spec.md
 [s156]: specs/worker-log-lifecycle/spec.md
-[s157]: specs/worker-log-deep-archive/spec.md
 [s158]: specs/worker-log-query-federation/spec.md
 [s159]: specs/cp-log-query-coordinator/spec.md
-[s160]: specs/log-ingest-cutover/spec.md
 [s161]: specs/logs-center-tiered-ui/spec.md
-[s162]: specs/worker-log-canonical-eventstore/spec.md
 [s163]: specs/mcp-stateless-endpoint/spec.md
 [s164]: specs/qqbot-notification-channel/spec.md
 [s165]: specs/qqbot-group-discovery/spec.md
-[s166]: specs/log-index-sqlite/spec.md
 [s167]: specs/log-startup-reconcile/spec.md
 [s168]: specs/auto-adopt-orphans/spec.md
 [s169]: specs/log-verify-chunking/spec.md
@@ -997,3 +1049,25 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 [s174]: specs/log-config-delivery/spec.md
 [s175]: specs/log-collection-switches/spec.md
 [s176]: specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项
+[s177]: specs/node-host-observability/spec.md
+[s178]: specs/ai-provider-models/spec.md
+[s179]: specs/ai-assistant/fr-515-agent-runtime.md
+[s180]: specs/ai-assistant/fr-516-tools-and-confirmation.md
+[s181]: specs/ai-assistant/fr-517-external-mcp.md
+[s182]: specs/ai-assistant/fr-518-page-context.md
+[s183]: specs/ai-assistant/fr-519-chat-ui.md
+[s184]: specs/ai-assistant/fr-520-ai-home.md
+[s185]: specs/business-capability-retirement/spec.md
+[s186]: specs/business-event-passthrough/spec.md
+[s187]: specs/business-batch-and-confirmation/spec.md
+[s188]: specs/business-write-reconcile-bridge/spec.md
+[s189]: specs/external-stats-contract/spec.md
+[s190]: specs/config-layered-override/spec.md
+[s191]: specs/config-write-grayscale-activation/spec.md
+[s192]: specs/config-beacon-migration/spec.md
+[s193]: specs/business-plugin-panel/spec.md
+[s194]: specs/sse-governance-and-streaming/spec.md
+[s195]: specs/ai-assistant/fr-538-543-provider-skill-history.md
+[s196]: specs/logs-query-workbench/spec.md
+[s197]: specs/logs-advanced-query/spec.md
+[s198]: specs/logs-live-streaming/spec.md

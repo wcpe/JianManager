@@ -21,7 +21,7 @@ func NewObservabilityHandler(svc *service.PlatformObservabilityService) *Observa
 // RegisterRoutes 注册平台全景观测只读路由。
 func (h *ObservabilityHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/observability/overview", h.Overview)
-	// 集群健康墙（FR-461）：逐台健康矩阵 + 一键下钻，只读 CP 快照、零 Worker RPC。
+	// 集群健康墙：逐台健康矩阵 + 一键下钻，只读 CP 快照、零 Worker RPC。
 	rg.GET("/observability/health-wall", h.HealthWall)
 }
 
@@ -39,7 +39,7 @@ func (h *ObservabilityHandler) Overview(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// HealthWall 返回逐台集群健康矩阵（FR-461）。平台级聚合，不向普通成员开放。
+// HealthWall 返回逐台集群健康矩阵。平台级聚合，不向普通成员开放。
 // 支持 ?sort=level|cpu|mem|disk|instances。
 func (h *ObservabilityHandler) HealthWall(c *gin.Context) {
 	if !requirePlatformAdmin(c) {

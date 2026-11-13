@@ -3,7 +3,7 @@ package top.wcpe.mc.jm.updater.core;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** 客户端启动运行态心跳构建（FR-265）。 */
+/** 客户端启动运行态心跳构建。 */
 final class RuntimeHeartbeat {
 
     private RuntimeHeartbeat() {

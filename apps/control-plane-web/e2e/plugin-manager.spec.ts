@@ -1,14 +1,14 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-143 插件/模组/资源包/数据包管理增强 · 单机（Playwright + mock 模式）验收。
+/** 
+ *插件/模组/资源包/数据包管理增强 · 单机（Playwright + mock 模式）验收。
  * 覆盖：四目录分区 + 元信息（版本·作者）+ 启禁/删除、重启提示、拖拽上传区、
  * 同名覆盖确认、批量部署、插件市场入口预留（禁用）。
- * 证据截图落 .tmp/acceptance/FR-143/。
+ * 证据截图落 .tmp/acceptance。
  */
 
-test('FR-143 插件页四区分区 + 元信息 + 操作 + 重启提示 + 市场入口预留', async ({ page }) => {
+test('插件页四区分区 + 元信息 + 操作 + 重启提示 + 市场入口预留', async ({ page }) => {
   await login(page)
   await page.goto('/instances/1?tab=plugins')
 
@@ -32,5 +32,5 @@ test('FR-143 插件页四区分区 + 元信息 + 操作 + 重启提示 + 市场�
   await expect(page.getByRole('button', { name: '批量部署' })).toBeVisible()
   await expect(page.getByRole('button', { name: '插件市场' })).toBeDisabled()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-143/single-machine-plugins.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-plugins.png', fullPage: true })
 })

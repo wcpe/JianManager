@@ -3,7 +3,7 @@ package model
 import "time"
 
 const (
-	// ServerProbePackageKey 是 ServerProbe 制品包的稳定机器键（FR-409）。
+	// ServerProbePackageKey 是 ServerProbe 制品包的稳定机器键。
 	ServerProbePackageKey = "serverprobe"
 	// ArtifactProviderGitHubRelease 是 GitHub Releases 来源 provider。
 	ArtifactProviderGitHubRelease = "github-release"

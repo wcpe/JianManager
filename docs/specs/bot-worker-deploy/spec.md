@@ -61,3 +61,13 @@
 - mineflayer 安装到节点受控根后的传递依赖体积（~200MB+）——走 npmmirror（FR-306 已配）可接受；磁盘占用一次性。旧 `global/lib/node_modules` 不自动删除，迁移期可能短暂双份占用。
 - NODE_PATH 对 ESM `import` 的支持：Node 的 ESM 解析默认不吃 NODE_PATH——**关键取舍**：bot-worker 是 `type: module`（ESM）！可靠方案是在 bot-worker dist 同级放一个 `node_modules` **junction/symlink → 节点受控根**（自愈下发时创建），ESM/CJS 解析都天然命中，零 Node 参数。spec 定此方案，NODE_PATH 仅作 CJS 兜底同时注入。
 - 施工中若发现 symlink 方案在某平台受限（Windows 非特权），回退方案=Windows 用 junction（mklink /J，无需特权）；实现按 GOOS 分派。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-308 bot-worker runtime 下发部署 + 经全局包运行（feat，节点级，需 spec + 新 ADR 修订 ADR-006，依赖 FR-306+299）
+
+**需求补充**：install-worker.sh 一键装机/CP 下发 bot-worker 源码（`dist`，非 bundle）；其依赖（mineflayer/mineflayer-pathfinder）经 FR-306 的 PM+registry 装为**全局包**，bot spawn 带 `NODE_PATH` 指向全局 node_modules（FR-300 node 解析已就绪）——统一「全局包」模型：装 mineflayer 插件（全局包）bot 立即可用。消除装机节点 bot 真连 MC 缺 426MB 依赖的缺口（真机复现：dist-only spawn `ERR_MODULE_NOT_FOUND: mineflayer`）→ `docs/specs/bot-worker-deploy/spec.md`
+
+**交付状态**：✅ 已交付@v0.16.0

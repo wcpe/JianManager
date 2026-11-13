@@ -15,12 +15,12 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// CrashSnapshotService 实例崩溃快照查询 + 趋势/聚合/重分类服务（FR-313 增强 FR-470）。
+// CrashSnapshotService 实例崩溃快照查询 + 趋势/聚合/重分类服务（增强）。
 // 写入在 gRPC 层（Worker 上报 ReportCrashSnapshot，含滚动修剪 + 同步分类 + 统计 upsert）；
 // 此处承担 REST 读侧（列表 / 趋势 / 总览）与管理员重分类批处理。
 type CrashSnapshotService struct {
 	db *gorm.DB
-	// correlation 关联证据（FR-470 §2.3）；nil 时列表不返回关联段。
+	// correlation 关联证据（§2.3）；nil 时列表不返回关联段。
 	correlation *CrashCorrelationService
 	// settings 读 crash.stat_retention_days（日粒度统计的清理窗口）。
 	settings SettingsReader
@@ -38,7 +38,7 @@ func NewCrashSnapshotService(db *gorm.DB) *CrashSnapshotService {
 // SetSettingsReader 注入设置读取器（crash.stat_retention_days）。
 func (s *CrashSnapshotService) SetSettingsReader(r SettingsReader) { s.settings = r }
 
-// SetCorrelation 注入资源关联服务（FR-470，main 接线）。
+// SetCorrelation 注入资源关联服务（main 接线）。
 func (s *CrashSnapshotService) SetCorrelation(c *CrashCorrelationService) { s.correlation = c }
 
 // CorrelationEnabled 报告是否已装配资源关联服务（读侧据此决定是否附关联段）。
@@ -79,7 +79,7 @@ func (s *CrashSnapshotService) ListByInstance(instanceID uint) ([]model.Instance
 	return out, err
 }
 
-// CrashCauseCount 按根因聚合的计数（FR-470 §2.4）。
+// CrashCauseCount 按根因聚合的计数（§2.4）。
 type CrashCauseCount struct {
 	RootCause string `json:"rootCause"`
 	Count     int    `json:"count"`
@@ -99,7 +99,7 @@ type CrashTrendPoint struct {
 	Count     int    `json:"count"`
 }
 
-// CrashTrend 实例崩溃趋势（FR-470 §2.4）：来自 InstanceCrashStat，**不受 K=5 快照裁剪影响**。
+// CrashTrend 实例崩溃趋势（§2.4）：来自 InstanceCrashStat，**不受 K=5 快照裁剪影响**。
 type CrashTrend struct {
 	InstanceID    uint                  `json:"instanceId"`
 	Days          int                   `json:"days"`
@@ -116,7 +116,7 @@ type CrashInstanceCount struct {
 	Count        int    `json:"count"`
 }
 
-// CrashOverview 平台崩溃总览（FR-470 §2.4）。
+// CrashOverview 平台崩溃总览（§2.4）。
 type CrashOverview struct {
 	Days          int                   `json:"days"`
 	Total         int                   `json:"total"`
@@ -196,7 +196,7 @@ func normalizeCrashDays(days int) int {
 	return days
 }
 
-// TrendByInstance 查询实例崩溃趋势（FR-470）。days<=0 默认 30。
+// TrendByInstance 查询实例崩溃趋势。days<=0 默认 30。
 func (s *CrashSnapshotService) TrendByInstance(instanceID uint, days int) (*CrashTrend, error) {
 	var inst model.Instance
 	if err := s.db.Select("id").First(&inst, instanceID).Error; err != nil {
@@ -380,10 +380,10 @@ type ReclassifyResult struct {
 	Backfilled int `json:"backfilled"`
 }
 
-// ReclassifyAll 对历史快照按当前规则重跑分类，回填分类列并修正统计（FR-470 §2.5）。
+// ReclassifyAll 对历史快照按当前规则重跑分类，回填分类列并修正统计（§2.5）。
 //
 // 统计修正采用「差量搬移」：旧分类与新分类不同则从旧桶减 1、新桶加 1；旧快照无分类
-// （FR-470 之前入库）按回填处理（只加不减）。因此重复执行幂等——第二次运行时旧分类已等于新分类，不再变动。
+// （之前入库）按回填处理（只加不减）。因此重复执行幂等——第二次运行时旧分类已等于新分类，不再变动。
 func (s *CrashSnapshotService) ReclassifyAll() (*ReclassifyResult, error) {
 	res := &ReclassifyResult{}
 	const batch = 200

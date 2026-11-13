@@ -29,13 +29,14 @@ const federationAllTargets = "*"
 // 置 nil 后 federation 端点不注册（与其它可选服务一致）。
 var testLogCoord *logcoord.Coordinator
 
-// LogFederationHandler FR-480 CP 跨 Worker 日志联邦查询 HTTP 面。
+// LogFederationHandlerCP 跨 Worker 日志联邦查询 HTTP 面。
 //
 // 权限复用日志中心：路由组 RequireAnyPerm("log.read")；
 // Handler 内平台管理员可查全平台/指定目标，非管理员收敛到可访问实例。
 type LogFederationHandler struct {
-	coord *logcoord.Coordinator
-	authz *service.AuthzService
+	coord     *logcoord.Coordinator
+	authz     *service.AuthzService
+	instances *service.InstanceService
 	// 面板聚合类（stats/facets）的同参秒级缓存：这两条查询同样打满 VL 并发槽，
 	// 页面加载时与主列表互挤（实测 5.7–8.7s ✗）⇒ 命中即免扇出。键含授权主体/scope ⇒
 	// 跨主体绝不命中 ✗；导出/校验路径不经这两个 handler ⇒ 天然旁路 ✗。
@@ -340,8 +341,8 @@ func (h *LogFederationHandler) warmWindow(now time.Time, win time.Duration, targ
 }
 
 // NewLogFederationHandler 创建联邦查询处理器（并启动热门窗预热器 ✓）。
-func NewLogFederationHandler(coord *logcoord.Coordinator, authz *service.AuthzService) *LogFederationHandler {
-	h := &LogFederationHandler{coord: coord, authz: authz, aggCache: &fedTTLCache{},
+func NewLogFederationHandler(coord *logcoord.Coordinator, authz *service.AuthzService, instances *service.InstanceService) *LogFederationHandler {
+	h := &LogFederationHandler{coord: coord, authz: authz, instances: instances, aggCache: &fedTTLCache{},
 		warmHot: make(map[uint]time.Time), warmFailOnce: make(map[string]time.Time)}
 	h.startWarmLoop()
 	return h
@@ -352,11 +353,13 @@ func (h *LogFederationHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	if h == nil || h.coord == nil {
 		return
 	}
-	// 门面：LogsPage/双路径客户端探测 GET /logs/federation（FR-482）。
+	rg = rg.Group("", auditAdvancedLogQuery)
+	// 门面：LogsPage/双路径客户端探测 GET /logs/federation。
 	// 语义 = Search + envelope（ok/sourceTag/coverage/quality/items/notes）。
 	rg.GET("/logs/federation", h.FacadeSearch)
 	rg.GET("/logs/federation/search", h.Search)
 	rg.GET("/logs/federation/tail", h.Tail)
+	rg.GET("/logs/federation/live", h.Live)
 	rg.GET("/logs/federation/stats", h.Stats)
 	rg.GET("/logs/federation/fields", h.Fields)
 	rg.GET("/logs/federation/facets", h.Facets)
@@ -370,7 +373,7 @@ func (h *LogFederationHandler) RegisterRoutes(rg *gin.RouterGroup) {
 }
 
 // FacadeSearch 前端门面：Search 结果包装为双路径 envelope。
-// coverage/quality 保持 FR-473 snake_case wire 形态，由前端 adapter 归一。
+// coverage/quality 保持snake_case wire 形态，由前端 adapter 归一。
 func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 	q, ok := h.buildQuery(c)
 	if !ok {
@@ -412,6 +415,9 @@ func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 	}
 	if len(resp.IngestPositionGaps) > 0 {
 		body["ingest_position_gaps"] = resp.IngestPositionGaps
+	}
+	if meta := queryMetadata(c, q, len(resp.Items)); meta != nil {
+		body["query_meta"] = meta
 	}
 	c.JSON(http.StatusOK, body)
 }
@@ -456,42 +462,6 @@ func federationPermissionScope(access *service.UserAccess, targets []string) str
 		kind, access.RoleKey, access.AuthVersion, nsum[:6], tsum[:6])
 }
 
-// federationFilter 把结构化筛选参数组合为 LogsQL 过滤表达式。
-//
-// 背景：wire 契约（LogQueryRequestBase）只有单一 filter 表达式字段，没有结构化的
-// level / source 等参数。经典 /logs 路径支持按级别与来源筛选（log.go 的 buildFilter），
-// 联邦路径若不在此组合，用户在联邦视图点「错误」或选「来源」不会有任何反应——
-// 同一界面两条路径行为不一致。
-//
-// 组合时必须给 keyword 加括号：LogsQL 中 AND 优先级高于 OR，`a OR b AND level:X`
-// 会被解析为 `a OR (b AND level:X)`，使级别筛选对含 OR 的关键词失效。实测
-// `LIVE-TEST OR Notch AND level:INFO` 命中 4 条，而 `(LIVE-TEST OR Notch) AND level:INFO`
-// 命中 2 条——故存在结构化约束时把 keyword 包成 `(keyword) AND ...`。
-//
-// level 与 source 均走白名单：它们来自用户输入，直接拼进表达式会引入注入面。
-func federationFilter(c *gin.Context) string {
-	keyword := strings.TrimSpace(c.Query("keyword"))
-
-	terms := make([]string, 0, 2)
-	if level := strings.ToLower(strings.TrimSpace(c.Query("level"))); isFederationLevel(level) {
-		// VL 中级别以大写存储（ERROR/INFO/WARN）；LogsQL 大小写敏感，故统一转大写。
-		terms = append(terms, "level:"+strings.ToUpper(level))
-	}
-	if prefix, ok := federationSourcePrefix(strings.ToLower(strings.TrimSpace(c.Query("source")))); ok {
-		terms = append(terms, `log_source_id:"`+prefix+`"`)
-	}
-
-	if len(terms) == 0 {
-		// 无结构化约束：保持既有行为，keyword 原样下发（其内部布尔结构由用户自负）。
-		return keyword
-	}
-	joined := strings.Join(terms, " AND ")
-	if keyword == "" {
-		return joined
-	}
-	return "(" + keyword + ") AND " + joined
-}
-
 // isFederationLevel 白名单校验：仅接受契约登记的四个级别。
 func isFederationLevel(v string) bool {
 	switch v {
@@ -532,6 +502,7 @@ func federationSourcePrefix(v string) (string, bool) {
 // buildQuery 从查询参数构造 logcoord.Query，并完成授权目标收敛。
 // 返回 (query, ok)；ok=false 表示已写出错误响应。
 func (h *LogFederationHandler) buildQuery(c *gin.Context) (logcoord.Query, bool) {
+	c.Set(logQueryStartedContext, time.Now())
 	access := getAccess(c)
 	if access == nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
@@ -540,6 +511,15 @@ func (h *LogFederationHandler) buildQuery(c *gin.Context) (logcoord.Query, bool)
 
 	targets, ok := h.authorizedTargets(c, access)
 	if !ok {
+		return logcoord.Query{}, false
+	}
+
+	filter, filterErr := federationFilter(c)
+	if filterErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_REQUEST",
+			"message": filterErr.Error(),
+		})
 		return logcoord.Query{}, false
 	}
 
@@ -553,13 +533,22 @@ func (h *LogFederationHandler) buildQuery(c *gin.Context) (logcoord.Query, bool)
 		// F-008：稳定 PermissionScope 摘要（权限节点/角色/授权版本/目标），供 View 复用校验。
 		PermissionScope: federationPermissionScope(access, targets),
 		OnlineOnly:      parseBoolParam(c.Query("onlineOnly")),
-		Filter:          federationFilter(c),
+		Filter:          filter,
 		ViewID:          c.Query("viewId"),
 		Cursor:          c.Query("cursor"),
 	}
 	q.Budget.Limit = parseIntDefault(c.Query("limit"), 0)
 	if q.Budget.Limit < 0 {
 		q.Budget.Limit = 0
+	}
+	if parseBoolParam(c.Query("advanced")) {
+		budget, err := advancedQueryBudget(c, q.Budget)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+			return logcoord.Query{}, false
+		}
+		q.Budget = budget
+		c.Set("logs.query.scope", q)
 	}
 	return q, true
 }
@@ -631,7 +620,30 @@ func (h *LogFederationHandler) authorizedTargets(c *gin.Context, access *service
 			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "nodeId 无效"})
 			return nil, false
 		}
-		return []string{nodeTargetID(uint(id))}, true
+		nodeID := uint(id)
+		targets := []string{nodeTargetID(nodeID)}
+		source := strings.ToLower(strings.TrimSpace(c.Query("source")))
+		if source == "instance" || source == "" || source == "all" {
+			if h.instances == nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ENGINE_NOT_READY", "message": "日志实例目录暂不可用"})
+				return nil, false
+			}
+			instances, err := h.instances.List(service.InstanceFilter{NodeID: &nodeID})
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询节点实例失败"})
+				return nil, false
+			}
+			// 节点自身与节点上的实例是独立日志目标；来源过滤不能替代目标展开。
+			// 空节点保留具体节点目标，避免空授权被 resolver 当成全平台通配。
+			if source == "instance" && len(instances) > 0 {
+				targets = nil
+			}
+			for _, instance := range instances {
+				targets = append(targets, instanceTargetID(instance.ID))
+			}
+		}
+		sort.Strings(targets)
+		return targets, true
 	}
 	return []string{federationAllTargets}, true
 }
@@ -685,7 +697,10 @@ func (h *LogFederationHandler) Search(c *gin.Context) {
 		writeFederationError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, struct {
+		*logcoord.SearchResponse
+		QueryMeta *logQueryMetadata `json:"query_meta,omitempty"`
+	}{resp, queryMetadata(c, q, len(resp.Items))})
 }
 
 func (h *LogFederationHandler) Tail(c *gin.Context) {
@@ -699,7 +714,10 @@ func (h *LogFederationHandler) Tail(c *gin.Context) {
 		writeFederationError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, struct {
+		*logcoord.SearchResponse
+		QueryMeta *logQueryMetadata `json:"query_meta,omitempty"`
+	}{resp, queryMetadata(c, q, len(resp.Items))})
 }
 
 func (h *LogFederationHandler) Fields(c *gin.Context) {
@@ -707,6 +725,7 @@ func (h *LogFederationHandler) Fields(c *gin.Context) {
 	if !ok {
 		return
 	}
+	q.ExploreFields = parseBoolParam(c.Query("explore"))
 	resp, err := h.coord.Fields(c.Request.Context(), q)
 	if err != nil {
 		writeFederationError(c, err)
@@ -846,10 +865,21 @@ func (h *LogFederationHandler) Facets(c *gin.Context) {
 	if !ok {
 		return
 	}
+	q.ExploreFields = parseBoolParam(c.Query("explore"))
+	// 与 buildQuery 里 Budget.Limit 同口径：先钳掉负值。
+	// 不钳就会在转 uint32 时溢出成 4294967295，使下游裁剪与 Truncated 标记一并失效——
+	// 本地裁剪是 field_values 响应的唯一体积闸（该端点不向 VL 传 limit）。
+	dimensionLimit := parseIntDefault(c.Query("dimensionLimit"), 0)
+	if dimensionLimit < 0 {
+		dimensionLimit = 0
+	}
+	if dimensionLimit > int(logcoord.MaxFacetDimensionLimit) {
+		dimensionLimit = int(logcoord.MaxFacetDimensionLimit)
+	}
 	fq := logcoord.FacetsQuery{
 		Query:          q,
 		Dimensions:     splitCSV(c.Query("dimensions")),
-		DimensionLimit: uint32(parseIntDefault(c.Query("dimensionLimit"), 0)),
+		DimensionLimit: uint32(dimensionLimit),
 	}
 	if len(fq.Dimensions) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "dimensions 不能为空"})
@@ -955,6 +985,8 @@ func dedupeFederationReasons(in []string) []string {
 func writeFederationError(c *gin.Context, err error) {
 	msg := err.Error()
 	switch {
+	case errors.Is(err, logcoord.ErrExplorationInvalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": msg})
 	case errors.Is(err, logcoord.ErrViewAuthz):
 		// F-007：授权拒绝/主体或目标不匹配 → 403，不得当作内部错误。
 		c.JSON(http.StatusForbidden, gin.H{

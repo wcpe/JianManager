@@ -123,7 +123,7 @@ func TestBuildProxyConfigRejectsZeroListenPort(t *testing.T) {
 	require.Equal(t, 20010, l0["query_port"])
 }
 
-func TestMergeVelocitySecretIntoPaperGlobal(t *testing.T) {	// 从空生成最小档
+func TestMergeVelocitySecretIntoPaperGlobal(t *testing.T) { // 从空生成最小档
 	out, err := mergeVelocitySecretIntoPaperGlobal("", "abc123")
 	require.NoError(t, err)
 	var m map[string]interface{}

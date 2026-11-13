@@ -2,10 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
 import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
-import { apiErrorMessage } from '@/lib/api-error'
+import { apiErrorMessage } from '@/lib/shared/api-error'
 
-/**
- * 实例二进制/Beacon 版本（FR-468）。版本真源是制品库 Asset：
+/** 
+ * 实例二进制/Beacon 版本。版本真源是制品库 Asset：
  * 升级 = 换绑定 + 换文件；回滚 = 一级对称操作（Current ↔ Previous 交换）。
  */
 export interface BinaryUpgradeCandidate {
@@ -18,7 +18,7 @@ export interface BinaryUpgradeCandidate {
 
 export interface BinaryVersionView {
   instanceId: number
-  /** 是否登记了版本绑定（非 binary/beacon 实例或搭建早于 FR-468 时为 false）。 */
+  /** 是否登记了版本绑定（非 binary/beacon 实例或搭建早于时为 false）。 */
   bound: boolean
   /** 当前生效制品 ID；0=无制品库版本（url/node_file 来源）。 */
   currentAssetId: number
@@ -35,12 +35,12 @@ export interface BinaryVersionView {
   driftReason?: string
   /** 工作目录里实际二进制文件的 SHA-256（M-3：后端经 Worker 现算，未校验时为空）。 */
   diskSha256?: string
-  /**
+  /** 
    * 本次查询是否真的做了磁盘内容比对（M-3）。
    * 与 driftDetected 分开表达：未校验 ≠ 没有漂移，前端不得把「未校验」渲染成「已核对」。
    */
   diskSha256Checked: boolean
-  /**
+  /** 
    * 「读过盘但没能算出摘要」的原因（N-4：文件过大 / 不可读）。
    * 必须与 driftDetected 分开渲染——「本次未比对」不是「版本漂移」。
    */
@@ -72,7 +72,7 @@ export function useBinaryVersion(instanceId: number, enabled = true) {
   })
 }
 
-/**
+/** 
  * 版本变更后统一失效的缓存。
  *
  * **`['tasks']` 是必需的**：升级/回滚都返回 taskId（kind=`binary_upgrade`），而任务列表

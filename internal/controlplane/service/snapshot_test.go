@@ -76,7 +76,7 @@ func newSnapshotHarnessWithWorker(t *testing.T, stopWorker func(db *gorm.DB, fak
 // TestSnapshotCreate_FullBackupAndFingerprint 创建快照：全量备份 + RootBackupID 回填 + 二进制指纹（验收项 ①）。
 func TestSnapshotCreate_FullBackupAndFingerprint(t *testing.T) {
 	svc, backups, db, inst, fake := newSnapshotHarness(t)
-	// 登记版本绑定，使指纹摘要取自制品库（FR-468 协同）。
+	// 登记版本绑定，使指纹摘要取自制品库（协同）。
 	require.NoError(t, db.Create(&model.InstanceBinaryBinding{
 		InstanceID: inst.ID, CurrentAssetID: 7, CurrentFilename: "beacon-1.0.0-linux-amd64",
 		CurrentSHA256:  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -237,7 +237,7 @@ func TestSnapshotRollback_BinaryMismatchWarnsOnly(t *testing.T) {
 	require.Equal(t, "./beacon-1.0.0-linux-amd64", got.StartCommand)
 }
 
-// TestSnapshotPrune_PreRollbackSurvivesCount 条数裁剪**不得挤掉** pre_rollback（FR-466 关键约束）。
+// TestSnapshotPrune_PreRollbackSurvivesCount 条数裁剪**不得挤掉** pre_rollback（关键约束）。
 func TestSnapshotPrune_PreRollbackSurvivesCount(t *testing.T) {
 	svc, _, db, inst, _ := newSnapshotHarness(t)
 	svc.SetSettingsReader(stubSettings{

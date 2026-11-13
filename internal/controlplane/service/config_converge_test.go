@@ -16,6 +16,12 @@ func newBaselineTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Instance{}, &model.Node{}, &model.InstanceConfigVersion{},
 		&model.ConfigBaseline{}, &model.InstanceGroupNode{}, &model.InstanceGroupMember{},
@@ -118,7 +124,7 @@ func TestConfigBaseline_UpsertRejectsBadScope(t *testing.T) {
 }
 
 // TestConfigBaseline_GroupScopeFailClosed 覆盖修复（NEW-ISSUE）：group:<id> 不再静默解析为空集。
-// 组织树分组（ADR-033）与用户组（ADR-004）id 空间正交，误填用户组 id 必须报错而不是「创建成功但谁都不覆盖」。
+// 组织树分组与用户组id 空间正交，误填用户组 id 必须报错而不是「创建成功但谁都不覆盖」。
 func TestConfigBaseline_GroupScopeFailClosed(t *testing.T) {
 	db := newBaselineTestDB(t)
 	ids := seedPlainInstances(t, db, 1)
@@ -134,7 +140,7 @@ func TestConfigBaseline_GroupScopeFailClosed(t *testing.T) {
 	require.NoError(t, db.Model(&model.ConfigBaseline{}).Count(&cnt).Error)
 	require.Zero(t, cnt, "非法 group scope 不得落库")
 
-	// 2) 用户组 id（ADR-004）被填进 group: → 同样被拒（组织树里没有这个节点）。
+	// 2) 用户组 id被填进 group: → 同样被拒（组织树里没有这个节点）。
 	//    这里直接建一条用户组关联，证明它与 group: 的解析空间无关。
 	require.NoError(t, db.Create(&model.GroupInstance{GroupID: 42, InstanceID: ids[0]}).Error)
 	_, err = svc.resolveScopeInstances("group:42")
@@ -176,7 +182,7 @@ func TestConfigBaseline_GroupScopeFailClosed(t *testing.T) {
 	require.ErrorIs(t, err, ErrBaselineScopeGroupNotFound)
 }
 
-// TestConfigBaseline_ScopeFiltering 覆盖 FR-458 越权修复：非管理员只能看到/收敛「scope ∩ 可访问集合」。
+// TestConfigBaseline_ScopeFiltering 覆盖越权修复：非管理员只能看到/收敛「scope ∩ 可访问集合」。
 func TestConfigBaseline_ScopeFiltering(t *testing.T) {
 	db := newBaselineTestDB(t)
 	ids := seedPlainInstances(t, db, 3)
@@ -254,7 +260,7 @@ func TestConfigBaseline_ScopeHidesInvisible(t *testing.T) {
 	require.Len(t, rows, 1)
 }
 
-// TestConfigBaseline_DetectDriftReadErrorNotDrift 读取错误单独分类，不计入漂移（FR-458 nit）。
+// TestConfigBaseline_DetectDriftReadErrorNotDrift 读取错误单独分类，不计入漂移（nit）。
 func TestConfigBaseline_DetectDriftReadErrorNotDrift(t *testing.T) {
 	db := newBaselineTestDB(t)
 	seedPlainInstances(t, db, 1) // 该实例无版本；config 未注入 → Read 报错
@@ -278,7 +284,7 @@ func TestConfigBaseline_DetectDriftReadErrorNotDrift(t *testing.T) {
 	require.Equal(t, 0, res.Targeted)
 }
 
-// TestConfigBaseline_UpsertScopedGuard 覆盖 FR-458 越权修复：非管理员不能创建/覆盖 scope 超出可访问范围的基线。
+// TestConfigBaseline_UpsertScopedGuard 覆盖越权修复：非管理员不能创建/覆盖 scope 超出可访问范围的基线。
 func TestConfigBaseline_UpsertScopedGuard(t *testing.T) {
 	db := newBaselineTestDB(t)
 	ids := seedPlainInstances(t, db, 3)

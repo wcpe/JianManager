@@ -40,7 +40,7 @@ var actionErrorCodes = map[string]struct{}{
 	ActionErrorMoveTimeout: {}, ActionErrorTargetNotFound: {}, ActionErrorAttackAssertionUnmet: {},
 	ActionErrorProbeEventTimeout: {}, ActionErrorBarrierTimeout: {},
 	ActionErrorCancelled: {}, ActionErrorInternal: {},
-	// FR-369 通用命令编排新增的错误码。
+	// 通用命令编排新增的错误码。
 	CommandErrorRouteFailed: {}, CommandErrorIPCFailed: {},
 	CommandErrorArgumentInvalid: {}, CommandErrorRuntimeUnavailable: {},
 	CommandErrorScheduleRejected: {}, CommandErrorDeadlineExceeded: {},
@@ -201,11 +201,11 @@ func waitingAction(result model.BotLoadActionResult, bot *model.Bot) *WaitingAct
 	return waiting
 }
 
-// ActionResultService 校验并持久化 FR-351 Fleet action_event，保证首终态胜出。
+// ActionResultService 校验并持久化Fleet action_event，保证首终态胜出。
 type ActionResultService struct {
 	repository actionResultRepository
 	clock      BotLoadClock
-	// db 可选：用于 FR-369 命令 checkpoint 回写；nil 时跳过。
+	// db 可选：用于命令 checkpoint 回写；nil 时跳过。
 	db *gorm.DB
 }
 
@@ -244,7 +244,7 @@ func (s *ActionResultService) Ingest(ctx context.Context, executorNodeID uint, e
 	if err != nil {
 		return ActionResultIngestResult{}, fmt.Errorf("持久化动作结果失败: %w", err)
 	}
-	// FR-369：命令编排终态回写 checkpoint（仅 applied 的终态；duplicate/invalid 跳过）。
+	// 命令编排终态回写 checkpoint（仅 applied 的终态；duplicate/invalid 跳过）。
 	if decision == ActionResultApplied && status != model.BotLoadActionRunning {
 		s.syncCommandCheckpoint(ctx, bot, event, status)
 	}

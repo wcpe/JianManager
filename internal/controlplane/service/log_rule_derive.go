@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 日志采集规则名（FR-502），取值与 Worker 侧 `ingest.RuleKey*` 常量一致。
+// 日志采集规则名，取值与 Worker 侧 `ingest.RuleKey*` 常量一致。
 const (
 	logRuleKeyBukkit    = "bukkit"
 	logRuleKeyBungee    = "bungee"
@@ -14,7 +14,7 @@ const (
 	logRuleKeyVelocity  = "velocity"
 )
 
-// deriveLogRuleKey 由实例角色、核心类型与核心 jar 名推导日志采集规则名（FR-502 §3.1）。
+// deriveLogRuleKey 由实例角色、核心类型与核心 jar 名推导日志采集规则名。
 //
 // 背景：Worker 侧原先把实例活动日志路径硬编码为 `WorkDir/logs/latest.log`，
 // 而 BungeeCord 的日志在**工作目录根**的 `proxy.log.0`，因此永远采集不到。

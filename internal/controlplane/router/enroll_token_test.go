@@ -126,7 +126,7 @@ func TestEnrollToken_Issue_EmitsDownloadURLWhenBinaryURLConfigured(t *testing.T)
 	}
 }
 
-// TestEnrollToken_Issue_DefaultsToCPLocalWorkerAssetURL 覆盖 FR-190：未显式配置 BinaryURL 时，
+// TestEnrollToken_Issue_DefaultsToCPLocalWorkerAssetURL 覆盖：未显式配置 BinaryURL 时，
 // 添加节点的一键命令默认走 CP-local Worker 资产下载 URL，而不是公网 release 源。
 func TestEnrollToken_Issue_DefaultsToCPLocalWorkerAssetURL(t *testing.T) {
 	db := setupTestDB(t)

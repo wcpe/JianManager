@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// MetricScope 时序指标的作用域维度（ADR-013）。
+// MetricScope 时序指标的作用域维度。
 type MetricScope string
 
 const (
@@ -12,7 +12,7 @@ const (
 	MetricScopeInstance MetricScope = "instance"
 	// MetricScopeWorld 实例下单个世界的负载，来自 ServerProbe serverprobe_world_*。
 	MetricScopeWorld MetricScope = "world"
-	// MetricScopePlatform 平台汇总维度（FR-463 平台级 SLO）：仅作查询维度，不作为序列身份存储。
+	// MetricScopePlatform 平台汇总维度（平台级 SLO）：仅作查询维度，不作为序列身份存储。
 	MetricScopePlatform MetricScope = "platform"
 )
 
@@ -34,8 +34,8 @@ const (
 	MetricNodeDiskTotal = "node_disk_total"
 	MetricNodeNetRxRate = "node_net_rx_rate"
 	MetricNodeNetTxRate = "node_net_tx_rate"
-	MetricNodeLoad      = "node_load" // 1 分钟 load average（FR-062）
-	// MetricNodeMemPct / MetricNodeDiskPct 是内存与磁盘的**利用率百分比**（0-100，FR-485）。
+	MetricNodeLoad      = "node_load" // 1 分钟 load average
+	// MetricNodeMemPct / MetricNodeDiskPct 是内存与磁盘的**利用率百分比**（0-100，）。
 	//
 	// 为什么需要单独指标而不是让告警自己算 used/total：
 	// 告警规则引擎只支持「单个指标值与阈值比较」（见 alert_evaluator 的
@@ -46,10 +46,10 @@ const (
 	// 量纲与 node_cpu_pct 一致（都是 0-100 的百分比），可直接参与百分比触发。
 	MetricNodeMemPct  = "node_mem_pct"
 	MetricNodeDiskPct = "node_disk_pct"
-	// MetricNodeIOWait 是 CPU 等 IO 的占比（pct，FR-485）。
+	// MetricNodeIOWait 是 CPU 等 IO 的占比（pct，）。
 	// 与 cpu_pct 同为 0..100 的百分比量纲，可直接参与百分比触发。
 	MetricNodeIOWait = "node_iowait"
-	// MetricLogIngestHealthy 日志采集健康（FR-485）：1=采集运行时在运行，0=未运行/创建失败。
+	// MetricLogIngestHealthy 日志采集健康：1=采集运行时在运行，0=未运行/创建失败。
 	MetricLogIngestHealthy = "log_ingest_healthy"
 
 	// ── 日志存储层（VL）磁盘占用（2026-10-29）──
@@ -75,7 +75,7 @@ const (
 	// 告警据此区分「危险」与「必然超限但无事可做」。
 	MetricLogVLPartitions = "log_vl_partitions"
 
-	// FR-401：由 FR-400 已认证 Heartbeat 当前快照沉淀的共享 Bot Worker 运行时指标。
+	// 由已认证 Heartbeat 当前快照沉淀的共享 Bot Worker 运行时指标。
 	// 它们属于节点维度，不代表任一 Bot 或压测会话独占的资源。
 	MetricWorkerProcessRSSBytes = "worker_process_rss_bytes"
 	MetricWorkerProcessCPUPct   = "worker_process_cpu_pct"
@@ -89,21 +89,52 @@ const (
 	MetricInstTPS           = "inst_tps"
 	MetricInstMSPT          = "inst_mspt"
 	MetricInstPlayersOnline = "inst_players_online"
-	MetricInstHeapUsed      = "inst_heap_used"
-	MetricInstHeapMax       = "inst_heap_max"
-	MetricInstThreads       = "inst_threads"
-	MetricInstCPUPct        = "inst_cpu_pct"
-	MetricInstUptime        = "inst_uptime"
-	// FR-465：GC 累计 counter 经 CP 相邻心跳差推导的速率（探针累计值不直接当曲线）。
+	// MetricInstPlayersMax 在线人数上限：来自 SLP `players.max` / Query `maxplayers`。
+	// 供侧栏与列表显示「当前/最大」；与 `inst_players_online` 成对消费，单看它会误导（重启后归零等）。
+	MetricInstPlayersMax = "inst_players_max"
+	MetricInstHeapUsed   = "inst_heap_used"
+	MetricInstHeapMax    = "inst_heap_max"
+	MetricInstThreads    = "inst_threads"
+	MetricInstCPUPct     = "inst_cpu_pct"
+	MetricInstUptime     = "inst_uptime"
+	// GC 累计 counter 经 CP 相邻心跳差推导的速率（探针累计值不直接当曲线）。
 	MetricInstGCCount = "inst_gc_count"   // GC 次数速率（count_per_sec）
 	MetricInstGCTime  = "inst_gc_time_ms" // GC 暂停占用（ms_per_sec）
+
+	// ── 业务桥（ServerProbe ↔ JM 插件桥）中转指标 ────────────────────
+	//
+	// ## 为什么这几项要进时序库，而不是只看 bridge_status
+	//
+	// `core.bridge_status` 只能查到**当下这一瞬**的队列深度与计数。
+	// 它回答不了「下午三点那次业务高峰堵了没有」——而那才是运维真正要问的问题。
+	// 入时序库后才有曲线、才能做告警阈值、才能回查历史拐点。
+	//
+	// ## 指标语义（与 ServerProbe SenderStatus 一一对应）
+	//
+	// 本通道的约定是「不可靠 / 幂等 / 不堵塞」：丢弃是**设计内的降级**，
+	// 但必须可观测——静默丢数据比丢数据本身更危险。
+	//
+	// | metric_key | 来源 | 含义 |
+	// |---|---|---|
+	// | bridge_queue_depth | sender.{reliable,bestEffort}Queue | 当前积压（帧） |
+	// | bridge_rejected_rate | sender.{reliableRejected,bestEffortDropped} 差分 | 拒绝/丢弃速率 |
+	// | bridge_receipt_rejected | sender.commandResultRejected | 回执被拒累计——回执被拒会让 JM 误判业务失败 |
+	// | bridge_write_failures | sender.writeFailures/writeTimeouts | 写出失败——链路质量直接信号 |
+	//
+	// 队列深度与拒绝速率成对出现才有意义：只有深度高而拒绝为 0 说明消费跟得上（排队但在消化）；
+	// 深度高且拒绝率高才是真的承不住了。
+	MetricBridgeReliableQueue   = "bridge_reliable_queue"    // 帧，gauge：可靠事件队列深度
+	MetricBridgeBestEffortQueue = "bridge_best_effort_queue" // 帧，gauge：可丢事件队列深度
+	MetricBridgeRejectedRate    = "bridge_rejected_rate"     // 条/秒，rate：拒绝+丢弃总速率
+	MetricBridgeReceiptRejected = "bridge_receipt_rejected"  // 条，累计：回执被拒（JM 会误判业务失败）
+	MetricBridgeWriteFailures   = "bridge_write_failures"    // 次/秒，rate：写失败+写超时
 
 	MetricWorldLoadedChunks = "world_loaded_chunks"
 	MetricWorldEntities     = "world_entities"
 	MetricWorldTileEntities = "world_tile_entities"
 )
 
-// MetricSeries 时序序列的身份维度表（ADR-013）。
+// MetricSeries 时序序列的身份维度表。
 // 一条序列 = (node_uuid, instance_id?, scope, metric_key, world?)；
 // 样本/卷积表只引用 series_id，对新增指标键与动态世界天然可扩展。
 type MetricSeries struct {
@@ -135,7 +166,7 @@ type MetricSampleRaw struct {
 	Value    *float64  `json:"value"`
 }
 
-// ProcessMetricSnapshot 受管实例进程 TOPN 短期快照（FR-170）。
+// ProcessMetricSnapshot 受管实例进程 TOPN 短期快照。
 type ProcessMetricSnapshot struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// NodeUUID 所属节点。
@@ -143,7 +174,7 @@ type ProcessMetricSnapshot struct {
 	// InstanceUUID 受管实例 UUID。
 	InstanceUUID string `gorm:"type:varchar(64);not null;index:idx_process_metric_instance_sampled,priority:1" json:"instanceUuid"`
 	// PID 显式列名 pid：避免 GORM 把 PID 缩写蛇形化为 p_id，与 managedProcessHistory 的
-	// WHERE pid = ? 查询对齐（真机验收 FR-407 抓到：SQL logic error: no such column: pid）。
+	// WHERE pid = ? 查询对齐（真机验收抓到：SQL logic error: no such column: pid）。
 	PID              int32     `gorm:"column:pid;not null" json:"pid"`
 	Name             string    `gorm:"type:varchar(128)" json:"name"`
 	CPUPercent       float64   `json:"cpuPercent"`

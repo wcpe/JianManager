@@ -10,8 +10,8 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import StatisticsPage from './StatisticsPage'
 
-/**
- * StatisticsPage 强断言（FR-220 平台级聚合统计）：验节点/实例/玩家 KPI 出数、实例状态分布含 CRASHED、
+/** 
+ * StatisticsPage 强断言（平台级聚合统计）：验节点/实例/玩家 KPI 出数、实例状态分布含 CRASHED、
  * 分发区块按平台管理员权限分支（管理员见汇总、非管理员降级）、错误注入不崩。
  *
  * /nodes、/instances、/players 非可观测域端点，用 server.use 就地桩供本页聚合；
@@ -119,6 +119,22 @@ describe('StatisticsPage（mock 假后端）', () => {
     // overview 失败 → 计数回退 /instances 本地聚合，页面与分布面板仍渲染（非崩溃）。
     expect(await screen.findByRole('heading', { name: '统计' })).toBeInTheDocument()
     expect(await screen.findByText('实例·按状态')).toBeInTheDocument()
+    // overview 有完整的本地回退口径，故**不**触发整区错误态（错误态只留给真丢数据的查询）。
+    expect(screen.queryByText('平台全景观测暂不可用')).not.toBeInTheDocument()
+  })
+
+  it('⑥ 构成区查询失败（/instances/aggregate 500）→ 整区错误态，绝不把失败演成 0', async () => {
+    loginAs(ADMIN_TOKEN, 1)
+    mockInject('get', '/instances/aggregate', { kind: 'status', status: 500 })
+    renderWithProviders(<StatisticsPage />)
+
+    // 错误态文案出现（复用已有键，无新增 i18n）。
+    expect(await screen.findByText('平台全景观测暂不可用')).toBeInTheDocument()
+    // 关键回归：不再输出「0/0」这类假计数，也不再出现空白分布面板（那正是本缺陷最误导人的呈现）。
+    expect(screen.queryByText('实例·按状态')).not.toBeInTheDocument()
+    expect(screen.queryByText('实例·按角色')).not.toBeInTheDocument()
+    expect(screen.queryByText('0/0')).not.toBeInTheDocument()
+    expect(screen.queryByText('24/1')).not.toBeInTheDocument()
   })
 
   it('⑤ 平台管理员 + 分发端点 403 → 分发区块降级为错误态，其余正常', async () => {

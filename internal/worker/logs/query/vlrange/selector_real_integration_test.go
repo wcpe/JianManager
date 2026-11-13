@@ -36,7 +36,7 @@ func selectorLegacySearch(ctx context.Context, client *Client, rng query.Authori
 	params.Set("query", selectorBeforeFactoring(rng, q)+pipe)
 	params.Set("limit", strconv.FormatUint(lookaheadRows(q), 10))
 	return client.searchPage(ctx, params, q, lookaheadRows(q), func(event logtypes.Event) bool {
-		return rng.Projection != nil && len(rng.Projection.SourceProjections) > 0 && q.ClosedVisibleSeq == 0 || event.Record.End <= q.ClosedVisibleSeq
+		return q.ClosedVisibleSeq == 0 || event.Record.End <= q.ClosedVisibleSeq
 	})
 }
 

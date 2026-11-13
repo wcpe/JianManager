@@ -44,6 +44,12 @@ type instanceEvent struct {
 	Timestamp int64
 }
 
+// ProbeSnapshotReader 提供按实例读取最近推送探针快照的能力。
+// 实现方负责保留既有快照的存在、作废和缺项语义；gRPC 层只消费命中结果。
+type ProbeSnapshotReader interface {
+	Load(instanceUUID string) (metrics.ProbeSnapshot, bool)
+}
+
 // Server Worker Node gRPC 服务器实现。
 // 仅实现 Control Plane 反向调用 Worker 的 RPC（实例操作、文件操作、指标）。
 // 生命周期 RPC（Register/Heartbeat）由 Worker 主动发起，不由 CP 调用 Worker，
@@ -51,29 +57,30 @@ type instanceEvent struct {
 // 避免因嵌入接口导致未实现方法被调用时 panic。
 type Server struct {
 	workerpb.UnimplementedWorkerServiceServer
-	manager   *process.Manager
-	nodeUUID  string
-	collector *metrics.Collector
-	jdkMgr    *jdk.Manager
-	// logQuery FR-479 日志 RPC 装配点（T11）；nil 时 Log* 走 Unimplemented。
+	manager             *process.Manager
+	nodeUUID            string
+	collector           *metrics.Collector
+	probeSnapshotReader ProbeSnapshotReader
+	jdkMgr              *jdk.Manager
+	// logQuery日志 RPC 装配点（T11）；nil 时 Log* 走 Unimplemented。
 	logQuery     interface{}
 	instanceLogs InstanceLogCollector
-	// logSourceOverrides 提供实例日志路径的配置化覆盖（FR-502 §3.4）；nil = 不覆盖。
+	// logSourceOverrides 提供实例日志路径的配置化覆盖；nil = 不覆盖。
 	// 由 SetInstanceLogSourceOverrides 注入。
 	logSourceOverrides InstanceLogSourceOverrides
-	// root 是本节点数据根，用于把 CP 下发的相对工作目录解析为绝对路径。参见 ADR-010。
+	// root 是本节点数据根，用于把 CP 下发的相对工作目录解析为绝对路径。
 	root *dataroot.Root
-	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。参见 ADR-006。
+	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。
 	// 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误。由 SetBotManager 注入。
 	//
 	// 用接口而非 *bot.Manager：单进程部署注入 *Manager，多分片部署注入 *ShardedManager
-	//（见 ADR-006 的分片说明），grpc 层无需感知差异。
+	//分片部署形态差异由 Bot 管理器实现吸收，grpc 层无需感知差异。
 	botMgr botManager
 	// botFleet 允许 Fleet RPC 复用 Manager，并为协议测试注入最小替身。
 	botFleet   botFleetManager
 	botStartMu sync.Mutex
 	botBatchMu sync.Mutex
-	// managedRuntimeMu 保护 Worker/Bot Worker CPU 时间差的上一次采样基线（FR-400）。
+	// managedRuntimeMu 保护 Worker/Bot Worker CPU 时间差的上一次采样基线。
 	managedRuntimeMu  sync.Mutex
 	managedRuntimeCPU map[int]managedRuntimeCPUBaseline
 	botBatchResults   map[string]*botBatchCacheEntry
@@ -98,15 +105,15 @@ type Server struct {
 	// emitRecovered 记录 EmitOutput 兜底 recover 次数（P0 兜底 ✓）：**记日志 + 标降级，不静默** ✓。
 	emitRecovered int64
 
-	// 插件桥（ServerProbe 反向 WS，FR-065，见 ADR-016）。
+	// 插件桥（ServerProbe 反向 WS）。
 	// bridge 提供「实例 UUID→探针会话」表与下发能力；为 nil 表示本节点未启用插件桥。由 SetPluginBridge 注入。
 	bridge *ws.PluginBridgeServer
 
-	// terminalWSAddr 本机终端 WS 服务回环地址（FR-281 M2，见 ADR-066）：
+	// terminalWSAddr 本机终端 WS 服务回环地址（M2）：
 	// TerminalSession 据此回环拨自身 WS 终端服务桥接会话。由 SetTerminalWSAddr 注入。
 	terminalWSAddr string
 
-	// decompiler 解析/缓存 CFR 反编译器 jar（FR-075，见 ADR-018）。
+	// decompiler 解析/缓存 CFR 反编译器 jar。
 	// 为 nil 表示本节点未启用反编译能力，DecompileClass 返回降级错误。由 SetDecompiler 注入。
 	decompiler *decompiler.Provider
 	// pluginEventMu 保护 pluginEventSubs，StreamPluginEvents 订阅/取消订阅时加锁。
@@ -114,49 +121,49 @@ type Server struct {
 	pluginEventMu   sync.Mutex
 	pluginEventSubs []chan *workerpb.PluginEvent
 
-	// restartFn 是自更新（FR-081）替换二进制后执行的重启动作；nil 时用默认 selfupdate.Restart。
+	// restartFn 是自更新替换二进制后执行的重启动作；nil 时用默认 selfupdate.Restart。
 	// 由 SetRestartFunc 注入（测试用，避免真重启）。
 	restartFn func()
-	// execPath 覆盖自更新（FR-081）待替换的可执行文件路径；空时用 os.Executable()。
+	// execPath 覆盖自更新待替换的可执行文件路径；空时用 os.Executable()。
 	// 由 SetExecutablePath 注入（测试用，避免替换真二进制）。
 	execPath string
-	// httpClient 出站 client（经进程级代理，FR-174/ADR-037）：Worker 升级二进制下载经此 client。
+	// httpClient 出站 client（经进程级代理）：Worker 升级二进制下载经此 client。
 	// 由 SetHTTPClient 注入；为 nil 时回退 http.DefaultClient（向后兼容）。
 	httpClient *http.Client
-	// httpProvider 运行时出站持有者（FR-185/ADR-043）：非 nil 时每次取当前 client，
+	// httpProvider 运行时出站持有者：非 nil 时每次取当前 client，
 	// 使 CP 经心跳下发的代理改动即时生效。优先于 httpClient。
 	httpProvider func() *http.Client
-	// 全文搜索索引（FR-074，见 ADR-017）。每实例一份 *search.Index，懒创建。
+	// 全文搜索索引。每实例一份 *search.Index，懒创建。
 	// 索引落数据根 var/index/<instance-uuid>/，是 Worker 本地派生资产，不进 CP DB。
 	// searchIgnore 为用户配置追加的忽略 glob（worker.yml search.ignore），叠加内置默认集。
 	searchMu      sync.Mutex
 	searchIndexes map[string]*search.Index
 	searchIgnore  []string
 
-	// tasks 运行中长任务内存登记表（FR-183，见 ADR-040）。
+	// tasks 运行中长任务内存登记表。
 	// InstallJDK 异步执行时经此表更新进度/日志；心跳侧读 Snapshot 随心跳上报给 CP。
 	// 非 nil（NewServer 初始化）。
 	tasks *taskreg.Registry
 
-	// cache 节点本地内容寻址制品缓存（FR-178）。仅服务 DownloadCore 的核心 jar：
+	// cache 节点本地内容寻址制品缓存。仅服务 DownloadCore 的核心 jar：
 	// 命中即从缓存秒拷到工作目录（免重下），未命中下载校验后存入。为 nil 表示未启用缓存
 	// （DownloadCore 退化为原有「每次都下载」行为，向后兼容）。由 SetArtifactCache 注入。
 	cache *artifactcache.Cache
-	// coreFlightMu/coreFlights 同核心并发下载单飞（FR-330）：同缓存键（sha256 或组合键）的
+	// coreFlightMu/coreFlights 同核心并发下载单飞：同缓存键（sha256 或组合键）的
 	// 并发 DownloadCore 只有领队真正走网络，其余等待领队完成后从缓存秒取，不重复下载也不互相踩。
 	coreFlightMu sync.Mutex
 	coreFlights  map[string]*coreFlight
 
-	// runtimeScanner 运行时扫描器（FR-298 节点运行时库）：ScanRuntimes 按常见安装路径
+	// runtimeScanner 运行时扫描器（节点运行时库）：ScanRuntimes 按常见安装路径
 	// 发现 jdk/nodejs 候选。为 nil 表示未启用（返回空候选）。由 SetRuntimeScanner 注入。
 	runtimeScanner *runtimescan.Scanner
-	// runtimeMgr 非 JDK 运行时安装管理器（FR-299，首批 Node.js）：InstallRuntime/RemoveRuntime
+	// runtimeMgr 非 JDK 运行时安装管理器（首批 Node.js）：InstallRuntime/RemoveRuntime
 	// 经此下载安装/托管删除。为 nil 表示未启用（RPC 返回明确错误）。由 SetRuntimeManager 注入。
 	runtimeMgr *wruntime.Manager
-	// pkgMgr 节点包管理器（FR-306）：PM 偏好（corepack 激活）与托管 .npmrc registry 配置读写。
+	// pkgMgr 节点包管理器：PM 偏好（corepack 激活）与托管 .npmrc registry 配置读写。
 	// 为 nil 表示未启用（PM 配置 RPC 返回明确错误）。由 SetPkgManager 注入。
 	pkgMgr *pkgmgr.Manager
-	// importJDKProbe 导入探测（FR-302）中「某目录是否为 JDK」的探测钩子，仅测试注入替身：
+	// importJDKProbe 导入探测中「某目录是否为 JDK」的探测钩子，仅测试注入替身：
 	// 真探测（jdk.detectAt 语义）要跑 bin/java，伪目录布局单测不可得。为 nil 时走 jdkMgr.Probe。
 	importJDKProbe func(dir string) (*workerpb.ImportJdkCandidate, bool)
 }
@@ -189,13 +196,19 @@ func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Col
 	return s
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037）：Worker 升级二进制下载经此 client。
+// SetProbeSnapshotReader 注入托管模式推送快照读取器。
+// 读取器返回 false 时，实时指标继续走既有 HTTP → SLP → Query 回退链。
+func (s *Server) SetProbeSnapshotReader(r ProbeSnapshotReader) {
+	s.probeSnapshotReader = r
+}
+
+// SetHTTPClient 注入出站 client（经进程级代理）：Worker 升级二进制下载经此 client。
 // 由 main 装配；不调用则回退 http.DefaultClient（向后兼容，测试不受影响）。
 func (s *Server) SetHTTPClient(c *http.Client) {
 	s.httpClient = c
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（FR-185/ADR-043）：每次下载取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者：每次下载取当前 client，
 // 使 CP 经心跳下发的代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
 func (s *Server) SetHTTPClientProvider(p func() *http.Client) {
 	s.httpProvider = p
@@ -214,7 +227,7 @@ func (s *Server) outboundClient() *http.Client {
 	return http.DefaultClient
 }
 
-// SetArtifactCache 注入节点本地制品缓存（FR-178）：DownloadCore 据此命中复用核心 jar。
+// SetArtifactCache 注入节点本地制品缓存：DownloadCore 据此命中复用核心 jar。
 // 由 main 装配；不调用则 DownloadCore 退化为原有「每次都下载」行为（向后兼容，测试不受影响）。
 func (s *Server) SetArtifactCache(c *artifactcache.Cache) {
 	s.cache = c
@@ -243,7 +256,7 @@ func (s *Server) dispatch(evt instanceEvent) {
 }
 
 // EmitOutput 把实例进程输出（stdout/stderr）作为事件扇出到 StreamInstanceEvents 订阅者，
-// 供 CP 侧采集落库（FR-049）。stream 为原始流名（stdout/stderr）。
+// 供 CP 侧采集落库。stream 为原始流名（stdout/stderr）。
 // 与 WS 终端广播相互独立：终端面向交互、本路径面向持久化，二者从同一份输出分流。
 func (s *Server) EmitOutput(instanceUUID, stream, data string) {
 	if data == "" {
@@ -269,9 +282,9 @@ func (s *Server) EmitOutput(instanceUUID, stream, data string) {
 	})
 }
 
-// CreateInstance 创建实例（FR-499）。
+// CreateInstance 创建实例。
 // CP 下发的 WorkDir 按数据根相对存储（系统分配的 var/servers/<slug>-<shortid>），
-// 此处解析为本节点绝对路径并确保目录存在。参见 ADR-010。
+// 此处解析为本节点绝对路径并确保目录存在。
 //
 // 它是「登记不能被长周期锁拖死」这个事故面的**唯一可观测点**：
 // 呼叫方（CP）关心的就是「从我发出到拿回响应花了多久」。
@@ -287,7 +300,7 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 	// 超阈时用 Warn，正常用 Debug：这条日志每次建实例都会打，
 	// 但只有慢的那些值得在默认日志等级下看见。
 	//
-	// 阈值 100ms 的由来：FR-499 的生产复验里登记 1.246ms 返回，
+	// 阈值 100ms 的由来：生产复验里登记 1.246ms 返回，
 	// 整轮采集墙钟 11.95s 时也不受影响。100ms 是「已经慢了但还没到事故」的量级，
 	// 用它做告警线可以把「开始不对」和「真出事」分开。
 	const slowRegisterThreshold = 100 * time.Millisecond
@@ -295,7 +308,7 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 	if elapsed >= slowRegisterThreshold {
 		logFn = slog.Warn
 	}
-	logFn("实例登记完成（FR-499 端到端耗时）",
+	logFn("实例登记完成（端到端耗时）",
 		"instanceUUID", req.InstanceUuid,
 		"created", created,
 		"elapsedMs", float64(elapsed.Microseconds())/1000.0,
@@ -309,10 +322,10 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 }
 
 // registerInstanceFromProto 把 CP 下发的实例规格填入进程管理器（不启动进程）。
-// 解析相对 WorkDir 为本节点绝对路径并建目录（ADR-010），调 manager.Create 注册为 STOPPED，
-// docker 实例补记镜像/端口/限额（启动时随 spec 定型，ADR-019 / FR-079）。
+// 解析相对 WorkDir 为本节点绝对路径并建目录，调 manager.Create 注册为 STOPPED，
+// docker 实例补记镜像/端口/限额（启动时随 spec 定型）。
 // 返回 created：true=本次新登记，false=实例已存在（已刷新随启动定型的超时与 docker 配置）。
-// CreateInstance（CP 建实例/启动前幂等重注册）与 ResyncInstances（重连重推，见 ADR-050）共用此逻辑。
+// CreateInstance（CP 建实例/启动前幂等重注册）与 ResyncInstances（重连重推）共用此逻辑。
 func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) (created bool, err error) {
 	workDir := req.WorkDir
 	if s.root != nil && workDir != "" {
@@ -341,17 +354,17 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 	if cerr != nil {
 		// 实例已存在（CP 在每次启动前幂等重注册，或重连重推命中已恢复的 RUNNING 实例）：
 		// 刷新随启动定型的优雅停止超时与 docker 配置，使设置/镜像/端口变更对下一次启动生效
-		// （FR-063 / FR-078）。该错误对幂等路径是良性的（按已注册处理）。
+		// 该错误对幂等路径是良性的（按已注册处理）。
 		if strings.Contains(cerr.Error(), "已存在") {
 			s.manager.SetGracefulStopTimeout(req.InstanceUuid, int(req.GracefulStopTimeoutSeconds))
-			// FR-411 补口：同步刷新探针端口。导入/历史实例起初 probe_port=0，CP 在部署探针前
+			// 补口：同步刷新探针端口。导入/历史实例起初 probe_port=0，CP 在部署探针前
 			// 补分配端口并重注册本 RPC——不及时刷新的话，心跳采集器仍按旧值 0 过滤，
 			// 形成「探针桥已连接但监控永无数据」的静默断链（下一拍心跳即采集，无需重启）。
 			s.manager.SetProbePort(req.InstanceUuid, int(req.ProbePort))
-			// FR-446 直探端口：同步刷新 server_port / query_port，使端口迁移/导入后直探打对新端口。
+			// 直探端口：同步刷新 server_port / query_port，使端口迁移/导入后直探打对新端口。
 			s.manager.SetServerPort(req.InstanceUuid, int(req.ServerPort))
 			s.manager.SetQueryPort(req.InstanceUuid, int(req.QueryPort))
-			// 刷新启动配置（启动命令 / 绑定 JDK / 环境变量），使配置编辑（FR-233 重绑 JDK 等）对下次启动生效——
+			// 刷新启动配置（启动命令 / 绑定 JDK / 环境变量），使配置编辑（重绑 JDK 等）对下次启动生效——
 			// 否则 worker 保留旧 spec，重绑的 JDK 不被采用、preflight 仍报「未绑定 JDK」。
 			s.manager.SetLaunchConfig(req.InstanceUuid, req.StartCommand, req.JdkPath, req.JdkBinPath, req.EnvVars, req.AutoRestart, req.StopCommand)
 			if req.ProcessType == string(process.ProcessTypeDocker) {
@@ -361,17 +374,17 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 		}
 		return false, cerr
 	}
-	// docker 模式：把镜像、端口映射与资源限额存到实例记账，启动时随 spec 定型（ADR-019 / FR-079）。
+	// docker 模式：把镜像、端口映射与资源限额存到实例记账，启动时随 spec 定型。
 	if req.ProcessType == string(process.ProcessTypeDocker) {
 		s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings), req.CpuLimit, req.MemLimitMb, req.DiskLimitMb)
 	}
-	// FR-446 直探端口：新登记实例同步记下 server_port / query_port（心跳据此直探）。
+	// 直探端口：新登记实例同步记下 server_port / query_port（心跳据此直探）。
 	s.manager.SetServerPort(req.InstanceUuid, int(req.ServerPort))
 	s.manager.SetQueryPort(req.InstanceUuid, int(req.QueryPort))
 	return true, nil
 }
 
-// ResyncInstances Worker 重连/重注册后接收 CP 重推的整节点实例规格，填充内存注册表（见 ADR-050）。
+// ResyncInstances Worker 重连/重注册后接收 CP 重推的整节点实例规格，填充内存注册表。
 // 「只补不覆盖」运行态与目录：已在表者复用幂等注册补完整启动规格（当前控制通道不中断），
 // 不在表者按 STOPPED 登记且不启动进程——只让停机实例可被文件/配置/归档 op 定位工作目录，
 // 绝不擅自拉起。修 bug #2（重启后停机实例 op 报「实例不存在」）。
@@ -382,7 +395,7 @@ func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstan
 			continue
 		}
 		// 已在内存表 → 不覆盖启动/运行态（不覆盖 RUNNING 恢复实例；重复重推幂等），
-		// 但以 CP 为准刷新探针端口（FR-454）与 MC 直探端口（FR-446）：Worker 重启经
+		// 但以 CP 为准刷新探针端口与 MC 直探端口：Worker 重启经
 		// RecoverDaemonInstances 从 PID 文件恢复的 RUNNING 实例不携带这些端口，重连重推时补齐。
 		// CP 已按适用性收敛 probe_port（代理/Beacon/通用二进制为 0）；心跳采集按 ProbePort>0 过滤，
 		// 补直探端口使直探对恢复实例也打对端口（不触碰运行态、不重启进程）。
@@ -410,12 +423,23 @@ func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstan
 	if registered > 0 || skipped > 0 {
 		slog.Info("已接收 CP 重连重推的实例规格", "registered", registered, "skipped", skipped, "total", len(req.Instances))
 	}
+	// 就地收养的恢复**必须在这里补一次**。
+	//
+	// Startup 阶段的恢复（PhaseProcessRecover）跑在**实例注册之前**：那时内存表还是空的，
+	// 逐条检查"实例是否存在"会全部跳过，记录被原封不动留着。而实例要等 CP 重推
+	// （即本 RPC）才注册进来。不在这里重试的话，重启后全量变回 STOPPED——
+	// 真机上就是这个症状：记录文件还在、进程还在，面板却是停止。
+	//
+	// 恢复幂等：已恢复的不会被重复认领；已清理的记录不会再生。
+	if adopted, cleaned := s.manager.RestoreAdoptedRuntimes(); adopted > 0 || cleaned > 0 {
+		slog.Info("重推后补做就地收养恢复", "restored", adopted, "cleaned", cleaned)
+	}
 	return &workerpb.ResyncInstancesResponse{Registered: registered, Skipped: skipped}, nil
 }
 
 // StartInstance 启动实例。
 //
-// FR-459：这是**人工启动**（CP 操作员动作）入口，故先显式解除崩溃熔断——「熔断期间人工启动
+// 这是**人工启动**（CP 操作员动作）入口，故先显式解除崩溃熔断——「熔断期间人工启动
 // 不受阻」且「移除熔断锁后恢复自动重启」（spec §4 验收 5 / §5 人工确认解除）由同一次人工动作
 // 完成。自动重启路径（direct/docker waitLoop 回调 Manager.Start）不经此处，因此熔断期间不会被
 // 自己解除；配置编辑（SetLaunchConfig）也不再隐式清熔断（复审项 6）。
@@ -444,7 +468,7 @@ func (s *Server) applyActionLimits(req *workerpb.InstanceActionRequest) {
 	s.manager.SetResourceLimits(req.InstanceUuid, req.CpuLimit, req.MemLimitMb)
 }
 
-// PreflightStartInstance 启动前同步预检（FR-314）：返回逐项检查聚合结果。success=全部通过，
+// PreflightStartInstance 启动前同步预检：返回逐项检查聚合结果。success=全部通过，
 // message=拼接失败原因（供 CP 同步拦截配置错误、写 statusReason）。实例未注册按预检失败处理。
 func (s *Server) PreflightStartInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
 	checks, err := s.manager.PreflightStart(req.InstanceUuid)
@@ -464,7 +488,7 @@ func (s *Server) PreflightStartInstance(ctx context.Context, req *workerpb.Insta
 	return &workerpb.InstanceActionResponse{Success: false, Error: strings.Join(failed, "；")}, nil
 }
 
-// AdoptForeignRuntime 接管实例工作目录下的外来活进程（FR-471）：委托进程管理器先优雅停止该进程树
+// AdoptForeignRuntime 接管实例工作目录下的外来活进程：委托进程管理器先优雅停止该进程树
 // （Paper 走 shutdown hook 保存世界），再以受管方式启动实例，使平台记账与磁盘事实对齐。
 // 失败时返回 Success=false + Error，由 CP 回写 statusReason；错误范式与 StopInstance 一致
 // （鉴权由 gRPC 拦截器统一完成，不在本方法内重复）。
@@ -475,6 +499,25 @@ func (s *Server) AdoptForeignRuntime(ctx context.Context, req *workerpb.Instance
 	}
 	if stoppedPID > 0 {
 		slog.Info("已接管实例目录下的外来运行时并重新纳入受管", "instanceId", req.InstanceUuid, "stoppedPid", stoppedPID)
+	}
+	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
+
+// AdoptInPlaceRuntime 收养就地导入实例的外部运行进程：**不改进程、不重启**。
+//
+// 与 AdoptForeignRuntime（先停后启）的分工见 process.AdoptInPlaceRuntime 的注释：
+// 就地导入的服往往由 tmux/systemd 在平台外跑着，业务不能断，
+// 此时只能“承认它、看着它”，而不是吹掉重启（那样会因端口冲突反复崩溃）。
+//
+// 目录下无活进程时返回 success=false——调用方（CP 导入流程）据此判定为
+// “导入成 STOPPED”的正常结果，而不是错误。
+func (s *Server) AdoptInPlaceRuntime(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
+	pid, err := s.manager.AdoptInPlaceRuntime(req.InstanceUuid)
+	if err != nil {
+		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
+	}
+	if pid > 0 {
+		slog.Info("已收养就地导入实例的外部运行进程（未重启）", "instanceId", req.InstanceUuid, "pid", pid)
 	}
 	return &workerpb.InstanceActionResponse{Success: true}, nil
 }
@@ -559,7 +602,7 @@ func (s *Server) GetNodeMetrics(ctx context.Context, req *workerpb.GetNodeMetric
 	m := s.collector.Collect()
 	return &workerpb.GetNodeMetricsResponse{
 		CpuUsage:      m.CPUUsage,
-		Iowait:        m.IOWait, // FR-485：IO 等待占比，与 cpu_usage 同量纲（0..1）
+		Iowait:        m.IOWait, // IO 等待占比，与 cpu_usage 同量纲（0..1）
 		MemoryUsage:   m.MemoryUsage,
 		DiskUsage:     m.DiskUsage,
 		MemoryUsedMb:  m.MemoryUsedMB,
@@ -569,9 +612,9 @@ func (s *Server) GetNodeMetrics(ctx context.Context, req *workerpb.GetNodeMetric
 	}, nil
 }
 
-// GetInstanceMetrics 获取实例指标（采集优先级链 `探针 → SLP → Query → 不可用`，FR-446/447）。
-// 与心跳链路共用 metrics.CollectInstanceTelemetry：抓 ServerProbe /metrics（FR-010 富指标：
-// TPS/MSPT/堆/线程/世界）；探针缺失时用 SLP/Query 直探（FR-446）回填 MOTD/版本/在线人数/最大人数/
+// GetInstanceMetrics 获取实例指标（采集优先级链 `探针 → SLP → Query → 不可用`447）。
+// 与心跳链路共用 metrics.CollectInstanceTelemetry：抓 ServerProbe /metrics（富指标：
+// TPS/MSPT/堆/线程/世界）；探针缺失时用 SLP/Query 直探回填 MOTD/版本/在线人数/最大人数/
 // 玩家名单/插件/地图。不再以 TPS/在线人数 = -1 占位：改为显式可用性位（probe_available /
 // players_available / *_available），三档皆无即「不可用」。
 // OS 进程内存/CPU/运行时长近似仍作为回退（与探针无关）。
@@ -604,9 +647,9 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 			if memInfo, err := proc.MemoryInfoWithContext(ctx); err == nil && memInfo != nil {
 				resp.MemoryMb = int64(memInfo.RSS / 1024 / 1024)
 			}
-			// FR-343 系统级基础指标：无需 ServerProbe，直接采进程 CPU%/运行时长，让未部署/未连探针的
+			// 系统级基础指标：无需 ServerProbe，直接采进程 CPU%/运行时长，让未部署/未连探针的
 			// 运行中实例在概览也有真实 CPU 与运行时长（内存 RSS 上面已采）。CPUPercent 为累计 CPU%
-			// （与 FR-170 进程采样器同源、非阻塞）；uptime 由进程创建时刻推算。探针可用时下方会覆盖。
+			// （与进程采样器同源、非阻塞）；uptime 由进程创建时刻推算。探针可用时下方会覆盖。
 			if cpu, err := proc.CPUPercentWithContext(ctx); err == nil {
 				resp.CpuPercent = cpu
 			}
@@ -616,19 +659,25 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 		}
 	}
 
-	// 采集优先级链 `探针 → SLP → Query → 不可用`（FR-447）：与心跳链路共用同一编排函数，
+	// 采集优先级链 `探针 → SLP → Query → 不可用`：与心跳链路共用同一编排函数，
 	// 确保两条链路的来源与「不可用」语义一致。探针与实例同机，直探 localhost。
-	// 直探超时取 CP 经心跳下发的生效值（FR-446：超时可配）；此链路是用户手动触发的实时查询，
+	// 直探超时取 CP 经心跳下发的生效值（：超时可配）；此链路是用户手动触发的实时查询，
 	// **不做失败退避**，永远给最新结果（退避只用于 30s 时序采样，见 heartbeat）。
 	slpTimeout, queryTimeout := metrics.DirectProbeTimeouts()
-	tel := metrics.CollectInstanceTelemetry(metrics.CollectConfig{
+	collectCfg := metrics.CollectConfig{
 		ProbePort:    int(req.ProbePort),
 		ServerPort:   int(req.ServerPort),
 		QueryPort:    int(req.QueryPort),
 		Host:         "localhost",
 		SLPTimeout:   slpTimeout,
 		QueryTimeout: queryTimeout,
-	})
+	}
+	if s.probeSnapshotReader != nil {
+		if snap, ok := s.probeSnapshotReader.Load(req.InstanceUuid); ok {
+			collectCfg.ProbeSnapshot = &snap
+		}
+	}
+	tel := metrics.CollectInstanceTelemetry(collectCfg)
 
 	// 探针深度指标（TPS/MSPT/JVM/世界）。
 	if tel.ProbeAvailable {
@@ -663,7 +712,7 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 	resp.VersionAvailable = tel.VersionAvailable
 	// favicon 端到端已通（SLP → 本响应 → CP MetricsData.favicon → 前端 InstanceMetricsData.favicon），
 	// 但前端当前仅声明字段、未渲染，属**预留字段**：服务端图标是一张 base64 PNG（可达 ~50KB），
-	// 前端若要展示应在详情页 MOTD 卡片按需渲染，而非默认注入卡片列表（FR-446 审计项 7）。
+	// 前端若要展示应在详情页 MOTD 卡片按需渲染，而非默认注入卡片列表（审计项 7）。
 	resp.Favicon = tel.Favicon
 	resp.MaxPlayers = tel.PlayersMax
 	resp.MaxPlayersAvailable = tel.PlayersMaxAvailable
@@ -683,7 +732,7 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 // resolveGameProc 从受管根进程解析真正的游戏进程（JVM）。daemon 模式根进程是 Go wrapper，
 // 真实 java 隔着中间 shell 层（wrapper→sh→java）；direct 模式根进程可能就是 shell。
 // 深度优先遍历后代：优先返回名为 java 的最深进程，无 java 命名者回退最深后代，无后代回退根进程。
-// FR-343 指标与 FR-344 运行时环境都读游戏进程本身，而非托管壳。
+// 指标与运行时环境都读游戏进程本身，而非托管壳。
 func resolveGameProc(ctx context.Context, pid int32) *psproc.Process {
 	root, err := psproc.NewProcessWithContext(ctx, pid)
 	if err != nil {
@@ -728,7 +777,7 @@ func resolveGameProc(ctx context.Context, pid int32) *psproc.Process {
 	return deepest
 }
 
-// GetInstanceEnv 返回运行中实例 Java 进程的实际环境（FR-344 环境变量下区）。
+// GetInstanceEnv 返回运行中实例 Java 进程的实际环境（环境变量下区）。
 // 取进程 PID → gopsutil Environ 读进程环境（Linux 走 /proc/pid/environ）；未运行/平台受限则 available=false + note。
 func (s *Server) GetInstanceEnv(ctx context.Context, req *workerpb.GetInstanceEnvRequest) (*workerpb.GetInstanceEnvResponse, error) {
 	resp := &workerpb.GetInstanceEnvResponse{}
@@ -746,7 +795,7 @@ func (s *Server) GetInstanceEnv(ctx context.Context, req *workerpb.GetInstanceEn
 		return resp, nil
 	}
 	// 解析到游戏 JVM 本身：wrapper 的环境缺 composeEnv 注入的 JAVA_HOME/PATH 前缀与自定义变量，
-	// 直读根进程会把「运行时实际环境」展示成 wrapper 继承的 systemd 环境（FR-344 下区语义是 JVM）。
+	// 直读根进程会把「运行时实际环境」展示成 wrapper 继承的 systemd 环境（下区语义是 JVM）。
 	proc := resolveGameProc(ctx, int32(pid))
 	if proc == nil {
 		resp.Note = "读取进程失败：进程不存在"
@@ -769,7 +818,7 @@ func (s *Server) GetInstanceEnv(ctx context.Context, req *workerpb.GetInstanceEn
 }
 
 // IssueTerminalToken 签发终端 token。
-// 有意不在 Worker 侧实现：终端 token 由 Control Plane 签发并代理（见 FR-007/FR-019 决策），
+// 有意不在 Worker 侧实现：终端 token 由 Control Plane 签发并代理（见决策），
 // 浏览器经 CP 拿到 token 后直连 Worker WS。此处返回明确错误而非走 Unimplemented，
 // 便于调用方区分「该能力归属 CP」与「Worker 未实现」。
 func (s *Server) IssueTerminalToken(ctx context.Context, req *workerpb.IssueTerminalTokenRequest) (*workerpb.IssueTerminalTokenResponse, error) {
@@ -801,7 +850,7 @@ func (s *Server) ListJDKs(ctx context.Context, req *workerpb.ListJDKsRequest) (*
 
 // InstallJDK 下载并安装指定 JDK。
 //
-// 当 req.TaskId 非空时走**异步**路径（FR-183，见 ADR-040）：登记内存任务表为 running、
+// 当 req.TaskId 非空时走**异步**路径：登记内存任务表为 running、
 // 启动后台 goroutine 执行下载解压（经进度回调更新任务表），RPC **立即返回** task_id，
 // 不再阻塞最长 20min；进度/日志/终态经心跳上报给 CP，CP 据终态落 NodeJDK + 发站内信。
 // 当 req.TaskId 为空时回退**同步**路径（向后兼容旧 CP）。
@@ -813,12 +862,12 @@ func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest
 	// 异步路径：启动即返回 task_id，后台执行。
 	if req.TaskId != "" {
 		taskID := req.TaskId
-		// 可取消 context 登记进任务表：强制停止（FR-227）时由心跳侧 registry.Cancel 真中断下载。
+		// 可取消 context 登记进任务表：强制停止时由心跳侧 registry.Cancel 真中断下载。
 		taskCtx, cancel := context.WithCancel(context.Background())
 		s.tasks.Start(taskID, cancel)
 		// 复制下发参数，goroutine 不持有 req（避免在 RPC 返回后引用其底层内存）。
 		vendor, major, arch := req.Vendor, int(req.MajorVersion), req.Arch
-		version := req.Version // 具体版本（FR-178，可选；非空经 foojay 解析）
+		version := req.Version // 具体版本（可选；非空经 foojay 解析）
 		installDir, mirrorBase := req.InstallDir, req.MirrorBase
 		go func() {
 			defer cancel() // goroutine 退出即释放 context（正常完成/失败/被取消均释放）
@@ -870,7 +919,7 @@ func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest
 	}, nil
 }
 
-// jdkResult 是 jdk_install 任务成功时写入 TaskSnapshot.result 的 JSON 结构（FR-183，见 ADR-040）。
+// jdkResult 是 jdk_install 任务成功时写入 TaskSnapshot.result 的 JSON 结构。
 // CP 收到终态 succeeded 时反序列化它落一条 model.NodeJDK。字段与 workerpb.JDKInfo 一一对应。
 type jdkResult struct {
 	Vendor       string `json:"vendor"`
@@ -881,7 +930,7 @@ type jdkResult struct {
 	Managed      bool   `json:"managed"`
 }
 
-// ProbeJDK 探测节点上某路径的 JDK 信息（FR-228），供登记前自动填厂商/版本/架构（不再手填）。
+// ProbeJDK 探测节点上某路径的 JDK 信息，供登记前自动填厂商/版本/架构（不再手填）。
 func (s *Server) ProbeJDK(ctx context.Context, req *workerpb.ProbeJDKRequest) (*workerpb.ProbeJDKResponse, error) {
 	if s.jdkMgr == nil {
 		return &workerpb.ProbeJDKResponse{Valid: false, Error: "JDK 管理器未启用"}, nil
@@ -900,7 +949,7 @@ func (s *Server) ProbeJDK(ctx context.Context, req *workerpb.ProbeJDKRequest) (*
 	}, nil
 }
 
-// TaskSnapshots 返回运行中任务的心跳快照（FR-183）。心跳侧据此随心跳上报给 CP。
+// TaskSnapshots 返回运行中任务的心跳快照。心跳侧据此随心跳上报给 CP。
 func (s *Server) TaskSnapshots() []*workerpb.TaskSnapshot {
 	return s.tasks.Snapshot()
 }
@@ -910,7 +959,7 @@ func (s *Server) DropTask(taskID string) {
 	s.tasks.Drop(taskID)
 }
 
-// CancelTask 强制停止运行中任务（FR-227）：真中断 Worker 操作（取消其下载 context）并置 canceled 终态，
+// CancelTask 强制停止运行中任务：真中断 Worker 操作（取消其下载 context）并置 canceled 终态，
 // 由心跳侧收到 CP 下发的 cancel_task_ids 时调用。幂等（不存在/已终态返回 false）。
 func (s *Server) CancelTask(taskID string) bool {
 	return s.tasks.Cancel(taskID)
@@ -985,7 +1034,7 @@ func (s *Server) StreamInstanceEvents(req *workerpb.StreamInstanceEventsRequest,
 // === Bot 操作 ===
 //
 // Worker 侧 Bot 由 bot.Manager spawn 的 Node 子进程（bot-worker）经 stdin/stdout IPC 管理，
-// 一个 bot-worker 进程承载本节点全部 Bot。参见 ADR-006。
+// 一个 bot-worker 进程承载本节点全部 Bot。
 // botMgr 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误而非 panic。
 // Bot 状态（connecting/connected/disconnected）由 CP 经 ListBots 拉取回填（懒拉取，见 BotService.refreshStatus）。
 
@@ -1128,7 +1177,7 @@ func dispatchBotEventNonBlocking(ch chan *bot.BotWorkerEvent, event *bot.BotWork
 	}
 }
 
-// SetSearchIgnore 设置全文搜索的追加忽略规则（worker.yml search.ignore，FR-074）。
+// SetSearchIgnore 设置全文搜索的追加忽略规则（worker.yml search.ignore）。
 // 叠加在内置默认忽略集之上，由 Worker 主进程在启动时按配置注入。须在首次 SearchFiles 前调用。
 func (s *Server) SetSearchIgnore(rules []string) {
 	s.searchMu.Lock()
@@ -1273,7 +1322,7 @@ func (s *Server) ListBots(ctx context.Context, req *workerpb.ListBotsRequest) (*
 	return &workerpb.ListBotsResponse{Bots: out}, nil
 }
 
-// StreamBotEvents 推送 Bot 实时状态与行为事件（FR-041）。
+// StreamBotEvents 推送 Bot 实时状态与行为事件。
 func (s *Server) StreamBotEvents(req *workerpb.StreamBotEventsRequest, stream workerpb.WorkerService_StreamBotEventsServer) error {
 	if s.botMgr == nil {
 		return fmt.Errorf("本节点未启用 Bot 能力")

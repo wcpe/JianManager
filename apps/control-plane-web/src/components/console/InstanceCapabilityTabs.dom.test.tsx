@@ -5,8 +5,8 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import InstanceConsolePage from './InstanceConsolePage'
 
-/**
- * FR-445 / FR-448：详情页 Tab 显隐只由能力画像 `capabilities` 决定（画像权威）。
+/** 
+ *：详情页 Tab 显隐只由能力画像 `capabilities` 决定（画像权威）。
  * devmock 详情响应下发 capabilities；实例 1=backend、2=proxy、30=generic/beacon（见 instance.ts 种子）。
  */
 async function tabBar() {
@@ -14,7 +14,7 @@ async function tabBar() {
   return bar
 }
 
-describe('InstanceConsolePage 能力画像门控（FR-448）', () => {
+describe('InstanceConsolePage 能力画像门控', () => {
   beforeEach(() => {
     loginMockUser()
   })
@@ -52,7 +52,7 @@ describe('InstanceConsolePage 能力画像门控（FR-448）', () => {
     }
   })
 
-  it('深链落到隐藏 Tab 时回退概览，不白屏（FR-448）', async () => {
+  it('深链落到隐藏 Tab 时回退概览，不白屏', async () => {
     // beacon 画像不含 plugins；?tab=plugins 应回退 overview。
     renderWithProviders(<InstanceConsolePage instanceId={30} />, { route: '/instances/30?tab=plugins' })
     const bar = await tabBar()

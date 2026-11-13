@@ -330,30 +330,30 @@ internal/worker/
 
 ##### 数据面边界
 
-- **CP 不存任何日志行**：`logs` 表已删（2026-10-29）。CP 只有授权与联邦查询两件事。
+- **CP 业务库不存日志行**：`logs` 表已删（2026-10-29）。实例行由 Worker 的单 VL 持有，CP 负责授权、联邦查询和流桥接；CP 自身进程日志另落本机轮转文件。
 - **Worker/VL 只监听 localhost**，CP→Worker 只走 ADR-081 反向隧道；浏览器**不得**直连 Worker/VL。
-- 查询面：Search/Stats/Fields/Facets/Tail/**Rehydrate**/Export 使用 FR-473 Query View、Catalog owner、
-  PublishedProjection 与 coverage。~~Runbook A/B/C 分别归属 FR-474/476/477~~ **2026-11-01 改**：
-  FR-474 已退役（编号不得复用，见 `docs/PRD.md` 规格导航段的退役索引），现存只余 FR-476/477。
+- **实例历史查询**：Search/Stats/Fields/Facets/Streams/兼容 Tail/Export 使用 Query View、Catalog owner、PublishedProjection 与 coverage/quality，原始用户过滤不能扩大授权目标与 `[from,to)`。
+- **实例持续订阅**：独立 `LogTailLive` → CP `/logs/federation/live` → fetch SSE，冻结授权实例集合，持续接纳其新流与新 UTC 日；不持有历史 Worker view/read pin，不用实时流证明历史完整性，见 [ADR-110](adr/110-native-instance-log-tail-stream.md)。
+- **节点/平台进程日志**：只读普通文件尾部（最多 200 行 / 64 KiB），日志中心复用文件窗口，不接 VL；窗口内筛选与快照刷新不能冒充全历史检索、精确总量或实例原生流。
 
 ##### 落地包与边界（2026-11-01 现状）
 
 | 层 | 包 / 资产 | 对应 FR | 当前实现与验收边界 |
 |---|---|---|---|
 | 共享类型与事件身份 | `internal/worker/logs/logtypes` | FR-473 | 事件身份/内容哈希契约不变；~~账本~~ 已随采集链路重建删除（2026-11-06） |
-| 归档导出 | `internal/worker/logs/archive` | FR-501 | 只余 `archive_copy` 导出用的 Provider 抽象与 manifest/校验；~~冷层搬迁 / Rehydrate / 回灌~~ 已退役（2026-11-01） |
+| 归档导出 | ~~`internal/worker/logs/archive`~~ | ~~FR-501~~ | **已删除（2026-11-10）**：`archive_copy` 导出链随 `archive` 整包（20 文件/6733 行）一并移除——真机无归档目的地（`worker.yml` 无 `log_archive` 段），该路径从未启用 |
 | 采集器（新） | `internal/worker/logs/{tailer,logtail}` | FR-475 | **当前唯一采集链路**。对齐 Fluent Bit / Filebeat：prospector（glob）→ harvester（每文件一个）→ registry（fingerprint→offset）。见下方小节 |
 | 行解析与字符集 | `internal/worker/logs/logtail`（`parseline.go`）/ `normalize`（charset） | FR-475 | 级别/时刻提取的**唯一实现**；字符集解码复用 `normalize.CharsetDecoder`（auto 粘滞按源） |
-| 保留策略 | `internal/worker/logs/retention` + `apps/worker/log_retention.go` | FR-501 | **单 VL**：`retention.NewDriver(…, nil, …)` 的 mover **恒为 nil**，到期分区只会 `archive_copy`（需配目的地）或 `blocked`（保留原物）。~~默认搬运 COLD~~ 2026-10-29 废除 |
+| 保留策略 | ~~`internal/worker/logs/retention` + `apps/worker/log_retention.go`~~ | ~~FR-501~~ | **已删除（2026-11-10）**：保留执行器（Driver/Mover/Sweeper/ArchivePurge/VLDeleter，8332 行）移除。**到期处置现由 VL 自治**：`-retentionPeriod=180d` + `-delete.enable`，不经应用层编排。仍在生产的纯数据模型与工具已迁到 `internal/worker/logutil`（Policy/Trigger/ParseTTL/LogLevelController） |
 | VL 运行时 | `internal/worker/logs/vlsup` | FR-476 | 资产 v1.52.0、localhost、auth、supervisor + 15s 看护（见下一小节） |
-| Partition Catalog + Lifecycle | `internal/worker/logs/{catalog,lifecycle}` | FR-477 | 纯逻辑 + **内存 journal**；permit/lease/pin 保留 |
-| Deep Archive | ~~`internal/worker/logs/archive`~~ | ~~FR-478~~ | **已退役（2026-11-01）**：单 VL 后冷层与 Rehydrate 已删，对象不存在；包内只余 `archive_copy` 导出用的 Provider 抽象（FR-501 用） |
-| Worker 查询 | `internal/worker/logs/query` + `grpcmap/grpcsvc` | FR-479 | 逐源固定 view + budget + read pin |
-| CP 联邦协调 | `internal/controlplane/logcoord` + 反向隧道适配 | FR-480 | 扇出 → 合并 → 游标分页 → 覆盖/质量聚合 → HTTP |
+| Partition Catalog | `internal/worker/logs/catalog` | FR-477 | 纯逻辑 + **内存 journal**；permit/lease/pin 保留。~~lifecycle 迁移状态机~~ 已删除（2026-11-10） |
+| Deep Archive | ~~`internal/worker/logs/archive`~~ | ~~FR-478~~ | **已删除（2026-11-10）**：整包移除，无残留 |
+| Worker 查询 | `internal/worker/logs/query` + `grpcmap/grpcsvc` | FR-479/557/559 | 历史查询逐源固定 view + budget + read pin；新增兼容 `LogTailLive` 逐条桥接 VL 原生尾流，结构化 fields 贯通 wire |
+| CP 联邦协调 | `internal/controlplane/logcoord` + 反向隧道适配 | FR-480/558/559 | 扇出、合并、复合游标、覆盖/质量；高级 filter-only 预算与认证 SSE 有独立约束 |
 | 入库切换 | ~~`log_cutover.go` + `log_legacy.go` + DualPath 门面~~ | ~~FR-481~~ | **已下线（2026-10-29）**，**FR-481 已退役（2026-11-01）**：随 CP `logs` 表删除，切换两侧不再存在。残留的 `model.LogCutoverState` 表与 `LogCutoverReadiness` RPC 只是**兼容壳**，无任何开关消费者 |
-| 进程日志诊断 | `apps/*/process_log.go` + `router/diagnostics_log.go` + Worker `PullSelfLog` | — | 自轮转落盘，面板只读尾部；不存储、不检索 |
-| 前端日志面板 | LogsPage、联邦 API/helper、运行时与停机历史 | FR-482 | 前端 DOM/mock/类型/lint/build/Chromium 通过；真后端 Chromium 已验证 1800 行 scope 的分页/三范围、半开窗、abort/失败；**非生产/性能完成** |
-| proto | `proto/worker.proto` Log* | FR-473 | 消息契约不变；兼容 RPC（如 `LogCutoverReadiness`）不再有产品语义 |
+| 进程日志文件窗口 | `apps/*/process_log.go` + `taillog` + 诊断 HTTP / Worker `PullSelfLog` | — | CP/Worker 各自轮转落盘；仅平台管理员读取最多 200 行 / 64 KiB，窗口内筛选，无 VL 查询 |
+| 前端日志工作台 | LogsPage、LogTimeline、TextLogWorkbench、LogFieldExplorer | FR-482/557/558/559 | 固定视口、原生选区、字段/数值分析、高级过滤和有界跟随；组件/自动化证据与真实浏览器、部署、性能验收分开 |
+| proto | `proto/worker.proto` Log* | FR-473/557/559 | 加性 `metric_field`、结构化 fields 与 `LogTailLive`；原 `LogTail` 及兼容壳保留 |
 
 ##### durable outbox r4 / r8d 私有轮尾
 
@@ -427,15 +427,15 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 | 层 | 包 / 资产 | 对应 FR | 当前实现与验收边界 |
 |---|---|---|---|
-| 共享类型与账本 | `internal/worker/logs/{logtypes,ledger}` | FR-473/474 | 增量保存物理映射、绑定指纹、独立请求证据与恢复审计协议；跨适配/采集联合修复中 |
-| 事件体存储 | `internal/worker/logs/eventstore` | FR-484 | 新目录采用完整源键摘要，严格末行损坏分类与冻结读取字节界已落地；合法注册/三启定向回归已过，完整 race 与最终联合验收待，历史容量见 [受控记录](specs/worker-log-canonical-eventstore/acceptance-real.md) |
-| 采集通道 | `internal/worker/logs/{acquire,pipeline,ingest}` | FR-474/475 | tail/stdio/archive→WAL→VL 已接线；**投递路径已于 2026-11-02 简化**（`deliverCtx` 只做去重→规范化→写段→写 VL→异步登记缺口核对，见 §13.7），发布/物化/代次机制仅保留在**重建与对账**路径上 |
+| 共享类型与账本 | `internal/worker/logs/logtypes` | FR-473/474 | 共享类型与事件契约。原并列的 `ledger` 包已随旧采集链路删除 |
+| 事件体存储 | ~~`internal/worker/logs/eventstore`~~ | FR-484 | **已删除（2026-11-03 退废）**：canonical 事件体（tmpfs 段 + MANIFEST + 重建写入链）整体移除，VictoriaLogs 成为唯一事实源。当前不存在“本地事件副本”这一层，详见 [日志说明书](LOGS.md) |
+| 采集通道 | `internal/worker/logs/{tailer,logtail}` | FR-474/475 | **当前采集实现**：`tailer` 做路径发现与 registry 位点，`logtail` 做逐行解析/多行归并/归一与 NDJSON sink。旧的 `{acquire,pipeline,ingest}` 三包已于 2026-11 前整体删除（WAL → VL 直投）；旧述“`deliverCtx` 只做去重→规范化→写段→写 VL”已不存在。详见 [日志说明书](LOGS.md) |
 | 归一化 | `internal/worker/logs/normalize` + 生产 pipeline | FR-475 | 既有归一化与事件身份/内容哈希契约不变；逻辑 Multiline 字节/行数有限默认修复中，独立库零值与显式合法限制保持 |
 | 采集侧成本策略 | `internal/worker/logs/sampling` | FR-498 配套 | 四类策略默认关，抑制折叠为汇总事件，不变量 R 与 default-deny 缺口判据不放宽；历史变异见 [成本规格](specs/log-cost-governance/spec.md) |
-| 保留与分层策略 | `internal/worker/logs/retention` + `apps/worker/log_retention.go` | FR-477/501 | 默认动作搬运 COLD，删除三闸默认关、Sweeper 未接线；TTL 余量、实际接收端、物理日批次续跑与删除边界修复中；gz 文件吸存和指标仍未实现 |
+| 保留与分层策略 | ~~`internal/worker/logs/retention` + `apps/worker/log_retention.go`~~ | ~~FR-477/501~~ | **已删除（2026-11-10）**：执行器移除。到期由 VL 自治（`-retentionPeriod=180d`）；纯数据模型迁至 `internal/worker/logutil` |
 | VL 运行时 | `internal/worker/logs/vlsup` | FR-476 | 既有资产/localhost/auth/supervisor 保留；typed 资源模型、诊断脱敏与退出事实、固定客户端/readiness 恢复及实际准入正在联合接线复验 |
-| Partition Catalog + Lifecycle | `internal/worker/logs/{catalog,lifecycle}` | FR-477 | 当前 40 文件内容的固定批次、permit/lease/pin、独立 sidecar 故障与真双 VL 三启组件回归通过；容量压力仅旧小 PP 内容，范围 lint 9 既有/0 新增，联合门禁仍待 |
-| Deep Archive | `internal/worker/logs/archive` | FR-478 | 既有 Provider/Registry/Rehydrate 与历史 RustFS S3 记录保留；读取前预算、流式硬界、重复合并及实际 IO 结束后释放正在修复 |
+| Partition Catalog | `internal/worker/logs/catalog` | FR-477 | permit/lease/pin 保留；~~lifecycle 迁移状态机~~ 已删除（2026-11-10） |
+| Deep Archive | ~~`internal/worker/logs/archive`~~ | ~~FR-478~~ | **已删除（2026-11-10）**：整包移除（含 `archive_copy` 的 Provider 抽象）。旧述「Registry/Rehydrate 保留」与早前的「已退役」均已被本次删除取代 |
 | Worker 查询 | `internal/worker/logs/query` + `grpcmap/grpcsvc` | FR-479 | 既有 Log RPC 已接线；完整逐源固定 view、真实租约/TTL/read pin、故障分页和全请求预算联合修复中 |
 | CP 联邦协调 | `internal/controlplane/logcoord` + 反向隧道适配 | FR-480 | 既有 Assemble 与授权保留；真实首屏 Worker view、顶层覆盖/截断、整请求预算与当前页导出修复中 |
 | 入库切换 | ~~`log_cutover.go` + `log_legacy.go` + DualPath 门面~~ | FR-481 | **已下线（2026-10-29）**：随 CP `logs` 表废弃删除，切换的两侧不再存在 |
@@ -443,7 +443,7 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | 前端日志面板 | LogsPage、联邦 API/helper、运行时与停机历史 | FR-482 | 前端 DOM/mock/类型/lint/build/Chromium 与独立复核通过；后续 Go 同源正式资产的真后端 Chromium 已验证 1800 行 scope 的分页/三范围、半开窗、abort/失败及迁移 409 不假成功，非生产/性能完成 |
 | proto | `proto/worker.proto` Log* | FR-473 | 既有消息契约不变，本批不新增 Worker Export 或跨节点即时释放 RPC |
 
-**数据面边界**：CP 业务库**不再保存任何日志行**（`logs` 表已删，2026-10-29）。实例/Worker 日志只存在于 Worker 的受管 VictoriaLogs，平台日志只存在于本地自轮转文件；CP 对前者只做授权与联邦查询，对后者只读尾部。禁止把测试全绿当作真 Worker/VL/浏览器验收。
+**数据面边界**：CP 业务库不保存日志行（`logs` 表已删）。实例日志使用 Worker 单 VL；平台 CP 与节点 Worker 自身日志使用各自的普通轮转文件。CP 对实例只做授权、联邦查询与原生流转发，对进程文件只拉有界尾部；日志中心不把文件源转存 VL。历史 VL 中的静态 `node:` 源不作为当前 Worker 文件窗口的真源。禁止把组件测试全绿当作真实 Worker/VL/浏览器联合验收。
 
 **受管 VL 的运行期自愈（`internal/worker/logs/vlsup/guardian.go`）**：Supervisor 过去只在**启动路径**做一次孤儿回收，运行期没有探活——`reconcileExitedLocked` 只把账面改成 FAILED，不会拉起进程，于是 VL 因 OOM 或段损坏崩溃后采集与查询长期降级，直到人工重启 Worker。看护协程按 15s 周期判活（只读进程退出状态，不碰磁盘也不发 HTTP），仅重启「此前健康」的实例：本代进程须已稳定存活超过 30s 稳定窗口，启动即崩/秒退按启动失败处理、不进重启循环（那属于启动路径的存活窗口与资产校验，放进来会自激成「启动失败 → 看护重启 → 再失败」）。失败按 5s→10s→20s→40s→80s 指数退避、单次封顶 5min，连续 5 次即熔断并 ERROR 告警 + 状态暴露（`RestartAttempts`/`RestartsSuspended`/`LastRestartError`），只有「重启后稳定存活超过窗口」才清零计数——启动成功不清零，否则「启动即崩」的循环永远打不满上限。显式 Start/Stop 与看护重启共享一把操作锁并以 epoch 判先后：人工动过实例即放弃本轮自愈，人工 Start 一次则重新武装已熔断的实例。默认开启，`JIANMANAGER_DISABLE_LOG_VL_GUARDIAN=1` 关闭（与 `JIANMANAGER_DISABLE_JDK` 同口径，不为开关扩配置结构）。**判据只看进程存活、不把 HTTP `/health` 纳入重启条件**：健康语义与「进程活着」是两件事（契约 §5.3），把健康探测塞进重启判据会让「进程活着、正在重建索引」被误判成崩溃并杀掉——宁可晚一点恢复，也不放大故障。
 
@@ -461,7 +461,7 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 **归档发现的缺省口径（FR-503）**：显式 `archive_glob`（规则表下发或 `worker.yml` 写死）**逐字使用**、不做扩展——写了 `logs/*.gz` 就只发现 `*.gz`。缺省（空）时在历史的「活文件同目录 `*.gz`」之外，再发现**与活文件同前缀的无扩展名数字轮转**（`proxy.log.1`、`proxy.log.2`……）：BungeeCord 的轮转产物正是纯文本无扩展名，导入侧早已按文件头识别（`DetectArchiveFormat` 分流到纯文本、账本登记 `rotated_text`）；规则表的 `bungee` 条目已显式给出 `proxy.log.[1-9]*`，故实例绑定的 bungee 源一直可达，**落到缺省分支的源**（`worker.yml` 的 `log_sources` 条目等）此前却只有 `*.gz` ⇒ 该形态**永远进不了候选**，形成「能力已有、发现不到」的静默缺口。判据为「同前缀 + 纯数字后缀 + 普通文件 + 路径 ≠ 活文件」：同前缀把范围收敛到同一逻辑源的轮转族（不纳入同目录其它 `*.log`，避免与实时 tail 抢同一份字节），纯数字后缀天然排除 `proxy.log.0.lck`、`.bak` 与日期名而不必另立黑名单；活文件按**路径**排除（log4j 形态活跃文件是 `proxy.log`、java.util.logging 形态活跃文件就是 `proxy.log.0`），活文件名本身不带数字后缀时再排除 `proxy.log.0`（那是 JUL 的当前文件）。目录不存在按「没有归档」处理，只有目录真正不可读才登记 `ARCHIVE_DISCOVERY_FAILED` 缺口。
 
-**采集索引与查询一致性**：旧 JSON 迁移绑定原始字节 SHA-256、映射版本与 meta 进度凭据，分块数据/进度同事务提交；启动循环续跑 `Incomplete`，全量逐值校验及来源复核后才归档旧 JSON，非空无凭据不一致库拒绝覆盖。全表读取共用一个只读事务的 WAL 快照。锁外持久化计划携快照顺序令牌，提交门内整份拒绝过期计划（包括根行及剪枝），部分提交同样推进接纳门槛。本地 SQLite 新增 `recovery_audit` 与 `materialization_attempt`：后者保留按源/日/窗/代次核算的物化预留、失败和实际成本，不随活动引用裁剪归零（**2026-10-29**：前者已随受管恢复分段废除而删除 —— `Open` 会幂等 `DROP TABLE recovery_audit`；同批 `source_wal` 表也已删除，WAL 改纯内存队列，reclaim 改按 `REQUEST_DONE` 证据推进）。物理映射、已确认指纹与实际 ACK 证明的持久化模型见 [索引规格](specs/log-index-sqlite/spec.md)。只读 JSON 导出不含这两张历史表，不是完整备份；旧 JSON 回退仅为备份时间点受控恢复，不能承诺旧二进制直接读取新元数据或迁移后增量无损降级。
+**采集索引与查询一致性**：旧 JSON 迁移绑定原始字节 SHA-256、映射版本与 meta 进度凭据，分块数据/进度同事务提交；启动循环续跑 `Incomplete`，全量逐值校验及来源复核后才归档旧 JSON，非空无凭据不一致库拒绝覆盖。全表读取共用一个只读事务的 WAL 快照。锁外持久化计划携快照顺序令牌，提交门内整份拒绝过期计划（包括根行及剪枝），部分提交同样推进接纳门槛。本地 SQLite 新增 `recovery_audit` 与 `materialization_attempt`：后者保留按源/日/窗/代次核算的物化预留、失败和实际成本，不随活动引用裁剪归零（**2026-10-29**：前者已随受管恢复分段废除而删除 —— `Open` 会幂等 `DROP TABLE recovery_audit`；同批 `source_wal` 表也已删除，WAL 改纯内存队列，reclaim 改按 `REQUEST_DONE` 证据推进）。物理映射、已确认指纹与实际 ACK 证明的持久化模型原见 FR-496 索引规格；**该规格连同 SQLite 索引库已整体退废（索引改 `:memory:`，FR-496 已废弃）**。只读 JSON 导出不含这两张历史表，不是完整备份；旧 JSON 回退仅为备份时间点受控恢复，不能承诺旧二进制直接读取新元数据或迁移后增量无损降级。
 
 > **2026-10-30 重大变更：索引库改纯内存（`:memory:`），事件段改 tmpfs。**
 >
@@ -481,20 +481,20 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 > 只读 JSON 导出 / 旧 JSON 回退」**全部失去对象**（磁盘上已没有索引库）。
 > `worker log-index-export` 子命令保留但**总是返回说明性错误**，不再假装成功。
 > 上述迁移与快照语义仅作**历史参考**，现行细节见
-> [索引规格](specs/log-index-sqlite/spec.md) 的 2026-10-30 修订节。
+> 索引规格已随 FR-496 退废而归档（原 `log-index-sqlite` spec 已删除）。
 >
 > **代价（必须知道）**：进程重启后索引、事件段、WAL 全部归零。
 > 「VL 数据根丢失后从事件段重建 projection」这个能力**不再存在**（详见 ADR-095 追记）。
 
-**续读物理/逻辑定位（模型已扩展，适配与采集复验中）**：`Segment.PhysicalStart` 与 `PhysicalMappingKnown` 把逻辑 `StartPos` 映射到文件偏移，真实 0 与旧状态缺证据分开。`ConfirmedFingerprint` 绑定分段身份、逻辑/物理采点、窗口与摘要；旧 `PositionsFingerprint/PositionsFingerprintAt` 保留兼容，但不能自动升级成可信绑定，更不能把逻辑投递水位直接用于物理 Seek。新增字段须经索引双向映射并在二启/三启保持，不造兼容证据；旧缺证据的具体续读/重锚路径仍在联合修复验收。准确字段、读取字节限与归档三态见 [采集规格](specs/worker-log-acquisition/spec.md)。
+**续读物理/逻辑定位（模型已扩展，适配与采集复验中）**：`Segment.PhysicalStart` 与 `PhysicalMappingKnown` 把逻辑 `StartPos` 映射到文件偏移，真实 0 与旧状态缺证据分开。`ConfirmedFingerprint` 绑定分段身份、逻辑/物理采点、窗口与摘要；旧 `PositionsFingerprint/PositionsFingerprintAt` 保留兼容，但不能自动升级成可信绑定，更不能把逻辑投递水位直接用于物理 Seek。新增字段须经索引双向映射并在二启/三启保持，不造兼容证据；旧缺证据的具体续读/重锚路径仍在联合修复验收。准确字段、读取字节限与归档三态原见 FR-474 采集规格；**该规格已随旧采集链路删除而归档**，当前采集实现见 [日志说明书](LOGS.md)。
 
 **纯截断重写按 reanchor 处置（不是轮转）**：`copytruncate` 这类「同 inode、前缀仍是已投递字节、size 回退到游标之前」的重写，此前走轮转语义（游标归零、登记 `latest→latest.1` 关联、不记缺口）⇒ 已投递内容被重新赋予更高的逻辑位置、以不同 `event_id` 二次投递，而账本显示零缺口（查询侧看不出重复、账本也自认一致）。现改走 reanchor 同族：锚到 EOF、禁止回头重读，缺口按**真实损失** `[Durable, logicalPos)` 登记（照搬 `[cursor, size)` 会被夹平成零长度），已全部确认落库时不记缺口——否则一次无损截断会因 `FILE_REWRITTEN` 不在自动消解名单内把源永久阻塞。四条判据须同时成立才判为截断，否则仍走轮转：size 回退、非 inode 替换（inode 变了是真正的同名替换，旧内容还在轮转目标上）、**没有可接管的轮转目标**（copytruncate 的未读尾部已被复制到 `rotateTo`、由 ArchiveImporter 接管，此时按缺口报就是假缺口）、残留前缀与首次观察到的身份前缀逐字节相同（前缀已变是「换内容从头写」，跳过即静默丢内容）；拿不到物理身份时不判定，宁可沿用轮转语义，也不把真轮转的新文件当旧内容静默跳过。同尺寸的「保头吞尾」重写仍由进程内尾窗指纹链负责。
 
-**发布恢复边界**：静默遗留 pending 由常驻对账按实际 UTC 日内容级确认或预算化续修，不依赖新日志；全部日未确认时保持 pending，清除须复核发布版本/authority/attempt，旧完成不能清新尝试。微投影 64 代阈值按本批实际日检查，到限单代 Replace 写完整 canonical 日集，保留旧历史。既有处理游标逐源完成后推进，不能按候选数抢先跨过未处理源；详细语义与回归见 [采集规格](specs/worker-log-acquisition/spec.md)。
+**发布恢复边界**：静默遗留 pending 由常驻对账按实际 UTC 日内容级确认或预算化续修，不依赖新日志；全部日未确认时保持 pending，清除须复核发布版本/authority/attempt，旧完成不能清新尝试。微投影 64 代阈值按本批实际日检查，到限单代 Replace 写完整 canonical 日集，保留旧历史。既有处理游标逐源完成后推进，不能按候选数抢先跨过未处理源；详细语义原见采集规格（已归档）；当前链路见 [日志说明书](LOGS.md)。
 
 **热层可发布窗口（2026-10-21 生产缺陷修复）**：VL 对**超出 `-retentionPeriod` 的数据点返回 HTTP 200 但静默丢弃**（已实测：写 45 天前数据得 `200`、随后查询 `0` 行；写当天数据得 `200`、查询 `1` 行）。若不设窗口，重建会把历史天重放成「`status:200, verified:N` 的假成功」，随后逐字段校验恒 `rows:0` ⇒ `not fully visible before deadline` ⇒ `PublicationPending` 永久为真 ⇒ 重试到上限后「已停止自动重试」，且对账每轮又把该天判成 `observed < expected` ⇒ 无限重新登记重建。故新增集中判定（`ingest/hot_retention_window.go`），判据保守：**只有该天整天都早于 `now - retention` 才判超窗口**，跨越边界当天仍按可发布处理；`retention<=0`/空串/脏串一律不启用过滤（零值保持改动前行为，避免「没配就误滤正常数据」）。窗口在**四处**统一应用：重建面（不写、不校验、不计入已发布）、对账期望集（不计入 `MissingDays`，如实进 `Report.BeyondHotRetention`）、pending 确认的缺失天、**投递路径**（`writeProjectionDay` 入口单天阑，适用于归档导入批次）。全部天超窗口时给明确终态：清 `PublicationPending` + WARN，**绝不解算缺口**（缺口继续对用户可见）。**发布语义（2026-11-02 简化后）**：投递路径只做到「写段 → 写 VL」，不再有逐字段校验与 publish（以 VL 的 HTTP 结果为准）；而**重建路径仍保持**「写 VL → 逐字段校验 → 通过才 publish」——不这样重建会把历史天重放成永久 pending。超窗口天既不生成代次也不宣称已发布。保留期由 `log_vl.retention_period` 经 `Options.HotRetention` 注入（空串回退 `vlsup.DefaultRetentionPeriod`）。**已知边界**：若 VL 由外部部署且 retention 与配置不一致，窗口会偏大或偏小（偏小 ⇒ 多发几次无用重建；偏大 ⇒ 少量仍会被继续重试），属配置一致性风险，不引入数据错误。
 
-**日志投递路径简化（2026-11-02，用户裁定）**：按「边读边扔 VL，`event_id` 做幂等」重写投递路径。`deliverCtx` 从 335 行/179 分支降到约 60 行，只剩：投递守卫 → 批内 `event_id` 去重 → **按稳定摄取时间规范化**（Raw 事件） → 写本地磁盘段 → 写 VL → 异步登记缺口核对。查询侧同步去掉 `projection_generation` 过滤。
+**日志投递路径（2026-11-02 简化后现状）**：当前实现是 `tailer` 发现路径 + `logtail` 逐行读取与归一 → NDJSON → `InsertJSONLines` 直写 VL。**本段旧述已全部失真，保留仅作历史对照**：`deliverCtx`（335 行/179 分支）已随旧链路整体删除；“写本地磁盘段”已不存在（无事件副本）；`projection_generation` 过滤已去掉。
 
 **已删除**（投递路径上永久不再运行）：代次取名/预留与 `projection_generation` 标签、发布快照 `publishSnapshot`、`PublicationPending` 发布确认链、整窗重发与 `replace` 分支、增量尾部快路径、物化预算 `reserveMaterialization`、`activeTails` 活跃代次簿记、投递路径上的逐字段校验，以及 closed/debt/verified 三层账。
 
@@ -518,14 +518,14 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | 维度 | 当前实现与修复边界（2026-10-22） | 产品决策与未完成范围 |
 |---|---|---|
 | 热层保留 | native HOT 默认已集中为 `120d`，产品窗口仍 `90d`；启用分层须另有正的复制校验/恢复 SLA、日界/周期余量及实际接收端。显式旧 HOT-only 有限 TTL 不改写，关闭策略只告警风险；装配回归中 | 产品 HOT **90 天**；按级别独立停留尚受下述日分区粒度限制。native 120d 的有限余量不是永久副本保证 |
-| 冷层保留 | `retention.Policy.ColdRetention` 默认 730d（声明与校验）；`log_retention.cold_retention` 与受管 VL 的**按 namespace retention** **已接线**（提交 `08eb2386`） | **730 天（2 年）**：VL + 大容量盘，**所有级别统一**；由受管 COLD 的 `-retentionPeriod` 执行 |
+| 冷层保留 | `retention.Policy.ColdRetention` 默认 730d（声明与校验）；`log_retention.cold_retention` 与受管 VL 的**按 namespace retention** **已接线** | **730 天（2 年）**：VL + 大容量盘，**所有级别统一**；由受管 COLD 的 `-retentionPeriod` 执行 |
 | 到期动作 | 默认动作=搬运 COLD（复用 `ROUTING_FROZEN→…→CLEANED`），搬运失败=保留原物+告警、零删除；删除需 `discard` + `sweep.vl_sweep` 双闸且受管 VL 需 `-delete.enable`，**默认全关**。次序固定为 `move_to_cold → archive_copy → discard → blocked`（导出判在删除之前）。次选 `archive_copy` **已闭环**：导出+三重校验通过且三闸全开时，先把 Catalog 权威态迁到 `ARCHIVED`（`Owner=archive` + 归档证据：provider kind / object prefix / manifest 回读 sha256 / coverage / 归档时刻 / 迁移前快照），**再**由生产 `Remover`（`lifecycle.RemoveArchivedPartition`：先 detach 再删日分区目录）回收热层；删除失败回滚为 HOT 并恢复原投影（查询能力不丢）；删除前 Catalog 复核「该日无 HOT 残留 + 证据完整 + 无在途写许可 + 无活跃读取」。查询面：未恢复的归档分区显式降级 `LOG_COVERAGE_ARCHIVE_MISSING`/`ARCHIVE_NOT_RESTORED`，无可读 range 时返回 `LOG_ARCHIVE_MISSING`（不是空成功）；已恢复（对齐投影）按 `archive` tier 走 Rehydrate 客户端。导出目的地支持 `local`（默认）/`s3`/`minio`（配置 `log_retention.archive_copy.{provider,root,endpoint,bucket,region,prefix,access_key,secret_key,use_ssl}`，目的地不完整则启动即拒）：s3/minio 复用 FR-478 已真机验过的 SigV4 `archive.RemoteS3Provider`（纯标准库 path-style，底层 `internal/worker/storage/s3.go`），对象键布局与本地完全同构，不新造协议也不新造凭证模型；构造失败只降级导出器（不装出口 ⇒ 到期分区落 blocked 保留原物）而不让 Worker 启动失败。**归档对象保留** **已接线**（ADR-098 第 7 条决策）：`log_retention.archive_object_retention.{enabled,retention,sweep_at_hour}`，默认关/空/3；启用但保留期为空 ⇒ 启动即拒。次序与热层回收同构：`MarkArchiveObjectPurgeRequested`（落 journal）→ 逐对象 `Delete` → 全部成功才 `MarkArchiveObjectsPurged`，任一失败 `RollbackArchiveObjectPurge`（尝试次数不清零）。**复用同一套三闸**（未全开时连候选都不枚举）。清除前置：证据完整 + 热层已回收 + 无待恢复标记 + 无活跃租约 + 无本地已恢复投影。终态取 `ArchiveEvidence.Purged/PurgedAt/PurgeReason`（**不新增 Owner 取值**：那会让十余处 `Owner == hot/cold/archive` 的 switch 落 default，把「数据不在」伪装成「另一个存储层」）。查询面用**新**原因 `ARCHIVE_PURGED` + 新错误码 `LOG_ARCHIVE_PURGED`，不复用 `LOG_ARCHIVE_MISSING`（那是「去 rehydrate」，已清除后是死路），也不返回空成功。**未做**：长期吸存；真机长窗与 S3/MinIO 目的地的对象删除未验 |
 
-| 分层驱动 | `retention.Driver` **每日固定时刻调度**（`log_retention.trigger.sweep_at_hour`，默认 3 点、进程本地时区）+ 启动首轮立即执行；触发口径年龄 + 磁盘水位**取先到**（磁盘触发 min_age=7d）；`log_retention.trigger.*` 配置面 **已接线**（提交 `08eb2386`） | 不变（即目标形态） |
-| 实例本地 gz | 无吸存能力；平台不删实例本地任何 `.gz`（轮转尾部由 ArchiveImporter 解析，仅用于接管；同目录的**纯文本轮转**归档——如 BungeeCord 的 `proxy.log.N`——同样由该导入器按形态分流后接管） | 以**文件身份、压缩态**吸存到冷层：只归档文件、不解析、不入事件流；幂等去重由系统负责；**本地 gz 一律不动** |
-| 对象存储 | FR-478 已有 S3 Provider / Rehydrate 能力（真机 RustFS 验收通过），当前未作为必需组件 | **第一阶段不上**；作为第 3 档（异地/超长期/合规）能力位与后续评估位 |
+| 分层驱动 | `retention.Driver` **每日固定时刻调度**（`log_retention.trigger.sweep_at_hour`，默认 3 点、进程本地时区）+ 启动首轮立即执行；触发口径年龄 + 磁盘水位**取先到**（磁盘触发 min_age=7d）；`log_retention.trigger.*` 配置面 **已接线** | 不变（即目标形态） |
+| 实例本地 gz | 无吸存能力；平台不删实例本地任何 `.gz`。**旧述“轮转尾部由 ArchiveImporter 解析”已失真**：ArchiveImporter 已整体删除（2026-11-03），当前由 `tailer` 路径发现 + `logtail` 直接读取（含 BungeeCord 式纯文本 `proxy.log.N`；能否采到历史取决于 `read_from_head`，见 [日志说明书](LOGS.md)） | 以**文件身份、压缩态**吸存到冷层：只归档文件、不解析、不入事件流；幂等去重由系统负责；**本地 gz 一律不动** |
+| 对象存储 | ~~FR-478 Deep Archive / Rehydrate~~ **已删除（2026-11-10，整包移除）**；真机 RustFS 验收记录属历史 | **第一阶段不上**；作为第 3 档（异地/超长期/合规）能力位与后续评估位 |
 | 采集侧成本 | `Config.SamplingPolicy → ingest.Options.Sampling → Manager → 每源 Pipeline` 已接线，四类策略**默认全关**；抑制以汇总事件承接（不变量 R），恢复重投不重复采样 | 不变（默认关即目标姿态） |
-| 单位成本 | 投递路径 O(段总行数) 遍历已消除（`87af507f`：−82% 批耗时 / +68% 吞吐 / 达成率 0.555→0.93）；新鲜度换成本的分段批拉经实测收益为零、**不做** | 成本可见性平台化（每源 GB/天、ms/行），供预算化运营 |
+| 单位成本 | 投递路径 O(段总行数) 遍历已消除（−82% 批耗时 / +68% 吞吐 / 达成率 0.555→0.93）；新鲜度换成本的分段批拉经实测收益为零、**不做** | 成本可见性平台化（每源 GB/天、ms/行），供预算化运营 |
 | 平台配额 | 机制侧有"每源预算"（默认关）；`GroupQuota` 无日志量维度 | **先可见性、后强制**：用量报表先落地，强制档位（复用 `EnforceMode` 三档）后置 |
 | 观测与关联 | `/metrics` 已接线（**17 条序列**：11 条保留/搬运含 3 条 `archive_copy` + 6 条事件段回收）；`log.level`/`log.format` 已装配（装配点是 `slog.LevelVar`），并**已提供运行期调级入口** `/debug/log-level`（GET 读 / POST 改，改级别不重启；只调等级不改格式、不持久化、仅影响本进程 handler）；无 trace/correlation 字段 | FR-485 其余观测项补齐（state 尺寸与增速、persist 写字节/秒、单源积压与暂停时长、投递失败率分类、退避次数、慢 SQL、节点 iowait、比率触发）；**轻量 correlation id** 贯通 CP→Worker→事件字段（不引入 OTel collector；correlation 不得进 `stream_fields`） |
 
@@ -537,7 +537,9 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
-- **Worker 日志平台 Log RPC（FR-473～484，消息已冻结 / 生产装配已落地）**：`GetLogCapabilities`、`LogCreateView`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`、`LogMigratePartition`、`LogCutoverReadiness`、`LogResolveIngestGaps`、`LogImportArchives`（手动触发归档导入扫描：源被暂停时自动发现不再跑，此入口复用同一条导入管道与归属闸，强制携带操作人；**支持两种归档形态**——`.gz` 压缩归档与 BungeeCord 式**纯文本轮转**（后者见下条），形态按文件头判定、`.gz` 名保持「坏归档必须可见」的既有契约）、`LogClearIdentityConflicts`（人工确认并清空身份冲突记录以消除查询面质量标记，强制携带操作人 + 理由）。受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。节点级 runtime/ingest 管理面的 HTTP 端点（`resolve-gaps` / `clear-identity-conflicts` / `import-archives`）见 API.md「Worker 日志平台」；`LogImportArchives` 的手动入口经 CP `POST /nodes/:id/log-runtime/ingest/import-archives` 转发（FR-504 补齐——此前只有 Worker gRPC 入口，运维实际不可达）。
+- **Worker 日志 RPC**：历史查询包含 `GetLogCapabilities`、`LogCreateView`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogStreams`、`LogStreamFieldNames`、`LogStreamFieldValues` 和兼容 `LogTail`。新增 `LogTailLive(LogTailRequest) returns (stream LogEvent)` 专供 VL 原生持续尾流，保留旧 LogTail 的有界批次行为以兼容混版。`LogStatsRequest.metric_field` 与事件结构化 fields 加性传递，不新增 Worker Export RPC。runtime 管理与已退役的归档/迁移兼容声明不表示对应运行能力仍存在。
+  **⚠ proto 已声明但 Worker 无实现（调用得 Unimplemented）的 4 个**：`LogCutoverReadiness`、`LogResolveIngestGaps`、`LogImportArchives`、`LogClearIdentityConflicts`——它们随对应能力下线（cutover 下线 / ArchiveImporter 删除）而失去运维对象，proto 声明作为历史保留。CP 侧零生产调用（仅测试替身）。**下文关于 `LogImportArchives` 形态与 HTTP 转发的描述属已下线能力的历史记录，不要当作现役功能。**
+  受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。节点级 runtime 管理面的 HTTP 端点见 API.md「Worker 日志平台」。
 - 生命周期：Register, Heartbeat (双向 stream), FetchBotWorkerArchive
   - `Register` 的身份匹配经 gRPC metadata 携带 `node-uuid`/`node-secret`（重注册必须同时出示）或 `enroll-token`（新节点准入），均不改 proto；Host 和名称不再作为身份凭据（ADR-081）。
   - `RegisterResponse` 携带 `ws_token_secret`（FR-275，见 ADR-061）：CP↔Worker 专用 **WS 令牌密钥**（只签终端/插件桥令牌，与签用户会话的 `jwt.secret` 隔离，Worker 永不持有后者）。首注册与重注册均下发；Worker 持久化到 `etc/node-identity.json` 并热应用到 WS 校验。CP 侧密钥三轨：显式 `jwt.ws_secret` > 生产 autogen 持久化 `<dataRoot>/etc/ws-token-secret.key`（0600）> dev 回退 `dev-secret-change-me`；若既无本地持久化值也未收到响应值，Worker 拒绝启动 WS 服务。
@@ -580,7 +582,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
   - **JBIS 业务事件汇聚上行（FR-122；见 ADR-027/028）**：同一条 StreamPluginEvents 流复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义）。CP 侧 `PlayerEventService` 据 `domain` 分流：玩家/监控事件走在线名册 + SSE，业务事件交 `BusinessEventService` 按 (domain,node_uuid,zone_id,dedup_key) 去重落 `business_events` 通用信封；经济域(`economy`)再解析信封维护 `economy_balance_mirrors`(node→zone 维度、seq 单调)+`economy_ledger_entries`(node→zone→ledger 幂等审计)。探针侧由 mce `PlayerEconomyChangeEvent`/`PlayerEconomyCatchupEvent` 折算上报（覆盖 web 后台/跨服一切余额变更），currencyId Int→identifier 折算保证跨服聚合不串味。CP 插件无关、只认信封
 - **CPU 窗口采样**：一个 Worker-owned `CPUSampler` 维护累计计数基线并发布窗口差分快照，collector/register/Heartbeat/`GetNodeMetrics` 仅读，不能相互推进基线。CPU/iowait 为 0..1，CP iowait 时序转为 pct；预热、无增量、计数或时钟回退、读取失败均无效，现有 RPC 标量只能零降级，不能把该零宣称有效测量。普通 iowait 阈值告警按节点 UUID + 既有时序别名读取近期 pct，缺失/过期跳过，不伪造触发或恢复；不新增 Node 字段或 RPC。
-- 指标：`GetNodeMetrics` 采集 Worker 所在节点 CPU / 内存 / 磁盘实时快照；`GetInstanceMetrics` 请求带 `probe_port`，由 Worker 抓 ServerProbe `/metrics`（**RCON 已退役（FR-067/ADR-016）**——探针未就绪时富指标 N/A，不再回退 RCON）。`GET /api/v1/nodes/:id/metrics` 节点面板端点优先经已连接 Worker 主动拉取，连接池暂无该节点时回退 CP 中最新心跳快照；实例实时面板继续按需 `GetInstanceMetrics` 拉取；**历史时序**（FR-060）由 Worker 心跳推送 `instance_metrics`，二者互补。FR-400 在同一已认证反向隧道 Heartbeat 追加 `managed_runtime`：只读上报 Go Worker 与已运行共享 Bot Worker 的 RSS/CPU、Bot 聚合运行态、真实 `bot_capacity_max` 和观测时间；容量未就绪、缺失或无效时保持 `null` 并附原因。不得调用会拉起 Bot Worker 的 RPC，也不扫描任意 OS 进程。CP 仅保存 Node 当前快照，首页经管理员 `GET /metrics/resource-attribution` 聚合鲜节点、RUNNING 受管实例树和进程 TopN；CPU 首帧/PID 切换为空值，陈旧超过 90 秒不伪装成实时。FR-401 的 `BotRuntimeMetricSampler` 只读取该已认证快照，每 30 秒写入 ADR-013 node scope 时序；离线/陈旧/不可用字段写 `NULL` 断点，查询经 `/metrics/bot-runtime` 由节点、实例或压测会话解析关联节点并始终标明共享语义，不新增 Worker RPC、端口或数据库直连。FR-402 的 `PlatformObservabilityService` 仅用有界集合查询构造平台管理员首页读模型：鲜活节点资源、节点/实例健康、未解决告警、进行中/失败任务与共享 Bot 观察值；每类列表上限 5，跨节点事件循环 P95 取可用节点最大值。该端点不做逐项查询、绝不触发 Worker RPC，普通成员不请求也不渲染管理员区块。FR-406 把 `/monitor` 收口为平台/节点/实例观测入口，默认选中对比指标并复用 FR-400/401/402 与进程 TopN 数据；FR-407 在实例维度新增受管进程详情读模型，结合 `process_metric_snapshots` 最近窗口输出带样本数、窗口和数值证据的诊断标签；FR-408 的 PID 级处置只开放非根子进程并要求前端 DangerConfirm 与后端 `confirm=true`，审计 detail 不记录完整命令行、环境变量或密钥。
+- 指标：`GetNodeMetrics` 采集 Worker 所在节点 CPU / 内存 / 磁盘实时快照；`GetInstanceMetrics` 由主进程注入推送快照读取器，按实例 UUID 读取与心跳共用的托管指标快照；快照缺失或经桥断开/实例下线作废后，按 `probe_port` 抓 ServerProbe `/metrics`，并保留既有 SLP/Query 基础信息及系统进程资源回退（**RCON 已退役（FR-067/ADR-016）**——探针未就绪时富指标 N/A，不再回退 RCON）。`GET /api/v1/nodes/:id/metrics` 节点面板端点优先经已连接 Worker 主动拉取，连接池暂无该节点时回退 CP 中最新心跳快照；实例实时面板继续按需 `GetInstanceMetrics` 拉取；**历史时序**（FR-060）由 Worker 心跳推送 `instance_metrics`，二者互补。FR-400 在同一已认证反向隧道 Heartbeat 追加 `managed_runtime`：只读上报 Go Worker 与已运行共享 Bot Worker 的 RSS/CPU、Bot 聚合运行态、真实 `bot_capacity_max` 和观测时间；容量未就绪、缺失或无效时保持 `null` 并附原因。不得调用会拉起 Bot Worker 的 RPC，也不扫描任意 OS 进程。CP 仅保存 Node 当前快照，首页经管理员 `GET /metrics/resource-attribution` 聚合鲜节点、RUNNING 受管实例树和进程 TopN；CPU 首帧/PID 切换为空值，陈旧超过 90 秒不伪装成实时。FR-401 的 `BotRuntimeMetricSampler` 只读取该已认证快照，每 30 秒写入 ADR-013 node scope 时序；离线/陈旧/不可用字段写 `NULL` 断点，查询经 `/metrics/bot-runtime` 由节点、实例或压测会话解析关联节点并始终标明共享语义，不新增 Worker RPC、端口或数据库直连。FR-402 的 `PlatformObservabilityService` 仅用有界集合查询构造平台管理员首页读模型：鲜活节点资源、节点/实例健康、未解决告警、进行中/失败任务与共享 Bot 观察值；每类列表上限 5，跨节点事件循环 P95 取可用节点最大值。该端点不做逐项查询、绝不触发 Worker RPC，普通成员不请求也不渲染管理员区块。FR-406 把 `/monitor` 收口为平台/节点/实例观测入口，默认选中对比指标并复用 FR-400/401/402 与进程 TopN 数据；FR-407 在实例维度新增受管进程详情读模型，结合 `process_metric_snapshots` 最近窗口输出带样本数、窗口和数值证据的诊断标签；FR-408 的 PID 级处置只开放非根子进程并要求前端 DangerConfirm 与后端 `confirm=true`，审计 detail 不记录完整命令行、环境变量或密钥。
 - 玩家管理：SendPluginCommand（FR-067/ADR-016；CP 经 Worker 反向 WS 向探针下发踢/封/解封/白名单治理指令，探针经服务端 API 执行；在线列表经探针事件聚合）。**RCON 路径已退役**，`ExecRconCommand`/`rcon_client` 移除；探针未连入时优雅降级
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
 - 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, JDKCatalog, ProbeJDK, ScanRuntimes, InstallRuntime, RemoveRuntime, GetPMConfig, SetPMConfig, ListGlobalPackages, InstallGlobalPackage(异步任务), RemoveGlobalPackage, DownloadCore, InstallForgeServer, ListArtifactCache, EvictArtifactCache, ClearArtifactCache, SetArtifactCacheCap, BrowseDir
@@ -1077,6 +1079,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
     - **统一通知铃铛**（FR-216，见 ADR-048）：**合并原「站内信收件箱(FR-183)」+「告警铃铛(FR-162)」为单一入口**（`NotificationBell`，原 `inbox`/`alertBell` 两槽并为单 `notifications` 槽）。统一未读计数（`GET /notifications/feed/unread-count` = 本人站内信未读 + 全局告警未读，30s 轮询）+ 下拉只读预览最近混合通知（消息/告警各带来源标识与级别色点，`GET /notifications/feed?pageSize=8`）+「查看全部」跳 `/notifications` 通知中心页。+ **账户菜单**（用户名/角色 + 退出登录）始终显示（窄屏不隐，确保核心能力常驻）。
 - **右 = 工作区（路由页面 + 服务器统一控制台，FR-166/269）**：
   - 点实例 → 直接导航到 `/instances/:id` 并打开**服务器统一控制台**（`InstanceConsolePage`）：固定分区为概览 / 控制台 / 文件配置 / 监控 / 玩家 / 插件 / 备份定时 / 业务 / Bot，激活分区写入 `?tab=`，刷新可还原；顶部状态条提供运行态、节点、端口、在线玩家、TPS/MSPT 与启动 / 停止 / 重启 / 强杀 / 打开终端等操作。FR-166 可组合卡片画布仍保留为超级工作台 / 导播台等高级拼屏能力，不作为单服默认入口。
+    - **概览排障布局**：先指标，配额与版本配置并排；配额收为单行摘要，来源/限流边界/待收紧/进程内作用域保留在可展开详情。最近日志复用已有实例 VL 联邦快照，以最多 30 行、200px 滚动区展示最新信息，加载/失败/部分覆盖与空态明确分离；只在概览活动时刷新，查看日志深链限定当前实例。卡片/列表和详情横幅共享启动/停止、待确认、确定失败语义，不编造游戏就绪进度。
   - **控制台 keep-alive 与跨服热缓存**（FR-295/296/414，见 ADR-067）：`/instances/:id` 不再直接挂 `InstanceConsolePage`，而由跨服热缓存宿主 `InstanceConsoleCache` 渲染——默认保活最近 6 个服、按实际可见终端数动态提升且硬上限 12（LRU，`lib/console-hot-cache.ts` 纯逻辑），每个成员一份 `<Activity mode>` 包裹的控制台，命中热集切 `visible` 瞬时呈现、未命中入列、超容按淘汰偏好（先无草稿者，草稿由 `lib/console-draft-registry.ts` 登记）整体卸载释放；配合 `Workspace` 把 `/instances/*` 路由 key 归并为固定值，实例间切换不触发路由级 remount。单服内部 9 个页签访问过即以 `<Activity mode="hidden">` 保活（DOM/本地状态保留、effects 卸载 → 隐藏页签轮询自动暂停），切回瞬时。**终端连接抽为模块级单例 `lib/terminal-session-manager`**（组件订阅制：行缓冲与 WS 常驻管理器，组件/页签卸载只解绑渲染层不断连；重连退避 FIX-B、一次性 token 现取 FR-140、401 诊断 FR-276 语义原样迁入），热集成员用 `pin`/`markVisible`/`markHidden` 联动——hidden 成员 WS 保持连接、闲置超 5 分钟自动断连降级、切回自动重连；LRU 淘汰 / 离开控制台 / 登出（`disposeAll`）即整体释放。**独立表面（FR-166 画布卡片 / FR-168 导播台）仍卸载即释放**（`release` 受 `pinnedIds` 约束，非 pin 即 dispose，ADR-035 资源模型不变）。
   - **统一卡壳** `WorkspaceCard`：grip 拖拽手柄（`draggableHandle=".workspace-card-grip"`，仅按住卡头 grip 才移动，卡内终端/编辑器交互不被吞）+ 实例·功能标签 + 全屏（临时最大化单卡）+ 关闭。卡 resize / 全屏切换后派发 `window` resize，触发终端 `fit` 与编辑器 relayout。
   - **惰性挂载**（承 ADR「未挂载卡不建 WS」）：仅渲染当前画布上的卡片，故终端 WS / metrics 轮询只对画布上的卡建立；未加入画布的功能不预渲染。
@@ -1084,7 +1087,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
   - **文件**段 = 共享资源管理器 `components/explorer/ResourceExplorer`（FR-070）：左懒加载目录树（`FileTree`）+ 右目录内容（`FileList` 多选/右键/拖拽源）/ CodeMirror 编辑器（`editor/CodeEditor`，多格式高亮 + Ctrl+S 拦截保存接 FR-051 历史）。交互全集（新建文件夹/重命名/删除/剪切复制粘贴/树内拖拽移动/拖拽上传/单文件流式与多选 zip 批量下载/shift·ctrl·全选多选）抽为纯函数（`selection`/`clipboard`/`paths`/`language`，vitest 覆盖）；删除/回滚走 `DangerConfirm`（FR-059），历史版本经右侧抽屉 `VersionDrawer`。`ResourceExplorer` 接受可选 `config` 能力注入（编辑器插槽 / 左栏插槽 / 配置版本抽屉），不注入即为纯文件资源管理器。**此组件为 FR-071/073/074/075/082/083/084 复用地基**。归档浏览/反编译（FR-075）叠加为右栏互斥面板：`FileList` 双击/右键按 jar/zip→`ArchiveViewer`（内部条目子树 + 点文本条目只读查看 + 点 `.class` 触发反编译）、`.class`→`DecompileViewer`（只读 Java 源码），与文本编辑器三者互斥占用右栏；API client `api/archive.ts`，只读端点不触碰写操作。
   - **共享文件浏览器** `components/file-browser/FileBrowser`（FR-213）：**展示型、数据源经 props 注入、不耦合具体后端**的只读浏览组件——左目录树/列表（`FileBrowserTree`，支持「懒加载分层」与「扁平全量+`tree.ts` 建树」两形态）+ 右内容预览（`FilePreview` 复用 `editor/CodeEditor` 只读多格式高亮；二进制/超大/错误**显式降级**为「不可预览+下载兜底」）。数据/下载/操作全经 `FileBrowserSource`/`FileBrowserAction` 契约注入（组件主体不 import 任何后端 api）；实例工作目录适配器见 `file-browser/sources/instanceSource`（二进制=NUL 字节、超大=1 MiB 阈值判定）。实例「资源卡片」（`console/InstanceResourceCard`）= 「管理」Tab 全功能 `ConfigExplorer`（能力不减）+「文件」Tab 纯文件 `ResourceExplorer`（通用 `fileVersions` / diff / 回滚生产入口，FR-204）+「浏览」Tab 共享 `FileBrowser`；客户端分发文件预览（FR-214）复用同一组件喂 manifest 数据源（`sources/clientDistSource`，经管理面 sha256 端点读已上传制品文本）。**发布编排页（FR-250）尚未上传时的内容预览另有 `sources/localDraftSource`**——直接读浏览器内 `File` 文本（同一 NUL/1 MiB 降级口径），零网络、无 sha256 依赖。
   - **配置**段 = `components/config-explorer/ConfigExplorer`（FR-071）：**复用 `ResourceExplorer`** 并注入配置能力——打开文件改用 `ConfigFileEditor`（schema 表单/文本双模式 + 跨文件校验 + Ctrl+S 存**配置版本**，FR-031；文本模式复用共享 `CodeEditor` 多格式高亮）；左栏顶部 `FavoritesBar`（收藏书签存 `localStorage`，纯函数 `favorites.ts` + 已发现配置面板 `GET /configs/discover` 递归全部配置，分组纯函数 `discover.ts`）；历史经 `ConfigVersionDrawer`（FR-031 配置版本/diff/回滚）。树/列表本身呈现工作目录全部文件，满足「目录树呈现自动发现的全部配置」。原独立三栏 `ConfigEditor` 已移除。
-  - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 异常实例 / 近期任务 / 活跃告警三栏一屏速扫（各最多 5 条、独立加载/空态/错误降级，FR-271）+ 虚拟渲染密集实例表（mock 模式 1000+ 服务器时仅渲染可视窗口）；**节点页（`NodesPage`，FR-177 主从双栏重做，取代原卡片网格/列表 + 手搓 `fixed inset-0` 模态）** = 左**可收缩节点列表**（窄图标轨 ⇄ 展开，收缩态 `localStorage` 持久；顶集群汇总头复用 `summarizeNodes` + 搜索 + `AddNodeDialog`；行 = 状态点呼吸灯/名/host/mini 水位/实例数，选中高亮、离线置灰）+ 右**选中节点实时详情**（身份块 + 操作 kebab[维护/排空/下线，走 `DangerConfirm`] + `ResourceGauge` CPU/内存/磁盘/负载 + **分段 Tabs**：概览 `NodeOverviewSection` / 实例 `NodeInstanceCompare` / JDK `NodeJDKPanel` / 制品缓存 `NodeArtifactCachePanel`（FR-178 组件改挂分段，抽屉入口下线）/ 端口 `NodePortsPanel` / 监控历史曲线 / 坏节点修复 `NodeRepairPanel`[BUG-A：诊断 + 重 enroll + 清孤儿，接 `/nodes/repair/*`·`/nodes/:id/reenroll|orphans|purge-orphans`，破坏性走 `DangerConfirm`]）；未选节点右栏空态。列表筛选/选中态/收缩态持久抽纯函数 `lib/node-list.ts`（vitest 覆盖）。分段切换稳定工具条、布局不重组（FR-178 §5 抽屉 UX 约束）。**开源许可页（`LicensesPage`，`/licenses`，FR-135）** = 构建期 `scripts/gen-licenses.mjs` 扫描 control-plane-web(pnpm) + bot-worker(npm) + Go(go-licenses) + client-updater(Gradle runtimeClasspath) + ServerProbe(Gradle taboo 发行依赖) 五个发行来源，任一来源为空即失败，生成 `apps/control-plane-web/public/licenses.json`（静态资源、非 `/api`）；页面提供包名搜索 + 运行时/开发分区计数 + 表格 [包名·版本·许可证·作者] + 行内展开许可证全文。
+  - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 异常实例 / 近期任务 / 活跃告警三栏一屏速扫（各最多 5 条、独立加载/空态/错误降级，FR-271）+ 虚拟渲染密集实例表（mock 模式 1000+ 服务器时仅渲染可视窗口）；**节点页（`NodesPage`）**：未选节点时显示集群指标、运行概览、筛选和默认卡片墙；保留显式 `?layout=list` 表格、活跃/归档切换与分页。卡片按内容定高，展示 IP、系统、硬件、CPU/内存/磁盘水位与容量、实例数、隧道和心跳；表格行高与动态分页计算同源，宽度足够时不强制横滚。选中节点通过 `?node=<id>&tab=<tab>` 进入对象详情，保留身份与操作、资源仪表、概览/实例/运行时/制品缓存/端口/监控等分段。**服务器页（`InstancesPage`）**：服务端分页搜索与聚合、默认卡片及显式 `?view=list` 列表；卡片从节点表注入真实 host，与游戏端口组合为连接地址，未分配端口不猜默认值。运行态已挂载卡片读取实时指标，CPU/内存缺测与人数/TPS 可用位分别处理，选择和生命周期确认沿用页面级流程。顶部 `InstanceRuntimeOverview` 复用范围内状态聚合绘制分布图；本页近一小时有效采样汇总 CPU、堆内存、后端人数和 TPS，并显示采样覆盖，不冒充全平台实时汇总，不额外逐服轮询。**开源许可页（`LicensesPage`，`/licenses`，FR-135）** = 构建期 `scripts/gen-licenses.mjs` 扫描 control-plane-web(pnpm) + bot-worker(npm) + Go(go-licenses) + client-updater(Gradle runtimeClasspath) + ServerProbe(Gradle taboo 发行依赖) 五个发行来源，任一来源为空即失败，生成 `apps/control-plane-web/public/licenses.json`（静态资源、非 `/api`）；页面提供包名搜索 + 运行时/开发分区计数 + 表格 [包名·版本·许可证·作者] + 行内展开许可证全文。
   - **跨实例超级工作台（FR-167，`/super`，集群域独立入口，复用 ADR-034）**：把可组合画布的作用域从「限当前实例」扩展为**跨实例**——同一画布并存任意实例的卡（如 4 个不同实例终端拼监看墙）。两作用域在 `stores/workspace.ts` 清晰并存：单实例画布 `canvasByInstance[id]`（卡省略 instanceId，按实例 id 记忆）与超级工作台 `superCanvas`（**卡显式携带 `instanceId`**）。页面 `components/console/SuperWorkbenchPage` = 左侧可收起**实例库** `InstanceLibrary`（搜索实例 + 实例展开看 6+ 功能；**HTML5 原生 DnD 拖拽源**：拖实例=加该实例默认卡组、拖功能=加单卡、多选批量拖=一次拼监看墙；放置区 dragover 高亮 + 松手落位）+ 右侧跨实例画布（复用同一 `WorkspaceCard` 卡壳与网格、**惰性挂载**未上画布的卡不建 WS）。卡片所属实例名由 `WorkspaceCard` 按 `instanceId` 自解析（每卡可属不同实例）。**跨实例预设**与单实例共享同一份 `userPresets` localStorage（`lib/workspace-preset` 序列化扩为携 `instanceId`，**向后兼容**无 instanceId 的旧预设）。拖拽载荷的序列化/解析与「载荷→卡片」「跨实例卡去重（同实例同功能去重，多实例同功能并存）」抽为纯函数 `lib/instance-library.ts`（vitest 覆盖）。
   - **工作区导播台（FR-168，`/director`，集群域独立入口 / 超级工作台工具栏「导播台」按钮进，ADR-035）**：在多个**场景**（= FR-167 跨实例预设）间像 OBS **瞬切零延迟** + 缩略图条 + 定时轮播。页面 `components/console/DirectorConsolePage`：① **场景缩略图条** `DirectorSceneStrip`（一排场景，点击 / 数字键 1-9 / ←→ 瞬切；三态指示——active 主色脉动 / 预热绿点 / cold 灰点；右侧并发上限滑杆）；② **舞台**把所有**预热场景的画布同时挂载**（`DirectorCanvas`，只读网格复用 `WorkspaceCard` 卡壳），仅 active 可见。**核心 = ADR-035 预热并发模型**：要瞬切零延迟，目标场景的卡 WS 必须**已保活**；但多场景同时全速渲染会过载浏览器（WS 同域 ~6 连接 + 多 xterm/图表重绘吃满 CPU），故——**场景三态状态机**（纯逻辑 `lib/director.ts`，vitest 覆盖 LRU 驱逐 / 状态转移 / 轮播序列）：激活唯一 + **预热是受并发上限约束的集合**（默认保守 3，可配 1~6），新预热超限按 **LRU 驱逐**最久未激活的预热场景（降 cold，下次切换重连）；**非激活降频 / 暂停渲染**——非激活场景的 `DirectorCanvas` 用 `content-visibility:hidden`（浏览器跳过整棵子树布局/绘制）+ 终端经 `lib/director-render.ts` 的 `DirectorRenderProvider active=false` 让 xterm **暂停 render 但 WS 继续收数据进缓冲**（`Terminal.tsx` 加 paused 模式累积输出），切回一次性 flush。**cold 场景不挂载**（不建 WS）。导播台运行态（场景定义 + 状态机 + 轮播）由 `stores/director.ts`（Zustand，场景/上限/轮播间隔 localStorage 持久）承载，**纯前端**——只管理既有终端/监控 WS 的保活与渲染节流，不新增协议、不逾越进程边界（守架构不变量）。**真机多连接压测为硬验收维度**（单元只覆盖状态机逻辑）。
 - **设计系统（FR-061 + FR-163 视觉底座 + FR-267 A+C 收口 + FR-273 组件包）**：CSS 变量 token 驱动；默认亮色为 **A+C Jian 绿 `#158053`**，辅助钴蓝 `#2563EB`，结构色为背景 `#F5F6F8` / 面板 `#FFFFFF` / 边框 `#D7DCE3`，状态色系继续由 success/warning/danger/info 与阈值 helper（见 `@jianmanager/ui/lib/threshold`）驱动。**设计底座 token（`index.css`）**：`--primary: #158053`、`--brand-forest: #158053`、`--brand-cobalt: #2563EB`、`--radius: 0.375rem`、`--workspace-bg-image` 指向 A+C 背景素材；暗色模式按 B 高密度专业运维方向保留更深表面层级。**交互细节（FR-176/244/267）**：卡片/行/chip 原语 hover 只换阴影不位移；输入焦点环使用 `ring-2 + ring-ring/40`；全局 motion token（`--motion-duration-fast/normal/slow/route`、`--motion-easing-standard/emphasized`）在 app 与 `@jianmanager/ui` 两侧暴露，侧栏、顶栏、路由、移动导航面板、工具条与固定顶层进度条 `TopLoadingBar` 均引用同一时长/缓动；React Query 请求/变更忙碌时进度条进入循环加载态；`prefers-reduced-motion` 下保留切页/进度条状态反馈动画，仅关闭平滑滚动；全局主题化细滚动条随明暗 + 双主题自适配。**通用组件包**：`packages/ui`（FR-283 迁仓库根，见 ADR-064）以 `@jianmanager/ui` **pnpm workspace 真依赖**（源码 exports，消费方 Vite 直接转译；Tailwind 侧各 app 显式 `@source` 声明其源码为扫描源）暴露 Button / Panel / StatCard / StatusBadge / SummaryChips / Table / Form primitives、`RangePicker` / `TimeSeriesChart` / `MonitorChart` / `MetricsOverviewStrip` 等通用 chart，以及 `utils` / `threshold` / `brush` / `chart-hover` / `monitor-metrics` helper；旧 `web/src/components/ui`、第一版通用 chart 与 helper 入口保留兼容 re-export。**控件博物馆**：`apps/ui-museum`（原 `web/wiki`，FR-283 更名迁移）是独立 Vite workspace 应用，直接消费 `@jianmanager/ui` 展示 Foundation / Actions / Forms / Data / Overlay / Monitoring 控件矩阵。**弃 shadcn `Card` 松散用法**（`card.tsx` 标 `@deprecated`，eslint `no-restricted-imports` 阻断新引入，见 ADR-032）。**全局双主题（FR-164）**：组件层零硬编码品牌色，品牌色全经 CSS 变量（`--primary`/`--primary-foreground`/`--accent`/`--accent-foreground`/`--ring`/`--brand-shadow`/`--chart-1`）。第二主题青绿 `#14B8A6` 仅在 `index.css` 用 `[data-theme="teal"]` 与 `[data-theme="teal"].dark` 覆盖这组品牌变量（结构色/状态色不动）；Jian 绿为默认（无 `data-theme` 即承 `:root`/`.dark`，兼容旧 `colorTheme: indigo` 存储值）。**主题色（`colorTheme: indigo|teal`）与明暗（`light|dark|system`）正交、各自 `localStorage` 持久**；纯逻辑下沉 `lib/theme.ts`，`stores/theme.ts` 统管两轴。**主题/明暗初始化提到 app 入口**（`main.tsx` 在 React 挂载前 `initThemeFromStorage()` 套 `<html data-theme>` + `.dark`），登录/初始化页也套主题且首屏无闪。一处切（侧栏底部 `ThemeSwitcher`）全站 CSS 变量实时跟变（按钮/曲线/选中态/进度条随主色）。仍基于 shadcn/ui + Tailwind v4 + OKLCH，不引入新框架。
@@ -1333,6 +1336,18 @@ tmux 前缀键或键盘复制模式**。它与 `/super` 的鼠标画布、`/dire
 └──────────────────────────────────────────────────────┘
 ```
 
+#### 日志工作台 `/logs`
+
+Workspace 将 `/logs` 纳入固定视口路由，`PageShell fixed`、内容区的 `min-h-0` 与日志区内部滚动共同约束高度；分页/状态 footer 留在屏内。顶部洞察、筛选、覆盖状态和结果壳使用稳定槽位，加载、错误、刷新、跟随不因整块卸载挤动日志列表。来源名称优先展示实际实例/节点名，无法解析时保留可辨认的 ID。
+
+实例分页时 `LogTimeline` 保留当前页 100 行 DOM（进程文件窗口最多 200 行），取消整行按钮、自定义多选、虚拟卸载与 Ctrl/Cmd+A/C 接管，正文使用浏览器原生拖选和复制；详情箭头独立展开结构化 fields。实例流式缓冲、节点/平台文件窗口在回看或存在原生选区时保护当前正文；用户显式恢复实例跟随时仅清除本窗口选区并回到顶部，不用不断重建 DOM 打断阅读。
+
+历史 Search 在 VL 中保留固定 canonical 字段的 `fields → sort(_time desc) → limit` 路径，避免对全宽行排序物化。安全同戳组与页前缀确定后才按完整事件身份补查字段；来源分片可补其局部有界前缀，但所有阶段共享原时间/授权/过滤条件、总 bytes 与物理请求预算。字段身份或内容不匹配、缺失、超限均显式降为 partial/error。
+
+实例 VL 工作台提供全窗口时间桶、级别/来源概览、Fields 与流标签发现；`LogFieldExplorer` 在按需浮层中复用同一已应用 scope/view 查询常见值和数值分组（count/sum/min/max/avg），明确加载、unsupported、失败、pending、partial 与 truncated。文档字段探索使用显式 `explore=true`，保留旧受控维度默认策略；候选字段需经同作用域存在性证实，元数据、验证和取值共用 1 MiB / 5 秒 / 16 次物理读取预算。Worker/CP 两层执行确认防止混版静默忽略参数。高级输入使用 `advanced/logsQL` 草稿与已应用表达式分离，未应用或失败的旧数据不得导出。节点/平台使用 `TextLogWorkbench`，只显示和筛选最多 200 行 / 64 KiB 文件窗口，手动刷新或 3 秒跟随刷新，不伪造历史分页、精确总量或 VL 分析。
+
+页面说明统一由 `PageHeader` 的点击式 `PageHelp` 承载，显式 `help` 优先于 `description`；问号浮层可键盘操作且内部滚动。它供页面帮助使用，单行动作 Tooltip 仍可保留。上述页面能力的 DOM/单元测试、真实 VL 流测试与 Chromium 联合验收分别记证，不因文档同步宣称已部署或完成性能验收。
+
 #### 其他页面
 
 - **备份 `/backups`**: 按实例分组的备份列表，支持创建/恢复/删除
@@ -1476,26 +1491,50 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 
 | 通路 | 产生者 | 存哪 | 谁读 | 能做什么 | 不能做什么 |
 |---|---|---|---|---|---|
-| **实例/Worker 运行日志** | 游戏服进程 stdout/stderr、Worker 采集器 | Worker 本地**受管 VictoriaLogs（单 VL）**（ADR-094；~~HOT/COLD/Rehydrate 三命名空间~~ 2026-10-29 废，现 180d/100GiB） | CP 经反向隧道联邦查询；浏览器**不得**直连 Worker/VL | Search / Stats / Fields / Facets / Tail / Export | CP 业务库**不存任何日志行**（`logs` 表已删） |
-| **平台（CP 自身）进程日志** | CP 进程 slog（含 `middleware.ErrorLog` 的 API 失败响应） | CP 数据根自轮转文件 `<data>/var/log/control-plane.log`（`internal/platform/rollog`） | 面板只读尾部（`GET /diagnostics/log`） | 最近 N 行 + 关键字/级别可见性 + 可复制的 `tail`/`grep` 命令 | **不进** VL、不进联邦查询、无分页/总数/时间窗/导出 |
-| **Worker 进程日志** | Worker 进程 slog | Worker 数据根自轮转文件 `<data>/var/log/worker.log` | CP 经反向隧道 `PullSelfLog` RPC 拉尾部，面板入口在节点页 | 同平台日志 | 同上；也**不是**日志中心的 `node:` 目标（那是该节点上的实例日志） |
+| **实例日志** | 游戏服进程 stdout/stderr、实例日志文件 | Worker 本地**单个受管 VictoriaLogs**（ADR-094/102；180d/100GiB） | CP 经反向隧道查询；浏览器只连 CP | Search / Stats / Fields / Facets / Streams / Tail / Export / 原生 Live | CP 业务库不存日志行；实时流不证明历史完整或全局有序 |
+| **平台（CP 自身）进程日志** | CP slog（含 API 失败响应） | CP 数据根轮转文件 `<data>/var/log/control-plane.log` | 仅平台管理员，`GET /diagnostics/log` | 最多 200 行 / 64 KiB 窗口、窗口内关键字/级别筛选、刷新和原生复制 | 不进 VL；无服务端全历史检索、精确总量、分页、聚合、联邦导出 |
+| **节点（Worker 自身）进程日志** | Worker slog | Worker 数据根轮转文件 `<data>/var/log/worker.log` | 仅平台管理员，CP 经 `PullSelfLog` 拉取 `GET /nodes/:id/diagnostics/log` | 同平台文件窗口；选择具体节点后读取 | 同平台边界；节点离线、旧 RPC 和读取说明显式呈现，不空成功 |
 
 ### 关键语义（容易读错的地方）
 
-- **`node:<id>` ≠ Worker 进程日志**。联邦查询里它指“该节点上各实例的日志”。要看 Worker 自己的日志走节点页的『查看诊断日志』。
+- **目标范围与行来源不同**。`nodeId` / 授权目标 `node:<id>` 是查询资源约束；实际日志行来源由 `log_source_id` 表示。历史静态采集可能产生 `node:<id>/file`，不能据此把 Worker 文件窗口接回 VL；看 Worker 自身当前日志走文件端点。
 - **实例停机 ≠ Worker 停机**。MC 进程停了，Worker 仍在跑、VL 数据仍在，所以停机态照样能回放历史（`StoppedLogsView`）。
-- **平台日志跨重启连续**。rollog 用 `O_APPEND` 打开已有文件，运维 `tail -f` 不断档；并发删文件时由 1s 采样自愈重建 fd。
-- **诊断不是检索**。`/diagnostics/log` 系端点刻意没有关键字检索、时间窗、分页、多目标聚合——需要这些能力请走联邦查询。
+- **平台日志跨重启追加**。rollog 用 `O_APPEND` 打开已有文件，轮转与保留按文件策略执行；并发删文件时由 1s 采样自愈重建 fd，不构成永久历史保证。
+- **文件窗口内筛选 ≠ 全文件检索**。文件端点只接受 `lines`，前端按已加载快照筛选。显示“0 个匹配”不能推断历史无该内容，更早记录需在对应机器查看轮转文件。
 
-### 前端三个视图与站点
+### 前端四类视图
 
-| 视图 | 数据源 | 分页 | 导出 |
+| 视图 | 数据源与边界 | 分页 | 导出 |
 |---|---|---|---|
-| 平台日志 | `/diagnostics/log`（文件尾部） | 无（文件上本就没有） | 禁用 |
-| 节点/实例日志 | `/logs/federation` | 游标 | 有（带覆盖/质量门禁） |
-| 全部日志 | `/logs/federation`（平台管理员） | 游标 | 同上 |
+| 平台日志（管理员） | `/diagnostics/log`，CP 最近文件窗口 | 无历史分页 | 当前筛选后的文本窗口 |
+| 节点日志（管理员） | `/nodes/:id/diagnostics/log`，显式选择 Worker 的最近文件窗口 | 无历史分页 | 当前筛选后的文本窗口 |
+| 实例日志（默认） | 实例 VL 工作台；普通用户仅授权实例，协议仍为 `view=node_instance` | 固定 view + 复合游标，每页 100 行 | 服务端重新核验授权、覆盖和质量的历史导出 |
+| 全部日志（管理员） | CP 尾部 + 最多 4 个在线节点尾部 + 实例 VL 当前页，按时间合并；未知时间保留，离线/超限/失败分别显示 | 汇总不提供历史分页 | 当前可见汇总窗口，附每源边界，不宣称完整历史 |
+
+文件窗口支持 50/100/200 行、级别与关键字筛选；跟随是 3 秒重取尾部，与实例原生 Live 分开。汇总默认文本每源 100 行、实例当前页 100 行；关键词与级别仅筛选已加载汇总，VL 时间范围不被套用为文本全历史条件。窗口导出 NDJSON 首行明确 `complete_history=false`。回看或原生选区期间冻结正文更新，改变范围取消旧请求并隔离迟到结果。
 
 `legacy` 视图（CP `logs` 表的切换前存量）已于 2026-10-29 随表删除而下线，并从 `LOG_VIEWS` 取值域中移除；旧的 `?view=legacy` 深链现按非法值回退默认视图。
+
+### 高级过滤与实例原生流的独立边界
+
+高级 LogsQL 遵循 [ADR-109](adr/109-instance-logs-advanced-query-boundary.md)：`advanced=true&logsQL=…` 与 `keyword` 互斥，两入口同受 8192 UTF-8 字节、引号/分组/半开区间和 filter-only 限制。授权 selector、时间窗、Principal/PermissionScope 与 Query View 独立于用户表达式，OR/源字段/时间表达式只能缩小交集；不把括号检查当成授权。普通用户可在其授权实例使用高级模式，节点/平台文本窗口不提供该入口。
+
+高级整请求上限 32 MiB / 30 秒 / 64 Worker，页面结果最多 1000 行（工作台分页为 100）；`maxBytes/timeoutMs/maxFanout` 只能收紧。整窗导出保留配置闸门。门面/Search/兼容 Tail 可返回 `query_meta`（实际耗时、返回行数、采用的预算）；预算不是实际扫描量，旧 CP 无确认字段时高级前端拒绝假结果。草稿与已应用输入分离，未应用/失败/请求中/旧占位数据禁止导出，取消沿 AbortSignal→HTTP context→Worker→VL 传播。
+
+实例原生 Live 遵循 [ADR-110](adr/110-native-instance-log-tail-stream.md)：
+
+```text
+浏览器 fetch（Bearer header + AbortSignal）
+  ↔ CP GET /logs/federation/live（SSE ready / event / heartbeat / error）
+  ↔ ADR-081 反向隧道：Worker LogTailLive RPC
+  ↔ localhost VL /select/logsql/tail（用户 filter 与授权 extra_filters 独立）
+```
+
+- 会话最长 45 秒或 token 到期，每 2 秒复核权限；进程最多 32 连接、每用户 2、每连接最多 8 Worker。
+- 单连接最多 10000 行 / 8 MiB，事件队列 64 条、单事件 64 KiB、HTTP 写入 deadline 3 秒；慢消费者或预算超限终止，显式错误不伪装成完整尾流。
+- 连接内实例成员固定，新增流/UTC 日可跟随；历史 Worker view/cursor 不传给实时读取。`ready` 不证明全 Worker 支持或历史完整，实时数据不参与历史导出门禁。
+- 10 秒 best-effort 回放可能重复，断线超过窗口可能缺行，不承诺持久 cursor、ExactlyOnce 或跨 Worker 严格全局顺序。`UNSUPPORTED` 可显式轮询回退；撤权停止；会话到期/暂时不可用可有界退避重连。
+- `api/logLive.ts` 负责 Bearer 刷新、UTF-8 分块 SSE 解码与取消；页面控制回看、选区、有限缓冲和恢复，不接管浏览器复制。新页面的 Chromium 联合验收、部署与长稳仍单独记证。
 
 ### 代码入口索引
 
@@ -1506,12 +1545,18 @@ apps/control-plane/process_log.go   # installPlatformLogger / platformLogPath
 apps/worker/process_log.go          # installProcessLogger / ProcessLogPath
 internal/controlplane/router/diagnostics_log.go   # GET /diagnostics/log
 internal/controlplane/router/node_diagnostics.go  # GET /nodes/:id/diagnostics/log（经 PullSelfLog）
-internal/controlplane/logcoord/     # 联邦协调：扇出、合并、游标分页、覆盖/质量聚合
-internal/worker/logs/               # 采集 / 归一化 / 事件体 / Catalog / 保留 / 归档 / 查询 / VL 运行时
-apps/control-plane-web/src/pages/LogsPage.tsx      # 日志中心
-apps/control-plane-web/src/components/console/StoppedLogsView.tsx  # 停机实例历史回放
-apps/control-plane-web/src/lib/console-history.ts  # 控制台上漂（游标翻页）
-apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断日志 Modal
+internal/controlplane/logcoord/     # 历史联邦与有界原生流协调
+internal/controlplane/router/log_query_{filter,budget}.go # 高级过滤边界、预算、访问记录
+internal/controlplane/router/log_live_stream.go  # 认证 SSE、权限复核、连接与写入上限
+internal/worker/logs/               # 采集 / 归一化 / Catalog / 查询 / 单 VL 运行时
+internal/worker/logs/query/vlrange/live_stream.go # 原生 VL tail、独立 scope 与逐行源复核
+apps/control-plane-web/src/api/logLive.ts        # Bearer fetch、SSE 解码与取消
+apps/control-plane-web/src/pages/LogsPage.tsx    # 固定视口日志中心与来源分流
+apps/control-plane-web/src/components/logs/TextLogWorkbench.tsx # CP/Worker 有界文件窗口
+apps/control-plane-web/src/components/logs/LogFieldExplorer.tsx # 按需字段值与数值分析
+apps/control-plane-web/src/components/console/StoppedLogsView.tsx # 停机实例历史回放
+apps/control-plane-web/src/lib/console/console-history.ts # 控制台上漂（游标翻页）
+apps/control-plane-web/src/components/logs/DiagnosticsLogDialog.tsx # 节点诊断日志浮层
 ```
 
 ### 实例日志的端到端数据流（`internal/worker/logs/` 跨包）
@@ -1673,8 +1718,7 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 ### 已知遗留（不影响使用，但别当成已完成）
 
 - ~~rollog 的轮转阈值与保留档数仍是**编译期默认**（1 GiB / 5 档），未配置化；要改需重新编译。~~（2026-11-07 已消）`log.max_size_mb` / `log.max_backups` / `log.max_age_days` / `log.compress` 已开放，零值回退默认；同时补齐**按天保留**（此前只有份数上限，份数在不同负载下代表的时长差很多）。
-- 联邦 tail 的 `coverage.complete` 现为 `true`（实时流没有“完整边界”这回事，且它不可分页/导出）；
-  若后续要给 tail 加“覆盖已追平”的语义，需在契约里单独定义，**不要**再次借用 Search 的枚举状态。
+- 历史 JSON Tail 的 coverage 与实时订阅状态不相互替代。新 `/live` 不声称历史覆盖完整；`ready/heartbeat` 不证明无漏，10 秒回放与有限缓冲不构成持久恢复保证。联合浏览器与长稳验证须另记，不能据旧 Tail 的 `coverage.complete=true` 宣称新流完整。
 
 ## 11. 配置
 
@@ -1688,7 +1732,7 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 
 删除该表的理由（不是“换个介质”）：它与业务数据（用户/权限/实例）同库——备份被日志撑大、VACUUM 被日志行拖住、库损坏会连累登录与实例管理；检索是 `message LIKE '%kw%'` 全表扫（生产 109 万行实测）；保留靠“先归档 NDJSON、再 DELETE 行”维持，而 DELETE 大表不回收空间。
 
-两处**能力降级是刻意的**（不伪装成能力）：平台日志视图不再提供分页、总条数、任意时间窗——文件上做不到，也不该假装能；要看更早的走面板给出的 `grep` 命令。联邦视图仍保有 Search/Stats/Facets/Tail/Export。
+**文件与实例检索的边界是刻意的**：平台/节点文件窗口无历史分页、精确总量、任意时间窗或数值聚合；筛选只作用于已加载的最多 200 行 / 64 KiB，更早记录到相应机器查轮转文件。实例联邦保有 Search/Stats/Fields/Facets/Streams/Tail/Export，并提供有独立预算的原生 Live；两类来源不混为一个“全部日志总量”。
 
 轮转形态：进程内 `rename`（O(1)、零字节复制）→ 后台异步 gzip → 保留 `MaxBackups` 个档。这取代了旧形态下的 logrotate `copytruncate`（每次轮转要读写整个文件；2026-10-27 现场 35GB 就是该风险的实证）。**轮转只有这一处实现**：项目不再随包分发外部 logrotate 片段，也没有第二套阈值或外部兜底档需要与之对齐。
 
@@ -1706,13 +1750,12 @@ log_export:
 
 导出（`POST /logs/federation/export`）是「单次请求逐页读全量并在 CP 内存里物化 NDJSON」的操作，上限即为此设。**请求参数只能在其内收紧**（`limit` 取服务端配置与请求值的较小者），放宽一律走本配置——否则任意调用方传大 `limit` 即可把有界导出变成无界资源入口。默认值与修复前的编译期常量一字不差，故零配置部署行为不变；超默认上限的部署须显式调大，否则导出会被判 `budget_exceeded` 而不产出附件（阻断报告的 `incomplete_reasons` 会给出 `row_limit_exceeded` / `byte_budget_exceeded` 精确归因，前端据此提示「缩小时间范围或调大配置」）。负数或小于 100 的行数上限在启动期 fail-fast（`config.ValidateLogExportConfig`）。
 
+**控制面入口限流（可配置 + 分片）**：`/api/v1` 按「路由分类 × 客户端 IP」令牌桶限流，分类为只读（GET/HEAD/OPTIONS）、写操作（其余方法）、日志查询（`/api/v1/logs*` 前缀优先命中），另有跨分类的每 IP 全局上限；每 IP 实际放行量 = min(全局, 各分类)。判定顺序先全局再分类，被分类拒绝的请求同样已扣全局令牌。预算由 `internal/platform/trafficlimit` 定义（默认值、边界、配对约束单一事实源），可由平台设置 `traffic.rate_limit.*`（四组 × 速率/容量共 8 键）覆盖，保存即热更新、无需重启；速率与容量须同时为正或同时为 0（该组不限流），全局组不允许关闭，非法值被写路径拒绝、历史脏值由 Normalize 回落默认。并发模型为 64 分片独立加锁 + 短临界区（锁内只做取桶/补令牌/扣令牌，过期桶按片惰性清理），规格为不可变快照原子替换，热更新不重置已有桶；同 key 判定语义不变，不同客户端 IP 不再争用同一把锁。429 统一带 `Retry-After`。
+
 **API 错误统一落平台日志（FR-320）**：全局 gin 中间件 `middleware.ErrorLog` 把 API 失败响应（4xx 业务拒绝=warn、5xx=error，401/404/429 噪音跳过）连同路径/状态码/响应体/用户/IP slog 化，经进程 slog 直接写入自轮转平台日志文件（`<data>/var/log/control-plane.log`）——`/logs` 页的「平台日志」视图读它的尾部即可追查「某操作为什么报错」。此前错误只回 HTTP 响应，平台日志恒空、失败随连接断开进黑洞（FR-319 真机事故的观测性根因）。
 
-**日志视图分流（2026-10-29 重构后）**：`/logs` 与 `/logs/export` / `/logs/legacy` / `/logs/cutover` 均已随 CP `logs` 表删除而下线。现在只有两条来源：
-  - `platform` 视图 → 进程日志文件尾部（`GET /diagnostics/log`，最近 N 行，无分页/总数/时间窗）；
-  - `node_instance` / `all` 视图 → VL 联邦（`GET /logs/federation`，Search/Stats/Facets/Tail/Export）。
-  - `legacy` 视图已于本次一并从 `LOG_VIEWS` 取值域删除（入口按钮与菜单项同时移除）——留着它只会得到一个「点了没反应」的死入口：视图名还在，数据源已不存在。旧的 `?view=legacy` 深链现在按非法值回退默认视图。
-  停机实例历史与客户端底部预览同样改走联邦——**实例停机 ≠ Worker 停机**，VL 数据仍在。
+**日志视图分流**：旧 API `/logs`、`/logs/export`、`/logs/legacy`、`/logs/cutover` 随 CP `logs` 表下线，前端 `/logs` 工作台仍保留。默认 `node_instance` 为实例 VL 查询；平台视图读 CP 文件，管理员全部视图按来源在实例 VL、Worker 文件、CP 文件之间切换，详见 §10.1，不进行跨三类源的全量统计或导出。旧 `?view=legacy` 深链回退默认实例视图。
+停机实例历史与客户端预览仍走 VL 联邦——**实例停机 ≠ Worker 停机**，保留期内 VL 数据仍可查询。
 
 ### 11.1 项目自包含数据根（FHS 布局，ADR-010）
 
@@ -1784,7 +1827,7 @@ proxy:
 **生产**: 多节点部署，Control Plane 一个 + Worker Node 多个
 **Docker**: `Dockerfile.control-plane` + `Dockerfile.worker` + `docker-compose.yml`
 
-### 12.1 构建与发布管线（GitHub Actions，FR-173，见 ADR-036 / ADR-074）
+### 12.1 构建与发布管线（GitHub Actions，FR-173，见 ADR-036 / ADR-108）
 
 `.github/workflows/release.yml` 固定使用 Go 1.26.2、Node.js 22 与 JDK21，当前 job 链路为 `metadata → prepare-embeds → test → build → smoke → release`：
 
@@ -1795,7 +1838,7 @@ proxy:
 - **smoke**：四项矩阵逐一验证最终产物——两个 Linux 二进制在 `ubuntu-24.04` 原生执行，两个 Windows `.exe` 在 `windows-latest` 原生执行；`--version` 必须退出码 0、stdout 严格等于 metadata 版本且 stderr 为空。`release` 直接依赖全部 smoke 成功。全部 runner 显式锁定版本，不用 `-latest` 浮动标签。
 - **release**：汇总 4 个二进制并生成 `checksums.txt`（ADR-036 命名 / sha256 契约），说明由 `gh release create --generate-notes` 自动生成（只统计相邻两 tag 间合并的 PR，故必须「先合 PR 到主干、后打 tag」）。唯一发布动作是 push tag `vX.Y.Z`；`release.yml` 不监听主干 push 与 `pull_request`（非 tag ref 上源码版本解析不出合法版本），主干与 PR 的构建校验由 `ci.yml` 承担，`latest` 滚动预发布渠道已移除。
 
-ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布前 smoke，不重写其历史；ADR-036 的产物命名、校验和 stable/prerelease 渠道契约继续生效。当前实现尚未按用户选择推送远端，GitHub-hosted runner、artifact 传递、权限与实际 Release 创建仍为 **Actions 待验**。
+ADR-108 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布前 smoke，不重写其历史；ADR-036 的产物命名、校验和 stable/prerelease 渠道契约继续生效。当前实现尚未按用户选择推送远端，GitHub-hosted runner、artifact 传递、权限与实际 Release 创建仍为 **Actions 待验**。
 
 ### 12.2 SSH 推送式远程部署（FR-277 / FR-410，见 ADR-063 / ADR-084）
 
@@ -1899,4 +1942,3 @@ ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布�
 - **影响**：race 检测在**权限与实例端点所在的这个最大包**上长期实际未被执行——正是最需要它发现竞态的地方。
 - **当前做法**：门禁经 `scripts/go-test-race.sh` 分两组执行——`core`（除 router 外的全部包，默认 10m 时限）与 `router`（单独放宽时限，`RACE_TIMEOUT` 默认 60m）；`make test` / `make test-cover` / `task go:race` 均指向该脚本。**非 race 侧同口径**：`scripts/go-test.sh` 分同样的两组（`ROUTER_TIMEOUT` 默认 25m），`make test-plain` 指向它——release 门禁的 `go test ./...` 无显式时限，在慢机/满载机器上会被上述包级超时掩盖真实结论。
 - **后续收敛方向**（按收益排序）：① 给该包做**共享迁移**——`TestMain` 建一个模板 DB 文件，`setupTestDB` 改为文件拷贝（比逐用例 `AutoMigrate` 快两个数量级），这是最大杠杆；② 把 router 包的 race 拆为 CI 独立 job 并放宽超时。二者都属独立的重构/CI 改动，不在单次修复范围内。
-

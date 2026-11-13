@@ -3,7 +3,7 @@
 > 状态：**已交付@v0.24.0**（依既有实现、回归与真机验收归真；本次未新增运行）
 > 已验范围：2026-10-15 BungeeCord 采集闭环、§5 规则/覆盖/兼容/持久化回归，以及 §6 的 2026-10-20 BungeeCord 轮转、Waterfall/Velocity 真实产物核实；不外推性能或全部故障覆盖，§4 原计划清单不追写为新执行记录。
 > 关联 PRD：**FR-502**　·　依赖：FR-474（Worker 日志采集与持久化通道）
-> 关联：`docs/specs/worker-log-acquisition/spec.md`（采集底座，本项为其路径发现机制的增强）
+> 关联：原 FR-474 采集规格（**已归档删除**）；当前采集底座见 [日志说明书](../../LOGS.md)
 > 动因：2026-10-15 生产实测——`bungee-main` 代理日志在平台**完全缺失**（VL 0 条），而 Paper 服正常（2465 条/24h）
 >
 > **实现落点**：`internal/worker/logs/ingest/rules.go`（规则表）+ `instances.go`（路径解析与源重置）
@@ -107,7 +107,7 @@ role == proxy && coreJar 含 "velocity"    → velocity
 > **字段号选定依据（2026-10-15 实测核对）**：`CreateInstanceRequest` 当前已占用
 > **1–20、22、23、24**（22/23/24 为日志采集增量字段 `log_target_id`/`log_acquire_mode`/
 > `log_source_generation`）。**21 号在本 message 内空缺**，但同文件其他 message
-> （`worker.proto:512`、`1137`）在用 21，且 21 曾出现在提交 `dcb00d56` 的历史中——
+> （`worker.proto:512`、`1137`）在用 21，且 21 曾出现在更早一批提交的历史中——
 > 为规避历史删除字段的 wire 兼容风险，**不复用 21，改用 25/26**。
 > 实现前须再核对一次 `proto/worker.proto` 当前实际占用。
 

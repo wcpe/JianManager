@@ -19,7 +19,7 @@ type defaultAlertRuleSeed struct {
 	DurationSec int
 }
 
-// defaultAlertRuleSeeds 是 CP 首次启动时预置的推荐规则（FR-485）。
+// defaultAlertRuleSeeds 是 CP 首次启动时预置的推荐规则。
 //
 // # 为什么预置（而不是让用户从零建）
 //
@@ -86,7 +86,7 @@ var defaultAlertRuleSeeds = []defaultAlertRuleSeed{
 	},
 }
 
-// seedDefaultAlertRules 幂等地预置推荐告警规则（FR-485）。
+// seedDefaultAlertRules 幂等地预置推荐告警规则。
 //
 // 幂等依据：按 UUID 判断是否已存在。已有同 UUID 的规则（无论用户后来怎么改阈值/启用）
 // **一律不覆盖**——那可能是用户已经调过的值，覆盖等于把他们的配置偷换回默认。

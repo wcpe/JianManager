@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// fakeLifecycleWorker 假 Worker（FR-314 后启动链路带同步预检）：预检放行、注册/启动即成功，
+// fakeLifecycleWorker 假 Worker（后启动链路带同步预检）：预检放行、注册/启动即成功，
 // 使生命周期用例聚焦路由层状态转换语义而非预检分支（预检分支见 service 层与下方 409 用例）。
 type fakeLifecycleWorker struct {
 	workerpb.WorkerServiceClient
@@ -26,7 +26,7 @@ func (f *fakeLifecycleWorker) PreflightStartInstance(ctx context.Context, in *wo
 
 func (f *fakeLifecycleWorker) CreateInstance(ctx context.Context, in *workerpb.CreateInstanceRequest, opts ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
 	// 幂等成功语义与真实 Worker 一致（已注册实例重注册也返回成功）：预检链路把「重注册失败」
-	// 升格为预检失败（ADR-050）后，零值响应（Success=false）会被误判为真实失败而 422。
+	// 升格为预检失败后，零值响应（Success=false）会被误判为真实失败而 422。
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
@@ -62,7 +62,7 @@ func TestInstance_Delete_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-// TestInstance_Start_StoppedToStarting 停止状态的实例可启动（预检放行经 fake Worker，FR-314）。
+// TestInstance_Start_StoppedToStarting 停止状态的实例可启动（预检放行经 fake Worker）。
 func TestInstance_Start_StoppedToStarting(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
@@ -118,7 +118,7 @@ func TestInstance_Start_AlreadyStarting(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 }
 
-// TestInstance_Start_NodeOffline 节点未连接时启动被同步预检拦截，返回 409 NODE_OFFLINE（FR-314）。
+// TestInstance_Start_NodeOffline 节点未连接时启动被同步预检拦截，返回 409 NODE_OFFLINE。
 func TestInstance_Start_NodeOffline(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db) // 空连接池 = 节点未连接

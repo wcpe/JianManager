@@ -31,13 +31,13 @@ const (
 // ValidNamespace 报告 ns 是否为受支持的命名空间。
 func ValidNamespace(ns Namespace) bool { return ns == NamespaceHot }
 
-// 默认监听端口（与 FR-473 C 组 supervisor-equivalent smoke 一致，可在 Options 覆盖）。
+// 默认监听端口（与C 组 supervisor-equivalent smoke 一致，可在 Options 覆盖）。
 const (
 	DefaultPortHot = 19441
 )
 
 // DefaultHotCacheBytes 是 HOT 实例 -memory.allowedBytes 默认模板（512MiB）。
-// 依据 FR-473 §6.5/§7 与 FR-476 §3.1：512MiB 只代表 HOT cache 模板，不等于 RSS 上限，
+// 依据§6.5/§7 与§3.1：512MiB 只代表 HOT cache 模板，不等于 RSS 上限，
 // 也不是 Worker 日志总预算。
 const DefaultHotCacheBytes int64 = 512 * 1024 * 1024
 

@@ -126,3 +126,22 @@
 - **`memberCount` 口径修正**：JOIN 后悬空成员（实例已删但 network_members 残留）不再计入，与详情页 `Get` 的跳过口径（`network.go:127-128`）对齐；数字可能比现值小——属修正非回归，CHANGELOG 注明。
 - **wheel 缩放与页面滚动冲突**：SVG 容器内 wheel 需 `preventDefault`，可能与整页滚动手感冲突；采用「Ctrl+滚轮缩放 / 裸滚轮不拦截」或「悬停即拦截」两种模式之一，真机走查定。
 - **权限面**：`/topology` 限平台管理员（与现有注册/群组读取一致）。若后续要求组管理员看到其可访问实例的子拓扑，需按 AccessibleInstanceIDs 裁剪——另立 FR。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-335 群组拓扑规模化（feat，增强 FR-145，验收分诊
+
+**需求补充**：拓扑页每 proxy 拉 registration + 列表页每 network 拉详情双 N+1；SVG 纵向线性堆叠超高无缩放/筛选）：后端新增拓扑聚合端点（一次返回全部 proxy 及注册关系）+ NetworkSummary 内联成员健康计数；前端拓扑单查询消费 + SVG 视口控件（pan/zoom/适应视图/搜索/状态筛选/分层布局）→ `docs/specs/topology-scale/spec.md`
+
+**交付状态**：✅ 已交付@v0.17.0
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-335~340（2026-07-15 验收分诊批二：规模化与全栈补缺）
+
+FR-335~340（2026-07-15 验收分诊批二：规模化与全栈补缺）→ FR-335 `docs/specs/topology-scale/`、FR-336 `docs/specs/users-search-pagination/`、FR-337 `docs/specs/tasks-pagination/`、FR-338 `docs/specs/backup-storage-update/`、FR-339 `docs/specs/console-players-backup-segments/`、FR-340 `docs/specs/metrics-batch-series/`；随批一并做的前端消费 gap：节点页聚合（gap:FR-270）/实例列表可供性（gap:FR-235）/超级工作台虚拟化（gap:FR-167）/备份实例选择器 Combobox/端口表虚拟化
+

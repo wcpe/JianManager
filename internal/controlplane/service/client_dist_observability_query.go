@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ObsSeriesPoint 观测时序的一个小时桶点（FR-217）。
+// ObsSeriesPoint 观测时序的一个小时桶点。
 type ObsSeriesPoint struct {
 	TS               time.Time `json:"ts"`
 	ManifestPulls    int64     `json:"manifestPulls"`
@@ -22,7 +22,7 @@ type ObsSeriesPoint struct {
 	UpdateError      int64     `json:"updateError"`
 }
 
-// ObsSummary 区间内跨桶汇总标量 + 派生率（FR-217）。
+// ObsSummary 区间内跨桶汇总标量 + 派生率。
 type ObsSummary struct {
 	ManifestPulls    int64   `json:"manifestPulls"`
 	ArtifactPulls    int64   `json:"artifactPulls"`
@@ -35,7 +35,7 @@ type ObsSummary struct {
 	SuccessRate      float64 `json:"successRate"`
 	FailStaticRate   float64 `json:"failStaticRate"`
 	RollbackRate     float64 `json:"rollbackRate"`
-	// ActiveMachines 区间「活跃客户端」；ActiveMachinesExact 标明是否为精确去重独立数（ADR-049 §4）。
+	// ActiveMachines 区间「活跃客户端」；ActiveMachinesExact 标明是否为精确去重独立数。
 	ActiveMachines      int64 `json:"activeMachines"`
 	ActiveMachinesExact bool  `json:"activeMachinesExact"`
 }
@@ -58,7 +58,7 @@ type ObsLagCount struct {
 	Count int64 `json:"count"`
 }
 
-// ObservabilityResult 观测查询复合结果（FR-217）。
+// ObservabilityResult 观测查询复合结果。
 type ObservabilityResult struct {
 	ChannelID    string             `json:"channelId"`
 	From         time.Time          `json:"from"`
@@ -76,7 +76,7 @@ type ObservabilityQuery struct {
 	From, To  time.Time
 }
 
-// Query 据目标频道与区间返回观测时序 + 区间分布聚合 + 汇总标量（FR-217）。
+// Query 据目标频道与区间返回观测时序 + 区间分布聚合 + 汇总标量。
 func (s *ClientDistObservabilityService) Query(q ObservabilityQuery) (*ObservabilityResult, error) {
 	return s.queryAt(time.Now().UTC(), q)
 }
@@ -148,7 +148,7 @@ func (s *ClientDistObservabilityService) queryAt(now time.Time, q ObservabilityQ
 		sum.FailStaticRate = float64(sum.UpdateFailStatic) / float64(sum.UpdateTotal)
 		sum.RollbackRate = float64(sum.UpdateRolledBack) / float64(sum.UpdateTotal)
 	}
-	// 活跃客户端独立数（ADR-049 §4）：区间完全落在明细保留窗内 → 回查明细做区间级精确去重；
+	// 活跃客户端独立数：区间完全落在明细保留窗内 → 回查明细做区间级精确去重；
 	// 否则只能给各桶 active_machines 求和（人次近似上界）。
 	exactActive, exact, err := s.activeMachinesExact(now, q.ChannelID, from, to)
 	if err != nil {

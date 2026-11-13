@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 统一 Runtime 视图行（FR-298）：node_jdks(type=jdk) + node_runtimes 读侧拼装。 */
+/** 统一 Runtime 视图行：node_jdks(type=jdk) + node_runtimes 读侧拼装。 */
 export interface NodeRuntimeItem {
   id: number
   nodeId: number
@@ -17,7 +17,7 @@ export interface NodeRuntimeItem {
   createdAt: string
 }
 
-/** 一条扫描发现的运行时候选（FR-298）。 */
+/** 一条扫描发现的运行时候选。 */
 export interface RuntimeCandidate {
   type: string
   vendor: string
@@ -77,7 +77,7 @@ export function useRegisterRuntime(nodeId: number) {
   })
 }
 
-/** 安装请求体（POST /nodes/:id/runtimes/install，FR-299）：首批仅 type=nodejs。 */
+/** 安装请求体（POST /nodes/:id/runtimes/install）：首批仅 type=nodejs。 */
 export interface InstallRuntimeBody {
   type: string
   major: number
@@ -90,7 +90,7 @@ export interface InstallRuntimeResult {
   taskId: string
 }
 
-/** POST /nodes/:id/runtimes/install — 异步一键安装 Node.js（202+taskId，进度在任务中心，FR-299）。 */
+/** POST /nodes/:id/runtimes/install — 异步一键安装 Node.js（202+taskId，进度在任务中心）。 */
 export function useInstallRuntime(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({

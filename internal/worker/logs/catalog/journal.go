@@ -341,7 +341,7 @@ func NewJournalWithStore(store Store) (*JournalWithStore, error) {
 		if j.leases.degraded {
 			// **降级而不是拒绝**（见 journal.go 顶部的取舍说明）：
 			// 租约是短生命周期的运行时状态，丢了只是旧视图失效，不该阻断查询。
-			slog.Warn("journal 存储未提供租约旁路文件：查询租约退化为进程内内存态"+
+			slog.Warn("journal 存储未提供租约旁路文件：查询租约退化为进程内内存态" +
 				"（重启后旧视图 ID 自然失效，不影响查询可用性）")
 		}
 	}

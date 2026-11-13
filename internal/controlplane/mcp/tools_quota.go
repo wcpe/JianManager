@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-467 运行期配额：读配额与实时用量（含强制状态）。
+// 运行期配额：读配额与实时用量（含强制状态）。
 func init() {
 	registerToolSpecs(
 		toolSpec{

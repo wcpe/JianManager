@@ -9,7 +9,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.Properties;
 
 /**
- * updater-core 自更新选择状态（FR-091），落 {@code <gameDir>/.jm-updater/core/state.properties}。
+ * updater-core 自更新选择状态，落 {@code <gameDir>/.jm-updater/core/state.properties}。
  *
  * <p><b>格式即 wedge↔core 的契约</b>：用 {@link Properties}（JDK 原生，两模块各自读写、零 JSON 依赖）。
  * core 侧仅 <em>暂存</em> pending（下载+selftest 通过的新 core）；selected/prev 的 promote/rollback 由
@@ -54,7 +54,7 @@ final class CoreSelectStore {
         return longProp(K_SELECTED_VERSION, 0);
     }
 
-    /** 曾 trial 失败回退的最高 core 版本（wedge 回退时记录）；用于跳过重暂存同一坏版本，防 boot-loop（FR-091）。 */
+    /** 曾 trial 失败回退的最高 core 版本（wedge 回退时记录）；用于跳过重暂存同一坏版本，防 boot-loop。 */
     long failedVersion() {
         return longProp(K_FAILED_VERSION, 0);
     }
@@ -96,7 +96,7 @@ final class CoreSelectStore {
         Files.createDirectories(file.getParent());
         Path tmp = file.resolveSibling("state.properties.tmp");
         try (OutputStream out = Files.newOutputStream(tmp)) {
-            props.store(out, "jm-updater core self-update state (FR-091)");
+            props.store(out, "jm-updater core self-update state");
         }
         try {
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);

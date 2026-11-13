@@ -22,10 +22,10 @@ func NewUserHandler(userSvc *service.UserService) *UserHandler {
 	return &UserHandler{userSvc: userSvc, invitationSvc: userSvc.InvitationService()}
 }
 
-// userListMaxLimit 分页信封形态单次返回上限（FR-336）。
+// userListMaxLimit 分页信封形态单次返回上限。
 const userListMaxLimit = 500
 
-// List 用户列表（FR-336 增强 FR-002）。可选 q（用户名模糊）+ limit/offset 分页；
+// List 用户列表（增强）。可选 q（用户名模糊）+ limit/offset 分页；
 // 以「请求是否携带 limit」分流响应形态：带则返回 {items,total,limit,offset} 信封，
 // 缺则保持旧裸数组兼容（q 两形态均生效，旧调用方零改动）。
 func (h *UserHandler) List(c *gin.Context) {
@@ -135,7 +135,7 @@ func (h *UserHandler) Get(c *gin.Context) {
 type updateUserRequest struct {
 	Role   *model.UserRole   `json:"role"`
 	Status *model.UserStatus `json:"status"`
-	// Password 非空时重置该用户登录密码；长度下限 8 与初始化/创建一致（FR-156）。
+	// Password 非空时重置该用户登录密码；长度下限 8 与初始化/创建一致。
 	Password *string `json:"password" binding:"omitempty,min=8"`
 }
 

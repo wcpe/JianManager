@@ -852,7 +852,7 @@ func (s *ClientDistSecurityService) securityTelemetryLogs(f ClientDistSecurityLo
 			"os": r.OS, "arch": r.Arch, "javaVersion": r.JavaVersion, "javaVendor": r.JavaVendor,
 			"launcher": r.Launcher, "locale": r.Locale, "timezone": r.Timezone, "memoryTier": r.MemoryTier,
 			"durationMs": r.DurationMs, "bootSuccess": r.BootSuccess,
-			// FR-426 增补：安装 ID 与脱敏后的完整启动参数（--username 即玩家登录名）。
+			// 增补：安装 ID 与脱敏后的完整启动参数（--username 即玩家登录名）。
 			"installId": r.InstallID, "launchArgs": r.LaunchArgs,
 		}})
 	}

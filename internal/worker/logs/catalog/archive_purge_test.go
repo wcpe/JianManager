@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 本文件守「归档对象自身的回收」的**权威态**语义（FR-501 的最后一块）。
+// 本文件守「归档对象自身的回收」的**权威态**语义。
 //
 // 每条用例都咬住一个具体的说谎形态——这个功能只有两种错法，两种都很严重：
 //  ① 删了却没说删（记录仍称「归档里有」，查询面把用户引向一条必然失败的恢复路径）；
@@ -24,10 +24,10 @@ func purgeArchivedRecord(t *testing.T) (*Catalog, PartitionKey) {
 	key := purgeKey()
 	rec := NewStableRecord(key, OwnerHot, 1, "20260601")
 	rec.PublishedProjection = &PublishedProjection{
-		ManifestVersion:  "manifest-hot",
-		CoverageComplete: true,
-		QueryLocationDirID: "20260601",
-		QueryGeneration:    1,
+		ManifestVersion:      "manifest-hot",
+		CoverageComplete:     true,
+		QueryLocationDirID:   "20260601",
+		QueryGeneration:      1,
 		ProjectionGeneration: "p-hot",
 	}
 	ev := ArchiveEvidence{

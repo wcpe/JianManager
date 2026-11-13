@@ -8,25 +8,25 @@ import {
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { formatRelativeTime } from '@/lib/relative-time'
+import { formatRelativeTime } from '@/lib/shared/relative-time'
 import {
   qqGatewayFatalHintKey,
   qqGatewayLevel,
   qqGatewayStatusKey,
   shortGroupOpenid,
-} from './alert-helpers'
+} from '@/lib/alerts/alert-helpers'
 
 /** 折叠区里最多列几个群——超过部分只报总数（后端默认一页 20 条，全展开会把对话框撞满）。 */
 const GROUP_PREVIEW_LIMIT = 8
 
 /**
- * QQ 接入状态只读观测区（FR-495）。
+ * QQ 接入状态只读观测区。
  *
  * 为什么需要它：`qq_discovered_groups` 在落库、网关在连、`GET /qq/groups` 有数据，但控制台上
  * **什么也看不见**。一旦网关掉线（`1<<25` 权限失效 4014、会话失效 4006），运维只能翻日志。
  * 本组件把两个现成端点接上，让「网关到底连没连、机器人进了哪些群」在通道配置页一眼可查。
  *
- * 为什么是**只读**：群主动消息被平台拒（40034105，见 FR-494 spec §6），恢复 `targetType=group`
+ * 为什么是**只读**：群主动消息被平台拒（40034105，见 spec §6），恢复 `targetType=group`
  * 选项等于给运维一个用不了的功能。所以这里只展示状态，不提供任何群选择入口、不支持手工填
  * `group_openid`——观测是纯收益，建群通道是纯陷阱。
  *

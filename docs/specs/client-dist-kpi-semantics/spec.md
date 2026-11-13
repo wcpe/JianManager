@@ -100,3 +100,16 @@ download trend         →  stats.downloads（按日）与监控页 series 并�
 
 - `/client-dist/stats` 的 `successRate` 与 observability 的 `successRate` 历史实现若分叉，以 **observability + 本字典** 为准，并在 stats 回退路径加脚注或逐步废弃 stats 率字段展示。
 - 监控页 `toApiRange` 将 1h/6h 映射为 24h，与频道 Tab 的 7/30/90 不完全同一选择器——本 FR 对齐**语义**，不强行统一选择器控件（控件统一可归 FR-359）。
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-356~361（客户端分发安全/遥测/统计闭环 2026-07-21：KPI 口径统一 + 统计监控加厚钻取 + 安全研判处置 + 跨页深链 + updater-core 遥测隐私字段 + CSV 导出；允许新聚合 API/必要 schema；**不做** 告警联动/CDN 多节点防护/重写安全状态机；计划见 `.tmp/brainstorm-client-dist-obs-security-loop-2026-07-21.md`）
+
+FR-356~361（客户端分发安全/遥测/统计闭环 2026-07-21：KPI 口径统一 + 统计监控加厚钻取 + 安全研判处置 + 跨页深链 + updater-core 遥测隐私字段 + CSV 导出；允许新聚合 API/必要 schema；**不做** 告警联动/CDN 多节点防护/重写安全状态机；计划见 `.tmp/brainstorm-client-dist-obs-security-loop-2026-07-21.md`）→ FR-356 `docs/specs/client-dist-kpi-semantics/spec.md`；FR-357 `docs/specs/client-dist-stats-monitor-enrich/spec.md`；FR-358 `docs/specs/client-dist-security-ops-loop/spec.md`；FR-359 免 spec；FR-360 `docs/specs/client-telemetry-enrich-privacy/spec.md`；FR-361 `docs/specs/client-dist-csv-export/spec.md`（均已交付@v0.19.0）
+
+### FR-356~361（客户端分发安全/遥测/统计闭环 2026-07-21…
+
+FR-356~361（客户端分发安全/遥测/统计闭环 2026-07-21：KPI 口径统一 + 统计监控加厚钻取 + 安全研判处置 + 跨页深链 + updater-core 遥测隐私字段 + CSV 导出；允许新聚合 API/必要 schema；**不做** 告警联动/CDN 多节点防护/重写安全状态机；计划见 `.tmp/brainstorm-client-dist-obs-security-loop-2026-07-21.md`） → `docs/specs/client-dist-kpi-semantics/spec.md`
+

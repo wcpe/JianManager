@@ -22,7 +22,7 @@ func killProcessTree(cmd *exec.Cmd) {
 	}
 }
 
-// KillPIDTree 按 PID 用 taskkill /T /F 递归终止整棵进程树（FR-325 接管兜底：
+// KillPIDTree 按 PID 用 taskkill /T /F 递归终止整棵进程树（接管兜底：
 // 只有 PID 记录、无 *exec.Cmd 句柄），与 killProcessTree 同源。
 func KillPIDTree(pid int) error {
 	if pid <= 0 {

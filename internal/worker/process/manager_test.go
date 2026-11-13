@@ -82,7 +82,7 @@ func TestBackoffDelay(t *testing.T) {
 }
 
 // TestNewStrategy_Routing 验证 Manager 按 ProcessType 路由到正确策略。
-// direct → *directStrategy；daemon → *daemonStrategy；docker → *dockerStrategy（ADR-019）；rcon/未知 → ErrNotImplemented。
+// direct → *directStrategy；daemon → *daemonStrategy；docker → *dockerStrategy；rcon/未知 → ErrNotImplemented。
 func TestNewStrategy_Routing(t *testing.T) {
 	m := NewManager(t.TempDir())
 
@@ -131,7 +131,7 @@ func TestNewStrategy_Routing(t *testing.T) {
 }
 
 // TestManager_DockerStartWithoutImageFails docker 策略缺镜像名时启动失败并置 CRASHED。
-// docker 模式已落地（ADR-019），但未提供 image 时无法创建容器，按启动失败处理。
+// docker 模式已落地，但未提供 image 时无法创建容器，按启动失败处理。
 // 注：完整的 docker 生命周期（拉镜像/创建/attach/停止）经注入 fake 客户端在 docker_test.go 覆盖。
 func TestManager_DockerStartWithoutImageFails(t *testing.T) {
 	m := NewManager(t.TempDir())

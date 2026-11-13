@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
@@ -180,8 +179,9 @@ func TestWiringFixedClientsRecoverFromDisabledAndFailure(t *testing.T) {
 		_, readErr = clients.Ranges.Search(context.Background(), rng, queryArgs)
 		require.Error(t, readErr)
 	}
+	// 每次成功 Search 由投影查询 + 有界字段 hydration 两阶段组成；停止期间的查询仍不应触网。
 	require.Equal(t, 1, transport.inserts)
-	require.Equal(t, 3, transport.queries)
+	require.Equal(t, 6, transport.queries)
 }
 
 // TestWiringHealthFailureDoesNotReplaceClientsAndIsNotPublication 健康恢复不伪造Catalog发布。
@@ -206,34 +206,6 @@ func TestWiringHealthFailureDoesNotReplaceClientsAndIsNotPublication(t *testing.
 	snapshots, err := cat.SnapshotAndLease(catalog.QuerySnapshotRequest{ViewID: viewID, Keys: []catalog.PartitionKey{key}, TTL: time.Minute})
 	require.NoError(t, err)
 	require.Empty(t, snapshots, "没有可发布投影时不能因HTTP健康登记可读快照")
-}
-
-type wiringPublisher struct{ calls int }
-
-func (p *wiringPublisher) Publish(context.Context, archive.PartitionKey, []archive.ArchivedEvent, string) error {
-	p.calls++
-	return nil
-}
-
-// TestWiringRehydratePublisherGuardedWithoutReassembly 已装配的回灌出口在实例就绪前拒绝、就绪后发出。
-//
-// 2026-10-29：原用例还验了「mover 未就绪时零搬运」与「canonical 恢复前不能伪造输入」——
-// 那两块（readyRetentionMover / dayMigrationInputBridge / logPhysicalDayRecovery）
-// 随冷热双层一起删了。**保留的是回灌这一半**，它在单实例下语义没变：
-// 归档还原必须等目标实例真的就绪才发，不能对着一个没起来的进程写一遍 200。
-func TestWiringRehydratePublisherGuardedWithoutReassembly(t *testing.T) {
-	transport := &wiringTransport{rows: map[string][]byte{}, health: true}
-	supervisor := newWiringSupervisor(t, t.TempDir(), &wiringFakeFactory{}, transport, "constructed-password")
-	clients, err := newManagedLogClients(supervisor)
-	require.NoError(t, err)
-	publisher := &wiringPublisher{}
-	guarded := readyRehydratePublisher{clients: clients, publisher: publisher}
-	require.Error(t, guarded.Publish(context.Background(), archive.PartitionKey{}, nil, "task"))
-	require.Zero(t, publisher.calls)
-	require.NoError(t, supervisor.Start(context.Background(), vlsup.NamespaceHot))
-	require.NoError(t, guarded.Publish(context.Background(), archive.PartitionKey{}, nil, "task"))
-	require.Equal(t, 1, publisher.calls)
-	require.False(t, guarded.CanReuseRehydrate(context.Background(), archive.PartitionKey{}, "task"), "无当前投影证明不能复用成功状态")
 }
 
 // TestWiringBudgetSamplingPreservesUnknownAndDeduplicatesRoots 验证采样不是把失败当作零。

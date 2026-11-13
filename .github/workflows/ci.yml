@@ -408,3 +408,48 @@ jobs:
       # （都是「脚本/工作流的形态契约」）且已有 shell 环境。
       - name: 校验 cp-lifecycle 脚本契约（comm 字段解析）
         run: bash scripts/cp-lifecycle.test.sh
+      # 对外 API 契约：声明的路径必须在 Gin 里真实存在，且对外面的每条路由都已声明。
+      #
+      # 【为何必须在这里】早前 `scripts/check-openapi.sh` 只告警、恒退出 0，
+      # 且没有任何 workflow 调它——`docs/API.md` 里写的“路由不一致会导致 CI 失败”是一句空话。
+      # 后果是四类断裂都能全绿合入：文档写了没实现（node_repair）、实现没文档（config-deliveries）、
+      # 对外声明错鉴权（把 JWTAuth 路径写成 AgentToken）、契约与实现相反（business 的 requestId）。
+      - name: 校验对外 API 契约（docs/openapi）
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          bash scripts/check-openapi.sh
+
+      # 代码/文件名/注释里不得出现 FR 或 ADR 编号（.claude/rules/no-ref-in-code.md）。
+      #
+      # 用 --stock 全量比对，而不是只看本次 diff：编号会随重构/搬包被复制到新位置，
+      # 只看 diff 会让存量在每轮大重构里悄悄回潮（实测从「0 命中」回潮到 2000+ 处）。
+      - name: 代码内 FR/ADR 编号检查（--stock）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh .claude/scripts/check-no-ref-in-code.sh --stock
+
+      # 文档里不得出现 git commit hash（.claude/rules/no-hash-in-docs.md）。
+      #
+      # 用 --all 全量比对而不是只看 diff：hash 常整段搬动（spec 重组、PRD 压缩），
+      # 只看 diff 会让存量随搬动重新流入。仓库用 squash merge，分支 hash 合并后
+      # 不会被保留，写进文档就是注定失效的死引用（可读性换取零收益）。
+      - name: 文档内 git hash 检查（--all）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh .claude/scripts/check-no-hash-in-docs.sh --all
+
+      # Go 源码必须过 gofmt（.claude/rules/code-format.md）。
+      #
+      # 立此门前全仓有 34 个不合规文件，而 CI 与 golangci-lint 都没查格式
+      # （.golangci.yml 未启用 gofmt/gofumpt）—— 这批不一致可以无限期存在。
+      # 格式噪音还会淹没真实 diff：下一个改动者用 IDE 自动格式化就会带出一批
+      # 与本次无关的空白改动。
+      - name: Go 源码格式检查（gofmt）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh .claude/scripts/check-gofmt.sh

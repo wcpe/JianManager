@@ -180,7 +180,7 @@ func TestToolsForPrincipal_V1CannotSeeBotDomain(t *testing.T) {
 	}
 }
 
-func TestCallTool_BotSendCommand_ADR075Wording(t *testing.T) {
+func TestCallTool_BotSendCommand_Wording(t *testing.T) {
 	db := newBotToolDB(t)
 	f := seedBotToolFixture(t, db)
 	deps := ToolDeps{
@@ -190,7 +190,7 @@ func TestCallTool_BotSendCommand_ADR075Wording(t *testing.T) {
 	res := CallTool(context.Background(), deps, botLoadPrincipal(f), "bot_send_command",
 		map[string]any{"id": float64(f.bot.ID), "command": "/list"})
 
-	// 无论成功失败，措辞都不得宣称服务器已接受或业务已生效（ADR-075）。
+	// 无论成功失败，措辞都不得宣称服务器已接受或业务已生效。
 	text := res.Content[0].Text
 	assert.NotContains(t, text, "服务器已接受")
 	assert.NotContains(t, text, "业务已生效")

@@ -1,6 +1,6 @@
 import { resourceLevel, statusColorVar, type StatusLevel } from '../lib/threshold'
 
-/** 环形资源仪表盘（FR-061）：按阈值变色，用于节点/总览的 CPU/内存/磁盘占用。 */
+/** 环形资源仪表盘：按阈值变色，用于节点/总览的 CPU/内存/磁盘占用。 */
 export function ResourceGauge({
   label,
   value,
@@ -11,7 +11,8 @@ export function ResourceGauge({
   thickness = 8,
   decimals = 0,
 }: {
-  label: string
+  /** 环下方的说明；省略则只渲染环，供「环 + 卡内标签」的紧凑布局复用。 */
+  label?: string
   value: number
   max?: number
   unit?: string
@@ -22,9 +23,27 @@ export function ResourceGauge({
   /** 中心数值保留的小数位（默认 0；如负载倍数用 2）。 */
   decimals?: number
 }) {
-  const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0
+  // 缺数（NaN）时环按 0% 画：中心仍显示「—」，但不能把 NaN 写进 SVG 属性。
+  const safeValue = Number.isFinite(value) ? value : 0
+  const pct = max > 0 ? Math.min(100, Math.max(0, (safeValue / max) * 100)) : 0
   const lvl = level ?? resourceLevel(pct)
-  const r = (size - thickness) / 2
+  /*
+    【为何半径要减 thickness 而不只是 thickness/2】
+    环的可见外沿 = r + strokeWidth/2。若取 r = (size - thickness) / 2，
+    idle 时外沿恰好贴着 size/2（92 尺寸下 42+4=46，视口半宽也是 46）——
+    看上去没问题，但**一点余量也没留**：调用方一旦把描边加粗（悬浮/聚焦
+    时 stroke-width 8→10，见 OverviewPageView 的 hover:[&_svg_circle:last-child]、
+    focus-visible:...），外沿就变成 42+5=47，超出 SVG 视口 1px 被裁掉。
+
+    SVG 默认 overflow:hidden，描边超出的部分不会画出来——于是环的上下
+    左右各少一块，看上去像「球被卡掉了一条边」。
+
+    故按**最粗描边**预留空间：r = (size - maxStroke) / 2，maxStroke 取
+    thickness 的两倍与 thickness+4 中的较大者，足以覆盖常见的加粗幅度。
+    这样环永远完整，而不是「平时刚好、一 hover 就缺角」。
+   */
+  const maxStroke = Math.max(thickness * 2, thickness + 4)
+  const r = (size - maxStroke) / 2
   const circ = 2 * Math.PI * r
   const offset = circ * (1 - pct / 100)
   const color = statusColorVar(lvl)
@@ -47,13 +66,16 @@ export function ResourceGauge({
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-lg font-semibold tabular-nums" style={{ color }}>
+          <span
+            className={`font-semibold tabular-nums ${size < 56 ? 'text-sm' : 'text-lg'}`}
+            style={{ color }}
+          >
             {Number.isFinite(value) ? value.toFixed(decimals) : '—'}
           </span>
-          <span className="text-[11px] text-muted-foreground">{unit}</span>
+          {unit && <span className="text-[11px] text-muted-foreground">{unit}</span>}
         </div>
       </div>
-      <span className="text-xs text-muted-foreground">{label}</span>
+      {label && <span className="text-xs text-muted-foreground">{label}</span>}
     </div>
   )
 }

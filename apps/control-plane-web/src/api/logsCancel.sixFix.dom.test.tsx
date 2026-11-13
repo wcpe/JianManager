@@ -7,10 +7,10 @@ import { API } from '@jianmanager/devmock/api'
 import api from '@/api/client'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { getWithRateLimitRetry, isLogRequestCanceled, useLogsFederation, useLogsFederationFacets, useLogsFederationStats } from './logFederation'
+import { getWithRateLimitRetry, isLogRequestCanceled, useLogsFederation, useLogsFederationFacets, useLogsFederationFields, useLogsFederationStats } from './logFederation'
 
 /**
- * 取消/信号贯穿（FR-482 回归）。
+ * 取消/信号贯穿（回归）。
  *
  * 2026-10-29 缩范围：经典 `useLogs` / `useLegacyLogs` 已随 CP `logs` 表删除而下线，
  * 本文件原先把它们也纳入「路径列表」，那两路现在不存在，保留只会让用例挂在一个
@@ -24,7 +24,7 @@ it('条件切换/卸载把AbortSignal贯穿联邦Search、Stats、Facets', async
   const requests: { signal: AbortSignal; finish: () => void }[] = []
   const get = vi.spyOn(api, 'get')
   const abort = vi.spyOn(XMLHttpRequest.prototype, 'abort')
-  const paths = ['/logs/federation', '/logs/federation/stats', '/logs/federation/facets']
+  const paths = ['/logs/federation', '/logs/federation/stats', '/logs/federation/facets', '/logs/federation/fields']
   server.use(...paths.map((path) => http.get(API(path), async ({ request }) => {
     await new Promise<void>((finish) => requests.push({ signal: request.signal, finish }))
     return HttpResponse.json({ items: [], points: [], dimensions: [], coverage: { complete: true } })
@@ -34,20 +34,21 @@ it('条件切换/卸载把AbortSignal贯穿联邦Search、Stats、Facets', async
     useLogsFederation({ keyword })
     useLogsFederationStats({ keyword }, true)
     useLogsFederationFacets({ keyword }, true)
+    useLogsFederationFields({ keyword }, true)
     return <button onClick={() => setKeyword('第二组')}>换查询</button>
   }
   const view = renderWithProviders(<Probe />)
-  await waitFor(() => expect(requests).toHaveLength(3))
+  await waitFor(() => expect(requests).toHaveLength(4))
   fireEvent.click(screen.getByRole('button', { name: '换查询' }))
-  await waitFor(() => expect(requests).toHaveLength(6))
+  await waitFor(() => expect(requests).toHaveLength(8))
   // MSW 的 XHR 请求投影不联动 request.signal；同时核对传给 axios 的真信号与原生 abort 调用。
   const signals = get.mock.calls.filter(([path]) => paths.includes(path)).map(([, config]) => config?.signal)
-  expect(signals).toHaveLength(6)
-  expect(signals.slice(0, 3).every((signal) => signal?.aborted)).toBe(true)
-  expect(abort).toHaveBeenCalledTimes(3)
+  expect(signals).toHaveLength(8)
+  expect(signals.slice(0, 4).every((signal) => signal?.aborted)).toBe(true)
+  expect(abort).toHaveBeenCalledTimes(4)
   view.unmount()
   expect(signals.every((signal) => signal?.aborted)).toBe(true)
-  expect(abort).toHaveBeenCalledTimes(6)
+  expect(abort).toHaveBeenCalledTimes(8)
   requests.forEach(({ finish }) => finish())
 })
 
@@ -55,7 +56,7 @@ it('同key其它活跃observer保护Search/Stats/Facets，最后禁用才精确�
   const get = vi.spyOn(api, 'get')
   const abort = vi.spyOn(XMLHttpRequest.prototype, 'abort')
   const releases: (() => void)[] = []
-  const paths = ['/logs/federation', '/logs/federation/stats', '/logs/federation/facets']
+  const paths = ['/logs/federation', '/logs/federation/stats', '/logs/federation/facets', '/logs/federation/fields']
   server.use(...paths.map((path) => http.get(API(path), async () => {
     await new Promise<void>((finish) => releases.push(finish))
     return HttpResponse.json({ items: [], points: [], dimensions: [], coverage: { complete: true } })
@@ -65,6 +66,7 @@ it('同key其它活跃observer保护Search/Stats/Facets，最后禁用才精确�
     useLogsFederation(params, { enabled })
     useLogsFederationStats(params, enabled)
     useLogsFederationFacets(params, enabled)
+    useLogsFederationFields(params, enabled)
     return null
   }
   function Probe() {
@@ -75,17 +77,17 @@ it('同key其它活跃observer保护Search/Stats/Facets，最后禁用才精确�
   }
   const view = renderWithProviders(<Probe />)
   try {
-    await waitFor(() => expect(releases).toHaveLength(4))
+    await waitFor(() => expect(releases).toHaveLength(5))
     const shared = get.mock.calls.filter(([, config]) => config?.params?.keyword === 'shared-evidence').map(([, config]) => config?.signal)
     const independent = get.mock.calls.filter(([, config]) => ['independent-scope'].includes(config?.params?.keyword)).map(([, config]) => config?.signal)
-    expect(shared).toHaveLength(3)
+    expect(shared).toHaveLength(4)
     expect(independent).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: '禁用首个观察者' }))
     expect(shared.every((signal) => signal?.aborted === false)).toBe(true)
     expect(abort).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '禁用最后观察者' }))
     await waitFor(() => expect(shared.every((signal) => signal?.aborted === true)).toBe(true))
-    expect(abort).toHaveBeenCalledTimes(3)
+    expect(abort).toHaveBeenCalledTimes(4)
     expect(independent.every((signal) => signal?.aborted === false)).toBe(true)
   } finally {
     view.unmount()

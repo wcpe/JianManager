@@ -8,17 +8,28 @@ option go_package = "github.com/wcpe/JianManager/proto/workerpb";
 service WorkerService {
   // Register Worker Node 首次启动时注册到 Control Plane。
   rpc Register(RegisterRequest) returns (RegisterResponse);
+  // ReportStartupProgress Worker 上报启动阶段进度（CP 侧实现）。
+  //
+  // 存在的理由：加载（尤其大索引的全表扫描）发生在**注册之前**，那段时间 CP 侧完全看不到
+  // 该节点——2026-09-28 生产事故中这段黑盒长达 8m39s，主控台连节点都不存在。
+  // 本 RPC 让 Worker 在注册前就能把「当前处于第几阶段」送上来。
+  //
+  // 语义约束（刻意设计）：
+  //   - **best-effort**：Worker 侧上报失败一律静默丢弃，绝不阻塞或拖慢启动；
+  //   - **不构成就绪**：上报过进度不等于节点可服务，就绪判据仍只看注册与心跳；
+  //   - 老 CP 返回 Unimplemented 时 Worker 直接放弃上报（记一条 debug，不重试）。
+  rpc ReportStartupProgress(ReportStartupProgressRequest) returns (ReportStartupProgressResponse);
   // Heartbeat 双向心跳流，Worker 上报资源指标。
   rpc Heartbeat(stream HeartbeatRequest) returns (stream HeartbeatResponse);
-  // FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（FR-308，CP 侧实现）：
+  // FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（CP 侧实现）：
   // 携带节点身份鉴权 + 本地已知 sha256，指纹一致回空归档（省流），否则回 tar.gz 字节。
   rpc FetchBotWorkerArchive(FetchBotWorkerArchiveRequest) returns (FetchBotWorkerArchiveResponse);
-  // ReportCrashSnapshot Worker 上报实例崩溃快照（FR-313，CP 侧实现）：进程非正常退出
+  // ReportCrashSnapshot Worker 上报实例崩溃快照（CP 侧实现）：进程非正常退出
   //（退出码 ≠ 0 或 RUNNING/STARTING 态意外退出）时携带节点身份上报现场（退出码/信号/
   // 时长/尾部输出），CP 持久化并按实例滚动保留最近 5 条。与注册/心跳同信道（隧道/直拨
   // 双模式天然可用）；老 CP 返回 Unimplemented，Worker 记日志丢弃、不阻塞状态机。
   rpc ReportCrashSnapshot(ReportCrashSnapshotRequest) returns (ReportCrashSnapshotResponse);
-  // ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（FR-455/456，CP 侧实现）：
+  // ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（CP 侧实现）：
   // 运行期周期扫描与接管兜底的处置动作（scan_detected / scan_disposed / scan_dispose_blocked /
   // dispose_blocked / dispose_reaped）经与注册/心跳同信道（隧道/直拨双模式天然可用）上报，
   // 携带节点身份鉴权，CP 经审计服务入库（保证孤儿处置「不静默」）。老 CP 返回 Unimplemented，
@@ -29,7 +40,7 @@ service WorkerService {
   // ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
   // Worker 用它填充内存注册表（不在表者按 STOPPED 注册、不启动进程；已在表者跳过，
   // 不覆盖 RecoverDaemonInstances 恢复的 RUNNING 实例）。使重启后停机实例的
-  // 文件/配置/归档/备份 op 能定位工作目录（FR-FIXA 修 bug #2，见 ADR-050）。
+  // 文件/配置/归档/备份 op 能定位工作目录（修 bug #2）。
   rpc ResyncInstances(ResyncInstancesRequest) returns (ResyncInstancesResponse);
   // StartInstance 启动实例。
   rpc StartInstance(InstanceActionRequest) returns (InstanceActionResponse);
@@ -39,14 +50,22 @@ service WorkerService {
   rpc RestartInstance(InstanceActionRequest) returns (InstanceActionResponse);
   // KillInstance 强制终止实例。
   rpc KillInstance(InstanceActionRequest) returns (InstanceActionResponse);
-  // InspectManagedProcess 只读探查某实例受管进程树内的目标 PID（FR-407）。
+  // InspectManagedProcess 只读探查某实例受管进程树内的目标 PID。
   rpc InspectManagedProcess(ManagedProcessInspectRequest) returns (ManagedProcessInspectResponse);
-  // TerminateManagedProcess 处置某实例受管进程树内的非根目标 PID（FR-408）。
+  // TerminateManagedProcess 处置某实例受管进程树内的非根目标 PID。
   rpc TerminateManagedProcess(ManagedProcessActionRequest) returns (ManagedProcessActionResponse);
-  // 启动前同步预检（FR-314）：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
+  // 启动前同步预检：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
   rpc PreflightStartInstance(InstanceActionRequest) returns (InstanceActionResponse);
-  // AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程（FR-471）：登记 PID 并纳入受管生命周期。
+  // AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程：登记 PID 并纳入受管生命周期。
   rpc AdoptForeignRuntime(InstanceActionRequest) returns (InstanceActionResponse);
+  // AdoptInPlaceRuntime 收养就地导入实例的外部运行进程：**不改进程、不重启**。
+  //
+  // 与 AdoptForeignRuntime 的根本区别就一条：一个会重启，一个不会。
+  // 就地导入（in_place）的服往往由 tmux/systemd 在平台外跑着，业务不能断，
+  // 此时只能「承认它、看着它」——把现有 PID 登记为平台运行态。
+  // 代价：终端输入 / 优雅停止不可用（不是平台 spawn 的），生命周期仍归外部管理器。
+  // 目录下无活进程时返回 success=false，调用方据此回退到正常启动。
+  rpc AdoptInPlaceRuntime(InstanceActionRequest) returns (InstanceActionResponse);
   // SendCommand 向实例发送命令。
   rpc SendCommand(SendCommandRequest) returns (SendCommandResponse);
   // GetInstanceStatus 获取实例状态。
@@ -55,9 +74,9 @@ service WorkerService {
   rpc ListInstances(ListInstancesRequest) returns (ListInstancesResponse);
   // StreamInstanceEvents 订阅实例事件流。
   rpc StreamInstanceEvents(StreamInstanceEventsRequest) returns (stream InstanceEvent);
-  // FR-473/479：日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
+  // 日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
   rpc GetLogCapabilities(GetLogCapabilitiesRequest) returns (GetLogCapabilitiesResponse);
-  // FR-473/479：按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
+  // 按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
   rpc LogCreateView(LogCreateViewRequest) returns (LogCreateViewResponse);
   rpc LogSearch(LogSearchRequest) returns (LogSearchResponse);
   rpc LogStats(LogStatsRequest) returns (LogStatsResponse);
@@ -86,9 +105,11 @@ service WorkerService {
   rpc LogStreamFieldValues(LogStreamFieldValuesRequest) returns (LogStreamFieldValuesResponse);
   // Tail 的 FOLLOW_LIVE 与 VIEW_BOUNDED 语义必须由 mode 明确区分。
   rpc LogTail(LogTailRequest) returns (stream LogEvent);
+  // 持续读取 VL 原生 tail；与旧有界 LogTail 分离，老 Worker 明确 Unimplemented。
+  rpc LogTailLive(LogTailRequest) returns (stream LogEvent);
   rpc LogRehydrate(LogRehydrateRequest) returns (LogTaskResponse);
   rpc LogArchiveStatus(LogArchiveStatusRequest) returns (LogArchiveStatusResponse);
-  // FR-476：CP 经反向隧道查看/控制 Worker 受管 VL namespace。
+  // CP 经反向隧道查看/控制 Worker 受管 VL namespace。
   rpc LogRuntimeStatus(LogRuntimeStatusRequest) returns (LogRuntimeStatusResponse);
   rpc LogRuntimeControl(LogRuntimeControlRequest) returns (LogTaskResponse);
   rpc LogMigratePartition(LogMigratePartitionRequest) returns (LogTaskResponse);
@@ -115,8 +136,10 @@ service WorkerService {
   // ListFiles 列出实例工作目录下的文件。
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
   // ReadFile 读取文件内容。
+  // tail_bytes>0 时只读文件尾部窗口并按行对齐（见 ReadFileRequest.tail_bytes），
+  // 供持续追写的日志等大文本在线预览；响应以 truncated 显式标记内容非完整正文。
   rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
-  // HashFile 计算实例工作目录内文件的 SHA-256（FR-468 §2.5 版本漂移检测）。
+  // HashFile 计算实例工作目录内文件的 SHA-256（版本漂移检测）。
   // 与 ReadFile 分开：哈希只需读盘不需传内容，避免为校验把数十 MB 二进制经 gRPC 搬回 CP。
   rpc HashFile(HashFileRequest) returns (HashFileResponse);
   // WriteFile 写入文件内容。
@@ -125,32 +148,32 @@ service WorkerService {
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
   // RenameFile 重命名文件。
   rpc RenameFile(RenameFileRequest) returns (RenameFileResponse);
-  // CheckPathAccess 探测路径可读/可写（相对 Worker 进程用户，FR-373）。
+  // CheckPathAccess 探测路径可读/可写（相对 Worker 进程用户）。
   // instance_uuid 非空：path 为实例工作目录相对路径；为空：path 须为节点绝对路径（与 BrowseDir 同语义）。
   rpc CheckPathAccess(CheckPathAccessRequest) returns (CheckPathAccessResponse);
-  // ChmodPath 对单 path 做非递归 chmod（FR-373；不 chown、不递归）。
+  // ChmodPath 对单 path 做非递归 chmod（不 chown、不递归）。
   // instance_uuid 非空：实例相对路径；为空：节点绝对路径。mode 空=保证属主可读写（目录含 x）。
   rpc ChmodPath(ChmodPathRequest) returns (ChmodPathResponse);
-  // DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
+  // DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（批量下载）。
   rpc DownloadArchive(DownloadArchiveRequest) returns (stream DownloadArchiveChunk);
   // DownloadFile 单文件分块流式下载（原样字节，不打包）。
   // ReadFile 的 10MiB 上限是在线编辑器护栏，下载必须走本 RPC，任意大小不截断。
   rpc DownloadFile(DownloadFileRequest) returns (stream DownloadFileChunk);
-  // UploadFile 单文件分块流式上传（与 DownloadFile 对称，FR-304）。
+  // UploadFile 单文件分块流式上传（与 DownloadFile 对称）。
   // WriteFile unary 受服务端单消息上限约束（直拨 64MiB 拒收）且反向隧道无上限会整块缓冲，
   // 大文件上传必须走本 RPC：Worker 落临时文件、收完原子改名，中途失败不留半截目标文件。
   // 首帧必须携带 instance_uuid + path（content 可同帧携带），后续帧仅 content（其余字段忽略）；
   // 零帧即关流约定返回 success=false（不触盘、无副作用），供 CP 作老 Worker 能力探测
   // （老 Worker 对本 RPC 返回 Unimplemented，CP 借此区分并回退 WriteFile）。
   rpc UploadFile(stream UploadFileChunk) returns (UploadFileResponse);
-  // SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
+  // SearchFiles 对实例工作目录做全文搜索或文件名快速打开。
   // Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
   rpc SearchFiles(SearchFilesRequest) returns (SearchFilesResponse);
-  // ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程；FR-075，见 ADR-018）。
+  // ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程）。
   rpc ListArchiveEntries(ListArchiveEntriesRequest) returns (ListArchiveEntriesResponse);
-  // ReadArchiveEntry 读取归档内某条目内容，流式截断到上限（FR-075）。
+  // ReadArchiveEntry 读取归档内某条目内容，流式截断到上限。
   rpc ReadArchiveEntry(ReadArchiveEntryRequest) returns (ReadArchiveEntryResponse);
-  // DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（FR-075，见 ADR-018）。
+  // DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码。
   rpc DecompileClass(DecompileClassRequest) returns (DecompileClassResponse);
   // ListConfigFiles 列出可管理配置文件。
   rpc ListConfigFiles(ListConfigFilesRequest) returns (ListConfigFilesResponse);
@@ -170,9 +193,9 @@ service WorkerService {
   rpc PullSelfLog(PullSelfLogRequest) returns (PullSelfLogResponse);
   // GetInstanceMetrics 获取实例指标。
   rpc GetInstanceMetrics(GetInstanceMetricsRequest) returns (GetInstanceMetricsResponse);
-  // GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照（FR-399）。
+  // GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照。
   rpc GetInstanceResourceSnapshot(GetInstanceResourceSnapshotRequest) returns (GetInstanceResourceSnapshotResponse);
-  // GetInstanceEnv 获取运行中实例 JVM 进程的实际环境（FR-344 环境变量下区）。
+  // GetInstanceEnv 获取运行中实例 JVM 进程的实际环境（环境变量下区）。
   rpc GetInstanceEnv(GetInstanceEnvRequest) returns (GetInstanceEnvResponse);
 
   // === JDK 管理 ===
@@ -183,46 +206,46 @@ service WorkerService {
   rpc InstallJDK(InstallJDKRequest) returns (InstallJDKResponse);
   // RemoveJDK 删除 Worker 托管的 JDK 目录。
   rpc RemoveJDK(RemoveJDKRequest) returns (RemoveJDKResponse);
-  // JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
+  // JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器。
   rpc JDKCatalog(JDKCatalogRequest) returns (JDKCatalogResponse);
-  // ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填（FR-228）。
+  // ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填。
   rpc ProbeJDK(ProbeJDKRequest) returns (ProbeJDKResponse);
-  // ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，FR-298 节点运行时库）。
+  // ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，节点运行时库）。
   // 路径不存在/探测失败静默跳过，不阻断整体扫描；托管根下的候选标 already_registered。
   rpc ScanRuntimes(ScanRuntimesRequest) returns (ScanRuntimesResponse);
-  // InstallRuntime 下载并安装指定运行时到 Worker 托管目录（首批 nodejs，FR-299）。
-  // 携带 task_id 异步执行（语义同 InstallJDK/FR-183）：启动即返回，进度/日志/终态经心跳上报。
+  // InstallRuntime 下载并安装指定运行时到 Worker 托管目录（首批 nodejs）。
+  // 携带 task_id 异步执行（语义同 InstallJDK）：启动即返回，进度/日志/终态经心跳上报。
   rpc InstallRuntime(InstallRuntimeRequest) returns (InstallRuntimeResponse);
-  // RemoveRuntime 删除 Worker 托管的运行时目录（FR-299，删除顶层清理语义同 RemoveJDK/FR-292）。
+  // RemoveRuntime 删除 Worker 托管的运行时目录（删除顶层清理语义同 RemoveJDK）。
   rpc RemoveRuntime(RemoveRuntimeRequest) returns (RemoveRuntimeResponse);
-  // GetPMConfig 读取节点包管理器与 registry 配置（FR-306）：当前 PM 偏好、corepack 可用性、
+  // GetPMConfig 读取节点包管理器与 registry 配置：当前 PM 偏好、corepack 可用性、
   // 已激活 PM 版本、托管 .npmrc 现有 registry。
   rpc GetPMConfig(GetPMConfigRequest) returns (GetPMConfigResponse);
-  // SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc（FR-306）。
+  // SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc。
   rpc SetPMConfig(SetPMConfigRequest) returns (SetPMConfigResponse);
-  // ListGlobalPackages 列出托管全局目录下已装包（FR-307；含 outdated 可更新标记，best-effort）。
+  // ListGlobalPackages 列出托管全局目录下已装包（含 outdated 可更新标记，best-effort）。
   rpc ListGlobalPackages(ListGlobalPackagesRequest) returns (ListGlobalPackagesResponse);
-  // InstallGlobalPackage 安装/升级全局包（FR-307；task_id 必填走任务中心异步，版本空=latest，
+  // InstallGlobalPackage 安装/升级全局包（task_id 必填走任务中心异步，版本空=latest，
   // 升级=对已装包再装 @latest）。
   rpc InstallGlobalPackage(InstallGlobalPackageRequest) returns (InstallGlobalPackageResponse);
-  // RemoveGlobalPackage 卸载全局包（FR-307，同步）。
+  // RemoveGlobalPackage 卸载全局包（同步）。
   rpc RemoveGlobalPackage(RemoveGlobalPackageRequest) returns (RemoveGlobalPackageResponse);
-  // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
-  // 先查节点核心缓存（FR-178 sha256 键 / FR-330 组合键），命中免远程下载。
+  // DownloadCore 下载服务端核心 jar 到实例工作目录（一键开服）。
+  // 先查节点核心缓存（sha256 键 / 组合键），命中免远程下载。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
-  // InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
+  // InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod。
   rpc InstallForgeServer(InstallForgeServerRequest) returns (InstallForgeServerResponse);
-  // FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（FR-441 通用二进制运行时搭建）。
+  // FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（通用二进制运行时搭建）。
   // 与 DownloadCore 的分工：DownloadCore 只服务 MC 核心 jar（绑定节点核心缓存与组合键），
   // 本 RPC 服务 coreType=binary 的两类 Worker 侧来源——url=Worker 直连远程下载（避免 CP 中转
   // 大文件）、node_file=节点本地文件就地复制（路径须过受管区校验）。asset 来源由 CP 签发短期
   // token 转成 url 形态下发（复用制品库签名分发通道），故本 RPC 无需感知制品库语义。
   //
-  // 服务端流式（非 unary）：二进制体积可达数十 MB、慢链路分钟级，与 FR-319 异步化同因——
+  // 服务端流式（非 unary）：二进制体积可达数十 MB、慢链路分钟级，与异步任务同因——
   // 必须让前端看见「在下载」而非「卡住」，故周期性上报字节进度，末帧携带终态结果。
   rpc FetchBinary(FetchBinaryRequest) returns (stream FetchBinaryProgress);
 
-  // === 节点制品缓存（FR-178）===
+  // === 节点制品缓存 ===
   //
   // Worker 按 sha256 缓存下载过的服务端核心 jar（建实例命中即秒拷免重下）。
   // 缓存管理（列/逐项清/清空/容量上限）经以下 RPC，CP 仅平台管理员可达。
@@ -236,22 +259,22 @@ service WorkerService {
   // SetArtifactCacheCap 设置容量上限（字节，0=不限）；超限按 lastUsedAt 升序 LRU 淘汰。
   rpc SetArtifactCacheCap(SetArtifactCacheCapRequest) returns (SetArtifactCacheCapResponse);
 
-  // === 节点目录浏览（FR-178，JDK 路径登记目录选择器）===
+  // === 节点目录浏览（JDK 路径登记目录选择器） ===
 
   // BrowseDir 只读列出节点上某绝对路径下的子目录（防穿越，CP 仅平台管理员可达）。
   rpc BrowseDir(BrowseDirRequest) returns (BrowseDirResponse);
-  // DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录（FR-010）。
+  // DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录。
   rpc DeployServerProbe(DeployServerProbeRequest) returns (DeployServerProbeResponse);
-  // CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
+  // CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（一键复制）。
   rpc CloneWorkDir(CloneWorkDirRequest) returns (CloneWorkDirResponse);
   // RemoveInstance 移除实例注册并删除其工作目录与派生索引（CP 删除实例时真清理，兑现「所有数据将被删除」）。
   rpc RemoveInstance(RemoveInstanceRequest) returns (RemoveInstanceResponse);
-  // DisposeOrphanRuntime 处置无主运行时（FR-326）：CP 反向对账发现 Worker 有、CP 无记录的实例后下发。
+  // DisposeOrphanRuntime 处置无主运行时：CP 反向对账发现 Worker 有、CP 无记录的实例后下发。
   // Worker 停进程树并清理本地运行态元数据（PID/sock/注册表），不删工作目录、不重建 CP 记录。
   // 老 Worker 返回 Unimplemented，CP 记日志不崩（向后兼容）。
   rpc DisposeOrphanRuntime(DisposeOrphanRuntimeRequest) returns (DisposeOrphanRuntimeResponse);
 
-  // === Docker 镜像管理（FR-078，见 ADR-019）===
+  // === Docker 镜像管理 ===
 
   // ListImages 列出 Worker 本机 Docker 镜像。
   rpc ListImages(ListImagesRequest) returns (ListImagesResponse);
@@ -260,7 +283,7 @@ service WorkerService {
   // RemoveImage 删除 Worker 本机 Docker 镜像。
   rpc RemoveImage(RemoveImageRequest) returns (RemoveImageResponse);
 
-  // === 备份操作（FR-013 全量 / FR-056 增量 / FR-057 远程存储） ===
+  // === 备份操作（全量 / 增量 / 远程存储） ===
 
   // CreateBackup 将实例工作目录打包为 tar.gz 落到节点数据根 var/backups/。
   // 增量备份据 base_manifest 仅打包新增/变化文件；可选上传到远程存储后端。
@@ -268,7 +291,7 @@ service WorkerService {
   // RestoreBackup 按备份链顺序（全量基 + 各增量）回放归档到实例工作目录；
   // 远程归档先据 storage 拉回本地再回放。
   rpc RestoreBackup(RestoreBackupRequest) returns (RestoreBackupResponse);
-  // TestStorageBackend 对远程备份存储做一次非破坏性读写删除探测（FR-152）。
+  // TestStorageBackend 对远程备份存储做一次非破坏性读写删除探测。
   rpc TestStorageBackend(TestStorageBackendRequest) returns (TestStorageBackendResponse);
 
   // === Bot 操作 ===
@@ -287,18 +310,18 @@ service WorkerService {
   rpc RunBotScript(RunBotScriptRequest) returns (RunBotScriptResponse);
   // StreamBotEvents 订阅 Bot 事件流。
   rpc StreamBotEvents(StreamBotEventsRequest) returns (stream BotEvent);
-  // GetBotCapacity 返回本节点 Bot Worker 的 fleet 准入容量快照（FR-351）。
+  // GetBotCapacity 返回本节点 Bot Worker 的 fleet 准入容量快照。
   rpc GetBotCapacity(GetBotCapacityRequest) returns (GetBotCapacityResponse);
-  // ApplyBotBatch 批量应用最多 50 个 Bot assignment，并返回逐项回执（FR-351）。
+  // ApplyBotBatch 批量应用最多 50 个 Bot assignment，并返回逐项回执。
   rpc ApplyBotBatch(ApplyBotBatchRequest) returns (ApplyBotBatchResponse);
-  // GetBotFleetSnapshot 返回当前 Bot fleet 运行快照（FR-351，供后续 reconcile 建基线）。
+  // GetBotFleetSnapshot 返回当前 Bot fleet 运行快照（供后续 reconcile 建基线）。
   rpc GetBotFleetSnapshot(GetBotFleetSnapshotRequest) returns (GetBotFleetSnapshotResponse);
-  // StreamBotFleetEvents 以类型化流持续上报 runtime/action 事件（FR-351）。
+  // StreamBotFleetEvents 以类型化流持续上报 runtime/action 事件。
   rpc StreamBotFleetEvents(StreamBotFleetEventsRequest) returns (stream BotFleetEvent);
-  // SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执（FR-351）。
+  // SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执。
   rpc SignalBotActions(SignalBotActionsRequest) returns (SignalBotActionsResponse);
 
-  // === 通用 Bot 命令编排（FR-369，ADR-075）===
+  // === 通用 Bot 命令编排 ===
   //
   // 与 SignalBotActions / ApplyBotBatch 互不影响；仅承载命令计划、时间屏障与取消。
   // 每批最多 100 个 Bot 项；逐项结果固定 accepted|rejected|unknown；occurrence 终态
@@ -311,10 +334,10 @@ service WorkerService {
   // CancelBotCommandSchedules 下发 CP 已持久化的 cancel intent 与未终态 occurrence 集。
   rpc CancelBotCommandSchedules(CancelBotCommandSchedulesRequest) returns (CancelBotCommandSchedulesResponse);
 
-  // === 插件桥（ServerProbe 反向 WS ↔ Worker，FR-065，见 ADR-016）===
+  // === 插件桥（ServerProbe 反向 WS ↔ Worker）===
   //
-  // 一次铺齐桥的全面：下游 FR-066（玩家事件）/FR-067（治理迁移+退 RCON）/FR-068（在线更新）
-  // 复用以下 RPC 与 message，不再改 proto。地基（FR-065）仅真实使用 StreamPluginEvents
+  // 一次铺齐桥的全面：下游的玩家事件 / 治理迁移+退 RCON / 在线更新
+  // 复用以下 RPC 与 message，不再改 proto。地基仅真实使用 StreamPluginEvents
   // 的 connected/disconnected/heartbeat；其余事件子类型与命令/状态查询为骨架，语义留下游填充。
 
   // StreamPluginEvents 订阅某实例（或全部）探针经反向 WS 上报的事件流（connected/disconnected/玩家事件…）。
@@ -324,29 +347,49 @@ service WorkerService {
   // QueryServerState 查询子服全状态（在线列表/世界/TPS 等聚合），骨架，语义留下游。
   rpc QueryServerState(QueryServerStateRequest) returns (QueryServerStateResponse);
 
-  // === 面板自更新（FR-081，见 ADR-020 §4）===
+  // === 桥能力接入 ===
+  //
+  // ServerProbe 已具备、JM 此前未消费的桥能力：桥状态、主题订阅、业务域状态、配置重载。
+  // 全部经既有反向 WS 桥以 `core.*` 治理域命令下发，**不改 WS 帧协议**（探针侧早已就位），
+  // 本组 RPC 只是把这些能力的通道在 Worker/CP 之间显式化，避免复用业务命令的降级语义。
+
+  // QueryBridgeStatus 取探针桥线路健康度（`core.bridge_status`）：重连次数/队列深度/丢弃帧数/在途重载数。
+  // 只读诊断，Worker 不缓存；探针未连时返回 connected=false（不返回 error）。
+  rpc QueryBridgeStatus(QueryBridgeStatusRequest) returns (QueryBridgeStatusResponse);
+  // SetBridgeSubscription 设置事件主题订阅（`core.subscribe`）：整批覆盖、不是追加。
+  rpc SetBridgeSubscription(SetBridgeSubscriptionRequest) returns (SetBridgeSubscriptionResponse);
+  // QueryBusinessStatus 取探针已注册业务域与健康状态（`core.business_status`）。
+  rpc QueryBusinessStatus(QueryBusinessStatusRequest) returns (QueryBusinessStatusResponse);
+  // ReloadProbeConfig 下发配置重载（`core.config_reload`）。
+  //
+  // **独立超时**是本 RPC 存在的唯一理由：探针侧重载跑在独立的 reload 协调池上（不与业务命令争用），
+  // 默认 10s，远大于业务命令的 5s。走 SendPluginCommand 就无法表达这个差异。
+  // 生效编排落地之前本 RPC 只保证「能下发并拿回回执」，不维护生效状态机。
+  rpc ReloadProbeConfig(ReloadProbeConfigRequest) returns (ReloadProbeConfigResponse);
+
+  // === 面板自更新 ===
 
   // GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
-  // CheckDocker 探测本机 Docker 守护进程是否可用（FR-237）：返回可用性 + 版本 + 错误，
-  // 供创建向导选 docker 模式前先测、不可用即禁用提示（与 FR-229 连通性族同范式）。
+  // CheckDocker 探测本机 Docker 守护进程是否可用：返回可用性 + 版本 + 错误，
+  // 供创建向导选 docker 模式前先测、不可用即禁用提示（与连通性检查族同范式）。
   rpc CheckDocker(CheckDockerRequest) returns (CheckDockerResponse);
   // UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
-  // daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
+  // daemon 模式下不杀游戏服（wrapper 子进程与 Worker 主进程隔离，
   // Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
-  // action="rollback" 时改为回滚本地升级前备份（FR-182，见 ADR-042），不下载。
+  // action="rollback" 时改为回滚本地升级前备份，不下载。
   rpc UpgradeWorker(UpgradeWorkerRequest) returns (UpgradeWorkerResponse);
 
-  // === 终端会话隧道桥（FR-281 M2，见 ADR-066）===
+  // === 终端会话隧道桥（M2）===
 
   // TerminalSession 把 CP 侧终端代理（浏览器 ⇄ CP /ws/terminal）的 WS 帧经 gRPC 双向流
   // 转发给 Worker：首帧必须为 open（携带一次性终端令牌），Worker 在本机回环拨自身 WS
-  // 终端服务并原样泵帧——令牌校验方仍是 Worker（ADR-061 信任模型不变），会话层零复制。
+  // 终端服务并原样泵帧——令牌校验方仍是 Worker（信任模型不变），会话层零复制。
   // 经反向隧道承载时 CP→Worker 终端零入站；老 Worker 无本方法（Unimplemented）时 CP
   // 回退直拨 Worker WS（双模式，与指令通道一致）。
   rpc TerminalSession(stream TerminalFrame) returns (stream TerminalFrame);
 
-  // === 导入现有服务器（FR-302，见 ADR-069）===
+  // === 导入现有服务器 ===
 
   // InspectServerDir 只读探测节点上某现成服务器目录：核心 jar 候选（深度≤2，已知核心名排前，
   // MANIFEST Main-Class 仅作排序提示）、内嵌 JDK 候选（jre*/jdk*/runtime/java 子目录）、
@@ -355,7 +398,7 @@ service WorkerService {
   // ImportServerDir 导入现成目录：migrate 模式把目录整体搬进托管区系统分配目录
   // （同盘 os.Rename 优先，跨盘递归拷贝 + 数量/字节校验 + 清源）；in_place 模式 no-op 回原路径。
   rpc ImportServerDir(ImportServerDirRequest) returns (ImportServerDirResponse);
-  // ProbeInstanceEvidence CP 对账时向 Worker 拉取一批实例的进程侧证据（FR-455③）：
+  // ProbeInstanceEvidence CP 对账时向 Worker 拉取一批实例的进程侧证据：
   // wrapper/Java PID 是否存活、daemon socket 是否可达、docker 容器是否在跑。
   // CP 据此在「心跳清单缺失」时二次确认实例是否真已停机，避免通道抖动误判（消除
   // 「面板 STOPPED 而进程在跑」）。老 Worker 返回 Unimplemented，CP 退化为旧行为。
@@ -379,13 +422,45 @@ message RegisterRequest {
 message RegisterResponse {
   string node_uuid = 1;
   string node_secret = 2;
-  // CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：只签终端/插件桥令牌，与用户会话密钥隔离。
+  // CP↔Worker WS 令牌密钥：只签终端/插件桥令牌，与用户会话密钥隔离。
   // 首注册与重注册均下发；Worker 持久化到 etc/node-identity.json 并热应用到 WS 校验。
   // 空 = 旧 CP 未下发，Worker 回退本地 jwt_secret 配置（向后兼容）。
   string ws_token_secret = 3;
 }
 
-// === 崩溃快照上报（FR-313，CP 侧实现）===
+// === 启动阶段进度上报（CP 侧实现）===
+
+message ReportStartupProgressRequest {
+  // 节点自称的名字（CP 侧用于在未注册时也能展示「谁在启动」）。
+  string name = 1;
+  // 当前阶段标识，取值与 Worker 侧 startup.Phase 对齐
+  //（config / dataroot / identity / process_recover / ingest_state_load / register / heartbeat）。
+  string phase = 2;
+  // 该阶段耗时（毫秒）。0 表示阶段刚开始、尚未结束（用于让面板显示「卡在这一段」）。
+  int64 phase_elapsed_ms = 3;
+  // 自进程启动起的总耗时（毫秒）。
+  int64 total_elapsed_ms = 4;
+  // 已完成的阶段数 / 阶段总数，供面板渲染进度（如 5/7）。
+  int32 phases_done = 5;
+  int32 phases_total = 6;
+
+  // 鉴权二选一（与 Register 一致的两种身份）：
+  //   - 首次启动：enrollment token 明文；
+  //   - 已有身份：node_uuid + node_secret。
+  // 两者都没有时 CP 拒绝——不允许匿名上报，否则任何进程都能伪造「某节点在启动」。
+  string enroll_token = 7;
+  string node_uuid = 8;
+  string node_secret = 9;
+}
+
+message ReportStartupProgressResponse {
+  // accepted=false 时 CP 未记录（鉴权失败/参数非法/未实现），Worker 静默放弃。
+  bool accepted = 1;
+  // 拒绝原因（仅诊断用，不进面板）。
+  string reason = 2;
+}
+
+// === 崩溃快照上报（CP 侧实现）===
 
 // ReportCrashSnapshotRequest 一条实例崩溃快照：进程非正常退出的现场留存。
 message ReportCrashSnapshotRequest {
@@ -403,7 +478,7 @@ message ReportCrashSnapshotRequest {
 message ReportCrashSnapshotResponse {
 }
 
-// === 孤儿处置审计上报（FR-455/456，CP 侧实现）===
+// === 孤儿处置审计上报（CP 侧实现）===
 
 // ReportOrphanAuditRequest 一条孤儿处置/误杀拦截审计。
 message ReportOrphanAuditRequest {
@@ -411,11 +486,11 @@ message ReportOrphanAuditRequest {
   string node_secret = 2;
   string action = 3;      // 审计动作名：orphan.scan_detected / orphan.scan_disposed /
                           // orphan.scan_dispose_blocked / orphan.dispose_blocked / orphan.dispose_reaped /
-                          // orphan.auto_adopted / orphan.adopt_blocked / orphan.adopt_failed（FR-497 全自动收养
+                          // orphan.auto_adopted / orphan.adopt_blocked / orphan.adopt_failed（全自动收养
                           // 三态：复核通过且拨号成功纳管 / 复核不过只告警不收养 / 拨号失败保留 PID 待下轮，
                           // 与 docs/specs/auto-adopt-orphans/spec.md §6 一致）/
                           // health.dead_detected / health.selfheal_restart / health.selfheal_exhausted /
-                          // health.circuit_broken / health.circuit_released（FR-459，detail 内标 operator=auto）
+                          // health.circuit_broken / health.circuit_released（detail 内标 operator=auto）
   string target_id = 4;   // 目标标识（实例 UUID 或 direct 孤儿工作目录）
   string detail = 5;      // 补充说明（JSON）
   bool success = 6;       // 处置是否成功（拦截/未处置为 false）
@@ -428,7 +503,7 @@ message ReportOrphanAuditResponse {
 
 // === 心跳 ===
 
-// bot-worker dist 自愈下发（FR-308，CP 侧实现；见 ADR-070）。
+// bot-worker dist 自愈下发（CP 侧实现）。
 message FetchBotWorkerArchiveRequest {
   string node_uuid = 1;   // 节点身份（与重注册同源校验）
   string node_secret = 2;
@@ -446,7 +521,7 @@ message FetchBotWorkerArchiveResponse {
 message HeartbeatRequest {
   string node_uuid = 1;
   float cpu_usage = 2;
-    // iowait 是 CPU 等 IO 的时间占比（0..1，FR-485）。只看 cpu_usage 会把 IO 瓶颈
+    // iowait 是 CPU 等 IO 的时间占比。只看 cpu_usage 会把 IO 瓶颈
     // 看成「CPU 不满」；本机事故中 iowait 曾达 90%。老 CP 忽略该字段，不改变既有语义。
     float iowait = 17;
   float memory_usage = 3;
@@ -456,12 +531,12 @@ message HeartbeatRequest {
   repeated InstanceState instances = 7;  // 实例状态快照
   int64 network_bytes_sent = 8;  // 累计网络发送字节
   int64 network_bytes_recv = 9;  // 累计网络接收字节
-  repeated InstanceMetricSample instance_metrics = 10;  // 每实例 ServerProbe 快照（FR-060 时序）
-  double load_avg1 = 11;  // 节点 1 分钟 load average（FR-062；gopsutil 跨平台，取不到为 0）
-  repeated TaskSnapshot tasks = 12;  // 运行中长任务进度快照（FR-183 任务中心，见 ADR-040）
-  repeated ProcessMetricSample process_metrics = 13; // 受管实例进程 TOPN 快照（FR-170）
-  ManagedRuntimeSnapshot managed_runtime = 14; // Worker 与共享 Bot Worker 当前受管运行时快照（FR-400）
-  // 日志采集健康（FR-485）：false = 采集运行时未运行（创建失败或已停止）。
+  repeated InstanceMetricSample instance_metrics = 10;  // 每实例 ServerProbe 快照（时序）
+  double load_avg1 = 11;  // 节点 1 分钟 load average（gopsutil 跨平台，取不到为 0）
+  repeated TaskSnapshot tasks = 12;  // 运行中长任务进度快照（任务中心）
+  repeated ProcessMetricSample process_metrics = 13; // 受管实例进程 TOPN 快照
+  ManagedRuntimeSnapshot managed_runtime = 14; // Worker 与共享 Bot Worker 当前受管运行时快照
+  // 日志采集健康：false = 采集运行时未运行（创建失败或已停止）。
   // 2026-09-28 事故教训：采集静默停摆 40+ 分钟无人知晓——该信号让「采集健康」进入告警。
   bool log_ingest_healthy = 15;
   string log_ingest_detail = 16;  // 不健康原因（可空）
@@ -474,23 +549,175 @@ message HeartbeatRequest {
   // 只采几个读数，不自建一套指标体系：VL 自身已在 /metrics 暴露全部数据，
   // 这里只是把关键几项带到 CP 的告警链路上。
   // 老 Worker 不上报 ⇒ 0，CP 侧按「无读数」处理，不误报。
-  int64 log_vl_disk_used_bytes = 18;          // -storageDataPath 目录当前占用
-  int64 log_vl_disk_limit_bytes = 19;         // 生效的磁盘上限；0 = 未配置（不限制）
+  //
+  // 编号 47~51：本条分支早先占用 18~22，与上游的 load_avg5/15 等字段撞号，
+  // rebase 到上游后统一后移（wire 编号一旦发布不得复用）。
+  int64 log_vl_disk_used_bytes = 47;          // -storageDataPath 目录当前占用
+  int64 log_vl_disk_limit_bytes = 48;         // 生效的磁盘上限；0 = 未配置（不限制）
   // log_vl_partitions 是当前日分区数。用它判断「能不能丢」：
   // VL 至少保留最近 2 天，分区数 <=2 时即使超限也不会丢。
-  int32 log_vl_partitions = 20;
+  int32 log_vl_partitions = 49;
   // log_vl_rows_dropped_total 是 vl_rows_dropped_total（因时间超保留期被丢的行数累计值）。
   // CP 用相邻心跳差推导速率；累计值不直接当曲线。
-  uint64 log_vl_rows_dropped_total = 21;
+  uint64 log_vl_rows_dropped_total = 50;
   // log_vl_disk_limit_percent 是**百分比口径**的磁盘上限（`-retention.maxDiskUsagePercent`）。
   //
   // 为什么需要（2026-10-29 审计发现）：它与 `log_vl_disk_limit_bytes` **互斥**（VL 官方限制）。
   // 配上百分比时字节上限恒为 0，而 CP 原先只按字节上限算 `log_vl_disk_pct`
   // ⇒ 百分比部署**永远没有 disk_pct 指标**，与配置样例推荐的告警对不上。
-  int32 log_vl_disk_limit_percent = 22;
+  int32 log_vl_disk_limit_percent = 51;
+
+  // ---- 主机级观测补全（编号从 18 起；17 已被 iowait 占用）----
+  //
+  // 兼容策略与 iowait 一致：全部是**新增字段**，老 CP 忽略未知字段、老 Worker 不发
+  //（取零值），两侧都不改变既有语义。CP 侧据此把缺失值落为 null、前端显示 `--`，
+  // 而不是当成「读数为 0」——0 与「没有数据」在运维判断上是两回事。
+
+  // 1/5/15 分钟负载三档（原始值，未按核数归一）。load_avg1 已由字段 11 承载，不重复。
+  // 归一口径与 load_avg1 一致，仍在 CP 侧按核数完成（Worker 不猜 `loadPct` 的分母）。
+  double load_avg5 = 18;
+  double load_avg15 = 19;
+
+  // 进程计数（主机级，**不是**实例内进程数）。
+  //
+  // 注意与 GetInstanceResourceSnapshotResponse.process_count 区分：后者是
+  // 「某实例的进程树内进程数」，语义完全不同，不可互相代入。
+  int32 procs_running = 20;  // 活动（runnable）进程/线程数
+  int32 procs_total = 21;    // 总进程/线程数
+
+  // CPU 时间构成（窗口增量归一后的占比，0..1，各分量之和 ≈ 1）。
+  //
+  // 只给 user/system/iowait 无法定位「谁在吃 CPU」：iowait 高说明 IO 瓶颈、
+  // system 高说明内核态开销（如频繁上下文切换）、user 高才是应用自身忙。
+  // iowait 单列已由字段 17 承载，此处补齐其余主要分量。
+  float cpu_user = 22;
+  float cpu_nice = 23;
+  float cpu_system = 24;
+  float cpu_idle = 25;
+  float cpu_irq = 26;
+  float cpu_softirq = 27;
+  float cpu_steal = 28;
+
+  // 整机 top-N 进程（**不是**受管进程树——后者是 process_metrics，字段 13）。
+  //
+  // 隐私边界（spec 明确约束）：只上报 pid/comm/指标，**不上报完整 cmdline**。
+  // cmdline 常含密码、token、内网地址等敏感参数，而运维判断「谁在吃 CPU」只需 comm。
+  // 采集节流：≤ 1 次 / 10s（见 host_observe.top_interval）。
+  repeated HostProcessSample host_top_processes = 29;
+
+  // 分挂载点磁盘用量。
+  //
+  // 为什么需要：disk_usage/disk_used_mb（字段 4/6）只覆盖根分区。
+  // `/var` 写满而 `/` 还宽松时，单值表现完全无感——而这正是日志/数据盘最常见的故障形态。
+  repeated HostMountUsage host_mounts = 30;
+
+  // ---- 日志采集平台可观测性（编号从 31 起）----
+  //
+  // 2026-09-28 生产事故（ingest.state.json 涨至 1.2 GB、117 MB/s 持续重写 25 小时、
+  // iowait 91%）**完全靠人肉排查发现**，平台当时对这些信号一无所知。本组字段把
+  // 「采集面自身是否健康」变成可告警的数字。
+  //
+  // 兼容策略与前序字段一致：全部**新增**，老 CP 忽略未知字段、老 Worker 不发（取零值）。
+  // 但这里的零值语义特殊——见 log_metrics_available。
+  //
+  // 缺失值约定：Worker 侧采集器不可用（未装配 / 采集面从未启动）时**不发任何字段**，
+  // 并把 log_metrics_available 置 false；CP 据此不落点（曲线留空），而不是落一串 0。
+  // 「积压 0 条」与「不知道积压」在运维上要做的事完全不同。
+  bool log_metrics_available = 31;
+
+  // 采集索引（含旧 state 文件迁移归档）在磁盘上的实际占用字节。
+  // 口径：ingest.index.db + -wal + -shm 的文件尺寸之和（旧 ingest.state.json 及其
+  // .migrated 归档也计入，因为它们在事故形态里正是同一个增长面）。
+  // 事故靶点：该值曾达 1.2 GB 且无人知晓。
+  int64 log_state_file_size_bytes = 32;
+
+  // 上述文件在最近一个采样窗口内的**增速**（字节/秒，可为负——裁剪/迁移会使其下降）。
+  // 单独给尺寸不够：1.2 GB 静止无害，117 MB/s 持续 25 小时才是事故。
+  double log_state_file_growth_bytes_per_sec = 33;
+
+  // 采集索引持久化的写入吞吐（字节/秒），由相邻两次心跳的累计写入字节差推导，
+  // 口径与 node_net_*_rate 一致。事故靶点：117 MB/s 的持续重写。
+  double log_persist_write_bytes_per_sec = 34;
+
+  // 单源 WAL **最大**积压条数（跨全部采集源取最大值，不是求和）。
+  // 为什么取最大值而非求和：单源洪流才是事故形态，求和会被源数量稀释——
+  // 一个源积压 50 万条（该源已被闸住）与 60 个源各积压 8 千条，求和后同样都是 48 万，
+  // 但前者要立刻处置该源、后者说明整体在缓慢消化。
+  int64 log_wal_backlog_entries = 35;
+
+  // 上述「积压最重的那一个源」已处于采集暂停状态的**持续秒数**（0 = 未被暂停）。
+  // 暂停本身是设计行为（闸住洪流）；事故形态是「暂停了几小时没人发现」。
+  int64 log_wal_paused_seconds = 36;
+
+  // 投递失败率（0..100 百分比），窗口内失败批次数 / 总批次数。
+  // 无投递活动（分母为 0）时为 0，并由 log_metrics_available/窗口计数区分。
+  double log_delivery_failure_rate = 37;
+
+  // 投递失败的主要分类（窗口内出现次数最多的那一类；空 = 窗口内无失败）。
+  // 取值来自 Worker 侧投递错误的分类：auth / status_4xx / status_5xx / transport / other。
+  // 分类的价值在于区分「凭据错（重试无用）」与「VL 忙（等一等会好）」。
+  string log_delivery_failure_class = 38;
+
+  // 投影校验进入退避的累计次数（进程内单调递增）。
+  // 退避激增说明写后可见性校验在反复重试——VL 压力或可见延迟异常的先兆。
+  int64 log_verify_backoff_count = 39;
+
+  // 慢查询累计次数与其中最慢单次耗时（毫秒）。
+  // Worker 侧「慢」的判据是单次投影校验查询 ≥ 500 ms（verifySlowQueryThreshold）。
+  int64 log_slow_sql_count = 40;
+  int64 log_slow_sql_max_ms = 41;
+
+  // ---- 实例工作目录占用（编号从 42 起）----
+  //
+  // 为什么要进心跳：组配额的存储口径必须从「按备份大小估算」换成「真实工作目录占用」。
+  // 既有实时链路 GetInstanceResourceSnapshot 是**按需逐实例 gRPC**——组配额查询要
+  // 遍历组内全部实例，直接接会变成 N 次跨节点 RPC，配额页被拖慢。随心跳批量上报后 CP 落库，
+  // 配额读路径退化成一次 SQL 聚合，且「创建期检查」与「运行期强制」用同一份数据。
+  //
+  // 兼容策略与前序字段一致：**新增**字段，老 CP 忽略未知字段、老 Worker 不发（空列表），
+  // 两侧都不改变既有语义。空列表 = 该 Worker 不支持该项，CP 侧保持既有值不动
+  //（不回退成 0：清空会让用量凭空归零 → 低估占用 → 超卖）。
+  //
+  // 单实例粒度而非节点总量：配额按「组内实例集合」核算，节点总量无法归因到组。
+  repeated InstanceWorkDirUsage work_dir_usages = 42;
 }
 
-// TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照（FR-183，见 ADR-040）。
+// InstanceWorkDirUsage 单个实例的工作目录占用（心跳批量上报）。
+//
+// 与 GetInstanceResourceSnapshotResponse 的 work_dir_bytes 同源同口径（都统计目录树内
+// 常规文件尺寸之和），区别只在**投递方式**：那个是按需 RPC 的单实例响应，本消息是心跳里的
+// 批量项。两处口径必须一致，否则「配额页显示的用量」与「运行期强制判定的用量」会打架。
+message InstanceWorkDirUsage {
+  string instance_uuid = 1;
+  // work_dir_bytes 工作目录内常规文件尺寸之和（字节）。available=false 时本值无意义。
+  int64 work_dir_bytes = 2;
+  // available 本拍统计是否成功（目录不存在/不可读/超时/实例无工作目录时为 false）。
+  //
+  // 语义边界（消费方必读）：false **不等于占用为 0**。配额侧对 false 的实例必须回退到
+  // 备份大小估算，而不是按 0 计入——按 0 会低估用量，让超卖通过创建期检查。
+  bool available = 3;
+}
+
+// HostProcessSample 整机 top-N 进程的一项。
+//
+// 隐私边界：**刻意不含 cmdline**。这不是遗漏，是 spec §2「不做」明确列出的约束——
+// cmdline 里常有密码/token/内网地址。若将来要加，必须先过隐私评审。
+message HostProcessSample {
+  uint32 pid = 1;
+  string comm = 2;        // 进程名（不含参数）
+  float cpu_pct = 3;      // CPU 占用百分比（0..100，按单核口径，与 ps 一致）
+  uint64 rss_bytes = 4;   // 常驻内存字节
+}
+
+// HostMountUsage 一个挂载点的磁盘用量。
+message HostMountUsage {
+  string mountpoint = 1;   // 挂载点路径，如 /、/var
+  uint64 total_bytes = 2;
+  uint64 used_bytes = 3;
+  float used_pct = 4;      // 使用率 0..100
+}
+
+// TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照。
 // Worker 维护运行中任务内存登记表，每次心跳把表内任务快照随心跳上报；
 // CP 据 task_id upsert Task、幂等追加日志，终态（succeeded/failed）触发副作用。
 message TaskSnapshot {
@@ -505,23 +732,23 @@ message TaskSnapshot {
 message InstanceState {
   string instance_uuid = 1;
   string state = 2; // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
-  // pid 受管实例根进程 PID（可选，FR-326 反向对账诊断；0/缺省=未知或未运行）。
+  // pid 受管实例根进程 PID（可选，反向对账诊断；0/缺省=未知或未运行）。
   // 老 Worker 不上报本字段（零值），老 CP 忽略；不改变正向对账语义。
   int32 pid = 3;
-  // health 是 FR-459 健康巡检结论标识（可选）：healthy/suspected_dead/dead/crashed/circuit_broken。
+  // health 是健康巡检结论标识（可选）：healthy/suspected_dead/dead/crashed/circuit_broken。
   // 空=无巡检结论（老 Worker 或该实例未参与巡检，如无端口/未运行）。老 CP 忽略，不改正向对账语义。
   string health = 4;
-  // status_reason 是健康巡检给出的原因说明（假死/熔断等，FR-459）；空=正常。CP 据此写 instances.status_reason。
+  // status_reason 是健康巡检给出的原因说明（假死/熔断等）；空=正常。CP 据此写 instances.status_reason。
   string status_reason = 5;
   // foreign_pid 是「已注册实例的工作目录下存在活进程、但 Worker 未认作运行」时该进程的 PID（0=无此类漂移）。
-  // FR-471：用于发现「面板 STOPPED 而磁盘在跑」的运行态脱节（就地导入等外部启动的服务器）。
-  // 老 CP 忽略本字段；老 Worker 不上报（零值）。不改变 FR-326 反向对账语义。
+  // 用于发现「面板 STOPPED 而磁盘在跑」的运行态脱节（就地导入等外部启动的服务器）。
+  // 老 CP 忽略本字段；老 Worker 不上报（零值）。不改变既有反向对账语义。
   int32 foreign_pid = 6;
   // foreign_cmdline 是上述漂移进程的命令行摘要（已截断，供运维识别来源）；仅 foreign_pid>0 时有意义。
   string foreign_cmdline = 7;
 }
 
-// DisposeOrphanRuntimeRequest CP 请求 Worker 清理无主运行时（FR-326）。
+// DisposeOrphanRuntimeRequest CP 请求 Worker 清理无主运行时。
 message DisposeOrphanRuntimeRequest {
   string instance_uuid = 1;
 }
@@ -532,7 +759,7 @@ message DisposeOrphanRuntimeResponse {
   string error = 2;
 }
 
-// InstanceMetricSample 心跳负载里携带的每实例 ServerProbe 指标快照（FR-060 时序留存）。
+// InstanceMetricSample 心跳负载里携带的每实例 ServerProbe 指标快照（时序留存）。
 // probe_available=false 表示探针不可用（回退 RCON 或缺测），相应字段为零值。
 // 复用下方 WorldMetric 承载分世界负载。
 message InstanceMetricSample {
@@ -548,7 +775,7 @@ message InstanceMetricSample {
   double uptime_seconds = 10;
   repeated WorldMetric worlds = 11;
   double mspt_p95_millis = 12; // ServerProbe 最近 60 秒原始 Tick 时长 p95；老探针缺失时为零值并由 probe_available/上层缺测语义判定
-  // 以下为 MC 直探（SLP/Query，FR-446/447）补充字段：探针缺该指标时按 SLP → Query 回填；
+  // 以下为 MC 直探（SLP/Query）补充字段：探针缺该指标时按 SLP → Query 回填；
   // slp_available/query_available 记录本拍各直探来源可用性，probe_available 记探针。
   // 三者皆 false 时对应指标为「不可用」（缺测），CP 落 NULL 断点而非伪值。
   string motd = 13;                    // 来自 SLP description / Query hostname
@@ -561,22 +788,53 @@ message InstanceMetricSample {
   bool slp_available = 20;             // 本拍 SLP 是否可用
   bool query_available = 21;           // 本拍 Query 是否可用
   bool player_names_partial = 22;      // true=名单取自 SLP sample（可能不完整，非实名）；预留，心跳当前不填
-  // players_online_available 记录本拍在线人数是否真实可用（FR-447）。Query 有响应但响应里缺
+  // players_online_available 记录本拍在线人数是否真实可用。Query 有响应但响应里缺
   // numplayers（或不可解析）时该位为 false：CP 据此落 NULL 断点，绝不把「缺测」伪装成 0 在线。
   // 老 Worker 不置该位（false），CP 侧对「探针可用」的新老样本另有兼容判定。
   bool players_online_available = 23;
-  // gc_count_total / gc_time_millis 为 ServerProbe 暴露的 GC cumulative counter（FR-465），
+  // gc_count_total / gc_time_millis 为 ServerProbe 暴露的 GC cumulative counter，
   // 跨 gc 收集器求和。CP 侧据相邻心跳差推导速率（重启归零拍跳过），故这里存累计值而非速率。
   // 字段号 24/25：13/14 已被预留的 motd/version 占用（spec 原稿写 13/14，实现按现状顺延）。
   int64 gc_count_total = 24;   // Σ serverprobe_gc_count_total{gc=...}
   double gc_time_millis = 25;  // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000
-  // 上方的 motd / version / max_players / player_names / plugins / map / source_mask /
+  // 上方的 motd / version / player_names / plugins / map / source_mask /
   // player_names_partial 是**预留字段**：实时详情链路（GetInstanceMetrics）已端到端提供这些值，
   // 而心跳时序链路（本消息）的 CP 消费者只用到可用位与 players_online；故 Worker 不再每拍填充，
-  // 避免 69 实例规模下每 30s 的文本载荷放大（FR-446 审计项 3）。
+  // 避免 69 实例规模下每 30s 的文本载荷放大。
+  //
+  // max_players 是例外：侧栏要显示「当前/最大人数」，而批量的
+  // POST /metrics/series/batch 只能读到存好的时序序列。它是 int32、约 4 字节/实例/拍，
+  // 相比被排除的 motd/名单/插件/图标（KB 级）可忽略，因此本拍填充并由 CP 落 inst_players_max。
+  bool max_players_available = 26;  // max_players 本拍是否真实可用（三源皆无时 false → CP 落 NULL）
+
+  // ── 业务桥（ServerProbe ↔ JM）自身的中转指标 ──────────────────
+  //
+  // ## 为什么单独一组，而不是拌进上面的 TPS/堆/线程
+  // 上面那些是「服务器 / JVM 的快照」，反映业务自身健康；这一组是「通道的快照」，
+  // 反映**中转链路**承不承得住。数据源不同（后者来自 FrameSender.SenderStatus）、
+  // 采样时机不同、告警阀值也完全不同，混在一起会让“TPS 掉了”与“桥堵了”无法区分。
+  //
+  // ## 为何是累计值而不是速率
+  // 探针上报间隔可变（由 metrics-push-interval-ms 控制），在探针侧算速率会把“间隔变化”
+  // 误读成“流量变化”。CP 侧有固定心跳节奏，在那里做差分才准确。
+  //
+  // ## 缺测语义
+  // 老探针不上报这些字段，于是全为零——与“真的没丢”无法区分。
+  // 因此 CP 侧不得仅据“全零”判定健康，必须配合 bridge_metrics_present。
+  int32 bridge_reliable_queue = 27;             // 可靠事件队列当前深度（帧）
+  int32 bridge_best_effort_queue = 28;          // 可丢事件队列当前深度（帧）
+  int64 bridge_reliable_rejected_total = 29;    // 可靠事件因队列满被拒累计数
+  int64 bridge_best_effort_dropped_total = 30;  // 可丢事件被丢累计数
+  int64 bridge_receipt_rejected_total = 31;     // 命令回执被拒累计数（回执被拒会让 JM 误判业务失败）
+  int64 bridge_spill_dropped_total = 32;        // 已受理但被落盘缓冲挤掉的累计数（仅 spill 开启时非零）
+  int64 bridge_write_failures_total = 33;       // 写出失败累计数
+  int64 bridge_write_timeouts_total = 34;       // 写超时累计数（强关 socket）
+  // bridge_metrics_present 区分「上报了 0」与「没上报」——老探针为 false。
+  // 没有它，CP 会把“不知道”画成“健康”，而那正是本项监控要防的事。
+  bool bridge_metrics_present = 35;
 }
 
-// ProcessMetricSample 受管实例进程 TOPN 快照（FR-170）。
+// ProcessMetricSample 受管实例进程 TOPN 快照。
 message ProcessMetricSample {
   string instance_uuid = 1;
   int32 pid = 2;
@@ -609,28 +867,28 @@ message ManagedRuntimeSnapshot {
 
 message HeartbeatResponse {
   int64 timestamp = 1;
-  // 节点期望出站代理（FR-185，见 ADR-043）：CP 据「节点 custom ? 节点值 : 全局默认」每拍下发。
+  // 节点期望出站代理：CP 据「节点 custom ? 节点值 : 全局默认」每拍下发。
   // Worker 仅当 proxy_generation 与本地已应用代不同时才重建出站 client（避免每拍重建）；
   // 重连/重启天然由后续心跳重发。proxy_url 空 = 期望直连（回退 worker.yml/env）。
   string proxy_url = 2;        // 期望代理地址（scheme://host[:port]，可能含凭据，Worker 直接用、日志脱敏）
   string proxy_no_proxy = 3;   // 期望免代理列表（逗号分隔，语义同 NO_PROXY）
   string proxy_generation = 4; // 期望代理配置的哈希；变化才触发 Worker 重建出站 client
-  // cancel_task_ids 是 CP 请求中断的运行中长任务 id（FR-227）：CP 每拍把该节点「已请求取消
+  // cancel_task_ids 是 CP 请求中断的运行中长任务 id：CP 每拍把该节点「已请求取消
   // 且未终态」的任务 id 下发，Worker 据此取消对应任务的执行 context（真中断下载 + 清理临时文件）
   // 并经下一拍心跳上报该任务为 canceled。幂等：Worker 对已不在登记表的 id 静默忽略。
   repeated string cancel_task_ids = 5;
-  // CP↔Worker WS 令牌密钥每拍携带（FR-275，见 ADR-061，镜像 proxy 下发）：Worker 比对
+  // CP↔Worker WS 令牌密钥每拍携带（镜像 proxy 下发）：Worker 比对
   // 与当前生效值不同才热应用 + 持久化——CP 轮换密钥后 Worker 不重启即自愈（≤1 心跳周期）。
   // 空 = 旧 CP 未下发，Worker 不动作。
   string ws_token_secret = 6;
   // direct_probe_slp_timeout_ms / direct_probe_query_timeout_ms 是 CP 下发的 MC 直探
-  // （SLP / Query）超时毫秒值（FR-446）：取自平台设置 direct_probe.slp_timeout /
+  // （SLP / Query）超时毫秒值：取自平台设置 direct_probe.slp_timeout /
   // direct_probe.query_timeout（Go duration 文本）。Worker 存内存并填入心跳与实时两条
   // 采集链路的 metrics.CollectConfig，使超时真可配且无需重启 Worker。
   // <=0 = 未配置（老 CP 不下发），Worker 回退内置默认 3s。
   int32 direct_probe_slp_timeout_ms = 7;
   int32 direct_probe_query_timeout_ms = 8;
-  // === FR-459 实例健康巡检与自愈策略下发 ===
+  // === 实例健康巡检与自愈策略下发 ===
   // health_scan_enabled 用 optional 表达「CP 是否下发了策略」：nil=老 CP 未下发（Worker 沿用本地
   // worker.yml 配置），非 nil=采用本响应全部 health_* 字段。避免 proto3 零值无法区分「关闭」与「未配置」。
   optional bool health_scan_enabled = 9;      // 巡检总开关（CP 侧生效值）
@@ -640,37 +898,37 @@ message HeartbeatResponse {
   string health_action = 13;                  // 假死动作：warn / restart
   int32 health_circuit_breaker_threshold = 14; // 崩溃熔断：窗口内重启次数阈值
   int32 health_circuit_breaker_window_ms = 15; // 崩溃熔断：滚动窗口（毫秒）
-  // health_startup_warmup_ms 是启动宽限期（毫秒，FR-459 复审项 2）：Start 返回 RUNNING 后这段时间
+  // health_startup_warmup_ms 是启动宽限期（毫秒）：Start 返回 RUNNING 后这段时间
   // 内不做假死判定，避免慢启动 MC 被判假死并反复重启。<=0 = 未配置，Worker 回退内置默认 5m。
   int32 health_startup_warmup_ms = 16;
-  // health_self_heal_max_restarts 是假死自愈在熔断窗口内的重启次数上限（FR-459 复审项 7，
+  // health_self_heal_max_restarts 是假死自愈在熔断窗口内的重启次数上限，
   // 避免假死路径重启风暴）。<=0 = 未配置，Worker 回退内置默认 3。
   int32 health_self_heal_max_restarts = 17;
-  // === FR-503 日志采集配置下发 ===
+  // === 日志采集配置下发 ===
   // log_acq_present 是「CP 是否下发了日志采集配置」的存在标记（proto3 optional）：
   // nil = 老 CP 未下发 → Worker 不动作，沿用本地 worker.yml 配置（向后兼容）；
-  // 非 nil = 采用本响应全部 log_acq_* 字段。与 FR-459 的 health_scan_enabled 同款语义，
+  // 非 nil = 采用本响应全部 log_acq_* 字段。与 health_scan_enabled 同款语义，
   // 避免 proto3 零值无法区分「关闭」与「未配置」。
   optional bool log_acq_present = 18;
-  // log_acq_rules_enabled 是采集规则引擎总开关（FR-502 的规则匹配是否生效）。
-  // 关闭时 Worker 回退 bukkit 规则（等价于 FR-502 落地前的行为）。
+  // log_acq_rules_enabled 是采集规则引擎总开关（规则匹配是否生效）。
+  // 关闭时 Worker 回退 bukkit 规则（等价于规则引擎落地前的行为）。
   bool log_acq_rules_enabled = 19;
-  // log_acq_realtime_tail 是实时采集应急开关（FR-504）：关闭时停 tail 不采集新日志，
+  // log_acq_realtime_tail 是实时采集应急开关：关闭时停 tail 不采集新日志，
   // 服务照常运行、账本位置保持，恢复后从断点续采。
   bool log_acq_realtime_tail = 20;
-  // log_acq_gz_import_enabled 是 gz 归档导入**总开关**（FR-504）。
+  // log_acq_gz_import_enabled 是 gz 归档导入**总开关**。
   // 关闭 = 不启用定时归档扫描（折算后的扫描周期一律为 0），**手动导入入口不受影响**
   // （应急补历史永远可用）。
-  // 注意：它**不停**常驻采集循环的自动发现——那是 FR-474 的既有承诺（新接管的源先导入
+  // 注意：它**不停**常驻采集循环的自动发现——那是既有承诺（新接管的源先导入
   // 历史再给当前段分配位置），停掉会造成静默的历史缺失。
   bool log_acq_gz_import_enabled = 21;
-  // log_acq_gz_scan_interval_ms 是 gz 定时扫描周期（毫秒，FR-504）。
+  // log_acq_gz_scan_interval_ms 是 gz 定时扫描周期（毫秒）。
   // 空/0 = **未配置**（写入侧禁止配 0 或负数）→ Worker 回落 worker.yml 基线
   // `log_ingest.archive_scan_interval`；协议上 0 只表示未配置，不与「关闭」混用。
   // 默认（周期空 ⇒ 回落基线，内置基线周期为 0）⇒ **不扫描**；
   // 要显式停定时扫描请关总开关（log_acq_gz_import_enabled），而不是清周期。
   int32 log_acq_gz_scan_interval_ms = 22;
-  // log_acq_path_overrides_json 是实例级日志路径覆盖映射（JSON 对象，FR-502 §3.4）：
+  // log_acq_path_overrides_json 是实例级日志路径覆盖映射（JSON 对象）：
   // {"inst:<id>": "<相对实例工作目录的路径>"}。空 = 无覆盖，各实例用规则默认路径。
   // 安全约束：不接受绝对路径，也不接受折叠 `..` 后逃出工作目录的路径。
   // 用 JSON 而非 map<string,string> 是为了与既有 platform_settings 的文本值形态一致
@@ -698,31 +956,31 @@ message CreateInstanceRequest {
   // CP 按实例角色派生（MC 后端 stop / 代理 end）；为空时 Worker 回退到 "stop"。
   string stop_command = 11;
   // probe_port 是 ServerProbe /metrics 端口（CP 分配后下发），Worker 持久化到 PID 记录，
-  // 心跳时据此自采每实例 ServerProbe 快照（FR-060 时序）；0=未部署探针，心跳不采该实例。
+  // 心跳时据此自采每实例 ServerProbe 快照（时序）；0=未部署探针，心跳不采该实例。
   int32 probe_port = 12;
   // graceful_stop_timeout_seconds 是优雅停止后等待进程自行退出的上限（秒，CP 从平台设置
   // graceful_stop.timeout 取生效值后下发）。daemon 策略透传到 wrapper，停服按此值超时强杀。
   // 语义：对设置变更后「新启动」的实例生效（值在启动时定型）；0=未指定，wrapper 回退 env/默认。
   int32 graceful_stop_timeout_seconds = 13;
   // image 是 docker 模式的容器镜像引用（如 itzg/minecraft-server:latest）。
-  // 仅 process_type=docker 使用；Worker 启动前若本地缺镜像则拉取（FR-078，见 ADR-019）。
+  // 仅 process_type=docker 使用；Worker 启动前若本地缺镜像则拉取。
   string image = 14;
-  // port_mappings 是 docker 模式的容器端口↔宿主端口发布关系（宿主端口来自 FR-032 端口池）。
+  // port_mappings 是 docker 模式的容器端口↔宿主端口发布关系（宿主端口来自端口池）。
   // 仅 process_type=docker 使用。
   repeated PortMapping port_mappings = 15;
   // cpu_limit 是 docker 模式的 CPU 核数上限（如 1.5 表示 1.5 核），注入 HostConfig.NanoCPUs（×1e9）。
-  // 仅 process_type=docker 使用；0=不限制（FR-079，见 ADR-019）。
+  // 仅 process_type=docker 使用；0=不限制。
   double cpu_limit = 16;
   // mem_limit_mb 是 docker 模式的内存上限（MiB），注入 HostConfig.Memory（×1024×1024）。
-  // 仅 process_type=docker 使用；0=不限制（FR-079，见 ADR-019）。
+  // 仅 process_type=docker 使用；0=不限制。
   int64 mem_limit_mb = 17;
   // disk_limit_mb 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入。
-  // bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容（FR-079）。
+  // bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容。
   int64 disk_limit_mb = 18;
-  // server_port 是实例 server-port（MC 游戏端口），Worker 据此做 SLP 直探（FR-446）。
+  // server_port 是实例 server-port（MC 游戏端口），Worker 据此做 SLP 直探。
   // 0=未知，心跳不直探 SLP。
   int32 server_port = 19;
-  // query_port 是实例 query.port（Query/GameSpy4 端口），Worker 据此做 Query 直探（FR-446）。
+  // query_port 是实例 query.port（Query/GameSpy4 端口），Worker 据此做 Query 直探。
   // 0=未开启 Query，心跳不直探 Query。
   int32 query_port = 20;
   // CP-authorized log namespace. Empty means an older CP has not negotiated
@@ -730,19 +988,19 @@ message CreateInstanceRequest {
   string log_target_id = 22;
   string log_acquire_mode = 23; // FILE_PRIMARY | STDIO_PRIMARY
   string log_source_generation = 24; // stable across reconnects on this holder
-  // log_rule_key 是日志采集规则名（FR-502）：bukkit | bungee | waterfall | velocity。
+  // log_rule_key 是日志采集规则名：bukkit | bungee | waterfall | velocity。
   // 由 CP 按实例 role + launch_spec.coreJar 推导后下发（如 BungeeCord.jar → bungee）。
   // 空 = 旧 CP 未下发，Worker 回退 bukkit 规则（行为与历史逐字一致）。
   string log_rule_key = 25;
-  // log_relative_path 是实例级活动日志相对路径覆盖（相对 work_dir，FR-502）。
+  // log_relative_path 是实例级活动日志相对路径覆盖（相对 work_dir）。
   // 空 = 使用 log_rule_key 对应规则的默认路径。用于规则外的自定义日志布局。
   string log_relative_path = 26;
 }
 
-// PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。
+// PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式）。
 message PortMapping {
   int32 container_port = 1; // 容器内监听端口（由镜像约定，如 MC 容器内 25565）
-  int32 host_port = 2;      // 宿主发布端口（来自 FR-032 端口池）
+  int32 host_port = 2;      // 宿主发布端口（来自端口池）
   string protocol = 3;      // tcp（默认）或 udp（如 MC query）
 }
 
@@ -751,7 +1009,7 @@ message CreateInstanceResponse {
   string error = 2;
 }
 
-// ResyncInstancesRequest CP 重连后重推某节点全部实例规格（见 ADR-050）。
+// ResyncInstancesRequest CP 重连后重推某节点全部实例规格。
 // 复用 CreateInstanceRequest 作每实例规格——其字段已涵盖 Worker 填注册表所需的全部内容
 // （uuid/name/process_type/start_command/stop_command/work_dir/env_vars/auto_restart/
 // jdk_path/probe_port/graceful_stop_timeout/docker 镜像端口限额）。
@@ -767,7 +1025,7 @@ message ResyncInstancesResponse {
 
 message InstanceActionRequest {
   string instance_uuid = 1;
-  // 生效资源限额随启动/重启请求**一并下发**（N-3 / FR-467 throttle 生效链）。
+  // 生效资源限额随启动/重启请求**一并下发**（N-3 / throttle 生效链）。
   //
   // 为什么不能只靠启动前的幂等重注册（CreateInstance）刷新：重注册失败时 CP 侧
   // 只记 Debug 日志且**不阻断**启动，Worker 于是继续沿用旧 spec 里的 cgroup 限额——
@@ -917,7 +1175,7 @@ message FileInfo {
   bool is_dir = 2;
   int64 size = 3;
   int64 mod_time = 4;
-  // FR-373 权限元数据（加性；相对 Worker 进程用户）。
+  // 权限元数据（加性；相对 Worker 进程用户）。
   string mode_octal = 5;   // 如 "0644"，Windows 可空
   string mode_string = 6;  // 如 "rw-r--r--"，Windows 可空
   bool readable = 7;
@@ -926,7 +1184,7 @@ message FileInfo {
   string group = 10;       // 可空
 }
 
-// CheckPathAccessRequest 写前/浏览前权限探测（FR-373）。
+// CheckPathAccessRequest 写前/浏览前权限探测。
 message CheckPathAccessRequest {
   string instance_uuid = 1; // 空=节点绝对路径模式
   string path = 2;
@@ -946,7 +1204,7 @@ message CheckPathAccessResponse {
   string reason = 11; // 中文诊断
 }
 
-// ChmodPathRequest 单 path 非递归 chmod（FR-373）。
+// ChmodPathRequest 单 path 非递归 chmod。
 message ChmodPathRequest {
   string instance_uuid = 1;
   string path = 2;
@@ -962,13 +1220,26 @@ message ChmodPathResponse {
 message ReadFileRequest {
   string instance_uuid = 1;
   string path = 2;
+  // tail_bytes 为「只读文件尾部」的字节窗口（0 = 读全量，保持既有行为）。
+  //
+  // 为什么需要它：在线编辑器护栏把整读上限定在 10MiB，而持续追写的日志很快就越过
+  // 任何固定上限——单纯放大上限既不解决「读不完」，也会把整份文件塞进内存与前端。
+  // 调用方声明只要尾部窗口时，Worker 只读文件末尾并**按行对齐**（丢弃首行残段），
+  // 于是调用方能稳定拿到「最后若干行」而不是半行开头的文本。
+  // 生效上限 = min(tail_bytes, 服务端硬上限)；调用方无法用放大本字段绕过服务端兜底。
+  int64 tail_bytes = 3;
 }
 
 message ReadFileResponse {
   bytes content = 1;
+  // truncated 表示本次内容不是文件开头起算的完整正文（尾部窗口或服务端硬上限截断）。
+  // 调用方据此提示「仅显示尾部」，不得当作完整内容展示。
+  bool truncated = 2;
+  // total_size 为被读文件的总字节数（便于提示「文件共多大、当前显示的是尾部」）。
+  int64 total_size = 3;
 }
 
-// HashFileRequest 计算实例工作目录内某文件的 SHA-256（FR-468 §2.5）。
+// HashFileRequest 计算实例工作目录内某文件的 SHA-256。
 message HashFileRequest {
   string instance_uuid = 1;
   // path 为实例工作目录相对路径；必须指向工作目录内的**常规文件**——
@@ -1053,7 +1324,7 @@ message UploadFileResponse {
   int64 bytes_written = 3; // 实际落盘字节数，CP 与已发送字节数比对校验完整性
 }
 
-// === 全文搜索 / 文件名快速打开（FR-074，见 ADR-017）===
+// === 全文搜索 / 文件名快速打开 ===
 
 message SearchFilesRequest {
   string instance_uuid = 1;
@@ -1072,7 +1343,7 @@ message SearchHit {
 message SearchFilesResponse {
   repeated SearchHit hits = 1;
   bool truncated = 2;  // 命中数达到 max_results 上限被截断
-  bool indexing = 3;   // 索引首建未就绪：本次返回空命中，调用方应稍后用同一查询重试（FR-113，ADR-024）
+  bool indexing = 3;   // 索引首建未就绪：本次返回空命中，调用方应稍后用同一查询重试
 }
 
 // === 配置文件操作 ===
@@ -1135,6 +1406,9 @@ message WriteConfigRequest {
   string path = 2;
   string content = 3;
   repeated ConfigField fields = 4;
+  // expected_hash 落盘后读回校验的目标 sha256（小写 hex）。
+  // 空表示调用方不做校验（兼容旧 CP），此时仍会读回并回填 actual_hash。
+  string expected_hash = 5;
 }
 
 message WriteConfigResponse {
@@ -1142,6 +1416,15 @@ message WriteConfigResponse {
   string error = 2;
   ConfigValidationResult validation = 3;
   uint32 version_id = 4;
+  // error_code 机器可读原因码：PATH_ESCAPE / WRITE_FAILED / WRITE_VERIFY_FAILED /
+  // BACKUP_FAILED / VALIDATION_FAILED。success=false 时必填，便于 CP 分支处置。
+  string error_code = 5;
+  // actual_hash 读回文件后的实际 sha256；未读回（写失败）时为空。
+  string actual_hash = 6;
+  // backup_created 写前是否创建了快照（仅当原文件存在且内容不同）。
+  bool backup_created = 7;
+  // backup_path 快照路径（相对工作目录，便于运维定位与回滚）。
+  string backup_path = 8;
 }
 
 message ValidateConfigRequest {
@@ -1202,7 +1485,7 @@ message GetNodeMetricsResponse {
   float cpu_usage = 1;
   float memory_usage = 2;
   float disk_usage = 3;
-    float iowait = 8;  // IO 等待占比（0..1，FR-485）
+    float iowait = 8;  // IO 等待占比
   int64 memory_used_mb = 4;
   int64 memory_total_mb = 5;
   int64 disk_used_mb = 6;
@@ -1212,9 +1495,9 @@ message GetNodeMetricsResponse {
 message GetInstanceMetricsRequest {
   string instance_uuid = 1;
   // probe_port 是 ServerProbe /metrics 端口（0=未部署探针，指标返回 N/A）。
-  // RCON 回退已退役（FR-067，见 ADR-016）：指标纯探针，未部署探针即 N/A。
+  // RCON 回退已退役：指标纯探针，未部署探针即 N/A。
   int32 probe_port = 2;
-  // server_port / query_port 是 MC 直探端口（FR-446）：CP 下发后 Worker 据此做 SLP/Query 直探，
+  // server_port / query_port 是 MC 直探端口：CP 下发后 Worker 据此做 SLP/Query 直探，
   // 探针缺失时用于回填 MOTD/版本/在线人数/玩家名单等基础信息。0=未知/未开启。
   int32 server_port = 3;
   int32 query_port = 4;
@@ -1224,18 +1507,18 @@ message GetInstanceMetricsResponse {
   float tps = 1;
   int32 online_players = 2;
   int64 memory_mb = 3;
-  // 以下为 ServerProbe 富指标（FR-010）；探针不可用时为零值，probe_available=false。
+  // 以下为 ServerProbe 富指标；探针不可用时为零值，probe_available=false。
   float mspt_millis = 4;
   int32 threads = 5;
   double cpu_percent = 6;
   int64 heap_max_mb = 7;
   double uptime_seconds = 8;
   repeated WorldMetric worlds = 9;
-  // probe_available=true 表示指标来自 ServerProbe（FR-010）；false 表示探针未部署/未就绪
-  // （TPS/MSPT/JVM/世界等深度指标 N/A）。RCON 回退已退役（FR-067，见 ADR-016）。
+  // probe_available=true 表示指标来自 ServerProbe；false 表示探针未部署/未就绪
+  // （TPS/MSPT/JVM/世界等深度指标 N/A）。RCON 回退已退役。
   bool probe_available = 10;
   float mspt_p95_millis = 11; // ServerProbe 最近 60 秒原始 Tick 时长 p95；不得由 avg 二次聚合冒充
-  // 以下为 MC 直探（SLP/Query，FR-446/447）字段与显式可用性位。
+  // 以下为 MC 直探（SLP/Query）字段与显式可用性位。
   // 采集优先级链 `探针 → SLP → Query → 不可用`；不再以 -1/-- 伪值占位，前端按可用性位渲染「不可用」。
   bool players_available = 12;         // online_players 是否有效（探针/SLP/Query 任一命中）
   string motd = 13;
@@ -1273,7 +1556,7 @@ message GetInstanceResourceSnapshotResponse {
   bool cpu_available = 7;
   bool uptime_available = 8;
   string unavailable_reason = 9;
-  // work_dir_bytes 实例工作目录占用（字节，FR-467 运行期配额强制用）。
+  // work_dir_bytes 实例工作目录占用（字节，运行期配额强制用）。
   // 与进程指标不同源：磁盘占用看目录树大小而非进程 RSS，故独立采集 + 独立可用标记。
   int64 work_dir_bytes = 10;
   // work_dir_available 工作目录大小是否可用于配额判定（目录不存在/统计失败时为 false）。
@@ -1288,7 +1571,7 @@ message WorldMetric {
   int64 tile_entities = 4;
 }
 
-// GetInstanceEnvRequest 取运行中实例进程实际环境（FR-344）。
+// GetInstanceEnvRequest 取运行中实例进程实际环境。
 message GetInstanceEnvRequest {
   string instance_uuid = 1;
 }
@@ -1420,15 +1703,15 @@ message InstallJDKRequest {
   // mirror_base 是该 vendor 的下载基址（CP 从平台设置 jdk.mirror.<vendor> 取生效值后下发）。
   // 非空时 Worker 用它构造下载 URL，使运行时配置的镜像源真生效；为空时回退 Worker 本地 env/默认源。
   string mirror_base = 5;
-  // task_id 是 CP 生成的任务业务 ID（FR-183，见 ADR-040）。非空时 Worker 异步执行安装：
+  // task_id 是 CP 生成的任务业务 ID。非空时 Worker 异步执行安装：
   // 启动即返回、后台下载、经心跳按此 task_id 上报进度/日志/终态。为空时回退同步安装（向后兼容）。
   string task_id = 6;
-  // version 具体 JDK 版本（FR-178，可选，如 "21.0.4"）。非空时经 foojay disco 按具体版本解析下载源；
+  // version 具体 JDK 版本（可选，如 "21.0.4"）。非空时经 foojay disco 按具体版本解析下载源；
   // 为空时按 major_version 取该大版本最新 GA（沿用直链/foojay latest）。
   string version = 7;
 }
 
-// === JDK 版本目录（foojay，FR-178）===
+// === JDK 版本目录（foojay） ===
 
 message JDKCatalogRequest {
   string vendor = 1;       // 发行版名（Temurin/Liberica/Microsoft/Semeru/GraalVM…）
@@ -1454,7 +1737,7 @@ message InstallJDKResponse {
   bool success = 1;     // 异步语义下表示「已受理并启动」；同步语义下表示「安装成功」
   string error = 2;
   JDKInfo jdk = 3;      // 仅同步路径返回；异步路径为空（结果经心跳终态的 result 回传）
-  // task_id 回显受理的任务 ID（异步路径，FR-183）。CP 据此把 Task 置为 running。
+  // task_id 回显受理的任务 ID（异步路径）。CP 据此把 Task 置为 running。
   string task_id = 4;
 }
 
@@ -1467,7 +1750,7 @@ message RemoveJDKResponse {
   string error = 2;
 }
 
-// === 子服搭建（FR-034） ===
+// === 子服搭建 ===
 
 message DownloadCoreRequest {
   string instance_uuid = 1;
@@ -1475,7 +1758,7 @@ message DownloadCoreRequest {
   string download_url = 3;
   string sha256 = 4;        // 可选；非空时校验下载内容
 
-  // 组合缓存键成分（FR-330）：sha256 为空的下载源（Sponge Maven 等）按
+  // 组合缓存键成分：sha256 为空的下载源（Sponge Maven 等）按
   // core_type|mc_version|build 定位节点核心缓存。CP 必须把 latest/未指定构建
   // 解析为具体构建后再下发；三者缺任一（如 BungeeCord latest 无构建号）则不参与组合键缓存。
   string core_type = 5;   // 核心类型（paper / spongevanilla / velocity …）
@@ -1487,7 +1770,7 @@ message DownloadCoreResponse {
   bool success = 1;
   string error = 2;
   int64 size = 3;
-  bool cache_hit = 4; // FR-330：本次交付来自节点核心缓存（免远程下载），CP 据此区分 provision stage 文案
+  bool cache_hit = 4; // 本次交付来自节点核心缓存（免远程下载），CP 据此区分 provision stage 文案
 }
 
 message InstallForgeServerRequest {
@@ -1507,7 +1790,7 @@ message InstallForgeServerResponse {
   int64 spongeforge_size = 4;
 }
 
-// FetchBinaryRequest 通用二进制取件请求（FR-441）。来源由 source_kind 决定用哪组字段。
+// FetchBinaryRequest 通用二进制取件请求。来源由 source_kind 决定用哪组字段。
 message FetchBinaryRequest {
   string instance_uuid = 1;
   // source_kind 制品来源：url（远程下载）| node_file（节点本地复制）。
@@ -1526,7 +1809,7 @@ message FetchBinaryRequest {
   bool executable = 7;
 }
 
-// FetchBinaryProgress 取件进度（服务端流，FR-441）。每帧二选一：中间帧带字节计数，末帧带终态。
+// FetchBinaryProgress 取件进度（服务端流）。每帧二选一：中间帧带字节计数，末帧带终态。
 message FetchBinaryProgress {
   // 字节进度（中间帧；downloaded 单调递增，total<0 表示上游未给 Content-Length）。
   int64 downloaded = 1;
@@ -1540,7 +1823,7 @@ message FetchBinaryProgress {
   bool from_local = 8;  // 本地上游：URL 命中节点制品缓存，或 node_file 直接复制（免网络）
 }
 
-// === 节点制品缓存（FR-178） ===
+// === 节点制品缓存 ===
 
 // ArtifactCacheItem 一条节点本地制品缓存项（meta 缺失时 name/version 为空、size 取 blob 实际大小）。
 message ArtifactCacheItem {
@@ -1589,7 +1872,7 @@ message SetArtifactCacheCapResponse {
   int64 total_bytes = 4;   // 设定（含可能的 LRU 淘汰）后的总占用
 }
 
-// === 节点目录浏览（FR-178，目录选择器） ===
+// === 节点目录浏览（目录选择器） ===
 
 message BrowseDirRequest {
   // path 节点上的绝对路径（空=列出根/盘符等可选起点）。仅列子目录，只读。
@@ -1600,7 +1883,7 @@ message BrowseDirRequest {
 message BrowseDirEntry {
   string name = 1; // 目录名（basename）
   string path = 2; // 绝对路径
-  // FR-373 权限元数据（加性）。
+  // 权限元数据（加性）。
   string mode_octal = 3;
   string mode_string = 4;
   bool readable = 5;
@@ -1617,7 +1900,7 @@ message BrowseDirResponse {
   repeated BrowseDirEntry dirs = 5; // 子目录列表（不含文件）
 }
 
-// ProbeJDK 探测某路径的 JDK 信息（FR-228）：path 可为 JDK home 目录或 java 可执行文件，Worker 归一后探测。
+// ProbeJDK 探测某路径的 JDK 信息：path 可为 JDK home 目录或 java 可执行文件，Worker 归一后探测。
 message ProbeJDKRequest {
   string path = 1;
 }
@@ -1631,7 +1914,7 @@ message ProbeJDKResponse {
   string error = 7;           // valid=false 时的原因
 }
 
-// === 节点运行时库（FR-298）===
+// === 节点运行时库 ===
 
 // ScanRuntimes 扫描常见安装路径发现运行时候选（jdk/nodejs）。
 message ScanRuntimesRequest {
@@ -1654,17 +1937,17 @@ message ScanRuntimesResponse {
   repeated RuntimeCandidate candidates = 1;
 }
 
-// InstallRuntime 下载并安装运行时（FR-299，首批 nodejs：nodejs.org dist 便携归档）。
+// InstallRuntime 下载并安装运行时（首批 nodejs：nodejs.org dist 便携归档）。
 message InstallRuntimeRequest {
   string type = 1;        // 运行时类型（首批仅 nodejs）
   int32 major = 2;        // 主版本（如 22）
-  // arch 用该运行时下载源的命名（nodejs：x64 / arm64；CP 已按类型归一，FR-289 语义）。
+  // arch 用该运行时下载源的命名（nodejs：x64 / arm64；CP 已按类型归一）。
   // 为空时 Worker 按本机 GOARCH 推导。
   string arch = 3;
   // mirror_base 下载基址（CP 从平台设置 runtime.mirror.nodejs 取生效值后下发）。
   // 为空时回退 Worker 本地 env/官方默认源（https://nodejs.org/dist）。
   string mirror_base = 4;
-  // task_id CP 任务业务 ID（FR-183 异步语义同 InstallJDK）：必填，Worker 启动即返回，
+  // task_id CP 任务业务 ID（异步语义同 InstallJDK）：必填，Worker 启动即返回，
   // 后台下载解压，进度/日志/终态经心跳按此 task_id 上报。
   string task_id = 5;
 }
@@ -1675,8 +1958,8 @@ message InstallRuntimeResponse {
   string task_id = 3; // 回显受理的任务 ID（CP 据此把 Task 置为 running）
 }
 
-// RemoveRuntime 删除托管运行时目录（FR-299）。path 可为登记的内层路径（如 …/bin/node），
-// Worker 归一到托管根（opt/runtimes）下的顶层子目录整体删除（FR-292 语义）。
+// RemoveRuntime 删除托管运行时目录。path 可为登记的内层路径（如 …/bin/node），
+// Worker 归一到托管根（opt/runtimes）下的顶层子目录整体删除。
 message RemoveRuntimeRequest {
   string type = 1; // 运行时类型（首批仅 nodejs）
   string path = 2;
@@ -1687,7 +1970,7 @@ message RemoveRuntimeResponse {
   string error = 2;
 }
 
-// PMRegistry 单条 registry（FR-306）。scope 空=默认源；非空=@scope 域源。token 可选凭据。
+// PMRegistry 单条 registry。scope 空=默认源；非空=@scope 域源。token 可选凭据。
 message PMRegistry {
   string name = 1;
   string url = 2;
@@ -1718,7 +2001,7 @@ message SetPMConfigResponse {
   string pm_version = 3; // 激活后的 PM 版本
 }
 
-// 全局包可视化管理（FR-307）：托管全局目录 <数据根>/opt/runtimes/global，
+// 全局包可视化管理：托管全局目录 <数据根>/opt/runtimes/global，
 // PM 操作统一带托管 .npmrc（NPM_CONFIG_USERCONFIG）与托管 Node PATH。
 message GlobalPackage {
   string name = 1;
@@ -1773,6 +2056,18 @@ message DeployServerProbeRequest {
   string sha256 = 6;
   // version 是仅供 Worker 日志与诊断展示的逻辑版本，不参与下载授权。
   string version = 7;
+  // identity_json 是**托管身份文件**内容（plugins/ServerProbe/agent-identity.json）。
+  //
+  // ## 为什么与 config_yaml 分开送
+  // 两者在探针侧是两个独立开关，语义不同：
+  //   - config_yaml → 独立模式的本地行为（监听面、采集参数、bridge 段）；
+  //   - identity_json → **托管模式开关**（存在即托管，删除即回退）。
+  // 把它们揉进同一个文件会让“切换模式”变成改配置文件的一大段，无法原子地开关。
+  // 分开送也让 Worker 能用“原子写 + 0600”单独保护这份带凭证的文件。
+  //
+  // 空 = 不下发/不碰现有身份（向后兼容：未接托管的主流程、旧 CP）。
+  // 非空 = Worker 写入（不存在或内容不同才写，幂等）。
+  string identity_json = 8;
 }
 
 message DeployServerProbeResponse {
@@ -1780,13 +2075,13 @@ message DeployServerProbeResponse {
   string error = 2;
 }
 
-// === 一键复制子服（FR-036） ===
+// === 一键复制子服 ===
 
 message CloneWorkDirRequest {
   string src_instance_uuid = 1; // 源实例（须已注册，提供其工作目录）
   string dst_instance_uuid = 2; // 目标实例（须已注册，提供其工作目录）
   repeated string exclude = 3;  // 相对源工作目录的排除项：目录前缀、精确路径或 basename glob（如 *.pid）
-  // include 仅复制顶层段命中的项（目录前缀 / basename glob，如 plugins、*.jar；FR-231）。
+  // include 仅复制顶层段命中的项（目录前缀 / basename glob，如 plugins、*.jar）。
   // 为空=复制全部（仅受 exclude 约束，向后兼容）；非空仍叠加 exclude。
   repeated string include = 4;
 }
@@ -1803,10 +2098,10 @@ message CloneWorkDirResponse {
 
 message RemoveInstanceRequest {
   string instance_uuid = 1;
-  // work_dir 是 CP 记录的工作目录（数据根相对路径，ADR-010）。
+  // work_dir 是 CP 记录的工作目录（数据根相对路径）。
   // Worker 注册表命中时以注册的绝对路径为准；未命中（如 Worker 重启后未重推）时据此解析兜底。
   string work_dir = 2;
-  // skip_work_dir 就地导入实例（FR-302，见 ADR-069）：CP 显式指示跳过目录删除，
+  // skip_work_dir 就地导入实例：CP 显式指示跳过目录删除，
   // 仅移除注册与派生索引，原目录绝不清理（与托管区守卫互为双保险）。
   bool skip_work_dir = 3;
 }
@@ -1821,7 +2116,7 @@ message RemoveInstanceResponse {
   string skip_reason = 4;
 }
 
-// === Docker 镜像管理（FR-078，见 ADR-019） ===
+// === Docker 镜像管理 ===
 
 message ListImagesRequest {}
 
@@ -1859,7 +2154,7 @@ message RemoveImageResponse {
   string error = 2;
 }
 
-// === 备份操作（FR-013/FR-056/FR-057） ===
+// === 备份操作 ===
 
 // StorageBackendSpec 远程存储后端的传输参数。
 // 凭证由 Control Plane 侧从 ${ENV_VAR} 解析后填入（CP 拥有配置/DB），
@@ -1927,11 +2222,11 @@ message TestStorageBackendResponse {
   string error_code = 4;
 }
 
-// === 插件桥（ServerProbe 反向 WS ↔ Worker，FR-065，见 ADR-016）===
+// === 插件桥（ServerProbe 反向 WS ↔ Worker）===
 //
 // 一次铺齐桥全面：事件（PluginEvent）/命令（PluginCommand）/状态查询（QueryServerState*）。
-// 地基（FR-065）仅真实使用 PluginEvent 的 connected/disconnected/heartbeat；其余字段为骨架，
-// 语义由 FR-066/067/068 填充。
+// 地基仅真实使用 PluginEvent 的 connected/disconnected/heartbeat；其余字段为骨架，
+// 语义留下游填充。
 
 message StreamPluginEventsRequest {
   string instance_uuid = 1; // 空表示订阅所有实例
@@ -1954,7 +2249,7 @@ message PluginEvent {
   string version = 11;      // 探针版本
   string request_id = 12;   // command_result 对应的请求标识
   string raw_json = 13;     // 透传原始载荷（下游按需解析）
-  // domain 业务域命名空间（JBIS，FR-115/ADR-027）：空/core=监控/治理既有事件；
+  // domain 业务域命名空间（JBIS）：空/core=监控/治理既有事件；
   // economy/inventory… 为业务域事件，CP 据此分流落业务汇聚而非监控。
   string domain = 14;
   // dedup_key 业务事件去重键（JBIS）：CP 按 (domain,dedup_key) 幂等落库（至少一次投递去重）；
@@ -1970,7 +2265,7 @@ message PluginCommand {
   string reason = 3;        // 踢/封原因
   repeated string args = 4; // 透传额外参数
   string request_id = 5;    // 关联 command_result 回执
-  // domain 业务域命名空间（JBIS，FR-115/ADR-027）：空/core=内建治理（既有 kick/ban…）；
+  // domain 业务域命名空间（JBIS）：空/core=内建治理（既有 kick/ban…）；
   // economy/inventory… 为业务域，Worker 按 domain 前缀路由到对应桥业务会话。
   string domain = 6;
   // payload_json 结构化业务参数（JBIS）：业务动作的入参以 JSON 承载（如 economy.balance 的 player/currency），
@@ -1981,7 +2276,7 @@ message PluginCommand {
 message SendPluginCommandRequest {
   string instance_uuid = 1;
   PluginCommand command = 2;
-  // wait=true 时 Worker 同步等待探针的 command_result 回执（FR-067 治理：踢/封/解封/白名单/在线列表）。
+  // wait=true 时 Worker 同步等待探针的 command_result 回执（治理：踢/封/解封/白名单/在线列表）。
   // wait=false 为即发即忘（仅校验已下发，不等结果）。
   bool wait = 3;
 }
@@ -1990,7 +2285,7 @@ message SendPluginCommandResponse {
   bool success = 1;
   string error = 2;
   string request_id = 3;
-  // output 是探针执行指令的输出（list/whitelist 等查询结果；wait=true 且执行成功时填充，FR-067）。
+  // output 是探针执行指令的输出（list/whitelist 等查询结果；wait=true 且执行成功时填充）。
   string output = 4;
 }
 
@@ -2005,7 +2300,83 @@ message QueryServerStateResponse {
   string state_json = 4;    // 聚合状态 JSON（下游填充）
 }
 
-// === 面板自更新（FR-081，见 ADR-020 §4） ===
+// === 桥能力接入 ===
+
+message QueryBridgeStatusRequest {
+  string instance_uuid = 1;
+}
+
+// QueryBridgeStatusResponse `core.bridge_status` 的透传回执。
+//
+// status_json 是探针产出的完整快照（含 pools/sender/inbound/routes/topics 等分层结构），
+// Worker 与 CP 都**不解析**它：字段演进不需要改两端，前端按结构渲染。
+// connected 单独提出来是为了让 CP 在探针不在时无需解析就能判断降级路径。
+message QueryBridgeStatusResponse {
+  bool success = 1;         // 探针执行成功（未必 connected=false 时也为 false，看 error）
+  string error = 2;
+  bool connected = 3;       // 探针当前是否连入本机 Worker
+  string status_json = 4;   // 桥状态快照 JSON（探针产出，原样透传）
+  int64 fetched_at_ms = 5;  // Worker 取到快照的时刻（毫秒），供 CP 判断新鲜度
+}
+
+message SetBridgeSubscriptionRequest {
+  string instance_uuid = 1;
+  // topics 主题表达式列表，支持 `.*` 后缀通配。
+  //
+  // **空数组 = 订阅全部**（探针侧 clear → 全量上报），与「未设置过订阅」等价。
+  // 未出现在本请求里的历史订阅**不会保留**：整批覆盖，不是追加。
+  repeated string topics = 2;
+  // domains 业务域列表。探针侧的过滤维度只有 topic，没有独立 domain 维度；
+  // 故本字段由 Worker **展开成通配表达式**（`activity` → `activity.*`）后并入 topics 下发，
+  // 保持对外契约里有 domains 而无需改探针帧协议。
+  repeated string domains = 3;
+}
+
+message SetBridgeSubscriptionResponse {
+  bool success = 1;
+  string error = 2;
+  bool connected = 3;
+  // applied_topics 探针回执的**生效集合**（探针按字典序去重返回）。
+  // 与请求值不同是正常现象（通配展开、去重、空数组清空），CP 以本字段回给前端。
+  repeated string applied_topics = 4;
+}
+
+message QueryBusinessStatusRequest {
+  string instance_uuid = 1;
+  // domain 可选：非空时只查该域（探针 payload 的 `domain` 键），空为全量。
+  string domain = 2;
+}
+
+message QueryBusinessStatusResponse {
+  bool success = 1;
+  string error = 2;
+  bool connected = 3;
+  // status_json 探针产出的 `{"domains":{...},"refresh":{...},"timestamp":...}`，原样透传。
+  string status_json = 4;
+  int64 fetched_at_ms = 5;
+}
+
+message ReloadProbeConfigRequest {
+  string instance_uuid = 1;
+  // paths 待重载的配置路径列表；**空数组 = 全量重载**（探针侧语义）。
+  repeated string paths = 2;
+  // timeout_ms 本次重载等待回执的上限（毫秒）。0 = 用 Worker 侧默认（10s）。
+  //
+  // 由 CP 显式给值而非 Worker 硬编码：生效编排可能需要按目标调整，
+  // 但默认值仍独立于业务命令的 5s，绝不复用。
+  int64 timeout_ms = 3;
+}
+
+message ReloadProbeConfigResponse {
+  bool success = 1;
+  string error = 2;
+  bool connected = 3;
+  // receipt_json 探针的结构化重载回执（reloaded / bestEffort / failed / applied 等），原样透传。
+  string receipt_json = 4;
+  int64 duration_ms = 5;
+}
+
+// === 面板自更新 ===
 
 message GetVersionRequest {}
 
@@ -2013,10 +2384,10 @@ message GetVersionResponse {
   string version = 1; // Worker 当前版本（internal/version.Version）
   string os = 2;      // runtime.GOOS（linux/windows/darwin）
   string arch = 3;    // runtime.GOARCH（amd64/arm64）
-  string backup_version = 4; // 本地升级前备份的版本（无备份为空，供 CP 透出 backupVersion，FR-182）
+  string backup_version = 4; // 本地升级前备份的版本（无备份为空，供 CP 透出 backupVersion）
 }
 
-// CheckDocker 探测本机 Docker 守护进程可用性（FR-237）。
+// CheckDocker 探测本机 Docker 守护进程可用性。
 message CheckDockerRequest {}
 
 message CheckDockerResponse {
@@ -2030,7 +2401,7 @@ message UpgradeWorkerRequest {
   string sha256 = 2;         // 期望 sha256（Worker 下载后校验，不符拒绝替换）
   string target_version = 3; // 目标版本号（仅记录/回报）
   bool allow_insecure = 4;   // 是否允许 http 下载源（默认仅 https；本地/内网自测可开）
-  // action 升级动作（FR-182，加性向后兼容）：空/"upgrade"=既有下载替换升级；
+  // action 升级动作（加性向后兼容）：空/"upgrade"=既有下载替换升级；
   // "rollback"=回滚本地升级前备份（忽略 download_url/sha256，Worker 用自己的备份换回上一版）。
   string action = 5;
 }
@@ -2041,7 +2412,7 @@ message UpgradeWorkerResponse {
   string from_version = 3; // 升级前版本
 }
 
-// === 归档浏览与反编译（FR-075，见 ADR-018） ===
+// === 归档浏览与反编译 ===
 
 message ListArchiveEntriesRequest {
   string instance_uuid = 1;
@@ -2090,7 +2461,7 @@ message DecompileClassResponse {
 }
 
 
-// === 终端会话隧道桥（FR-281 M2，见 ADR-066）===
+// === 终端会话隧道桥（M2）===
 
 // TerminalFrame 终端会话双向流的帧：首帧（CP→Worker）必须为 open，其后双向均为不透明 WS 帧搬运。
 message TerminalFrame {
@@ -2101,7 +2472,7 @@ message TerminalFrame {
 }
 
 // TerminalOpen 会话建立请求 / 就绪应答：
-// CP→Worker 首帧携带一次性终端令牌（Worker 以其 WS 令牌密钥校验，ADR-061 信任模型不变，CP 不代校验）；
+// CP→Worker 首帧携带一次性终端令牌（Worker 以其 WS 令牌密钥校验，信任模型不变，CP 不代校验）；
 // Worker→CP 方向 token 为空，作「会话就绪 ack」——CP 据此确定性区分 就绪/令牌被拒/老 Worker 回退。
 message TerminalOpen {
   string token = 1;
@@ -2113,7 +2484,7 @@ message TerminalWSFrame {
   bytes payload = 2;
 }
 
-// === 导入现有服务器（FR-302，见 ADR-069）===
+// === 导入现有服务器 ===
 
 message InspectServerDirRequest {
   // path 导入根目录（节点上的绝对路径）。
@@ -2159,7 +2530,7 @@ message ImportServerDirResponse {
   bool moved = 4;          // migrate 是否实际完成搬迁（in_place 恒为 false）
 }
 
-// === Bot fleet（FR-351，一次铺齐下游共享字段）===
+// === Bot fleet（一次铺齐下游共享字段） ===
 
 message GetBotCapacityRequest {}
 
@@ -2318,7 +2689,7 @@ message SignalBotActionsResponse {
   repeated SignalBotActionItemResult results = 1;
 }
 
-// === FR-369 通用 Bot 命令编排 ===
+// === 通用 Bot 命令编排 ===
 
 message CommandOccurrenceKey {
   string command_id = 1;
@@ -2444,12 +2815,12 @@ message CancelBotCommandSchedulesResponse {
   repeated CancelBotCommandScheduleItemResult results = 2;
 }
 
-// ProbeInstanceEvidenceRequest CP 请求 Worker 拉取一批实例的进程侧证据（FR-455③）。
+// ProbeInstanceEvidenceRequest CP 请求 Worker 拉取一批实例的进程侧证据。
 message ProbeInstanceEvidenceRequest {
   repeated string instance_uuids = 1;
 }
 
-// InstanceEvidence 单个实例的进程侧证据（FR-455③）。
+// InstanceEvidence 单个实例的进程侧证据。
 message InstanceEvidence {
   string instance_uuid = 1;
   bool running = 2;           // 进程/容器侧证据是否显示该实例仍在运行（主判据）
@@ -2464,7 +2835,7 @@ message ProbeInstanceEvidenceResponse {
   repeated InstanceEvidence evidence = 1;
 }
 
-// ---------------- FR-473 Worker 日志 Shared Contracts 草案 ----------------
+// ---------------- Worker 日志 Shared Contracts 草案 ----------------
 
 enum LogErrorCode {
   LOG_ERROR_UNSPECIFIED = 0;
@@ -2478,7 +2849,7 @@ enum LogErrorCode {
   LOG_RECOVERY_REQUIRED = 8;
   LOG_CANCELLED = 9;
   LOG_UNSUPPORTED = 10;
-  // 归档副本已按保留期清除（FR-501 归档对象回收）。
+  // 归档副本已按保留期清除（归档对象回收）。
   //
   // 与 LOG_ARCHIVE_MISSING 分开的理由是**处置动作相反**：MISSING 是「归档还在、
   // 只是本地没恢复 ⇒ 去 rehydrate」；PURGED 是「归档已按保留期删掉 ⇒ 取不回来了」。
@@ -2594,6 +2965,8 @@ message LogEvent {
   string stream = 9;
   string message = 10;
   string canonical_content_hash = 11;
+  // 结构化字段按原值透传，旧客户端可忽略该兼容字段。
+  map<string, string> fields = 12;
 }
 
 message LogQueryRequestBase {
@@ -2685,6 +3058,7 @@ message LogStatsRequest {
   LogQueryRequestBase query = 1;
   repeated string group_by = 2;
   string time_bucket = 3;
+  string metric_field = 4;
 }
 
 message LogStatsPoint {
@@ -2705,19 +3079,24 @@ message LogStatsResponse {
   LogError error = 6;
 }
 
-message LogFieldsRequest { LogQueryRequestBase query = 1; }
+message LogFieldsRequest {
+  LogQueryRequestBase query = 1;
+  bool explore_fields = 2;
+}
 message LogFieldsResponse {
   string request_id = 1;
   LogQueryViewRef view = 2;
   LogCoverage coverage = 3;
   repeated string fields = 4;
   LogError error = 5;
+  bool explore_applied = 6;
 }
 
 message LogFacetsRequest {
   LogQueryRequestBase query = 1;
   repeated string dimensions = 2;
   uint32 dimension_limit = 3;
+  bool explore_fields = 4;
 }
 
 message LogFacetValue { string dimension = 1; string value = 2; uint64 count = 3; }
@@ -2729,6 +3108,7 @@ message LogFacetsResponse {
   repeated LogFacetValue values = 4;
   bool truncated = 5;
   LogError error = 6;
+  bool explore_applied = 7;
 }
 
 message LogTailRequest {

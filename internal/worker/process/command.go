@@ -42,33 +42,33 @@ type CommandSpec struct {
 	AutoRestart bool
 	ProcessType ProcessType
 	// ProbePort 是实例 ServerProbe /metrics 端口（CP 分配后下发）。daemon 策略透传到
-	// wrapper→PID 记录，供 Worker 重启恢复后心跳继续自采（FR-060）；0=未部署探针。
+	// wrapper→PID 记录，供 Worker 重启恢复后心跳继续自采；0=未部署探针。
 	ProbePort int
-	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发，FR-063）。daemon 策略
+	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发）。daemon 策略
 	// 透传到 wrapper 做超时强杀兜底；0=未指定，wrapper 回退 env/默认。值在启动时定型。
 	GracefulStopTimeoutSeconds int
 	// Image 是 docker 模式的容器镜像引用（如 itzg/minecraft-server:latest）。
-	// 仅 docker 策略使用；缺失时 docker 启动报错（ADR-019）。
+	// 仅 docker 策略使用；缺失时 docker 启动报错。
 	Image string
-	// PortMappings 是 docker 模式的容器端口↔宿主端口映射（宿主端口来自 FR-032 端口池）。
-	// 仅 docker 策略使用，发布容器内端口到宿主（ADR-019）。
+	// PortMappings 是 docker 模式的容器端口↔宿主端口映射（宿主端口来自端口池）。
+	// 仅 docker 策略使用，发布容器内端口到宿主。
 	PortMappings []PortMapping
 	// CPULimit 是 docker 模式的 CPU 核数上限（如 1.5 表示 1.5 核），注入 HostConfig.NanoCPUs。
-	// 仅 docker 策略使用；0=不限制（FR-079，见 ADR-019）。
+	// 仅 docker 策略使用；0=不限制。
 	CPULimit float64
 	// MemLimitMB 是 docker 模式的内存上限（MiB），注入 HostConfig.Memory。
-	// 仅 docker 策略使用；0=不限制（FR-079，见 ADR-019）。
+	// 仅 docker 策略使用；0=不限制。
 	MemLimitMB int64
 	// DiskLimitMB 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入 HostConfig。
-	// bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容（FR-079）。
+	// bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容。
 	DiskLimitMB int64
 }
 
-// PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。
+// PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式）。
 type PortMapping struct {
 	// ContainerPort 容器内监听端口（由镜像约定，如 MC 容器内 25565）。
 	ContainerPort int
-	// HostPort 宿主发布端口（来自 FR-032 端口池分配）。
+	// HostPort 宿主发布端口（来自端口池分配）。
 	HostPort int
 	// Protocol 端口协议，tcp（默认）或 udp（如 MC query）。
 	Protocol string
@@ -164,7 +164,7 @@ func splitEnvKey(kv string) (key, value string, ok bool) {
 // IProcessCommand 进程启动策略接口。
 // Manager 按 instance.ProcessType 选择具体实现（direct/daemon/docker），
 // 把「如何启动/停止/发送命令」的差异收敛到策略内部，Manager 只负责路由和生命周期记账。
-// 参见 ADR-003: 守护进程 Wrapper 模式。
+// 守护进程 Wrapper 模式。
 type IProcessCommand interface {
 	// Start 启动实例进程。ctx 用于取消启动阶段（如连接 wrapper 超时）。
 	Start(ctx context.Context) error
@@ -185,7 +185,7 @@ type IProcessCommand interface {
 }
 
 // newStrategy 按 ProcessType 构造对应策略。
-// direct 走 Worker 直连子进程；daemon 走 wrapper 子进程隔离；docker 走本机 Docker 容器（ADR-019）；
+// direct 走 Worker 直连子进程；daemon 走 wrapper 子进程隔离；docker 走本机 Docker 容器；
 // rcon 暂未实现，返回 ErrNotImplemented，避免误用未落地能力。
 func (m *Manager) newStrategy(spec CommandSpec) (IProcessCommand, error) {
 	switch spec.ProcessType {

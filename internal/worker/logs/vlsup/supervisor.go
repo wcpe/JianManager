@@ -10,7 +10,7 @@ import (
 )
 
 // InstanceState supervisor 账面进程状态。
-// 注意：进程健康、分区恢复完成、查询完整可用是三个独立状态（契约 §5.3 / FR-476 §3.1）。
+// 注意：进程健康、分区恢复完成、查询完整可用是三个独立状态（契约 §5.3§3.1）。
 type InstanceState string
 
 const (
@@ -419,6 +419,9 @@ func (s *Supervisor) start(ctx context.Context, ns Namespace) error {
 		return err
 	}
 
+	if err := ctx.Err(); err != nil {
+		return fail(fmt.Errorf("vlsup: start %s: %w", ns, err))
+	}
 	if err := VerifyAsset(s.binPath, s.assetSHA); err != nil {
 		return fail(err)
 	}
@@ -433,12 +436,18 @@ func (s *Supervisor) start(ctx context.Context, ns Namespace) error {
 	if err != nil {
 		return fail(err)
 	}
+	if err := ctx.Err(); err != nil {
+		return fail(fmt.Errorf("vlsup: start %s: %w", ns, err))
+	}
+	// 请求 ctx 只约束本次启动操作；成功后长驻进程由 Stop/StopAll 回收，
+	// 不得因 RPC 返回或看护 ctx 结束被 CommandContext 误杀。仍保留调用方的值。
+	processCtx := context.WithoutCancel(ctx)
 	var proc Process
 	startedAt := time.Now()
 	if factory, ok := s.factory.(namespaceCmdFactory); ok {
-		proc, err = factory.StartNamespace(ctx, ns, s.binPath, args)
+		proc, err = factory.StartNamespace(processCtx, ns, s.binPath, args)
 	} else {
-		proc, err = s.factory.Start(ctx, s.binPath, args)
+		proc, err = s.factory.Start(processCtx, s.binPath, args)
 	}
 	if err != nil {
 		return fail(fmt.Errorf("vlsup: start %s: %w", ns, err))
@@ -458,7 +467,10 @@ func (s *Supervisor) start(ctx context.Context, ns Namespace) error {
 	if exited, waitErr := waitStartupLiveness(ctx, proc, startLivenessWindow); exited || waitErr != nil {
 		_ = proc.Stop(DefaultStopGrace)
 		detail := processExitDetail(proc)
-		return fail(fmt.Errorf("vlsup: %s exited immediately after start%s%s", ns, detailSuffix(waitErr), detail))
+		if waitErr != nil {
+			return fail(fmt.Errorf("vlsup: %s startup observation: %w%s", ns, waitErr, detail))
+		}
+		return fail(fmt.Errorf("vlsup: %s exited immediately after start%s", ns, detail))
 	}
 
 	s.mu.Lock()
@@ -499,6 +511,9 @@ func waitStartupLiveness(ctx context.Context, proc Process, window time.Duration
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if proc.Exited() {
 			return true, nil
 		}
@@ -506,17 +521,10 @@ func waitStartupLiveness(ctx context.Context, proc Process, window time.Duration
 		case <-ctx.Done():
 			return false, ctx.Err()
 		case <-timer.C:
-			return proc.Exited(), nil
+			return proc.Exited(), ctx.Err()
 		case <-tick.C:
 		}
 	}
-}
-
-func detailSuffix(err error) string {
-	if err == nil {
-		return ""
-	}
-	return ": " + err.Error()
 }
 
 // Stop 停止指定 namespace 实例（显式操作）。
@@ -602,13 +610,8 @@ func (s *Supervisor) stop(ctx context.Context, ns Namespace) error {
 // 下次启动时新 VL 因端口被占而立即退出，采集面长期降级。
 func (s *Supervisor) StopAll(ctx context.Context) {
 	for _, ns := range managedNamespaces() {
-		s.mu.Lock()
-		inst, ok := s.instances[ns]
-		running := ok && (inst.state == StateRunning || inst.proc != nil)
-		s.mu.Unlock()
-		if !running {
-			continue
-		}
+		// 必须经 Stop 的操作锁确认归属：在途 Start 可能尚未登记 proc，
+		// 此时按状态快照跳过会漏掉随后启动的长驻进程。
 		if err := s.Stop(ctx, ns); err != nil {
 			// 单个 namespace 回收失败不应阻断其余，交由上层日志记录。
 			continue
@@ -714,7 +717,7 @@ func (s *Supervisor) Health(ctx context.Context, ns Namespace) error {
 // WaitHealthy 轮询 /health 直到实例就绪或超时。
 //
 // 用途：受管 VL 启动是异步的——Start 返回时进程可能尚未监听端口。若此时接线 ingest/查询并立即向
-// VL 写入，会因连接被拒失败，甚至导致采集运行时创建失败（FR-476 启动时序 / Runbook C）。
+// VL 写入，会因连接被拒失败，甚至导致采集运行时创建失败（启动时序 / Runbook C）。
 // 故在接线前等待就绪；超时返回最后一次错误，调用方据此保持降级而不静默假成功。
 func (s *Supervisor) WaitHealthy(ctx context.Context, ns Namespace, timeout time.Duration) error {
 	if timeout <= 0 {
@@ -862,7 +865,7 @@ func (s *Supervisor) SetTotalLogBudget(totalBytes int64) error {
 	return nil
 }
 
-// SampleBudget 采样受管 VL 进程 RSS 与数据盘使用率并评估降级状态（FR-476 / 契约 §6.6）。
+// SampleBudget 采样受管 VL 进程 RSS 与数据盘使用率并评估降级状态（契约 §6.6）。
 //
 // 仅纳入 RUNNING 实例；RSS 为各受管 VL 进程之和（Worker 日志数据面主要占用）。
 // 单维度采样失败（进程已退出、磁盘不可读）不阻断：跳过该维度，返回仍可用的 verdict。

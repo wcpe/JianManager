@@ -13,8 +13,8 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// LogProtocolVersion Worker Log RPC 协议版本（与 FR-473 契约对齐）。
-const LogProtocolVersion = "fr433/v1"
+// LogProtocolVersion Worker Log RPC 协议版本（与契约对齐）。
+const LogProtocolVersion = "log-query/1"
 
 // WorkerClientFactory 按 WorkerID 取得 workerpb 日志查询客户端。
 // 生产实现经 CP 反向 gRPC 隧道（ClientPool）；测试注入 fake。
@@ -22,7 +22,7 @@ type WorkerClientFactory func(ctx context.Context, workerID string) (workerpb.Wo
 
 // TunnelDialer 实现 WorkerDialer：经工厂拿到 workerpb 客户端并适配为 WorkerClient。
 //
-// 生产由 CP ClientPool.Get(workerID) 适配工厂（见 assemble.go PoolClientFactory），经 ADR-081 反向隧道；
+// 生产由 CP ClientPool.Get(workerID) 适配工厂（见 assemble.go PoolClientFactory），经反向隧道；
 // 未配置工厂时 Dial 失败，覆盖侧记 dial_failed，不得静默假完整。
 type TunnelDialer struct {
 	factory WorkerClientFactory
@@ -108,7 +108,7 @@ func (a *WorkerClientAdapter) Fields(ctx context.Context, req WorkerSearchReques
 	if a == nil || a.client == nil {
 		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
 	}
-	resp, err := a.client.LogFields(ctx, &workerpb.LogFieldsRequest{Query: toProtoQueryBase(req)})
+	resp, err := a.client.LogFields(ctx, &workerpb.LogFieldsRequest{Query: toProtoQueryBase(req), ExploreFields: req.ExploreFields})
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
 			return &WorkerFieldsResponse{Unsupported: true, Error: err.Error()}, nil
@@ -133,6 +133,11 @@ func (a *WorkerClientAdapter) Fields(ctx context.Context, req WorkerSearchReques
 		out.Error = e.GetMessage()
 		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
 	}
+	if req.ExploreFields && !resp.GetExploreApplied() {
+		out.Fields = nil
+		out.Unsupported, out.Error = true, "document-field exploration unsupported by worker"
+		out.Coverage = unsupportedExplorationCoverage(out.Coverage)
+	}
 	return out, nil
 }
 
@@ -153,11 +158,12 @@ func (a *WorkerClientAdapter) Stats(ctx context.Context, req WorkerSearchRequest
 		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
 	}
 	base := toProtoQueryBase(req)
-	// metric_field 无独立 proto 字段时经 filter 旁路传递不安全；Stats 预聚合由 Worker 按契约字段处理。
+	// 指标字段独立传递，不能嵌入 filter 改写查询含义。
 	resp, err := a.client.LogStats(ctx, &workerpb.LogStatsRequest{
-		Query:      base,
-		GroupBy:    append([]string(nil), groupBy...),
-		TimeBucket: timeBucket,
+		Query:       base,
+		GroupBy:     append([]string(nil), groupBy...),
+		TimeBucket:  timeBucket,
+		MetricField: req.MetricField,
 	})
 	return mapStatsResponse(resp, err)
 }
@@ -171,8 +177,15 @@ func (a *WorkerClientAdapter) Facets(ctx context.Context, req WorkerSearchReques
 		Query:          toProtoQueryBase(req),
 		Dimensions:     append([]string(nil), dimensions...),
 		DimensionLimit: dimensionLimit,
+		ExploreFields:  req.ExploreFields,
 	})
-	return mapFacetsResponse(resp, err)
+	out, mapErr := mapFacetsResponse(resp, err)
+	if req.ExploreFields && out != nil && resp != nil && !resp.GetExploreApplied() {
+		out.Dimensions = nil
+		out.Unsupported, out.Error = true, "document-field exploration unsupported by worker"
+		out.Coverage = unsupportedExplorationCoverage(out.Coverage)
+	}
+	return out, mapErr
 }
 
 // Streams 实现 WorkerClient（窗内有哪些流、各多少条）。
@@ -639,6 +652,13 @@ func eventFromProto(e *workerpb.LogEvent) Event {
 	if e == nil {
 		return Event{}
 	}
+	var fields map[string]string
+	if len(e.GetFields()) > 0 {
+		fields = make(map[string]string, len(e.GetFields()))
+		for key, value := range e.GetFields() {
+			fields[key] = value
+		}
+	}
 	return Event{
 		EventID:          e.GetEventId(),
 		LogSourceID:      e.GetLogSourceId(),
@@ -651,6 +671,7 @@ func eventFromProto(e *workerpb.LogEvent) Event {
 		Stream:           e.GetStream(),
 		Message:          e.GetMessage(),
 		CanonicalHash:    e.GetCanonicalContentHash(),
+		Fields:           fields,
 	}
 }
 

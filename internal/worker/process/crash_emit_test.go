@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestDirect_CrashEmitsCrashInfo 非正常退出判定 + 快照现场捕获（FR-313）：
+// TestDirect_CrashEmitsCrashInfo 非正常退出判定 + 快照现场捕获：
 // direct 进程以非零码退出（未请求停止）→ 崩溃回调收到退出码 1、非负时长与发生时刻。
 func TestDirect_CrashEmitsCrashInfo(t *testing.T) {
 	m := NewManager(t.TempDir())

@@ -284,7 +284,7 @@ func TestShardedManager_ForgetShard(t *testing.T) {
 // TestShardedManager_ShardCallCtxDetachesFromParent 验证分片下发用的是脱离调用方生命周期的 ctx。
 //
 // 回归保护（真机事故）：分片后一次上层调用会派发到多个片，而调用方 ctx 常是 gRPC 请求级
-//（响应返回后即取消）。若直接透传，第二个片会拿到已取消的 ctx → Manager 判「stdin 阻塞」
+// （响应返回后即取消）。若直接透传，第二个片会拿到已取消的 ctx → Manager 判「stdin 阻塞」
 // 并主动 kill 子进程 → 启动后只剩 1 个 bot-worker。
 // 日志证据：requestId=create-...:s1 ctxErr="context canceled" writeCompleted=false
 func TestShardedManager_ShardCallCtxDetachesFromParent(t *testing.T) {

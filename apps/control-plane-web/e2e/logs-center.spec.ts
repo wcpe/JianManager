@@ -13,6 +13,10 @@ async function downloadRows(download: Download, name: string): Promise<Record<st
   return (await readFile(path, 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
 }
 async function exportFromMenu(page: Page, label: string) {
+  const closeToast = page.getByRole('button', { name: 'Close toast' })
+  if (await closeToast.count()) {
+    await closeToast.first().click()
+  }
   await page.getByTestId('logs-export-trigger').click()
   await page.getByRole('menuitem', { name: label, exact: true }).click()
 }
@@ -22,24 +26,23 @@ async function downloadFromMenu(page: Page, label: string, name: string) {
 }
 
 /**
- * FR-150 日志中心增强 · 单机（Playwright + mock 模式）验收。
+ * 日志中心增强 · 单机（Playwright + mock 模式）验收。
  * 覆盖：实时跟随、时间范围、级别过滤、搜索、导出（范围/格式）、分页。
  * （级别配色/时间预设/导出范围/虚拟窗口逻辑由 logs-filters.test.ts 单测覆盖）
  * 本批证据仅落项目根 .tmp/vl-six-fix-31cf5b3d/panel-*。
  *
  * 默认时间范围的断言走**请求参数**而非下拉显示文案：文案受 i18n 与默认值漂移影响，
- * 断言窗口宽度（== 默认预设跨度）＋ 上界≈now 才锁得住「默认最近 15 分钟」这一 2026-10-11
- * 快首屏依据（默认「全部时间」会让每个目标的全部分区参与查询）。
+ * 断言窗口宽度（== 默认预设跨度）＋ 上界≈now 才锁得住「默认最近 1 小时」这一开发版策略。
+ * 快首屏仍使用有界窗口；需要更短时间范围可由筛选器主动选择。
  *
- * 观测的是**联邦**端点 `/api/v1/logs/federation`：devmock 提供联邦假后端（与经典 `/logs`
- * 复用同一份种子），页面在联邦视图下**只**以 federation.items 为数据源。查询服务不可用时
- * **不再回退**经典路径（用户裁定：没有就是没有，平台/历史日志走「更多 → Legacy 只读」专门入口），
- * 所以这里断言的必须是联邦端点本人下发的参数。
+ * 观测的是实例页签的 `/api/v1/logs/federation`：实例 API 始终发送
+ * `view=node_instance` 和 `source=instance`，查询服务不可用时不回退经典 `/logs`。
+ * 平台/节点文件日志通过各自页签读取独立文件窗口，全部日志由融合工作台承载。
  */
 
-/** 默认时间窗跨度：15 分钟（与 LogsPage 的 `useState<TimeRangePreset>('15m')` 对齐）。 */
-const DEFAULT_WINDOW_MS = 15 * 60 * 1000
-/**
+/** 默认时间窗跨度：1 小时（与 LogsPage 的 `useState<TimeRangePreset>('1h')` 对齐）。 */
+const DEFAULT_WINDOW_MS = 60 * 60 * 1000
+/** 
  * 上界与挂钟的容差（NEW-4，2026-10-12 收紧）。
  *
  * 语义是「仅覆盖挂载/网络往返」——实际实现里上界锚点就是 `Date.now()`，偏差应在毫秒级。
@@ -66,14 +69,18 @@ function lastParams(seen: string[], path: string): URLSearchParams | null {
   return last ? new URL(last).searchParams : null
 }
 
-test('FR-150 日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 分页', async ({ page }) => {
+test('日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 分页', async ({ page }) => {
   const seen = watchAPIRequests(page)
   await login(page)
   await page.goto('/logs')
 
   await expect(page.getByRole('heading', { name: '日志中心' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '实时跟随' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '导出' })).toBeVisible()
+  await expect(page.getByRole('tablist', { name: '日志视图' }).getByRole('tab')).toHaveText(['平台日志', '节点日志', '实例日志', '全部日志'])
+  await expect(page.getByRole('tab', { name: '实例日志', exact: true })).toHaveAttribute('aria-selected', 'true')
+  // 「实时跟随」必须 exact：页头 help 问号的 aria-label 里也含这四个字（真源在 LogsPageView 的 description），
+  // 散写会命中两个按钮 → strict mode violation。
+  await expect(page.getByRole('button', { name: '实时跟随', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '导出', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '错误', exact: true })).toBeVisible()
   await expect(page.getByPlaceholder('搜索日志内容…')).toBeVisible()
 
@@ -89,11 +96,13 @@ test('FR-150 日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 
     .poll(async () => lastParams(seen, '/api/v1/logs/federation'))
     .not.toBeNull()
   const logsParams = lastParams(seen, '/api/v1/logs/federation')!
+  expect(logsParams.get('view')).toBe('node_instance')
+  expect(logsParams.get('source')).toBe('instance')
   const fromMs = new Date(logsParams.get('from') ?? '').getTime()
   const toMs = new Date(logsParams.get('to') ?? '').getTime()
   // 窗宽是默认预设的直接函数（不受断言时刻影响）：默认窗改成 24h/全部时间即红。
   expect(toMs - fromMs, '默认时间窗跨度').toBe(DEFAULT_WINDOW_MS)
-  // 上界≈now ⇒ 窗口确实是「最近 15 分钟」，而非任意一段 15 分钟宽的区间。
+  // 上界≈now ⇒ 窗口确实是「最近 1 小时」，而非任意一段 1 小时宽的区间。
   expect(Math.abs(toMs - Date.now()), '默认时间窗上界贴近当前时刻').toBeLessThan(TO_TOLERANCE_MS)
 
   // 手动切到「全部时间」：筛选器可用，且下发的参数里不再带时间上/下界（走参数而非文案）。
@@ -117,6 +126,7 @@ async function prepareBrowserLogs(page: Page) {
   await login(page)
   await page.goto('/logs')
   await expect(page.getByRole('heading', { name: '日志中心' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '实例日志', exact: true })).toHaveAttribute('aria-selected', 'true')
   const base = Math.floor(Date.now() / 1000) * 1000 - 1000
   const rows = Array.from({ length: 163 }, (_, index) => ({
     id: 10000 + index, event_id: `browser-event-${index}`, canonical_content_hash: `browser-hash-${index}`,
@@ -136,7 +146,14 @@ async function prepareBrowserLogs(page: Page) {
   await page.getByTestId('logs-range-select').click()
   await page.getByRole('option', { name: '最近 15 分钟', exact: true }).click()
   await expect(page.getByText('浏览器六项-0', { exact: true })).toBeVisible()
-  expect(await page.getByTestId('log-row').count()).toBeLessThanOrEqual(24)
+  // 一页 100 条（LogsPage 的 PAGE_SIZE）——163 条夹具里 161 条落在「最近15分钟」窗口内，
+  // 所以当前页渲染满 100 行。
+  //
+  // 早前这里写的是 `<= 24`，与现在的分页尺寸对不上（24 是更早实现遗留的常数），
+  // 已在日志中心重构后失效；真正需要守的是「不多于页尺寸」与「不少于一页」。
+  const rendered = await page.getByTestId('log-row').count()
+  expect(rendered).toBeLessThanOrEqual(100)
+  expect(rendered).toBeGreaterThan(24)
   return { rows, seen }
 }
 
@@ -219,6 +236,7 @@ test('六项修复：英文深色与窄视口仍可操作两个既有设计系�
   await page.evaluate(() => { localStorage.setItem('language', 'en'); localStorage.setItem('theme', 'dark') })
   await page.goto('/logs')
   await expect(page.getByRole('heading', { name: 'Log Center' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: 'Instance Logs', exact: true })).toHaveAttribute('aria-selected', 'true')
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(page.getByTestId('logs-export-trigger')).toBeEnabled()
   await exportFromMenu(page, 'Export selected range')
@@ -244,4 +262,17 @@ test('六项修复：英文深色与窄视口仍可操作两个既有设计系�
   await page.screenshot({ path: resolve(evidenceRoot, 'panel-browser-en-dark-migration-390.png'), fullPage: true })
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(migration).not.toBeVisible()
+})
+
+test('实例日志无反馈时不预留空白状态区域', async ({ page }) => {
+  await prepareBrowserLogs(page)
+  const feedback = page.getByTestId('logs-coverage-slot')
+  await expect(feedback).toHaveText('')
+  await expect(feedback).toBeHidden()
+  const gap = await page.evaluate(() => {
+    const toolbar = document.querySelector('[data-testid="logs-toolbar"]')!.getBoundingClientRect()
+    const viewport = document.querySelector('[data-log-viewport]')!.getBoundingClientRect()
+    return viewport.top - toolbar.bottom
+  })
+  expect(gap, '没有提示时日志面板应紧接筛选栏').toBeLessThanOrEqual(20)
 })

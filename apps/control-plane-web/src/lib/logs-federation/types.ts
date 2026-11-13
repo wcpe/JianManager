@@ -1,5 +1,5 @@
 /**
- * 日志联邦 coverage / quality 类型（FR-482 foundation，契约继承 FR-473）。
+ * 日志联邦 coverage / quality 类型（foundation，契约继承）。
  *
  * 字段语义以 `docs/specs/worker-log-platform-contract/spec.md` 为准：
  * - `complete` / `partial_reasons` / `targets` / `enumeration_state` 是正交维度；
@@ -10,11 +10,11 @@
  * 已知 reason 进入 {@link PARTIAL_REASONS} 常量，未知 reason 原样透传（不得静默丢弃）。
  */
 
-/** FR-473 Coverage.enumeration_state。 */
+/** Coverage.enumeration_state。 */
 export type EnumerationState = 'OPEN' | 'EXHAUSTED' | 'STALE' | 'CANCELLED'
 
 /**
- * FR-473 Quality.duplicate_quality / stats_quality 的已登记取值。
+ * Quality.duplicate_quality / stats_quality 的已登记取值。
  *
  * `CONFLICT` 对应 proto 的 `LOG_QUALITY_DUPLICATE_CONFLICT`（身份冲突，可由
  * `LogClearIdentityConflicts` 清除），与 `UNRESOLVED`（`LOG_QUALITY_DUPLICATE_UNRESOLVED`，
@@ -23,7 +23,7 @@ export type EnumerationState = 'OPEN' | 'EXHAUSTED' | 'STALE' | 'CANCELLED'
 export type QualityLevel = 'EXACT' | 'APPROXIMATE' | 'UNRESOLVED' | 'CONFLICT' | 'UNKNOWN'
 
 /**
- * 已登记的 partial_reasons / 失败原因码（FR-482 §3.1 + FR-473 §6.3）。
+ * 已登记的 partial_reasons / 失败原因码（§3.1 + §6.3）。
  * 后端未冻结枚举时仍可能出现其它字符串；分类逻辑对未知码走 generic partial。
  */
 export const PARTIAL_REASONS = {
@@ -50,7 +50,7 @@ export const PARTIAL_REASONS = {
   /** 归档层缺失（Archive 开启但副本不可用）。 */
   ARCHIVE_MISSING: 'ARCHIVE_MISSING',
   /**
-   * 归档副本已按保留期清除（FR-501 归档对象回收）。
+   * 归档副本已按保留期清除（归档对象回收）。
    *
    * **不能**与 {@link ARCHIVE_MISSING} 合并：MISSING 是「归档还在、只是一时没恢复」，
    * 界面的处置是「去恢复」；而 PURGED 是「平台按保留期删掉了，恢复不了」，
@@ -131,7 +131,7 @@ export type TargetQueryStatus =
 /** 存储层级（HOT/COLD/DEEP/RAW）。 */
 export type StorageTier = 'HOT' | 'COLD' | 'DEEP' | 'RAW' | (string & {})
 
-/** FR-473 TargetCoverage 的前端投影。 */
+/** TargetCoverage 的前端投影。 */
 export interface TargetCoverage {
   /** 节点 / 实例 / 日志源标识。 */
   targetId: string
@@ -147,13 +147,13 @@ export interface TargetCoverage {
   reason?: PartialReason
   /** closed_visible_seq 摘要（可选，仅用于展示）。 */
   closedVisibleSeq?: string
-  /** Legacy 数据时间覆盖（FR-482：Legacy 必须有来源标识和时间覆盖）。 */
+  /** Legacy 数据时间覆盖（Legacy 必须有来源标识和时间覆盖）。 */
   legacyRange?: { from?: string; to?: string }
   /** 可观测缺口数（可选）。 */
   gapCount?: number
 }
 
-/** FR-473 Coverage。 */
+/** Coverage。 */
 export interface Coverage {
   /** true = 本次结果集在声明的授权目标与时间窗内完整。 */
   complete: boolean
@@ -163,7 +163,7 @@ export interface Coverage {
    * 与 complete 正交、**绝不冒充 complete**：pending=true 表示「未校验」，
    * 不是「有具体缺失」——不得据此渲染「部分日志无法查询」的失败/缺失文案，
    * 但也不可把空结果当完整成功，且全量历史完整性（historyFullyEnumerated）不得为真。
-   * 导出入口不因 pending 关闭：产出物由后端慢路径在下载前做完整校验（FR-482 由后端闸保证）。
+   * 导出入口不因 pending 关闭：产出物由后端慢路径在下载前做完整校验（由后端闸保证）。
    */
   pending?: boolean
   /** 结构化部分原因；失败 / 降级时不得省略。 */
@@ -174,13 +174,13 @@ export interface Coverage {
   enumerationState?: EnumerationState
 }
 
-/** FR-473 Quality（duplicate / stats 正交维度）。 */
+/** Quality（duplicate / stats 正交维度）。 */
 export interface Quality {
   duplicateQuality: QualityLevel | (string & {})
   statsQuality: QualityLevel | (string & {})
 }
 
-/** EngineNotReady 明细（FR-482 用户可见失败态之一）。 */
+/** EngineNotReady 明细（用户可见失败态之一）。 */
 export interface EngineNotReadyDetail {
   kind: 'engine_not_ready'
   reason: PartialReason
@@ -234,6 +234,20 @@ export type ExportStatus = 'READY' | 'PENDING' | 'FAILED' | 'INCOMPLETE' | (stri
  * 日志联邦查询 / 导出响应的前端信封。
  * 覆盖 useLogs 未来升级后的字段，以及错误注入 / mock 的传输失败形态。
  */
+/** 已裁定永久位置缺失；独立于时间覆盖与质量，位置始终保留十进制字符串。 */
+export interface IngestPositionGap {
+  workerId: string
+  storageNamespace: string
+  from: string
+  to: string
+  reasonCode: string
+  operator: string
+  atUTC: string
+  /** 旧Worker未提供时保持未知，禁止由namespace或当前事件推测。 */
+  logSourceId?: string
+  sourceGeneration?: string
+}
+
 export interface LogFederationResponse {
   /** 传输 / HTTP 层是否成功；undefined 表示调用方未提供（按成功路径继续看 coverage）。 */
   ok?: boolean
@@ -249,7 +263,7 @@ export interface LogFederationResponse {
   errorMessage?: string
   /** 导出作业状态；仅导出路径有意义。 */
   exportStatus?: ExportStatus
-  /** 导出是否已通过完整性校验（FR-482：只有校验后可下载）。 */
+  /** 导出是否已通过完整性校验（只有校验后可下载）。 */
   exportVerified?: boolean
 }
 
@@ -350,7 +364,7 @@ export interface ClassifiedLogViewState {
   /**
    * 是否允许导出下载入口。
    * complete 校验通过时为 true；**未校验（verifying）时同样开放入口**——
-   * 下载物由后端慢路径在产出前做完整校验（FR-482「只有校验后可下载」由后端闸保证），
+   * 下载物由后端慢路径在产出前做完整校验（「只有校验后可下载」由后端闸保证），
    * 前端把「未校验」当「已失败」会把导出永久锁死。
    */
   allowsExportDownload: boolean

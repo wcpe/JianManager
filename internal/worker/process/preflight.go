@@ -108,19 +108,19 @@ var preflightListProcesses = defaultListProcesses
 // preflightPortFree 是端口占用探测入口（测试可替换）。
 var preflightPortFree = checkPortFree
 
-// PreflightCheckResult 单项启动预检结果（FR-314）。
+// PreflightCheckResult 单项启动预检结果。
 type PreflightCheckResult struct {
 	Name    string
 	OK      bool
 	Message string
 }
 
-// PreflightStart 对已注册实例做启动前同步预检（FR-314）：校验 java 运行时、工作目录、启动目标 jar，
+// PreflightStart 对已注册实例做启动前同步预检：校验 java 运行时、工作目录、启动目标 jar，
 // 供 CP 在转 STARTING 前同步拦截配置错误，终结「配置错误也要启动中→崩溃兜一圈」。
 // docker 实例整体放行（本地 JDK/文件语义不适用）。实例未注册返回 error。
 // 与 Start 内嵌的 preflightJavaVersion 同源复用、并存不冲突（纵深防御，防 CP 绕过与竞态窗口）。
 //
-// FR-471 在既有三项后补两项**现场占用**检查（docker 仍整体放行）：
+// 在既有三项后补两项**现场占用**检查（docker 仍整体放行）：
 //   - work_dir_busy：工作目录下已有活进程（可能为未纳管进程或残留）；
 //   - port_free：实例 server-port 已被本机监听。
 //
@@ -142,7 +142,7 @@ func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
 	ptype := inst.processType
 	state := inst.State
 	// 本实例自己的根进程 PID（daemon=wrapper、direct/docker=子进程）。重启时该进程仍在，
-	// work_dir_busy 必须把它及其后代排除，否则会挡住 RUNNING 实例的重启（FR-471 回归修复）。
+	// work_dir_busy 必须把它及其后代排除，否则会挡住 RUNNING 实例的重启（回归修复）。
 	ownRootPID := 0
 	if inst.strategy != nil {
 		ownRootPID = inst.strategy.GetPID()
@@ -162,7 +162,7 @@ func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
 		toPreflightCheck("work_dir", checkWorkDir(workDir)),
 		toPreflightCheck("launch_target", checkLaunchTarget(startCmd, workDir)),
 	}
-	// FR-471 的「现场占用」两项只在实例**当前不在运行类状态**时执行。
+	// 的「现场占用」两项只在实例**当前不在运行类状态**时执行。
 	//
 	// 理由：这两项要防的是「面板记 STOPPED 而磁盘/端口仍被占」（外部启动或残留进程导致的双开）。
 	// 而实例处于 RUNNING/STARTING/STOPPING 时，其工作目录与端口**本就被自己的进程正当占用**——
@@ -178,7 +178,7 @@ func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
 	return checks, nil
 }
 
-// checkWorkDirBusy 报告工作目录下是否已有活进程（FR-471 防双开）。
+// checkWorkDirBusy 报告工作目录下是否已有活进程（防双开）。
 //
 // 判据与孤儿扫描同源（procInWorkDir）：进程 cwd 落在该目录之下，或其命令行引用了该目录。
 // 命中即失败，message 含占用 PID 与处置指引（接管或清理）。
@@ -213,6 +213,20 @@ func checkWorkDirBusy(workDir string, ownRootPID int) error {
 			continue // 本实例自己的进程（wrapper/java）：重启场景下属预期
 		}
 		if !procInWorkDir(proc, clean) {
+			continue
+		}
+		// 只把“像游戏服运行时的进程”算作占用。
+		//
+		// ## 为什么不能“目录下有东西就算占”
+		// 运维用 tmux 起的服，目录里除了 java 还有 tmux 的 shell（`-bash`）、`tee` 管道、
+		// 启动脚本外壳。它们占着这个目录但**不占端口、不持锁、不影响新进程启动**。
+		// 把它们当占用会得到真实机见过的现象：服已经停了（java 早退出），仅剩 tmux 空壳，
+		// 面板却拒绝启动并报“工作目录下已有活进程（pid=X：-bash），请先接管或清理”——
+		// 而运维对着一台已停的服根本无从“接管”，启动路径就死在了这里。
+		//
+		// 真正的冲突（端口占用、world/session.lock 被持）由后续的端口预检与运行时错误兜住，
+		// 不需要在这里用“目录非空”做代理判据。
+		if !looksLikeRuntimeCmdline(proc.Cmdline) {
 			continue
 		}
 		return fmt.Errorf("工作目录下已有活进程（pid=%d：%s），可能为未纳管进程或残留，请先接管或清理：%s",
@@ -251,10 +265,10 @@ func ownProcessTree(procs []ScannedProcess, rootPID int) map[int]struct{} {
 	return own
 }
 
-// checkPortFree 探测端口在本机是否可监听（FR-471 防双开抢端口）。
+// checkPortFree 探测端口在本机是否可监听（防双开抢端口）。
 // 用 net.Listen("tcp", ":<port>") 试绑：成功即空闲（立即 Close 释放，无副作用），失败即视为被占用。
 // port<=0（未配置/未知端口）不检查——由 CP 侧的端口分配负责。
-// checkPortFree 探测端口在本机是否真的已被监听（FR-471 防双开抢端口）。
+// checkPortFree 探测端口在本机是否真的已被监听（防双开抢端口）。
 //
 // 为什么要「以监听为准 + 有界重试」而非单纯试绑：早先实现只用 `net.Listen("tcp", ":port")`
 // 试绑、失败即判占用，真机出现**偶发误报**（同一实例重试启动即成功）——试绑会被本进程自身

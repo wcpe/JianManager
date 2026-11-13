@@ -9,8 +9,8 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import VersionDrawer from './VersionDrawer'
 
-/**
- * 文件历史版本抽屉强断言（FR-204 文件归档域 / FR-051 文件版本 / FR-070）。
+/** 
+ * 文件历史版本抽屉强断言（文件归档域文件版本）。
  *
  * 直接渲染 VersionDrawer（open=true），驱动 @/api/fileVersions 的读/写端点：
  * - 读：GET /files/versions 列出种子版本（plugins/config.yml 有一条 #1）；
@@ -37,7 +37,7 @@ function renderDrawer() {
   )
 }
 
-describe('文件历史版本抽屉（mock 假后端，FR-204）', () => {
+describe('文件历史版本抽屉（mock 假后端）', () => {
   it('读出种子版本列表（#1）', async () => {
     loginMockUser()
     renderDrawer()

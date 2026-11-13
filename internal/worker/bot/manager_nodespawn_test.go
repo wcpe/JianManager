@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 )
 
-// FR-300：Manager spawn bot-worker 时须用 NodeResolver 的解析结果，
+// Manager spawn bot-worker 时须用 NodeResolver 的解析结果，
 // 无候选回退 PATH "node"（现行为不变），解析缓存失效时 spawn 前重扫重试一次。
 
 // spawnedNodePath 取本代子进程实际使用的 node（Args[0]），加锁避免与 waitChild 竞态。
@@ -25,8 +25,13 @@ func spawnedNodePath(m *Manager) string {
 	return m.cmd.Args[0]
 }
 
+// realNodePath 取可用的 node 绝对路径；**版本不够就 skip**。
+//
+// 与 requireNode 同一判据：只查 LookPath 会在装了低版本的机器上让用例变红，
+// 而这些用例真正要验的是「spawn 用了解析出的路径」，跟本机 node 新旧无关。
 func realNodePath(t *testing.T) string {
 	t.Helper()
+	requireNode(t)
 	p, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("测试环境无 node，跳过 spawn 解析测试")

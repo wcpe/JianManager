@@ -20,11 +20,13 @@ vi.mock('@/api/instances', () => ({
   useStopInstance: () => ({ mutate: () => undefined }),
   useRestartInstance: () => ({ mutate: () => undefined }),
   useKillInstance: () => ({ mutate: () => undefined }),
-  // FR-342：实例控制台始终初始化重建 mutation，布局测试的整模块 mock 必须同步提供。
+  // 实例控制台始终初始化重建 mutation，布局测试的整模块 mock 必须同步提供。
   useRebuildInstance: () => ({ mutate: () => undefined }),
-  // FR-331：路由挂 InstanceConsolePage 时会调用，工厂 mock 需带上（恒 false=非搭建中）。
+  // 路由挂 InstanceConsolePage 时会调用，工厂 mock 需带上（恒 false=非搭建中）。
   isProvisioningInstance: () => false,
-  // FR-313 崩溃诊断卡经 crashSnapshots.ts 引用该常量（真模块），工厂 mock 缺它会在
+  // 同上，损毁重建在途判定也已收敛为 api/instances 的具名导出（恒 false=非重建中）。
+  isRebuildingInstance: () => false,
+  // 崩溃诊断卡经 crashSnapshots.ts 引用该常量（真模块），工厂 mock 缺它会在
   // 懒加载片段落地时抛「No export is defined」偶发炸布局用例。
   INSTANCE_QUERY_GC_TIME_MS: 15 * 60_000,
 }))
@@ -34,8 +36,10 @@ vi.mock('@/api/nodes', () => ({
 vi.mock('@/api/metrics', () => ({
   useMetricOverview: () => ({ data: { totals: { onlineNodeCount: 1, runningInstances: 2 } } }),
   useInstanceMetrics: () => ({ data: { tps: 19.8, msptMillis: 28, memoryMb: 2048, heapMaxMb: 4096, cpuPercent: 36, onlinePlayers: 12, probeAvailable: false } }),
-  // FR-343：实例概览会请求 TPS 时序，布局测试返回空序列即可。
+  // 实例概览会请求 TPS 时序，布局测试返回空序列即可。
   useMetricSeries: () => ({ data: { series: [] } }),
+  // 侧栏行尾小字走 `useInstanceWindowMetrics`（内部用批量序列端点）：布局测试给空序列。
+  useMetricSeriesBatch: () => ({ data: { series: {} } }),
 }))
 vi.mock('@/api/serverState', () => ({
   useServerState: () => ({ data: { connected: false, state: { server: { onlinePlayers: 12, maxPlayers: 200 } } } }),
@@ -72,7 +76,7 @@ describe('DashboardPage 宽屏布局', () => {
     expect(main).toHaveAttribute('data-slot', 'console-main')
   })
 
-  it('桌面侧栏切换期间锁定布局宽度，动画结束后再落位', async () => {
+  it('折叠只改侧栏自身状态：外壳不再有「锁定宽度 / 动画落位」的第二段状态机', async () => {
     const user = userEvent.setup()
     const { container } = renderWithProviders(<DashboardPage />, { route: '/instances/2' })
 
@@ -80,23 +84,45 @@ describe('DashboardPage 宽屏布局', () => {
     await waitFor(() => expect(container.querySelector('[data-page="instance-console"]')).toBeInTheDocument(), { timeout: 5_000 })
 
     const shell = container.querySelector('[data-slot="console-shell"]') as HTMLElement
+    const sidebar = container.querySelector('[data-slot="console-sidebar"]') as HTMLElement
     const content = container.querySelector('[data-slot="console-content"]') as HTMLElement
 
-    expect(shell).toHaveAttribute('data-sidebar-layout', 'expanded')
-    expect(shell).toHaveAttribute('data-sidebar-motion', 'idle')
+    // 外壳**不得**承载侧栏折叠态：一旦挂上 data-sidebar-target，根组件就必须订阅 sidebarCollapsed，
+    // 于是点一次 logo 要 reconcile 整棵树（实测 532ms）。折叠态只由侧栏自身的 data-state 表达，
+    // 顶栏品牌列的宽度由 index.css 的 :has() 从这里派生。此断言即该约束的守护。
+    expect(shell).not.toHaveAttribute('data-sidebar-target')
+    expect(sidebar).toHaveAttribute('data-state', 'expanded')
     expect(content).toHaveClass('jm-console-content')
+    // 阶段 6 补丁：`data-sidebar-layout` / `data-sidebar-motion`（320ms 落位状态机）整段退场，
+    // 宽度过渡改由 `.jm-console-sidebar` 自己承担（见 console-shell-motion.test.ts）。
+    expect(shell).not.toHaveAttribute('data-sidebar-layout')
+    expect(shell).not.toHaveAttribute('data-sidebar-motion')
 
-    const collapseButtons = screen.getAllByRole('button', { name: '收起侧栏' })
-    await user.click(collapseButtons[1]!)
+    // 【契约变更·本次】折叠入口**只有一处**：侧栏底部的常驻开关。
+    // 顶栏品牌区那个已删除（它在折叠态被条件卸载，正是「缩回去展不开」的成因）；
+    // 底部开关两种状态都常驻，是页面里唯一的出口——因此这里断言它唯一，防止有人再加回一个重复入口。
+    const toggles = screen.getAllByRole('button', { name: '收起侧栏' })
+    expect(toggles).toHaveLength(1)
+    await user.click(toggles[0])
 
-    expect(shell).toHaveAttribute('data-sidebar-target', 'collapsed')
-    expect(shell).toHaveAttribute('data-sidebar-layout', 'expanded')
-    expect(shell).toHaveAttribute('data-sidebar-motion', 'collapsing')
+    // 目标态与侧栏状态同帧切换：没有中间态，也就没有「两段式位移」。
+    expect(shell).not.toHaveAttribute('data-sidebar-target')
+    expect(sidebar).toHaveAttribute('data-state', 'collapsed')
+    // 内容区只是同一 flex 行的兄弟节点，外壳不再给它加任何过渡/平移钩子。
+    expect(shell).not.toHaveAttribute('data-sidebar-motion')
+  })
 
-    await waitFor(() => {
-      expect(shell).toHaveAttribute('data-sidebar-layout', 'collapsed')
-      expect(shell).toHaveAttribute('data-sidebar-motion', 'idle')
-    })
+  it('顶栏是唯一一条：工作区切换在顶栏内，不再另起一行', async () => {
+    const { container } = renderWithProviders(<DashboardPage />, { route: '/instances' })
+
+    const header = container.querySelector('[data-slot="console-header"]') as HTMLElement
+    // 【44px 而非 53px】顶栏整体收矮（用户要求「改矮一些、整体比例缩小」）：
+    // 53px 里塞 24px logo + 13px 文字，纵向留白过多。44px 是「logo 24 + 上下 10」的自然高度。
+    expect(header).toHaveClass('h-[44px]')
+    expect(container.querySelector('[data-slot="console-workspace-bar"]')).toBeNull()
+    expect(within(header).getByRole('navigation', { name: '工作区' })).toBeInTheDocument()
+    // 顶栏不输出页名：页名只由内容页的大标题承担。
+    expect(container.querySelector('[aria-label="breadcrumb"]')).toBeNull()
   })
 
   it('移动端提供可见导航入口，并能展开导航面板', async () => {
@@ -106,10 +132,12 @@ describe('DashboardPage 宽屏布局', () => {
     const mobileNav = screen.getByLabelText('移动导航')
     expect(mobileNav).toHaveAttribute('data-slot', 'mobile-console-nav')
 
-    await user.click(within(mobileNav).getByRole('button', { name: '服务器' }))
+    await user.click(within(mobileNav).getByRole('button', { name: '服务器运维' }))
     expect(mobileNav.querySelector('[data-slot="mobile-nav-panel"]')).toHaveAttribute('data-state', 'open')
-    expect(within(mobileNav).getByRole('link', { name: '全部服务器' })).toBeInTheDocument()
-    expect(within(mobileNav).getByRole('link', { name: '节点' })).toBeInTheDocument()
+    // 阶段 6：底部格子是「工作区」，面板里列该工作区下的分组。
+    // 面板内容按权限裁剪（本用例未登录特定角色，`instance.read` / `node.read` 不可见），
+    // 因此只断言本用例真正关心的事：面板里出现了可点链接。
+    expect(within(mobileNav).getAllByRole('link').length).toBeGreaterThan(0)
   })
 
   it('移动端导航面板收起时保留关闭动画状态', async () => {
@@ -117,7 +145,7 @@ describe('DashboardPage 宽屏布局', () => {
     renderWithProviders(<DashboardPage />, { route: '/instances' })
 
     const mobileNav = screen.getByLabelText('移动导航')
-    await user.click(within(mobileNav).getByRole('button', { name: '服务器' }))
+    await user.click(within(mobileNav).getByRole('button', { name: '服务器运维' }))
 
     const panel = mobileNav.querySelector('[data-slot="mobile-nav-panel"]') as HTMLElement
     expect(panel).toHaveAttribute('data-state', 'open')
@@ -132,7 +160,8 @@ describe('DashboardPage 宽屏布局', () => {
     renderWithProviders(<DashboardPage />, { route: '/networks/topology' })
 
     const mobileNav = screen.getByLabelText('移动导航')
-    await user.click(within(mobileNav).getByRole('button', { name: '群组网络' }))
+    // 阶段 6：群组网络已归入「服务器运维」工作区的「群组与工作台」分组。
+    await user.click(within(mobileNav).getByRole('button', { name: '服务器运维' }))
 
     expect(within(mobileNav).getByRole('link', { name: '网络拓扑' })).toHaveAttribute('aria-current', 'page')
     expect(within(mobileNav).getByRole('link', { name: '分组管理' })).not.toHaveAttribute('aria-current')

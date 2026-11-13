@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** core 自更新选择状态持久化（FR-091）：往返、原子落盘、损坏容错。 */
+/** core 自更新选择状态持久化：往返、原子落盘、损坏容错。 */
 class CoreSelectStoreTest {
 
     @Test

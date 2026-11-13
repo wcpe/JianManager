@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { server } from '@jianmanager/devmock/server'
 import { resetDb } from '@jianmanager/devmock/db'
 
-/**
- * 平台全景观测（FR-402 / FR-461）**经 mock handler** 的契约测试。
+/** 
+ * 平台全景观测**经 mock handler** 的契约测试。
  *
  * 存在的理由：这两个端点是平台首页与总览页的读模型。此前 devmock **完全没有**对应 handler——
  * 前端请求不被 MSW 拦截、透传 vite proxy 后报 ECONNREFUSED，E2E（navigation-benchmark /
@@ -47,7 +47,7 @@ afterEach(() => {
 })
 afterAll(() => server.close())
 
-describe('平台全景观测 overview（FR-402）', () => {
+describe('平台全景观测 overview', () => {
   it('返回健康/资源/Bot/告警/任务/异常六大段且数值来自种子集合', async () => {
     const token = await login()
     const r = await fetch(`${BASE}/observability/overview`, { headers: { Authorization: `Bearer ${token}` } })
@@ -76,7 +76,7 @@ describe('平台全景观测 overview（FR-402）', () => {
   })
 })
 
-describe('健康墙 health-wall（FR-461）', () => {
+describe('健康墙 health-wall', () => {
   it('逐节点返回快照，字段齐全、level 合法、href 可下钻', async () => {
     const token = await login()
     const r = await fetch(`${BASE}/observability/health-wall?sort=level`, {

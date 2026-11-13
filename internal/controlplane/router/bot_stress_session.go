@@ -255,7 +255,7 @@ func (h *BotStressSessionHandler) Stop(c *gin.Context) {
 	c.JSON(http.StatusAccepted, view)
 }
 
-// RetryFailed 只重试失败 Bot 子集；requestId 审计幂等（FR-365）。
+// RetryFailed 只重试失败 Bot 子集；requestId 审计幂等。
 func (h *BotStressSessionHandler) RetryFailed(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -542,7 +542,7 @@ func (h *BotStressSessionHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		if h.execution != nil {
 			sessions.POST("/:id/retry-failed", h.RetryFailed)
 		}
-		// FR-370：终态报告 + SSE + 指标 + bots/failures/events 投影。
+		// 终态报告 + SSE + 指标 + bots/failures/events 投影。
 		sessions.GET("/:id/report", h.Report)
 		sessions.GET("/:id/stream", h.Stream)
 		sessions.GET("/:id/metrics", h.Metrics)
@@ -552,7 +552,7 @@ func (h *BotStressSessionHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	}
 }
 
-// Bots 投影会话关联 Bot 列表（FR-370）。
+// Bots 投影会话关联 Bot 列表。
 func (h *BotStressSessionHandler) Bots(c *gin.Context) {
 	if h.projection == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "Bot 投影未启用"})
@@ -583,7 +583,7 @@ func (h *BotStressSessionHandler) Bots(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// Failures 投影会话失败项（FR-370）。
+// Failures 投影会话失败项。
 func (h *BotStressSessionHandler) Failures(c *gin.Context) {
 	if h.projection == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "失败投影未启用"})
@@ -620,7 +620,7 @@ func (h *BotStressSessionHandler) Failures(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// Events 投影运行历史事件（FR-370）。
+// Events 投影运行历史事件。
 func (h *BotStressSessionHandler) Events(c *gin.Context) {
 	if h.projection == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "事件投影未启用"})
@@ -700,7 +700,7 @@ func writeBotLoadProjectionError(c *gin.Context, err error) {
 	}
 }
 
-// Metrics 读取 5s 聚合指标样本（FR-370）：?from&to&resolution=raw|15s|1m|5m。
+// Metrics 读取 5s 聚合指标样本：?from&to&resolution=raw|15s|1m|5m。
 func (h *BotStressSessionHandler) Metrics(c *gin.Context) {
 	if h.metrics == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "指标功能未启用"})
@@ -742,7 +742,7 @@ func (h *BotStressSessionHandler) Metrics(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// Report 导出终态运行报告（FR-370）：?format=json|csv，默认 json。
+// Report 导出终态运行报告：?format=json|csv，默认 json。
 func (h *BotStressSessionHandler) Report(c *gin.Context) {
 	if h.report == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "报告功能未启用"})
@@ -778,7 +778,7 @@ func (h *BotStressSessionHandler) Report(c *gin.Context) {
 	}
 }
 
-// Stream 会话 SSE（FR-370/372）：对齐前端 init/counts/metric/complete。
+// Stream 会话 SSE（372）：对齐前端 init/counts/metric/complete。
 func (h *BotStressSessionHandler) Stream(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {

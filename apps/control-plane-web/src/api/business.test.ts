@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// 用 hoisted mock 暴露 post spy，断言 dispatchBusiness 拼装的请求体（FR-121）。
+// 用 hoisted mock 暴露 post spy，断言 dispatchBusiness 拼装的请求体。
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }))
 vi.mock('@/api/client', () => ({ default: { post: postMock, get: vi.fn() } }))
 
 import { dispatchBusiness } from './business'
 
-describe('dispatchBusiness 写动作横切参数（FR-121）', () => {
+describe('dispatchBusiness 写动作横切参数', () => {
   beforeEach(() => {
     postMock.mockReset()
     postMock.mockResolvedValue({ data: { instanceId: 1, domain: 'economy', action: 'deposit', available: true, output: null } })

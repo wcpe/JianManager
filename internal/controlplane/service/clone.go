@@ -16,13 +16,13 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 克隆相关错误（FR-036）。
+// 克隆相关错误。
 var (
 	ErrSourceNotBackend = errors.New("源实例不是 backend 子服")
 	ErrSourceRunning    = errors.New("源实例正在运行，请先停止再复制")
 )
 
-// defaultCloneExcludes 是复制工作目录时默认排除的运行态文件（FR-036）。
+// defaultCloneExcludes 是复制工作目录时默认排除的运行态文件。
 var defaultCloneExcludes = []string{
 	"session.lock",
 	"*.pid",
@@ -33,11 +33,11 @@ var defaultCloneExcludes = []string{
 	"libraries/.cache",
 }
 
-// quickCloneIncludes 快速复制的 include 集（FR-231）：核心 jar + plugins/ + 根配置（顶层段匹配，不含 world/logs/cache）。
+// quickCloneIncludes 快速复制的 include 集：核心 jar + plugins/ + 根配置（顶层段匹配，不含 world/logs/cache）。
 // eula.txt 必须显式包含（不在 *.yml/*.properties 通配内）：漏掉则克隆服首启被 Paper 以自生成的 eula=false 拒启。
 var quickCloneIncludes = []string{"*.jar", "plugins", "server.properties", "eula.txt", "*.yml", "*.yaml", "*.properties"}
 
-// cloneFilters 据复制模式派生 worker 的 include/exclude（FR-231）。
+// cloneFilters 据复制模式派生 worker 的 include/exclude。
 // quick=核心+插件+根配置；advanced/默认=用户 include（空=全部）+ 用户 exclude ∪ 运行态垃圾（始终排）。
 func cloneFilters(req CloneInstanceRequest) (include, exclude []string) {
 	if req.Mode == "quick" {
@@ -47,13 +47,13 @@ func cloneFilters(req CloneInstanceRequest) (include, exclude []string) {
 	return req.Include, exclude
 }
 
-// CloneService 一键复制 backend 子服为独立新实例（FR-036）。
+// CloneService 一键复制 backend 子服为独立新实例。
 type CloneService struct {
 	db       *gorm.DB
 	pool     *cpgrpc.ClientPool
 	instance *InstanceService
 	reg      *RegistrationService
-	// tasks 任务中心（FR-323）：拷贝工作目录经任务异步；nil 时回退同步（旧行为/测试）。
+	// tasks 任务中心：拷贝工作目录经任务异步；nil 时回退同步（旧行为/测试）。
 	tasks *TaskService
 }
 
@@ -62,7 +62,7 @@ func NewCloneService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *InstanceSer
 	return &CloneService{db: db, pool: pool, instance: instance, reg: reg}
 }
 
-// SetTaskService 注入任务中心（FR-323，main 接线）：非 nil 后拷贝阶段走后台任务。
+// SetTaskService 注入任务中心（main 接线）：非 nil 后拷贝阶段走后台任务。
 func (s *CloneService) SetTaskService(t *TaskService) { s.tasks = t }
 
 // CloneInstanceRequest 复制请求。
@@ -72,13 +72,13 @@ type CloneInstanceRequest struct {
 	LevelName          string `json:"levelName"`
 	RegisterToProxyIDs []uint `json:"registerToProxyIds"`
 	DryRun             bool   `json:"dryRun"`
-	// Mode 复制模式（FR-231）：quick=核心 jar+插件+根配置；advanced=按 Include/Exclude；空=advanced（向后兼容）。
+	// Mode 复制模式：quick=核心 jar+插件+根配置；advanced=按 Include/Exclude；空=advanced（向后兼容）。
 	Mode    string   `json:"mode"`
 	Include []string `json:"include"` // 高级复制 include 顶层项（plugins、*.jar…）；空=全部
 	Exclude []string `json:"exclude"` // 高级复制额外 exclude（与运行态垃圾合并）
 }
 
-// CloneAllocation 复制为新实例分配的资源（RCON 已退役，FR-067）。
+// CloneAllocation 复制为新实例分配的资源（RCON 已退役）。
 type CloneAllocation struct {
 	WorkDir    string `json:"workDir"`
 	ServerPort int    `json:"serverPort"`
@@ -93,7 +93,7 @@ type CloneResult struct {
 	Registrations []RegistrationView `json:"registrations,omitempty"`
 	Warnings      []string           `json:"warnings,omitempty"`
 	DryRun        bool               `json:"dryRun"`
-	// TaskID 拷贝工作目录的后台任务 id（FR-323，异步模式非空；同步回退/dryRun 为空）。
+	// TaskID 拷贝工作目录的后台任务 id（异步模式非空；同步回退/dryRun 为空）。
 	TaskID string `json:"taskId,omitempty"`
 }
 
@@ -138,7 +138,7 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 	result.Instance = dst
 	result.Allocated.WorkDir = dst.WorkDir
 
-	// 长段（拷贝工作目录 + 配置修正 + 代理注册）异步化（FR-323）：大目录拷贝可数分钟，
+	// 长段（拷贝工作目录 + 配置修正 + 代理注册）异步化：大目录拷贝可数分钟，
 	// 同步会阻塞 HTTP 请求。有任务中心即秒回 {instance, taskId}，拷贝在 CP 后台推进；
 	// 失败标注 dst statusReason「克隆未完成」，成功清空。无任务中心（测试）回退同步。
 	if s.tasks == nil {
@@ -205,12 +205,14 @@ func (s *CloneService) cloneAllocAndCreate(src *model.Instance, req CloneInstanc
 		groupID = gi.GroupID
 	}
 
-	// 创建独立新实例（系统分配新目录；同款结构化启动/JDK；新端口）。RCON 已退役（FR-067），治理走探针。
+	// 创建独立新实例（系统分配新目录；同款结构化启动/JDK；新端口）。RCON 已退役，治理走探针。
 	dst, err = s.instance.Create(CreateInstanceRequest{
-		NodeID:           src.NodeID,
-		Name:             req.Name,
-		Type:             src.Type,
-		Role:             model.InstanceRoleBackend,
+		NodeID: src.NodeID,
+		Name:   req.Name,
+		Type:   src.Type,
+		Role:   model.InstanceRoleBackend,
+		// 克隆沿用源实例的类别：克隆的是同一份服务端程序，类别必然相同。
+		Kind:             src.KindOrInfer(),
 		ProcessType:      src.ProcessType,
 		StartCommand:     src.StartCommand,
 		JDKID:            src.JDKID,
@@ -242,7 +244,7 @@ func (s *CloneService) finishCloneWork(ctx context.Context, src, dst *model.Inst
 	if w := s.fixupConfig(ctx, dst, req); w != "" {
 		result.Warnings = append(result.Warnings, w)
 	}
-	// 可选注册进所选代理（触发 FR-035 写代理配置 + 下发 secret）。
+	// 可选注册进所选代理（触发写代理配置 + 下发 secret）。
 	for _, proxyID := range req.RegisterToProxyIDs {
 		view, rerr := s.reg.Create(proxyID, CreateRegistrationRequest{BackendID: dst.ID})
 		if view != nil {
@@ -290,7 +292,7 @@ func (s *CloneService) cloneWorkDirOnWorker(ctx context.Context, src, dst *model
 	return nil
 }
 
-// fixupConfig 修正目标 server.properties（端口/motd/level-name）。返回告警（空表示成功）。RCON 已退役（FR-067）。
+// fixupConfig 修正目标 server.properties（端口/motd/level-name）。返回告警（空表示成功）。RCON 已退役。
 func (s *CloneService) fixupConfig(ctx context.Context, dst *model.Instance, req CloneInstanceRequest) string {
 	var node model.Node
 	if err := s.db.First(&node, dst.NodeID).Error; err != nil {
@@ -308,7 +310,7 @@ func (s *CloneService) fixupConfig(ctx context.Context, dst *model.Instance, req
 		existing = resp.Content
 	}
 
-	// RCON 已退役（FR-067）：不再写 rcon.port/rcon.password；治理走探针。
+	// RCON 已退役：不再写 rcon.port/rcon.password；治理走探针。
 	kv := map[string]string{
 		"server-port": fmt.Sprintf("%d", dst.ServerPort),
 		"query.port":  fmt.Sprintf("%d", dst.QueryPort),

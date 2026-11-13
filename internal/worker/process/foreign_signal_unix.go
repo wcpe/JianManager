@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-// signalPIDTree 向 pid 所在进程组发送 SIGTERM（FR-471 接管的优雅停止第一步）。
+// signalPIDTree 向 pid 所在进程组发送 SIGTERM（接管的优雅停止第一步）。
 //
 // 与 daemon.KillPIDTree 的区别只在信号：这里发 SIGTERM，让被接管的游戏服走正常的关闭流程
 // （Paper 的 shutdown hook 保存世界、释放 world/session.lock），而不是 SIGKILL 直接断电。

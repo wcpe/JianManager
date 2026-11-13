@@ -4,7 +4,7 @@ import { resetDb } from './db'
 import { clearInjections } from './inject'
 
 /**
- * 节点级日志采集域 mock 的**语义对齐**测试（FR-503 节点端 / FR-504 手动导入归档）。
+ * 节点级日志采集域 mock 的**语义对齐**测试（节点端 / 手动导入归档）。
  *
  * 断言的是「mock 与真后端语义一致」，而不是「端点能返回 200」——这批端点过去在 devmock
  * 里整体缺失（节点详情「日志采集」分段在 dev:mock/e2e 下恒为加载失败），补齐后若语义漂移，
@@ -110,7 +110,7 @@ const item = (view: AcqView, key: string): AcqItem => {
   return found!
 }
 
-describe('devmock × 节点级日志采集（FR-503）', () => {
+describe('devmock × 节点级日志采集', () => {
   it('① 返回四列对照视图：默认/平台/生效/覆盖，未覆盖项继承平台', async () => {
     const view = await getView()
     expect(view.nodeUuid).toBe('node-alpha')

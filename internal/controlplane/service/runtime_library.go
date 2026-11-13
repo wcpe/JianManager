@@ -17,13 +17,13 @@ import (
 )
 
 var (
-	// ErrInvalidRuntimeType 运行时类型不在支持集内（FR-298 验收：未知类型拒绝），路由映射 422。
+	// ErrInvalidRuntimeType 运行时类型不在支持集内（验收：未知类型拒绝），路由映射 422。
 	ErrInvalidRuntimeType = errors.New("不支持的运行时类型")
 	// ErrRuntimeNotFound 运行时登记记录不存在。
 	ErrRuntimeNotFound = errors.New("运行时不存在")
 	// ErrRuntimeDuplicated 同节点同类型同路径重复登记。
 	ErrRuntimeDuplicated = errors.New("该路径已登记同类型运行时")
-	// ErrInvalidRuntimeArch 安装请求 arch 不被支持（FR-299，齐平 FR-289 语义），路由映射 422。
+	// ErrInvalidRuntimeArch 安装请求 arch 不被支持（齐平语义），路由映射 422。
 	ErrInvalidRuntimeArch = errors.New("不支持的 arch")
 )
 
@@ -33,10 +33,10 @@ var scanableRuntimeTypes = map[string]bool{"jdk": true, "nodejs": true}
 // registrableRuntimeTypes 可登记类型（python 仅预留枚举：可手动登记，无扫描/安装器）。
 var registrableRuntimeTypes = map[string]bool{"jdk": true, "nodejs": true, "python": true}
 
-// installableRuntimeTypes 可一键安装类型（FR-299 首批仅 nodejs；jdk 走既有 /jdks/install 链路）。
+// installableRuntimeTypes 可一键安装类型（首批仅 nodejs；jdk 走既有 /jdks/install 链路）。
 var installableRuntimeTypes = map[string]bool{"nodejs": true}
 
-// RuntimeLibraryService 节点运行时库（FR-298）：统一 Runtime 视图（node_jdks + node_runtimes
+// RuntimeLibraryService 节点运行时库：统一 Runtime 视图（node_jdks + node_runtimes
 // 读侧拼装，写侧各走各表）、扫描发现（代理 Worker ScanRuntimes）、登记与删除。
 // JDK 的写路径全部委托既有 JDKService（node_jdks 一字不动，实例外键零变更）。
 type RuntimeLibraryService struct {
@@ -44,9 +44,9 @@ type RuntimeLibraryService struct {
 	pool *cpgrpc.ClientPool
 	jdk  *JDKService
 	// settings 提供平台设置生效值（runtime.mirror.nodejs），随安装下发 Worker 使镜像源真生效；
-	// 为 nil 时安装走 Worker 本地 env/官方默认源（FR-299，语义同 JDKService）。
+	// 为 nil 时安装走 Worker 本地 env/官方默认源（语义同 JDKService）。
 	settings SettingsReader
-	// tasks 全局任务中心服务（FR-183）；非 nil 时 InstallAsync 可用（建 Task→Worker 启动即返回）。
+	// tasks 全局任务中心服务；非 nil 时 InstallAsync 可用（建 Task→Worker 启动即返回）。
 	tasks *TaskService
 }
 
@@ -55,12 +55,12 @@ func NewRuntimeLibraryService(db *gorm.DB, pool *cpgrpc.ClientPool, jdk *JDKServ
 	return &RuntimeLibraryService{db: db, pool: pool, jdk: jdk}
 }
 
-// SetTaskService 注入任务中心服务，启用运行时安装异步化（FR-299）。在 main 装配阶段调用。
+// SetTaskService 注入任务中心服务，启用运行时安装异步化。在 main 装配阶段调用。
 func (s *RuntimeLibraryService) SetTaskService(t *TaskService) {
 	s.tasks = t
 }
 
-// SetSettingsReader 注入平台设置读取器（FR-299）。在 main 装配阶段调用，避免构造期循环依赖。
+// SetSettingsReader 注入平台设置读取器。在 main 装配阶段调用，避免构造期循环依赖。
 func (s *RuntimeLibraryService) SetSettingsReader(r SettingsReader) {
 	s.settings = r
 }
@@ -92,7 +92,7 @@ type RuntimeCandidate struct {
 	AlreadyRegistered bool   `json:"alreadyRegistered"`
 }
 
-// Scan 代理 Worker ScanRuntimes 扫描常见安装路径回候选列表（FR-298）。
+// Scan 代理 Worker ScanRuntimes 扫描常见安装路径回候选列表。
 // types 空 = 全部可扫描类型；未知类型返回 ErrInvalidRuntimeType（不下发）。
 // Worker 只能按托管根标 already_registered，这里再按 DB 已登记路径补标
 // （外部路径入库后重复扫描也能标出「已在库」）。
@@ -164,7 +164,7 @@ func (s *RuntimeLibraryService) registeredPaths(nodeID uint) (map[string]bool, e
 	return out, nil
 }
 
-// List 统一 Runtime 视图（FR-298）：node_jdks(type=jdk) + node_runtimes 读侧拼装。
+// List 统一 Runtime 视图：node_jdks(type=jdk) + node_runtimes 读侧拼装。
 // JDK 部分复用 JDKService.List（自带 syncFromWorker 容忍语义：同步失败仍回 DB 数据）。
 // 排序：type 升序（jdk 在前）→ major 降序 → id 降序。
 func (s *RuntimeLibraryService) List(nodeID uint) ([]RuntimeView, error) {
@@ -225,7 +225,7 @@ type RegisterRuntimeRequest struct {
 	Managed      bool   `json:"managed"`
 }
 
-// Register 登记运行时（FR-298）：type=jdk 转发 JDKService.Create（落 node_jdks），
+// Register 登记运行时：type=jdk 转发 JDKService.Create（落 node_jdks），
 // 其它已知类型落 node_runtimes；未知类型 ErrInvalidRuntimeType。
 func (s *RuntimeLibraryService) Register(nodeID uint, req RegisterRuntimeRequest) (*RuntimeView, error) {
 	typ := strings.ToLower(strings.TrimSpace(req.Type))
@@ -297,14 +297,14 @@ func (s *RuntimeLibraryService) Register(nodeID uint, req RegisterRuntimeRequest
 	}, nil
 }
 
-// InstallRuntimeRequest 一键安装请求（FR-299）。首批仅 type=nodejs；arch 可空（Worker 按本机推导）。
+// InstallRuntimeRequest 一键安装请求。首批仅 type=nodejs；arch 可空（Worker 按本机推导）。
 type InstallRuntimeRequest struct {
 	Type  string `json:"type" binding:"required"`
 	Major int    `json:"major" binding:"required"`
 	Arch  string `json:"arch"`
 }
 
-// normalizeNodeArch 把安装请求的 arch 别名归一为 nodejs dist 命名（FR-299，齐平 FR-289 语义）：
+// normalizeNodeArch 把安装请求的 arch 别名归一为 nodejs dist 命名（齐平语义）：
 // nodejs 用 x64/arm64（与 adoptium 的 x64/aarch64 不同，归一表按运行时类型分派、不共用）。
 // 空串放行（Worker 按本机 GOARCH 推导）；未知 arch 返回 ErrInvalidRuntimeArch 由路由映射 422，
 // 不再直透下载源产出误导性 404。
@@ -326,7 +326,7 @@ func normalizeNodeArch(arch string) (string, error) {
 	}
 }
 
-// InstallAsync 异步发起运行时安装（FR-299，复用 jdk_install 的任务模式）：建 Task →
+// InstallAsync 异步发起运行时安装（复用 jdk_install 的任务模式）：建 Task →
 // 下发 Worker InstallRuntime（携带 task_id，启动即返回）→ 置 running → 返回 Task（HTTP 202 语义）。
 // 终态落 node_runtimes（managed=true）与站内信由心跳终态副作用完成（见 TaskService.finalizeTerminal）。
 func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequest, createdBy uint) (*model.Task, error) {
@@ -412,9 +412,9 @@ func defaultRuntimeName(typ string, major int) string {
 	return base
 }
 
-// Delete 删除运行时（FR-298/299）。type=jdk 委托 JDKService.Delete（保留占用守卫 +
+// Delete 删除运行时（299）。type=jdk 委托 JDKService.Delete（保留占用守卫 +
 // 托管连文件语义，返回占用实例）；其它类型语义对齐 JDK：**托管的（managed=true）先经
-// Worker RemoveRuntime 删除托管目录文件**（FR-292 顶层清理语义），再删 node_runtimes 记录；
+// Worker RemoveRuntime 删除托管目录文件**（顶层清理语义），再删 node_runtimes 记录；
 // 外部登记的只删记录、绝不动用户磁盘文件。
 func (s *RuntimeLibraryService) Delete(nodeID, runtimeID uint, typ string) ([]model.Instance, error) {
 	typ = strings.ToLower(strings.TrimSpace(typ))

@@ -7,10 +7,10 @@ import (
 	"strings"
 )
 
-// WriteWorkerYML 原子写出 worker.yml（FR-222，见 ADR-051）。
+// WriteWorkerYML 原子写出 worker.yml。
 //
 // 字段与 install-worker.sh 写出的一组保持一致（name / control_plane / data_dir / ws.port /
-// log）。**enrollment token 绝不写入**（一次性凭据不留盘，沿用 ADR-020 §2.3）；
+// log）。**enrollment token 绝不写入**（一次性凭据不留盘，沿用）；
 // data_dir 仅在显式给出时写（缺省留空 = ./data，不把派生绝对路径钉死进文件）。
 //
 // 直接拼 YAML 文本（而非引第三方 marshaler）：字段少且固定、需带说明注释、对值做最小转义，
@@ -22,7 +22,7 @@ func WriteWorkerYML(path string, in *Inputs) error {
 	}
 
 	var b strings.Builder
-	b.WriteString("# 由 worker setup 生成（FR-222，见 ADR-051）。enrollment token 不写入本文件。\n")
+	b.WriteString("# 由 worker setup 生成。enrollment token 不写入本文件。\n")
 	fmt.Fprintf(&b, "name: %s\n", yamlScalar(name))
 	fmt.Fprintf(&b, "control_plane: %s\n", yamlScalar(in.ControlPlane))
 	if strings.TrimSpace(in.DataDir) != "" {

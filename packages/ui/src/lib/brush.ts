@@ -1,5 +1,5 @@
-/**
- * 监控页 brush 拖拽轴（FR-169）的纯逻辑：把 recharts Brush 的选区（按时间戳升序数组上的
+/** 
+ * 监控页 brush 拖拽轴的纯逻辑：把 recharts Brush 的选区（按时间戳升序数组上的
  * startIndex/endIndex）换算成 { from, to } 时间窗，供该图二次过滤。抽成无 React 依赖的模块
  * 以便 vitest 单测（参照 runtime-assets-view.ts 约定）。
  */
@@ -10,7 +10,7 @@ export interface TimeWindow {
   to: string
 }
 
-/**
+/** 
  * 把 brush 选区（在已升序排列的时间戳数组上的下标对）换算为时间窗。
  *
  * - 下标越界自动夹到 [0, len-1]；start>end 时自动交换（用户反向拖动手柄）。
@@ -36,10 +36,14 @@ export function brushSelectionToWindow(
   let hi = clamp(endIndex ?? len - 1)
   if (lo > hi) [lo, hi] = [hi, lo]
 
-  return { from: timestamps[lo], to: timestamps[hi] }
+  // lo/hi 已由 clamp 夹到 [0, len-1]，两端时间戳必存在；判 undefined 仅为类型收窄
+  const from = timestamps[lo]
+  const to = timestamps[hi]
+  if (from === undefined || to === undefined) return null
+  return { from, to }
 }
 
-/**
+/** 
  * 判断某时间窗是否覆盖整段数据（首末两端）。覆盖全段视为「未筛选」，
  * 调用方据此决定是否显示「重置 brush」之类的提示。
  */
@@ -50,7 +54,7 @@ export function isFullWindow(timestamps: string[], window: TimeWindow | null): b
   return window.from === timestamps[0] && window.to === timestamps[len - 1]
 }
 
-/**
+/** 
  * 按时间窗过滤升序时间戳行集合（闭区间，含端点）。行需带 ts:string 字段。
  * window 为 null 时原样返回。
  */

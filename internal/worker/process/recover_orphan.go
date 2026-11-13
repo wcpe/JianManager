@@ -11,16 +11,16 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-325：Worker 重启接管扫描中「wrapper 存活但 reconnect 拨号失败」的兜底。
+// Worker 重启接管扫描中「wrapper 存活但 reconnect 拨号失败」的兜底。
 // 旧行为只删 PID 文件，活着的 wrapper/Java 从此不可发现（孤儿永久化，真机事故：
 // 残留 java 占 Paper session.lock 致实例再也起不来）。现改为：
 // 有界重试（期间保留 PID 文件）→ 耗尽后按 PID 记录强杀孤儿进程树 → 死透才清理。
 //
-// FR-455①/ADR-093 修订：强杀只对**真孤儿**（wrapper 已确证死亡、仅剩 Java）生效；
+// ① 修订：强杀只对**真孤儿**（wrapper 已确证死亡、仅剩 Java）生效；
 // 重试耗尽但 wrapper 仍存活（确属本实例、仅 socket 瞬时不可达）一律只告警 + 落审计、保留 PID 文件。
 // 且任何强杀前必须通过归属复核 verifyProcessOwnership，复核不过同样只告警不杀。
 
-// DefaultRecoverRetryBackoff reconnect 失败的有界重试间隔默认序列（递增，覆盖分钟级瞬时故障，FR-455①）。
+// DefaultRecoverRetryBackoff reconnect 失败的有界重试间隔默认序列（递增，覆盖分钟级瞬时故障①）。
 // 旧序列仅 {1s,2s,4s}≈7s：交接窗口的 socket 未就绪/资源紧张常是瞬时的，多等一轮即可接管，
 // 无需牺牲服务器。扩为 1s→2s→4s→8s→16s→32s→64s（≈127s），显著降低「拨不通即强杀」的误杀面。
 //
@@ -31,7 +31,7 @@ var DefaultRecoverRetryBackoff = []time.Duration{
 	16 * time.Second, 32 * time.Second, 64 * time.Second,
 }
 
-// SetRecoverRetryBackoff 注入接管 reconnect 的重试间隔序列（FR-455①，worker main 按配置装配）。
+// SetRecoverRetryBackoff 注入接管 reconnect 的重试间隔序列（①，worker main 按配置装配）。
 //
 // 空/nil 表示回退默认序列；非正项被丢弃（它们只会造成无意义的重试），全部非法时同样回退默认。
 // 入口做防御性拷贝，避免调用方后续改写切片影响运行期重试节奏。
@@ -77,12 +77,37 @@ const (
 	orphanKillVerifyInterval = 100 * time.Millisecond
 )
 
-// dialWrapper 恢复路径的 reconnect 拨号；测试经 recoverDial 注入假拨号。
+// dialWrapper 优先兼容 PID 记录地址；部署目录移动后，在强归属复核通过时尝试当前实例地址。
+// 仅重连已有 wrapper，不改 PID 记录、不发停止信号；测试经 recoverDial 注入拨号。
 func (m *Manager) dialWrapper(s *daemonStrategy, addr string) error {
+	dial := s.Reconnect
 	if m.recoverDial != nil {
-		return m.recoverDial(s, addr)
+		dial = func(addr string) error { return m.recoverDial(s, addr) }
 	}
-	return s.Reconnect(addr)
+	err := dial(addr)
+	canonical := daemon.SocketAddr(m.pidDir, s.spec.UUID)
+	if err == nil || addr == canonical || s.spec.UUID == "" {
+		return err
+	}
+	// 路径变了并不证明 PID 仍属于本实例：必须重新读当前目录的记录并验证进程强特征。
+	// cwd/WorkDir 可能也已迁移，只能复用收养所要求的 argv + 实例 UUID 证据，不能按目录猜归属。
+	rec, readErr := daemon.NewPIDFile(daemon.PIDFileName(m.pidDir, s.spec.UUID)).ReadRecord()
+	if readErr != nil || rec.InstanceUUID != s.spec.UUID || !m.pidAlive(rec.WrapperPID) {
+		return err
+	}
+	if owned, _ := m.verifyAdoptOwnership(rec.WrapperPID, s.spec.UUID, rec.WorkDir, true); !owned {
+		return err
+	}
+	if rec.JavaPID > 0 && m.pidAlive(rec.JavaPID) {
+		if owned, _ := m.verifyAdoptOwnership(rec.JavaPID, s.spec.UUID, rec.WorkDir, false); !owned {
+			return err
+		}
+	}
+	if fallbackErr := dial(canonical); fallbackErr != nil {
+		return fmt.Errorf("旧地址 %s 重连失败（%v），当前地址 %s 重连失败: %w", addr, err, canonical, fallbackErr)
+	}
+	slog.Info("已从当前 PID 目录重连迁移后的 wrapper", "instanceId", s.spec.UUID, "oldAddr", addr, "addr", canonical)
+	return nil
 }
 
 // pidAlive 进程存活探测；测试经 recoverPIDAlive 注入假读数。
@@ -110,7 +135,7 @@ func (m *Manager) retrySleep(d time.Duration) {
 	time.Sleep(d)
 }
 
-// reconnectWithRetry 对存活 wrapper 做有界重试的 reconnect 拨号（FR-325）。
+// reconnectWithRetry 对存活 wrapper 做有界重试的 reconnect 拨号。
 // 首拨失败后按当前生效的重试序列（配置注入优先，缺省 DefaultRecoverRetryBackoff）递增间隔重试；
 // 期间不动 PID 文件（保证实例在后续扫描中仍可发现）。全部失败返回最后一次错误。
 func (m *Manager) reconnectWithRetry(strategy *daemonStrategy, addr, instanceUUID string) error {
@@ -121,7 +146,7 @@ func (m *Manager) reconnectWithRetry(strategy *daemonStrategy, addr, instanceUUI
 	return m.retryReconnect(strategy, addr, instanceUUID, err)
 }
 
-// retryReconnect 在「首拨已失败」的前提下，按当前生效序列继续有界重试（FR-455①）。
+// retryReconnect 在「首拨已失败」的前提下，按当前生效序列继续有界重试（①）。
 //
 // firstErr 是首拨的错误，作为本轮重试的起点错误；重试间隔与次数与旧实现逐字一致
 // （reconnectWithRetry = 首拨 + 本函数），差别只在于调用时机——启动路径把它搬到后台，
@@ -294,17 +319,17 @@ func (m *Manager) startStartupTakeoverRetries(tasks []startupTakeoverTask) {
 	}()
 }
 
-// settleStartupTakeoverFailure 接管重试彻底失败后的归类处置（FR-325 / ADR-093 / FR-471，语义与旧实现一致）：
+// settleStartupTakeoverFailure 接管重试彻底失败后的归类处置（语义与旧实现一致）：
 //   - wrapper 仍存活：属「确属本实例、仅 socket 瞬时不可达」→ 只告警 + 落审计、保留 PID 文件、不杀
 //     （强杀会误杀一个 wrapper 与 Java 都健康、只是暂时拨不通的服务器）；
-//   - wrapper 已死：只观测 + 落审计（启动路径无任何静默破坏），交由周期扫描按 policy 与 FR-471 接管处置。
+//   - wrapper 已死：只观测 + 落审计（启动路径无任何静默破坏），交由周期扫描按 policy 与 接管处置。
 func (m *Manager) settleStartupTakeoverFailure(instanceUUID string, rec *daemon.PIDRecord, reconnectErr error) {
 	if rec.WrapperPID > 0 && m.pidAlive(rec.WrapperPID) {
 		detail := fmt.Sprintf(`{"instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"reason":"alive_unreachable"}`,
 			instanceUUID, rec.WrapperPID, rec.JavaPID)
 		m.auditOrphan("orphan.dispose_blocked", instanceUUID, detail, false,
-			"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），按 ADR-093 只告警不杀")
-		slog.Warn("接管重试耗尽但 wrapper 仍存活，按 ADR-093 只告警不杀，保留 PID 文件等下一轮/人工介入",
+			"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），只告警不杀")
+		slog.Warn("接管重试耗尽但 wrapper 仍存活，只告警不杀，保留 PID 文件等下一轮/人工介入",
 			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "error", reconnectErr)
 		return
 	}
@@ -312,7 +337,7 @@ func (m *Manager) settleStartupTakeoverFailure(instanceUUID string, rec *daemon.
 }
 
 // registerAdoptedDaemon 把「已与 wrapper 建立控制连接」的接管结果登记为 RUNNING
-// （FR-455① 启动接管 / FR-497③ 自动收养共用同一收尾口径）。
+// （① 启动接管 / ③ 自动收养共用同一收尾口径）。
 //
 // 登记前在锁内**二次确认未纳管**（与 adoptUnmanagedRecord 同口径）：拨号期间可能有并发路径抢先
 // 纳管（运行期扫描的第 0 相自动收养、CP 重推后的人工 Start）。此时丢弃本次连接（strategy.Close()
@@ -327,7 +352,7 @@ func (m *Manager) registerAdoptedDaemon(instanceUUID string, rec *daemon.PIDReco
 	// ——那正是本缺陷的验收场景本身。迁移只改 cgroup 归属、不发任何信号，失败仅告警、保持原状。
 	m.isolateAdoptedWrapper(instanceUUID, rec)
 
-	// FR-459 终验 Low #3：若 Worker 重启前该实例已熔断，从状态文件恢复熔断态——否则 Worker
+	// 终验 Low #3：若 Worker 重启前该实例已熔断，从状态文件恢复熔断态——否则 Worker
 	// 会「忘掉」熔断（以为可自动重启）而 wrapper 粘性 autoRestartOff 仍在拒绝重启，形成反向 desync。
 	restored := m.restorePersistedCircuit(instanceUUID)
 
@@ -343,7 +368,7 @@ func (m *Manager) registerAdoptedDaemon(instanceUUID string, rec *daemon.PIDReco
 	m.instances[instanceUUID] = &Instance{
 		UUID:  instanceUUID,
 		State: StateRunning,
-		// StartedAt：与自动收养同口径（FR-497③ 补验）——本路径同样是「从无到 RUNNING」的跳变，
+		// StartedAt：与自动收养同口径（③ 补验）——本路径同样是「从无到 RUNNING」的跳变，
 		// 不写则 warmupRemaining 拿不到纪元、直接返回 0，刚接管的实例失去启动宽限期。
 		StartedAt:         time.Now(),
 		AutoRestart:       !restored,
@@ -364,17 +389,18 @@ func (m *Manager) registerAdoptedDaemon(instanceUUID string, rec *daemon.PIDReco
 	return true
 }
 
-// observeOrphanAtStartup 在 Worker 启动恢复路径上「只观测、不处置」一条孤儿（FR-471）。
+// observeOrphanAtStartup 在 Worker 启动恢复路径上「只观测、不处置」一条孤儿。
 //
 // 为什么启动路径必须非破坏：换二进制/重启 Worker 是高频运维动作，而 PID 目录里可能残留
 // 陈旧记录（wrapper 已死、Java PID 已被复用或本就属他人）。旧行为在此按记录强杀 Java 树，
-// 真机事故（2026-09-23）一次打断 54 台在跑农场。既然 FR-471 已提供启动冲突预检（防双开）与
+// 真机事故（2026-09-23）一次打断 54 台在跑农场。既然已提供启动冲突预检（防双开）与
 // 漂移呈现 + 接管入口，启动路径就不再需要任何静默破坏：
 //
 //   - 只记审计（`orphan.startup_detected_not_reaped`，success=true 表示「观测成功」而非「已处置」）
 //     并打 WARN，**保留 PID 文件**；
 //   - 交周期孤儿扫描按 `orphan.dispose_policy` 处置（默认 warn 只告警；显式 auto 才强杀）；
-//   - FR-471 的漂移观测与 `adopt-runtime` 接管是人工/受控的解决出口。
+//
+// 的漂移观测与 `adopt-runtime` 接管是人工/受控的解决出口。
 //
 // reason 用于审计定位触发分支（startup_wrapper_gone_java_alive / startup_reconnect_failed）。
 func (m *Manager) observeOrphanAtStartup(instanceUUID string, rec *daemon.PIDRecord, reason string) {
@@ -384,19 +410,19 @@ func (m *Manager) observeOrphanAtStartup(instanceUUID string, rec *daemon.PIDRec
 	detail := fmt.Sprintf(`{"instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"kind":%q,"policy":"observe","workDir":%q}`,
 		instanceUUID, rec.WrapperPID, rec.JavaPID, reason, rec.WorkDir)
 	m.auditOrphan("orphan.startup_detected_not_reaped", instanceUUID, detail, true, "")
-	slog.Warn("启动期发现 daemon 孤儿：按 FR-471 非破坏策略只观测不强杀（保留 PID 文件，交由周期扫描与接管流程处置）",
+	slog.Warn("启动期发现 daemon 孤儿：按非破坏策略只观测不强杀（保留 PID 文件，交由周期扫描与接管流程处置）",
 		"instanceId", instanceUUID, "reason", reason,
 		"wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "workDir", rec.WorkDir)
 }
 
-// reapOrphanWrapper 处置孤儿进程树（FR-325 及同源的 wrapper 已死场景）。
+// reapOrphanWrapper 处置孤儿进程树（及同源的 wrapper 已死场景）。
 //
-// 仅由**显式 auto 策略**的周期孤儿扫描调用（FR-471 起，启动恢复路径不再调用本函数）。
+// 仅由**显式 auto 策略**的周期孤儿扫描调用（起，启动恢复路径不再调用本函数）。
 // // 两种入口：
 //   - reconnectErr == errOrphanedWrapperGone：wrapper 已经不在，只剩 Java 孤儿（**真孤儿**）。
 //     只清 Java，跳过对已消失 wrapper 的杀树与存活复核。
 //   - 其余（reconnect 重试耗尽）：先判定 wrapper 是否仍存活——
-//     · wrapper 仍存活：属「确属本实例、仅 socket 瞬时不可达/暂不健康」（ADR-093 决策 1），
+//     · wrapper 仍存活：属「确属本实例、仅 socket 瞬时不可达/暂不健康」，
 //     **只告警 + 落审计、保留 PID 文件、不杀**，等下一轮扫描或人工介入（强杀会误杀一个
 //     wrapper 与 Java 都健康、只是 socket 一时拨不通的运行中服务器）；
 //     · wrapper 已在重试期间死亡：退化为真孤儿场景，按 PID 记录强杀 Java 树。
@@ -407,21 +433,21 @@ func (m *Manager) observeOrphanAtStartup(instanceUUID string, rec *daemon.PIDRec
 // PID 文件处置语义：确认全部死透 → 清 PID 文件与残留 socket；仍有存活（权限不足等）→
 // 保留 PID 文件，让下次 Worker 重启的接管扫描仍能发现并再次兜底，杜绝孤儿永久失联。
 //
-// FR-455① 处置前置存活复核：任何 killTree 之前，先以 cmdline/cwd 复核该 PID 是否确属本实例
+// ① 处置前置存活复核：任何 killTree 之前，先以 cmdline/cwd 复核该 PID 是否确属本实例
 // （verifyProcessOwnership）。复核不通过（PID 可能已被 OS 复用给无关进程）→ **只告警 + 落审计，
 // 不杀**，并保留 PID 文件等下一轮扫描或人工介入，杜绝误杀。
 func (m *Manager) reapOrphanWrapper(instanceUUID, pidPath string, rec *daemon.PIDRecord, reconnectErr error) {
 	wrapperGone := errors.Is(reconnectErr, errOrphanedWrapperGone)
 
-	// ADR-093 决策 1（覆盖 spec §2.1 旧表述「复核不通过→只告警」）：接管重试耗尽但 wrapper 仍存活，
+	// 归属复核口径覆盖 spec §2.1 旧表述「复核不通过→只告警」：接管重试耗尽但 wrapper 仍存活，
 	// 判为「确属本实例、仅瞬时不可达」——只告警、保留 PID 文件、不杀。只有当 wrapper 已确证死亡
 	// （真孤儿）才进入处置。存活判据即「wrapper 进程仍存活」，与 socket 是否拨通无关。
 	if !wrapperGone && rec.WrapperPID > 0 && m.pidAlive(rec.WrapperPID) {
 		detail := fmt.Sprintf(`{"instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"reason":"alive_unreachable"}`,
 			instanceUUID, rec.WrapperPID, rec.JavaPID)
 		m.auditOrphan("orphan.dispose_blocked", instanceUUID, detail, false,
-			"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），按 ADR-093 只告警不杀")
-		slog.Warn("接管重试耗尽但 wrapper 仍存活，按 ADR-093 只告警不杀，保留 PID 文件等下一轮/人工介入",
+			"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），只告警不杀")
+		slog.Warn("接管重试耗尽但 wrapper 仍存活，只告警不杀，保留 PID 文件等下一轮/人工介入",
 			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "error", reconnectErr)
 		return
 	}
@@ -451,7 +477,7 @@ func (m *Manager) reapOrphanWrapper(instanceUUID, pidPath string, rec *daemon.PI
 	keptByVerify := false
 	killedPIDs := make([]int, 0, len(targets))
 	for _, tgt := range targets {
-		// FR-455①：处置前 cmdline 存活复核。不通过只告警 + 落审计，不杀。
+		// ①：处置前 cmdline 存活复核。不通过只告警 + 落审计，不杀。
 		if !m.verifyProcessOwnership(tgt.pid, instanceUUID, rec.WorkDir, tgt.expectWrapper) {
 			keptByVerify = true
 			detail := fmt.Sprintf(`{"instanceUuid":%q,"pid":%d,"role":%q,"reason":"ownership_unverified"}`, instanceUUID, tgt.pid, tgt.role)
