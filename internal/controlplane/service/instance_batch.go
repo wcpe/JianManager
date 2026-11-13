@@ -358,7 +358,7 @@ func (s *InstanceBatchService) delegateBatchOneContext(parent context.Context, r
 		return fmt.Errorf("gRPC %s 失败: %w", req.Action, err)
 	}
 	if resp != nil && !resp.Success {
-		reconcileLifecycleObservation(s.db, client.Worker, inst, resp.Error)
+		reconcileLifecycleFailure(s.db, client.Worker, inst, string(req.Action), resp.Error)
 		return fmt.Errorf("Worker %s 失败: %s", req.Action, resp.Error)
 	}
 

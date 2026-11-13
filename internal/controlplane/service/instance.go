@@ -1536,6 +1536,33 @@ func (s *InstanceService) restartInternal(id, expectedNodeID uint) error {
 		return err
 	}
 
+	// 状态分支：「有活进程可停」才走重启的两段式（停止 → 启动）。
+	//
+	// 为什么不在 validTransitions 里放行 STOPPED/CRASHED → STOPPING：允许表是所有调用方
+	// （前端按钮态、Agent、定时任务）共享的「这个状态能做什么」的事实源。放行后「停止」
+	// 这类对无进程实例毫无意义的动作也显得合法，会真向 Worker 下发一条没有对象的停止委托
+	// （换来「未运行」类噪音失败）；真正要修的只是「重启」这一个复合动作在无进程时该怎么走。
+	// 故分支就写在这里，允许表原样不动。
+	if !hasLiveProcess(instance.Status) {
+		// STOPPED / CRASHED 没有进程可重启：Worker 侧下发 restart 只会得到「未运行」类失败。
+		// 语义上「重启一个已停止/崩溃的实例」就是启动，因此跳过停止阶段，改走启动路径：
+		// 保留启动侧全部守卫（上面的长操作闸 + DAMAGED + 预检，均已执行）与 transition 对
+		// status_reason 的清空，只把目标状态换成 STARTING、委托动作换成 start
+		// （Worker 的 start 分支会先等上一代进程退出，仍能处理残留进程）。
+		//
+		// 内存水位闸此处仍不参与：与运行中实例的重启同口径保留，避免同一入口因状态不同
+		// 而产生两套拒绝标准。
+		if err := s.transition(id, model.InstanceStatusStarting, "重启-启动"); err != nil {
+			return err
+		}
+		// 同 Start：委托未派出（控制面关闭中）时必须报错，不能丢弃返回值当作已受理。
+		if !s.spawnDelegate(instance, "start", expectedNodeID, releaseOperation) {
+			return fmt.Errorf("实例 %s 重启失败：控制面正在关闭，本次动作未执行", instance.UUID)
+		}
+		delegateOwnsOperation = true
+		return nil
+	}
+
 	if err := s.transition(id, model.InstanceStatusStopping, "重启-停止"); err != nil {
 		return err
 	}
@@ -1546,6 +1573,20 @@ func (s *InstanceService) restartInternal(id, expectedNodeID uint) error {
 	}
 	delegateOwnsOperation = true
 	return nil
+}
+
+// hasLiveProcess 判断该状态下是否存在「可以被停止/重启」的进程。
+//
+// 只有 STOPPED（已彻底停止）与 CRASHED（进程已消失）没有活进程；STARTING / RUNNING /
+// STOPPING 都意味着进程存在或即将存在（停止在途仍需按停止链路走）。DAMAGED 属搭建未完成，
+// 由 Restart 自己的守卫拦下，不在此列——即便误入也因缺少合法转换而被状态机拒绝。
+func hasLiveProcess(status model.InstanceStatus) bool {
+	switch status {
+	case model.InstanceStatusStopped, model.InstanceStatusCrashed:
+		return false
+	default:
+		return true
+	}
 }
 
 // Kill 强制终止实例。
@@ -2244,7 +2285,7 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 
 	if resp != nil && !resp.Success {
 		slog.Error("Worker 操作未成功", "action", action, "instanceId", instance.UUID, "error", resp.Error)
-		reconcileLifecycleObservation(s.db, client.Worker, &observed, resp.Error)
+		reconcileLifecycleFailure(s.db, client.Worker, &observed, action, resp.Error)
 		return
 	}
 
@@ -2319,25 +2360,39 @@ func markLifecycleUnconfirmed(db *gorm.DB, observed *model.Instance, reason stri
 
 // reconcileLifecycleObservation 传输失败/取消不是崩溃证据；复用现有状态查询，失败则交给心跳收敛。
 func reconcileLifecycleObservation(db *gorm.DB, worker workerpb.WorkerServiceClient, observed *model.Instance, reason string) {
+	unconfirmed := "操作结果待确认，状态查询/心跳收敛: " + reason
+	reconcileLifecycleResult(db, worker, observed, unconfirmed, unconfirmed)
+}
+
+// reconcileLifecycleFailure 保留 Worker 已明确返回的失败结果；只有运行态可能仍需心跳收敛。
+func reconcileLifecycleFailure(db *gorm.DB, worker workerpb.WorkerServiceClient, observed *model.Instance, action, reason string) {
+	label := map[string]string{"start": "启动", "stop": "停止", "restart": "重启", "kill": "强制停止"}[action]
+	if label == "" {
+		label = "操作"
+	}
+	failure := label + "失败: " + reason
+	reconcileLifecycleResult(db, worker, observed, failure, "操作失败，状态待心跳收敛: "+failure)
+}
+
+func reconcileLifecycleResult(db *gorm.DB, worker workerpb.WorkerServiceClient, observed *model.Instance, knownReason, pendingReason string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	resp, err := worker.GetInstanceStatus(ctx, &workerpb.InstanceActionRequest{InstanceUuid: observed.UUID})
-	unconfirmed := "操作结果待确认，状态查询/心跳收敛: " + reason
 	if err != nil || resp == nil {
 		// 连状态都查不清：只留痕原因，不碰 status（见 markLifecycleUnconfirmed）。
-		slog.Warn("生命周期结果查询失败，交由心跳收敛", "instanceId", observed.UUID, "reason", reason, "error", err)
-		markLifecycleUnconfirmed(db, observed, unconfirmed)
+		slog.Warn("生命周期结果查询失败，交由心跳收敛", "instanceId", observed.UUID, "reason", pendingReason, "error", err)
+		markLifecycleUnconfirmed(db, observed, pendingReason)
 		return
 	}
 	// Worker 是运行态的权威来源：查到明确状态就回写，让面板不必等下一拍心跳收敛。
 	// 状态不可识别（空串/未知取值）时不猜——同样只留痕原因。
 	switch state := model.InstanceStatus(resp.State); state {
 	case model.InstanceStatusStopped, model.InstanceStatusStarting, model.InstanceStatusRunning, model.InstanceStatusStopping, model.InstanceStatusCrashed:
-		writeLifecycleObservation(db, observed, state, unconfirmed)
+		writeLifecycleObservation(db, observed, state, knownReason)
 	default:
 		slog.Warn("生命周期结果查询返回未知状态，交由心跳收敛",
-			"instanceId", observed.UUID, "state", resp.State, "reason", reason)
-		markLifecycleUnconfirmed(db, observed, unconfirmed)
+			"instanceId", observed.UUID, "state", resp.State, "reason", pendingReason)
+		markLifecycleUnconfirmed(db, observed, pendingReason)
 	}
 }
 
