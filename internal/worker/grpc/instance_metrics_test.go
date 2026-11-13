@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -166,6 +167,82 @@ serverprobe_uptime_seconds 777
 	cleanupMetricsInstance(mgr, uuid)
 }
 
+func TestGetInstanceMetrics_UsesFreshPushedSnapshot(t *testing.T) {
+	srv, _, uuid := startMetricsRunningInstance(t)
+	store := metrics.NewPushedSnapshotStore()
+	store.Store(uuid, metrics.ProbeSnapshot{
+		TPS:           19.5,
+		MSPTAvgMillis: 12.5,
+		PlayersOnline: 7,
+		HeapUsedBytes: 256 * 1024 * 1024,
+		HeapMaxBytes:  1024 * 1024 * 1024,
+		Threads:       42,
+		SystemCPULoad: 0.125,
+		UptimeSeconds: 777,
+		Worlds:        map[string]metrics.WorldStat{"world": {LoadedChunks: 1200}},
+	})
+	srv.SetProbeSnapshotReader(store)
+
+	resp, err := srv.GetInstanceMetrics(context.Background(), &workerpb.GetInstanceMetricsRequest{InstanceUuid: uuid})
+	require.NoError(t, err)
+	assert.True(t, resp.ProbeAvailable)
+	assert.InDelta(t, 19.5, resp.Tps, 0.01)
+	assert.Equal(t, int32(7), resp.OnlinePlayers)
+	assert.Equal(t, int64(256), resp.MemoryMb)
+	assert.Equal(t, int64(1024), resp.HeapMaxMb)
+	assert.InDelta(t, 12.5, resp.MsptMillis, 0.01)
+	assert.Equal(t, int32(42), resp.Threads)
+	assert.InDelta(t, 12.5, resp.CpuPercent, 0.01)
+	assert.InDelta(t, 777, resp.UptimeSeconds, 0.01)
+}
+
+func TestGetInstanceMetrics_DroppedPushedSnapshotFallsBackToHTTP(t *testing.T) {
+	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `serverprobe_tps{window="1m"} 17.5
+serverprobe_players_online 3
+serverprobe_heap_used_bytes 134217728
+`)
+	}))
+	defer probe.Close()
+	_, portText, err := net.SplitHostPort(strings.TrimPrefix(probe.URL, "http://"))
+	require.NoError(t, err)
+	var port int
+	_, err = fmt.Sscanf(portText, "%d", &port)
+	require.NoError(t, err)
+
+	srv, _, uuid := startMetricsRunningInstance(t)
+	store := metrics.NewPushedSnapshotStore()
+	store.Store(uuid, metrics.ProbeSnapshot{TPS: 99, PlayersOnline: 99})
+	store.Forget(uuid)
+	srv.SetProbeSnapshotReader(store)
+
+	resp, err := srv.GetInstanceMetrics(context.Background(), &workerpb.GetInstanceMetricsRequest{InstanceUuid: uuid, ProbePort: int32(port)})
+	require.NoError(t, err)
+	assert.True(t, resp.ProbeAvailable)
+	assert.InDelta(t, 17.5, resp.Tps, 0.01)
+	assert.Equal(t, int32(3), resp.OnlinePlayers)
+	assert.Equal(t, int64(128), resp.MemoryMb)
+}
+
+func TestGetInstanceMetrics_PushedSnapshotsAreIsolatedByInstance(t *testing.T) {
+	srvA, _, uuidA := startMetricsRunningInstanceWithSuffix(t, "a")
+	srvB, _, uuidB := startMetricsRunningInstanceWithSuffix(t, "b")
+	store := metrics.NewPushedSnapshotStore()
+	store.Store(uuidA, metrics.ProbeSnapshot{TPS: 11, PlayersOnline: 1})
+	store.Store(uuidB, metrics.ProbeSnapshot{TPS: 22, PlayersOnline: 2})
+	srvA.SetProbeSnapshotReader(store)
+	srvB.SetProbeSnapshotReader(store)
+
+	respA, err := srvA.GetInstanceMetrics(context.Background(), &workerpb.GetInstanceMetricsRequest{InstanceUuid: uuidA})
+	require.NoError(t, err)
+	respB, err := srvB.GetInstanceMetrics(context.Background(), &workerpb.GetInstanceMetricsRequest{InstanceUuid: uuidB})
+	require.NoError(t, err)
+	assert.InDelta(t, 11, respA.Tps, 0.01)
+	assert.Equal(t, int32(1), respA.OnlinePlayers)
+	assert.InDelta(t, 22, respB.Tps, 0.01)
+	assert.Equal(t, int32(2), respB.OnlinePlayers)
+}
+
 func TestGetInstanceMetrics_StoppedDoesNotFabricateMetrics(t *testing.T) {
 	var probeCalls int
 	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -222,11 +299,18 @@ func TestResolveGameProc_WrapperShellJava(t *testing.T) {
 }
 
 func startMetricsRunningInstance(t *testing.T) (*Server, *process.Manager, string) {
+	return startMetricsRunningInstanceWithSuffix(t, "")
+}
+
+func startMetricsRunningInstanceWithSuffix(t *testing.T, suffix string) (*Server, *process.Manager, string) {
 	t.Helper()
 	javaPath := copyTestExecutableAsJava(t)
 	mgr := process.NewManager(t.TempDir())
 	mgr.SetMemGuard(process.MemGuardConfig{Disabled: true})
 	uuid := "metrics-running-" + strings.ReplaceAll(t.Name(), "/", "-")
+	if suffix != "" {
+		uuid += "-" + suffix
+	}
 	require.NoError(t, mgr.Create(
 		uuid,
 		"运行实例",

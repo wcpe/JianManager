@@ -600,6 +600,7 @@ func runWorker() {
 	defer collector.Stop()
 
 	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr, root)
+	workerServer.SetProbeSnapshotReader(heartbeat.PushedSnapshotStore())
 	// T11：装配 Worker 日志查询栈（Catalog+Planner+grpcsvc）。
 	// 配置了健康的 localhost VL 时接入真实 RangeClient；否则保留显式 LOG_UNSUPPORTED。
 	var rangeClient query.RangeClient

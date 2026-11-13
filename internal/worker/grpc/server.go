@@ -44,6 +44,12 @@ type instanceEvent struct {
 	Timestamp int64
 }
 
+// ProbeSnapshotReader 提供按实例读取最近推送探针快照的能力。
+// 实现方负责保留既有快照的存在、作废和缺项语义；gRPC 层只消费命中结果。
+type ProbeSnapshotReader interface {
+	Load(instanceUUID string) (metrics.ProbeSnapshot, bool)
+}
+
 // Server Worker Node gRPC 服务器实现。
 // 仅实现 Control Plane 反向调用 Worker 的 RPC（实例操作、文件操作、指标）。
 // 生命周期 RPC（Register/Heartbeat）由 Worker 主动发起，不由 CP 调用 Worker，
@@ -51,10 +57,11 @@ type instanceEvent struct {
 // 避免因嵌入接口导致未实现方法被调用时 panic。
 type Server struct {
 	workerpb.UnimplementedWorkerServiceServer
-	manager   *process.Manager
-	nodeUUID  string
-	collector *metrics.Collector
-	jdkMgr    *jdk.Manager
+	manager             *process.Manager
+	nodeUUID            string
+	collector           *metrics.Collector
+	probeSnapshotReader ProbeSnapshotReader
+	jdkMgr              *jdk.Manager
 	// logQuery日志 RPC 装配点（T11）；nil 时 Log* 走 Unimplemented。
 	logQuery     interface{}
 	instanceLogs InstanceLogCollector
@@ -187,6 +194,12 @@ func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Col
 		})
 	})
 	return s
+}
+
+// SetProbeSnapshotReader 注入托管模式推送快照读取器。
+// 读取器返回 false 时，实时指标继续走既有 HTTP → SLP → Query 回退链。
+func (s *Server) SetProbeSnapshotReader(r ProbeSnapshotReader) {
+	s.probeSnapshotReader = r
 }
 
 // SetHTTPClient 注入出站 client（经进程级代理）：Worker 升级二进制下载经此 client。
@@ -651,14 +664,20 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 	// 直探超时取 CP 经心跳下发的生效值（：超时可配）；此链路是用户手动触发的实时查询，
 	// **不做失败退避**，永远给最新结果（退避只用于 30s 时序采样，见 heartbeat）。
 	slpTimeout, queryTimeout := metrics.DirectProbeTimeouts()
-	tel := metrics.CollectInstanceTelemetry(metrics.CollectConfig{
+	collectCfg := metrics.CollectConfig{
 		ProbePort:    int(req.ProbePort),
 		ServerPort:   int(req.ServerPort),
 		QueryPort:    int(req.QueryPort),
 		Host:         "localhost",
 		SLPTimeout:   slpTimeout,
 		QueryTimeout: queryTimeout,
-	})
+	}
+	if s.probeSnapshotReader != nil {
+		if snap, ok := s.probeSnapshotReader.Load(req.InstanceUuid); ok {
+			collectCfg.ProbeSnapshot = &snap
+		}
+	}
+	tel := metrics.CollectInstanceTelemetry(collectCfg)
 
 	// 探针深度指标（TPS/MSPT/JVM/世界）。
 	if tel.ProbeAvailable {
