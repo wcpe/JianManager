@@ -28,7 +28,7 @@ func TestIntegrationManagedVLStartOutlivesRequestContext(t *testing.T) {
 		AssetSHA256:        logasset.LinuxExecutableSHA256,
 		DataRoot:           t.TempDir(),
 		AuthUsername:       "constructed",
-		AuthPassword:       "constructed-start-context-secret",
+		AuthPassword:       "sk-test-start-context-fixture",
 		Ports:              map[Namespace]int{NamespaceHot: port},
 		MemoryAllowedBytes: map[Namespace]int64{NamespaceHot: 128 << 20},
 		MemoryLimitBytes:   256 << 20,

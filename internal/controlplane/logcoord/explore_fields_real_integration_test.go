@@ -30,7 +30,7 @@ func TestRealVLExploreFieldsThroughCPAdapterAndWorkerService(t *testing.T) {
 	require.NoError(t, listener.Close())
 	root := t.TempDir()
 	supervisor, err := vlsup.New(vlsup.Options{BinaryPath: binary, AssetSHA256: vlsup.CurrentApprovedExeSHA256(), DataRoot: root,
-		AuthUsername: "exploration-fixture", AuthPassword: "isolated-only", RetentionPeriod: "730d",
+		AuthUsername: "exploration-fixture", AuthPassword: "sk-test-exploration-fixture", RetentionPeriod: "730d",
 		Ports: map[vlsup.Namespace]int{vlsup.NamespaceHot: port}, MemoryAllowedBytes: map[vlsup.Namespace]int64{vlsup.NamespaceHot: 64 << 20}})
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
