@@ -203,3 +203,25 @@ func TestSupervisorNamespaceBudgetsWireCacheAndGoTarget(t *testing.T) {
 		t.Fatal("RSS负预算非法")
 	}
 }
+
+func TestRuntimeBudgetAllowsReadOnlyQueryAtDiskPause(t *testing.T) {
+	c, err := NewBudgetController(RuntimeBudget{DiskBytes: 1000})
+	requireNoErrorBudget(t, err)
+	s := knownResourceSample()
+	s.DiskUsagePercent = 95
+	s.DiskUsedBytes = 999
+	c.Update(s)
+	if err := c.Admit(WorkReadOnly); err != nil {
+		t.Fatalf("磁盘保护只应阻止新增写入/物化，已有日志的有界只读查询应可继续: %v", err)
+	}
+	if err := c.Admit(WorkForeground); err == nil {
+		t.Fatal("连续/高成本前台工作仍须在90%水位拒绝")
+	}
+}
+
+func requireNoErrorBudget(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
