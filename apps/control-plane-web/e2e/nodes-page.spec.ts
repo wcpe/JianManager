@@ -32,11 +32,10 @@ test('节点列表态：集群概览 + 本地搜索 + 添加节点 + 卡片墙',
 
   // 卡片墙：卡片本身是可点进详情的按钮。
   //
-  // 【为何是精确名而不是 /^alpha /】注释里「可访问名收敛为「节点名 + 状态」」是旧版，
-  // 现在节点卡片按钮的可及名**就是节点名本身**（实测 `alpha-like buttons: ["alpha"]`）。
-  // 旧正则 `/^alpha /` 要求后面跟空格与内容，于是一个也匹配不到。
-  await expect(page.getByRole('button', { name: 'alpha', exact: true }).first()).toBeVisible()
-  await expect(page.getByRole('button', { name: 'beta', exact: true }).first()).toBeVisible()
+  // 【为何使用完整可及名】节点卡片按钮的可及名是「节点名 + 状态」（例如「alpha 在线」），
+  // 旧正则 `/^alpha /` 与只写节点名的精确定位都没有锁住当前真实语义。
+  await expect(page.getByRole('button', { name: 'alpha 在线', exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'beta 离线', exact: true }).first()).toBeVisible()
 
   await page.screenshot({ path: '../.tmp/acceptancesingle-machine-nodes-list.png', fullPage: true })
 })

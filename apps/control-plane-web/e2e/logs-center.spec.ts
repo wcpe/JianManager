@@ -13,6 +13,10 @@ async function downloadRows(download: Download, name: string): Promise<Record<st
   return (await readFile(path, 'utf8')).split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
 }
 async function exportFromMenu(page: Page, label: string) {
+  const closeToast = page.getByRole('button', { name: 'Close toast' })
+  if (await closeToast.count()) {
+    await closeToast.first().click()
+  }
   await page.getByTestId('logs-export-trigger').click()
   await page.getByRole('menuitem', { name: label, exact: true }).click()
 }

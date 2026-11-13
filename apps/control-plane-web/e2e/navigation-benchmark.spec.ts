@@ -46,9 +46,9 @@ const ROUTES: BenchRoute[] = [
   },
   {
     label: '服务器',
-    href: '/instances',
+    href: '/instances?view=list',
     readySelector: '[data-page="instances"]',
-    // 起 `/instances` 默认走分组树表（虚拟化 container = instances-table-virtual）。
+    // 列表 benchmark 显式使用服务端分页列表视图；服务器页默认入口是卡片视图。
     virtual: {
       surfaceSelector: '[data-testid="instances-table-virtual"]',
       itemSelector: '[data-testid="instances-table-virtual"] tbody tr',
@@ -517,7 +517,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
     // 同文件其它多步用例都显式放宽过上限，这里保持一致。
     test.setTimeout(180_000)
 
-    await page.goto('/instances?status=RUNNING&pageSize=50')
+    await page.goto('/instances?view=list&status=RUNNING&pageSize=50')
     await expect(page.locator('[data-page="instances"]'), '全部服务器页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
     const surface = page.locator('[data-testid="instances-table-virtual"]')
     await expect(surface, '实例树表虚拟列表存在').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
