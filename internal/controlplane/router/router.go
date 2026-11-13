@@ -631,7 +631,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			logCoord = testLogCoord
 		}
 		if logCoord != nil {
-			NewLogFederationHandler(logCoord, svcs.Authz).RegisterRoutes(permRead("log.read"))
+			NewLogFederationHandler(logCoord, svcs.Authz, svcs.Instance).RegisterRoutes(permRead("log.read"))
 		}
 		// Worker 受管 VictoriaLogs 状态/启停：仅平台节点管理权限，经反向隧道。
 		// 归档端点另需目标级授权（M-4B）：自定义角色获得 node.manage 后不得越权指定任意 target。

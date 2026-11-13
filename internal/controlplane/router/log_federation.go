@@ -34,8 +34,9 @@ var testLogCoord *logcoord.Coordinator
 // 权限复用日志中心：路由组 RequireAnyPerm("log.read")；
 // Handler 内平台管理员可查全平台/指定目标，非管理员收敛到可访问实例。
 type LogFederationHandler struct {
-	coord *logcoord.Coordinator
-	authz *service.AuthzService
+	coord     *logcoord.Coordinator
+	authz     *service.AuthzService
+	instances *service.InstanceService
 	// 面板聚合类（stats/facets）的同参秒级缓存：这两条查询同样打满 VL 并发槽，
 	// 页面加载时与主列表互挤（实测 5.7–8.7s ✗）⇒ 命中即免扇出。键含授权主体/scope ⇒
 	// 跨主体绝不命中 ✗；导出/校验路径不经这两个 handler ⇒ 天然旁路 ✗。
@@ -340,8 +341,8 @@ func (h *LogFederationHandler) warmWindow(now time.Time, win time.Duration, targ
 }
 
 // NewLogFederationHandler 创建联邦查询处理器（并启动热门窗预热器 ✓）。
-func NewLogFederationHandler(coord *logcoord.Coordinator, authz *service.AuthzService) *LogFederationHandler {
-	h := &LogFederationHandler{coord: coord, authz: authz, aggCache: &fedTTLCache{},
+func NewLogFederationHandler(coord *logcoord.Coordinator, authz *service.AuthzService, instances *service.InstanceService) *LogFederationHandler {
+	h := &LogFederationHandler{coord: coord, authz: authz, instances: instances, aggCache: &fedTTLCache{},
 		warmHot: make(map[uint]time.Time), warmFailOnce: make(map[string]time.Time)}
 	h.startWarmLoop()
 	return h
@@ -619,7 +620,30 @@ func (h *LogFederationHandler) authorizedTargets(c *gin.Context, access *service
 			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "nodeId 无效"})
 			return nil, false
 		}
-		return []string{nodeTargetID(uint(id))}, true
+		nodeID := uint(id)
+		targets := []string{nodeTargetID(nodeID)}
+		source := strings.ToLower(strings.TrimSpace(c.Query("source")))
+		if source == "instance" || source == "" || source == "all" {
+			if h.instances == nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ENGINE_NOT_READY", "message": "日志实例目录暂不可用"})
+				return nil, false
+			}
+			instances, err := h.instances.List(service.InstanceFilter{NodeID: &nodeID})
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询节点实例失败"})
+				return nil, false
+			}
+			// 节点自身与节点上的实例是独立日志目标；来源过滤不能替代目标展开。
+			// 空节点保留具体节点目标，避免空授权被 resolver 当成全平台通配。
+			if source == "instance" && len(instances) > 0 {
+				targets = nil
+			}
+			for _, instance := range instances {
+				targets = append(targets, instanceTargetID(instance.ID))
+			}
+		}
+		sort.Strings(targets)
+		return targets, true
 	}
 	return []string{federationAllTargets}, true
 }

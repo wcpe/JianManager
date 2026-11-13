@@ -232,9 +232,20 @@ log_vl:
 
 ### 查不到某个实例的日志
 
-1. `range` 是否超出 VL `retention_period`（超了 VL 返回 200 但静默丢）。
-2. 该实例是否真的产生过日志——`target_no_data`（从未产生）与 `engine_not_ready`（引擎没起来）是**不同**的原因，不要混。
-3. 若是 BungeeCord 式轮转档，确认 `read_from_head` 与预期一致。
+1. 先检查联邦响应的 `coverage` 和目标 `reasons`。`BUDGET_EXCEEDED`、查询失败或覆盖待校验不能当成「没有日志」。文件系统达到 **90% 暂停水位**时，VL 前台查询会被拒绝；后台物化与历史导出在 **80% 降级水位**即可被拒绝。水位按 Worker 数据根所在文件系统计算，不能只看 VL 目录大小。安全释放空间后，等资源采样刷新并重新查询；不要放宽阈值或删除 VL、实例日志及采集位点。
+2. 对照原始文件是否持续写、新行的本地时刻、当前 UTC 与返回的 `event_time_utc`。MC 风格 `[HH:MM:SS]` 没有时区，`log_ingest.time_zone` 空值按 **UTC** 解释；JVM 输出本地时间时必须显式配置实际来源时区。这会影响落库时间和 Catalog 的 UTC 日期，并非只改变界面显示。东八区来源示例：
+
+   ```yaml
+   log_ingest:
+     time_zone: Asia/Shanghai
+   ```
+
+   配置修改需要重启 Worker 才生效。开发环境以 `systemctl --user show <worker-service> -p ExecStart -p WorkingDirectory` 为准，当前配置为 `<dev-root>/worker/worker.yml`。保留原 registry 和 offset；修正仅作用于后续采集，不会自动重写已有错误时间戳。不要靠清空位点重采全文件来修时间。
+3. `range` 是否超出 VL `retention_period`（超了 VL 返回 200 但静默丢）。扩大窗口只能用于对照，不能替代资源准入和来源时区排查。
+4. 该实例是否真的产生过日志——`target_no_data`（从未产生）与 `engine_not_ready`（引擎没起来）是**不同**的原因，不要混。
+5. 若是 BungeeCord 式轮转档，确认 `read_from_head` 与预期一致。
+
+实机验收应同时核对：默认最近一小时有新行、UTC 时间与来源时区换算一致、对应 UTC 日可查询、重启前后 registry 位点继续向前、实例进程身份保持。仅看到采集计数增长或 24 小时窗口有旧记录，不能证明当前时间窗已恢复。
 
 ### 「点了只看 WARN 却拿到 INFO」
 

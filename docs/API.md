@@ -3264,6 +3264,7 @@
   - **权限**: 认证用户；资源收敛到授权实例；平台/全量视图仅平台管理员
   - **Query**: `from`/`to`（RFC3339/Nano、UTC 闭开区间 `[from,to)`）、`keyword` 或 `advanced=true&logsQL=…`、`level`、`source`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`viewId`、`limit`、`cursor`；续页使用原 view 和复合 cursor，不能以 offset 或毫秒锚点替代。
   - **筛选语义**: `keyword` 承载兼容的 LogsQL 过滤条件，不是数据库 LIKE；`level` 和来源前缀作为附加过滤相交。新工作台的 VL 路径使用 `source=instance`。兼容 `source=worker` 只过滤 VL 中已有的 `node:` 行，不读取 Worker 日志文件；`source=control_plane` 不会改为文件读取。节点/平台界面分别走文件端点，不把联邦空结果当作进程日志为空。高级模式的范围与限制见下节。
+  - **节点范围**：平台管理员只指定 `nodeId` 时，`source=instance` 展开为该节点所属的实例目标，不能把 `node:<id>` 与 `inst:` 过滤条件直接相交；`source=worker` 仍只查询节点目标。兼容的 `source` 省略或 `all` 查询合并节点与该节点实例目标。节点没有实例时不得把空目标集合回退为全平台 `*`；非管理员的节点全量查询仍拒绝。
   - **响应**: `{ view, coverage, quality, items[], next_cursor, exhausted, budget_cut, query_meta? }`；门面另含 `ok/sourceTag/notes`，不把前端内部 camelCase 名称当作原始 HTTP 字段。事件可含 `fields` 结构化字段；旧 Worker 未提供时保持缺省。
   - **历史结构化字段读取**：保留 canonical 字段的时间 top-K 查询；只对安全页边界确定后的有界返回前缀补查全字段，不对全历史做全宽排序。补查复用原授权 selector、用户过滤、时间窗口及总字节/物理请求预算，按完整事件身份和正文/级别/流复核；字段补查失败、身份不一致或预算不足明确 partial/error，不把缺字段伪装成完整响应。
   - **状态**: 已在隔离开发环境用真实 CP、Worker、受管 VL v1.52.0 与 Chromium 联合验证；详细样本、故障与界面记录见 [查询工作台规格](specs/logs-query-workbench/spec.md)。Fast 首屏以实际 Worker Search 的 view/vector 原子绑定，缓存保留同一引用；任一 Worker 未证明安全页边界时无新 cursor、`exhausted=false`，可见 `PAGE_RETRY_REQUIRED` 供同页重试。
