@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useQueries } from '@tanstack/react-query'
 import { Download, RefreshCw } from 'lucide-react'
@@ -47,6 +48,7 @@ export interface AllLogsWorkbenchProps {
   initialNodeId: number | null
   initialInstanceId: number | null
   mapInstanceItems: (items: unknown[] | null | undefined) => LogEntry[]
+  exportTarget?: HTMLElement | null
 }
 
 function isOnline(status: number | string): boolean {
@@ -91,8 +93,9 @@ export function AllLogsWorkbench({
   initialNodeId,
   initialInstanceId,
   mapInstanceItems,
+  exportTarget,
 }: AllLogsWorkbenchProps) {
-  const { i18n } = useTranslation()
+  const { t, i18n } = useTranslation()
   const language = i18n.language
   const english = language.startsWith('en')
   const role = useAuthStore((state) => state.role)
@@ -281,6 +284,9 @@ export function AllLogsWorkbench({
     }
   }
   const canExport = admin && visibleRows.length > 0 && !paused && !instanceQuery.isFetching && !textQueries.some((query) => query.isFetching)
+  const exportButton = (
+    <Button size="sm" variant="outline" className="shrink-0 self-end" disabled={!canExport} data-testid="all-logs-export" onClick={() => downloadLogSnapshot(visibleRows, windows, 'all-logs')}><Download className="size-3.5" />{t('logs.export')}</Button>
+  )
 
   if (!admin) {
     return <div data-testid="all-logs-workbench" className="rounded-md border p-4 text-sm text-muted-foreground">{localCopy(language, '仅平台管理员可查看融合日志。', 'Only platform administrators can view federated logs.')}</div>
@@ -288,9 +294,7 @@ export function AllLogsWorkbench({
 
   return (
     <div data-testid="all-logs-workbench" className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="flex shrink-0 items-center justify-end gap-2">
-        <Button size="sm" variant="outline" disabled={!canExport} data-testid="all-logs-export" onClick={() => downloadLogSnapshot(visibleRows, windows, 'all-logs')}><Download className="size-3.5" />{localCopy(language, '导出当前汇总', 'Export current snapshot')}</Button>
-      </div>
+      {exportTarget === undefined ? exportButton : exportTarget ? createPortal(exportButton, exportTarget) : null}
 
       <div className="grid shrink-0 grid-cols-2 gap-2 md:grid-cols-4">
         {[
@@ -308,19 +312,23 @@ export function AllLogsWorkbench({
         <Select value={instanceId === null ? '__all__' : String(instanceId)} onValueChange={(value) => { if (!paused) setInstanceId(value === '__all__' ? null : Number(value)) }}><SelectTrigger className="h-9 w-36" data-testid="all-logs-instance-select"><SelectValue placeholder={localCopy(language, '实例', 'Instance')} /></SelectTrigger><SelectContent><SelectItem value="__all__">{localCopy(language, '全部实例', 'All instances')}</SelectItem>{instances.map((instance) => <SelectItem key={instance.id} value={String(instance.id)}>{instance.name}</SelectItem>)}</SelectContent></Select>
         <Select value={String(rangeMinutes)} onValueChange={(value) => { if (!paused) { setRangeMinutes(Number(value)); setRangeAnchor(Date.now()) } }}><SelectTrigger className="h-9 w-28" data-testid="all-logs-range-select"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="15">15m</SelectItem><SelectItem value="60">1h</SelectItem><SelectItem value="1440">24h</SelectItem></SelectContent></Select>
         <Button size="sm" variant="outline" data-testid="all-logs-refresh" disabled={paused || textQueries.some((query) => query.isFetching) || instanceQuery.isFetching} onClick={refresh}><RefreshCw className="size-3.5" />{localCopy(language, '刷新', 'Refresh')}</Button>
+        <details className="min-w-0 basis-full rounded-md border bg-muted/20" data-testid="all-logs-source-status">
+          <summary className="cursor-pointer px-2 py-1 text-sm" title={english ? `Text: latest ${WINDOW_LIMIT} rows per source; VL: current page, ${new Date(from).toLocaleString()} – ${new Date(to).toLocaleString()}.` : `文本每源最近 ${WINDOW_LIMIT} 行；实例 VL 当前页：${new Date(from).toLocaleString()} – ${new Date(to).toLocaleString()}。`}>
+            {localCopy(language, '来源状态', 'Source status')} · {windows.length}
+            {failureCount > 0 && <span className="ml-2 text-status-warning">{localCopy(language, `${failureCount} 个来源受限`, `${failureCount} limited`)}</span>}
+          </summary>
+          <div className="max-h-36 overflow-y-auto border-t">
+            {windows.map((window) => <div key={window.key} className="flex items-center justify-between gap-2 px-3 py-1.5 text-sm"><span className="truncate">{window.label}</span><span className={window.status === 'ready' && !window.note ? 'text-muted-foreground' : 'text-status-warning'}>{english ? window.status : ({ ready: '已读取', loading: '读取中', failed: '读取失败', offline: '离线，未读取', skipped: '超出窗口，未读取' }[window.status])} · {window.loadedRows}/{window.limit}{window.truncated ? (english ? ' · tail truncated' : ' · 尾部截断') : ''}{window.note ? ` · ${window.note}` : ''}</span></div>)}
+            {nodeId === null && onlineNodes.length > MAX_NODE_SOURCES && <div className="px-3 py-1 text-sm text-status-warning">{localCopy(language, `在线节点超过 ${MAX_NODE_SOURCES} 个，范围受限`, `More than ${MAX_NODE_SOURCES} online nodes; scope limited`)}</div>}
+          </div>
+        </details>
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden rounded-md border bg-card">
         <div className="flex min-h-0 h-full flex-col">
-          <div className="shrink-0 border-b px-3 py-2 text-[11px] text-muted-foreground" data-testid="all-logs-scope">
-            {english ? `Text: latest ${WINDOW_LIMIT} rows per source; VL: current page, ${new Date(from).toLocaleString()} – ${new Date(to).toLocaleString()}. Search filters loaded rows only.` : `文本：每源最近 ${WINDOW_LIMIT} 行；实例 VL 当前页：${new Date(from).toLocaleString()} – ${new Date(to).toLocaleString()}。搜索仅筛选已加载内容。`}
-          </div>
-          <div className="max-h-28 shrink-0 overflow-y-auto border-b" data-testid="all-logs-source-status">
-            {windows.map((window) => <div key={window.key} className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs"><span className="truncate">{window.label}</span><span className={window.status === 'ready' && !window.note ? 'text-muted-foreground' : 'text-status-warning'}>{english ? window.status : ({ ready: '已读取', loading: '读取中', failed: '读取失败', offline: '离线，未读取', skipped: '超出窗口，未读取' }[window.status])} · {window.loadedRows}/{window.limit}{window.truncated ? (english ? ' · tail truncated' : ' · 尾部截断') : ''}{window.note ? ` · ${window.note}` : ''}</span></div>)}
-            {nodeId === null && onlineNodes.length > MAX_NODE_SOURCES && <div className="px-3 py-1 text-xs text-status-warning">{localCopy(language, `在线节点超过 ${MAX_NODE_SOURCES} 个，范围受限`, `More than ${MAX_NODE_SOURCES} online nodes; scope limited`)}</div>}
-          </div>
+
           <div className="flex min-h-0 flex-1 flex-col"><LogTimeline items={visibleRows} total={visibleRows.length} follow={false} filterKey={`${instanceIdentity}:${textScopeIdentity}:${keyword}:${level}`} loading={windows.some((window) => window.status === 'loading')} emptySuccessAllowed={windows.length > 0 && windows.every((window) => window.status === 'ready')} emptyReason="no_data" emptyHint={localCopy(language, '仅显示已加载窗口；文本是文件尾部，实例是 VL 当前页。', 'Loaded windows only; text is a file tail and instances are the current VL page.')} highlightKeyword={keyword} sourceLabelOf={sourceLabelOf} onInteractionPauseChange={setPaused} /></div>
-          <footer className="flex h-10 shrink-0 items-center justify-between gap-2 border-t px-3 text-xs text-muted-foreground" data-testid="all-logs-footer"><span>{localCopy(language, `${visibleRows.length} 行可见（当前已加载）`, `${visibleRows.length} visible rows (loaded only)`)}</span><span className="truncate">{localCopy(language, '不代表全历史或全量；选择/回看时冻结当前快照。', 'Not full history or all data; selection/reading freezes this snapshot.')}</span></footer>
+          <footer className="flex h-10 shrink-0 items-center justify-between gap-2 border-t px-3 text-xs text-muted-foreground" data-testid="all-logs-footer"><span>{localCopy(language, `${visibleRows.length} 行`, `${visibleRows.length} rows`)}</span></footer>
         </div>
       </div>
     </div>

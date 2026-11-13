@@ -1,12 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { API } from '@jianmanager/devmock/api'
 import { server } from '@jianmanager/devmock/server'
 import { loginMockUserAs } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import LogsPage from './LogsPage'
+import * as snapshotExport from '@/lib/logs/log-snapshot-export'
 
 const summary = {
   coverage: { complete: true, pending: false, targets: [], partial_reasons: [] },
@@ -47,6 +48,10 @@ beforeEach(() => {
     http.get(API('/logs/federation/stream-field-names'), () => HttpResponse.json({ fields: [], ...summary })),
     http.get(API('/logs/federation/stream-field-values'), () => HttpResponse.json({ values: [], ...summary })),
   )
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 async function choose(testId: string, label: string) {
@@ -135,4 +140,53 @@ describe('node process log entry', () => {
     expect(screen.queryByTestId('logs-node-select')).not.toBeInTheDocument()
     expect(screen.getByTestId('logs-text-export')).toBeEnabled()
   })
+})
+
+it('keeps one consistently named header export across tabs and exports the current text or combined window', async () => {
+  const download = vi.spyOn(snapshotExport, 'downloadLogSnapshot').mockImplementation(() => {})
+  const user = userEvent.setup()
+  renderWithProviders(<LogsPage />, { route: '/logs' })
+  await screen.findByText('instance-history-log')
+  const header = screen.getByTestId('logs-header-actions')
+  expect(within(header).getByTestId('logs-export-trigger')).toHaveAccessibleName('导出')
+  expect(within(header).getAllByRole('button', { name: '导出', exact: true })).toHaveLength(1)
+
+  await user.click(screen.getByRole('tab', { name: '平台日志', exact: true }))
+  await screen.findByText(/cp-process-log/)
+  const platformExport = within(header).getByTestId('logs-text-export')
+  await waitFor(() => expect(platformExport).toBeEnabled())
+  expect(platformExport).toHaveAccessibleName('导出')
+  expect(within(screen.getByTestId('logs-toolbar')).queryByRole('button', { name: '导出', exact: true })).not.toBeInTheDocument()
+  await user.click(platformExport)
+  expect(download.mock.calls[0][0]).toHaveLength(1)
+  expect(download.mock.calls[0][0][0]).toMatchObject({ source: 'control_plane' })
+  expect(download.mock.calls[0][1][0]).toMatchObject({ source: 'control_plane', limit: 200, truncated: false, capturedAt: expect.any(String) })
+  expect(screen.getByTestId('logs-text-status')).toBeEmptyDOMElement()
+
+  await user.click(screen.getByRole('tab', { name: '节点日志', exact: true }))
+  expect(within(header).getByTestId('logs-text-export')).toBeDisabled()
+  await choose('logs-node-select', 'dev-node')
+  await screen.findByText(/worker-process-log/)
+  const nodeExport = within(header).getByTestId('logs-text-export')
+  await waitFor(() => expect(nodeExport).toBeEnabled())
+  expect(nodeExport).toHaveAccessibleName('导出')
+  await user.click(nodeExport)
+  expect(download.mock.calls[1][0][0]).toMatchObject({ source: 'worker', nodeId: 1 })
+  expect(download.mock.calls[1][1][0]).toMatchObject({ source: 'worker', limit: 200, truncated: true })
+
+  await user.click(screen.getByRole('tab', { name: '全部日志', exact: true }))
+  const combinedExport = within(header).getByTestId('all-logs-export')
+  await waitFor(() => expect(combinedExport).toBeEnabled())
+  expect(combinedExport).toHaveAccessibleName('导出')
+  expect(within(screen.getByTestId('all-logs-workbench')).queryByRole('button', { name: '导出', exact: true })).not.toBeInTheDocument()
+  await user.click(combinedExport)
+  expect(download.mock.calls[2][1].map((window) => window.source).sort()).toEqual(['control_plane', 'instance', 'worker'])
+  expect(download.mock.calls[2][0]).toHaveLength(3)
+  expect(screen.queryByTestId('all-logs-scope')).not.toBeInTheDocument()
+
+  await user.click(screen.getByRole('tab', { name: '实例日志', exact: true }))
+  await screen.findByText('instance-history-log')
+  expect(within(header).getAllByRole('button', { name: '导出', exact: true })).toHaveLength(1)
+  expect(screen.queryByTestId('logs-text-export')).not.toBeInTheDocument()
+  expect(screen.queryByTestId('all-logs-export')).not.toBeInTheDocument()
 })

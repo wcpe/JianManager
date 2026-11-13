@@ -65,7 +65,10 @@ describe('AllLogsWorkbench', () => {
     expect(screen.getAllByTestId('log-message').length).toBeGreaterThanOrEqual(5)
     expect(screen.getByTestId('all-logs-source-status')).toHaveTextContent('node-5')
     expect(screen.getByTestId('all-logs-source-status')).toHaveTextContent(/scope limited/i)
-    expect(screen.getByTestId('all-logs-footer')).toHaveTextContent(/全历史|full history/i)
+    expect(screen.getByTestId('all-logs-footer')).toHaveTextContent(/\d+ 行/)
+    expect(screen.getByTestId('all-logs-source-status')).not.toHaveAttribute('open')
+    expect(screen.queryByTestId('all-logs-scope')).not.toBeInTheDocument()
+    expect(screen.getByTestId('all-logs-export')).toHaveAccessibleName('导出')
   })
 
   it('shows failures and partial coverage as source status, including a retryable 429', async () => {

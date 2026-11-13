@@ -37,6 +37,7 @@ export function InsightCard({
   children,
   testId,
   className,
+  contentClassName,
 }: {
   icon: React.ReactNode
   title: string
@@ -45,6 +46,8 @@ export function InsightCard({
   children: React.ReactNode
   testId: string
   className?: string
+  /** 内容区的溢出策略；总量卡使用可见溢出以避免内部滚动条。 */
+  contentClassName?: string
 }) {
   return (
     <div
@@ -59,7 +62,7 @@ export function InsightCard({
         <span className="truncate font-medium">{title}</span>
         {hint ? <span className="ml-auto shrink-0 opacity-70">{hint}</span> : null}
       </div>
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</div>
+      <div className={cn('min-h-0 min-w-0 flex-1', contentClassName ?? 'overflow-y-auto')}>{children}</div>
     </div>
   )
 }
@@ -426,7 +429,7 @@ export function EventsTotalCard({
 }) {
   const { t } = useTranslation()
 
-  // 副标题只说一句最要紧的实话，不把四项状态堆成一行。
+  // 状态说明保留在无障碍文本与标题提示里，卡片正文只留一个紧凑状态标记。
   const state = failed ? 'failed' : truncated ? 'truncated' : partial ? 'partial' : pending ? 'pending' : exact ? 'exact' : 'unverified'
   const note = {
     failed: t('logs.vizTotalFailed'),
@@ -436,47 +439,54 @@ export function EventsTotalCard({
     exact: t('logs.vizTotalExact'),
     unverified: t('logs.vizTotalUnverified'),
   }[state]
+  const qualityDetail = quality ? t('logs.vizQualityValue', { quality }) : undefined
+  const summaryDetail = typeof summary === 'string' ? summary : undefined
+  const detailText = [note, summaryDetail, qualityDetail].filter(Boolean).join(' · ')
+  const statusMark = failed ? '!' : exact ? '✓' : pending ? '?' : '≈'
 
   return (
     <InsightCard
       icon={<Hash className="size-3 shrink-0" />}
       title={t('logs.vizTotalTitle')}
       testId={testId}
-      hint={quality && !exact ? <span title={t('logs.vizQualityValue', { quality })}>{quality}</span> : undefined}
+      contentClassName="overflow-visible"
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex shrink-0 items-baseline gap-1.5">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 shrink-0 items-baseline gap-1">
           <span
             className={cn(
-              'text-xl font-semibold tabular-nums leading-none',
+              'text-lg font-semibold tabular-nums leading-none',
               failed && 'text-muted-foreground',
             )}
             data-testid={`${testId}-count`}
           >
             {failed || count === undefined ? '—' : `${exact ? '' : '≈'}${count.toLocaleString()}`}
           </span>
-          <span className="text-[11px] text-muted-foreground">{t('logs.vizTotalUnit')}</span>
+          <span className="text-[10px] text-muted-foreground">{t('logs.vizTotalUnit')}</span>
         </div>
-        <p
+        <span
           className={cn(
-            'min-w-0 text-right text-[10px] leading-3',
-            failed ? 'text-status-warning' : 'text-muted-foreground',
+            'shrink-0 text-[11px] font-medium leading-none',
+            failed ? 'text-status-warning' : exact ? 'text-status-success' : 'text-muted-foreground',
           )}
           data-testid={`${testId}-note`}
           data-state={state}
+          aria-label={detailText}
+          title={detailText}
         >
-          {note}
-        </p>
+          <span aria-hidden>{statusMark}</span>
+          <span className="sr-only">{note}</span>
+        </span>
       </div>
       {summary ? (
         <p
-          className="mt-0.5 text-[11px] leading-snug text-muted-foreground"
+          className="sr-only"
           data-testid={`${testId}-summary`}
         >
           {summary}
         </p>
       ) : null}
-      <div data-testid="logs-metric-summary" className="mt-1 grid grid-cols-4 gap-1 border-t border-border/60 pt-1 text-[10px] leading-3">
+      <div data-testid="logs-metric-summary" className="mt-1 grid grid-cols-4 gap-1 border-t border-border/60 pt-1 text-[11px] leading-[14px]">
         {[
           [t('logs.vizPageRows'), pageRows],
           [t('logs.vizLevelCount'), levelCount],
@@ -484,8 +494,8 @@ export function EventsTotalCard({
           [t('logs.vizBucketCount'), bucketCount],
         ].map(([label, value]) => (
           <div key={String(label)} className="min-w-0">
-            <div className="truncate text-muted-foreground">{label}</div>
-            <div className="tabular-nums font-medium text-foreground">{value === undefined ? '—' : Number(value).toLocaleString()}</div>
+            <div className="break-words text-muted-foreground">{label}</div>
+            <div className="text-xs font-medium tabular-nums text-foreground">{value === undefined ? '—' : Number(value).toLocaleString()}</div>
           </div>
         ))}
       </div>

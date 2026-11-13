@@ -21,7 +21,7 @@ beforeEach(() => {
 })
 
 describe('text log windows', () => {
-  it('reads the node text endpoint without requesting federation and shows bounded metadata', async () => {
+  it('reads the node text window without VL or persistent explanatory captions', async () => {
     server.use(http.get(API('/nodes/1/diagnostics/log'), ({ request }) => {
       expect(new URL(request.url).searchParams.get('lines')).toBe('200')
       return HttpResponse.json(tail)
@@ -29,7 +29,9 @@ describe('text log windows', () => {
     renderWithProviders(<TextLogWorkbench {...props} kind="worker" nodeId={1} />)
     expect(await screen.findByText(/msg="failed"/)).toBeInTheDocument()
     expect(screen.getByText(tail.path)).toBeInTheDocument()
-    expect(screen.getByTestId('logs-text-status')).toHaveTextContent('截断')
+    expect(screen.getByTestId('logs-text-status')).toBeEmptyDOMElement()
+    expect(screen.queryByText(/搜索与级别筛选仅作用于|已截断，更早内容仍在原文件中/)).not.toBeInTheDocument()
+    expect(screen.getByTestId('logs-text-export')).toHaveAccessibleName('导出')
     expect(screen.queryByTestId('logs-federation-insights')).not.toBeInTheDocument()
     const user = userEvent.setup()
     await user.type(screen.getByPlaceholderText('搜索已加载文本…'), 'failed')

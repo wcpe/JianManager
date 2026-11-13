@@ -260,6 +260,7 @@ export default function LogsPage() {
   const [interactionPaused, setInteractionPaused] = useState(false)
   const [streamField, setStreamField] = useState<'stream' | 'log_source_id'>('stream')
   const [exporting, setExporting] = useState(false)
+  const [exportTarget, setExportTarget] = useState<HTMLDivElement | null>(null)
 
   const [exportRangeOpen, setExportRangeOpen] = useState(false)
   const exportRequest = useRef<AbortController | null>(null)
@@ -398,9 +399,6 @@ export default function LogsPage() {
   // F-003：联邦视图的列表**只**以 federation.items 为主数据源；降级不再回退 useLogs 的
   // Legacy 表（用户裁定：没有就是没有）。禁止「联邦横幅 + 平台/历史内容」错配。
   const federationActive = !!federation && !federation.degraded && federation.available
-  // 供标题区状态提示使用（与横幅同源，避免两处判定漂移）。
-  const federationDegraded = federation?.degraded === true
-  const federationNotReady = federation?.federatedNotReady === true
   const requestFailure = federation?.failure ?? federationQuery.error
   const queryFailureStatus = (requestFailure as { response?: { status?: number } } | null)?.response?.status
   const rawQueryFailure = !federationQuery.isPlaceholderData && (activeAdvanced || queryFailureStatus === 400)
@@ -850,33 +848,10 @@ export default function LogsPage() {
             ]}
           />
         )}
-        actions={view === 'instance' ? (
+        actions={(
+          <div ref={setExportTarget} data-testid="logs-header-actions" className="flex items-center gap-2">
+          {view === 'instance' && (
           <>
-            {/* 来源做标（原「联邦」「Legacy」徽标）已删。
-             *
-             * 「联邦」「Legacy」是内部架构词，用户看不懂它们的含义，只知道“头上多了一个徒标”。
-             * 真正的信息已经由页面本身体现：查的是实时日志还是历史日志、覆盖完不完整，
-             * 都在下方覆盖横幅与空态提示里说清楚了。徒标只增加噪音。 */}
-            {(federationDegraded || federationNotReady) && (
-              <span
-                data-testid="logs-not-ready-hint"
-                className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
-                // 与横幅同源区分：只有引擎未启用才给「去启用」指引；接口不可达时
-                // 让用户去开启是无效指令，只说可查范围与后续办法。
-                title={
-                  federationNotReady
-                    ? t('logsFederation.degradedHint')
-                    : t('logsFederation.degradedUnavailableHint')
-                }
-              >
-                <Info className="size-3.5 shrink-0" />
-                <span className="truncate">
-                  {federationNotReady
-                    ? t('logsFederation.degradedTitleShort')
-                    : t('logsFederation.degradedUnavailableTitleShort')}
-                </span>
-              </span>
-            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -911,7 +886,9 @@ export default function LogsPage() {
               <Button size="sm" variant="outline" onClick={() => exportRequest.current?.abort()}>{t('common.cancel')}</Button>
             )}
           </>
-        ) : undefined}
+          )}
+          </div>
+        )}
       />
       <LogExportRangeDialog
         key={`${scopeKey}|${exportRangeOpen}`}
@@ -949,8 +926,8 @@ export default function LogsPage() {
         )}
       </div>
 
-      {view === 'all' && isPlatformAdmin ? <AllLogsWorkbench nodes={nodes ?? []} instances={instances ?? []} initialNodeId={nodeId} initialInstanceId={instanceId} mapInstanceItems={mapFederationItems} />
-        : textKind ? <TextLogWorkbench key={textKind} kind={textKind} nodeId={nodeId} nodes={nodes ?? []} onNodeChange={(value) => resetTo(setNodeId)(value)} sourceControl={null} /> : <>
+      {view === 'all' && isPlatformAdmin ? <AllLogsWorkbench nodes={nodes ?? []} instances={instances ?? []} initialNodeId={nodeId} initialInstanceId={instanceId} mapInstanceItems={mapFederationItems} exportTarget={exportTarget} />
+        : textKind ? <TextLogWorkbench key={textKind} kind={textKind} nodeId={nodeId} nodes={nodes ?? []} onNodeChange={(value) => resetTo(setNodeId)(value)} sourceControl={null} exportTarget={exportTarget} /> : <>
       {/* 洞察卡片区：表格之外的顶部。
        *
        * 为何抬到这里而不是留在表格工具栏里：原来它们挤在一行与筛选控件争宽，
@@ -962,7 +939,7 @@ export default function LogsPage() {
        * 同时避免跟随切换时把日志窗口整体向上/向下推。 */}
       <div
         data-testid="logs-insights-slot"
-        className="grid h-[208px] shrink-0 grid-cols-2 auto-rows-[104px] gap-2 overflow-x-auto overflow-y-hidden xl:h-[104px] xl:grid-cols-4"
+        className="grid h-[216px] shrink-0 grid-cols-2 auto-rows-[104px] gap-2 xl:h-[120px] xl:auto-rows-[120px] xl:grid-cols-4"
       >
         {!follow && insightsVisible ? (
           <div data-testid="logs-federation-insights" className="contents">
