@@ -18,9 +18,9 @@ test('实例列表首屏走服务端分页搜索，不拉裸数组', async ({ pa
     if (pathname.startsWith('/api/v1/instances')) instancePaths.push(pathname)
   })
 
-  await page.goto('/instances')
+  await page.goto('/instances?view=list')
 
-  // 首屏虚拟渲染壳就位（起默认分组树表），data-total-count 反映 1200 规模数据集。
+  // 列表视图首屏表格壳就位（服务端分页），data-total-count 反映 1200 规模数据集。
   const surface = page.getByTestId('instances-table-virtual')
   await expect(surface).toBeVisible()
   await expect

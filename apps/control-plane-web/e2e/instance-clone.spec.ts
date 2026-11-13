@@ -28,8 +28,8 @@ test.describe('一键复制子服（mock 模式真浏览器）', () => {
 
     const name = `fr036-clone-${Date.now()}`
 
-    // 起 `/instances` 默认走分组树表；本用例断言工作台卡，显式带 view=card。
-    await page.goto('/instances?view=card')
+    // 复制目标不在默认首页的数据中，显式按名称查询以验证真实分页搜索下的复制入口。
+    await page.goto('/instances?view=card&q=creative-1')
     // 页名已随 i18n 统一由「实例管理」改为「服务器」（instances.title）。
     await expect(page.getByRole('heading', { name: '服务器', exact: true })).toBeVisible()
     const sourceCard = instanceCard(page, 'creative-1')
