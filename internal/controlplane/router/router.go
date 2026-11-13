@@ -14,6 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/mcp"
 	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/platform/trafficlimit"
 )
 
 // Services 聚合所有服务依赖。
@@ -214,6 +215,15 @@ type Services struct {
 	Stats *service.StatsService
 }
 
+// initialRateLimits 返回装配期的限流预算：有设置服务时取其生效值（DB 覆盖 > 默认），
+// 否则用出厂默认。抽成函数是为了让「路由装配」与「设置热更新」共用同一条读取路径。
+func initialRateLimits(svcs *Services) trafficlimit.Settings {
+	if svcs != nil && svcs.Settings != nil {
+		return svcs.Settings.RateLimitSettings()
+	}
+	return trafficlimit.Defaults()
+}
+
 // Setup 创建并配置 Gin 路由引擎。
 func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	if svcs.User == nil && svcs.Auth != nil {
@@ -240,39 +250,51 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	//
 	// 数值依据（cp.out 近 20MB 的 9199 条请求；剔除 429 风暴 ±10s 污染窗口后统计每 IP
 	// 峰值滑动窗口）：全 API 1s≈20、5s≈45、10s≈90；日志类 1s≈24、5s≈45。
-	// 单桶「容量 20 + 速率 10/s」在 1 秒窗口内可放行约 20+10=30 次，**足以承载实测的
-	// 合法负载**——真正的缺陷是分类共桶，不是数值不够。因此：
+	// 当时的结论是「单桶容量 20 + 速率 10/s 足以承载实测合法负载，真正的缺陷是分类共桶」。
+	// 该结论对**单标签页**成立，但对多标签页不成立（见下方 2026-11-12 第二次归真）。
 	//   - 各分类预算一个数都没动，仍是原来的 10/s、容量 20；
-	//   - 跨分类总上限取「各分类预算之和」（20/s、容量 40）。这是**有意的设计取舍**，不是
+	//   - 跨分类总上限取「各分类预算之和」（当时 20/s、容量 40）。这是**有意的设计取舍**，不是
 	//     把数值调大：若总上限仍是 10/20，日志类会与别的分类争夺同一额度，隔离形同虚设。
-	//   - 分类只有 2 个（有界常量），放大倍数恒为 2，不随请求内容增长。
+	//   - 当时分类只有 2 个（有界常量），放大倍数恒为 2，不随请求内容增长。
 	//
 	// 语义必须如实读（2026-10-12 注释归真）：分类桶是**互相独立的配额**，每 IP 的实际
-	// 总量上限 = min(全局桶, Σ各分类预算)。当前只有 default 与 log_query 两类，
-	// 10 + 10 == 全局 20（速率与容量皆然）⇒ **全局桶对现有两类不构成任何额外约束**，
-	// 它与分类之和的阈值完全重合，只是为「将来新增第三类」预留的兜底闸。因此：
-	//   - 相对修复前（单桶 10/s、容量 20），每 IP 的总配额**确实由 10/s 变为 20/s（翻倍）**，
-	//     这是让分类隔离成立的代价，不应读成"总量未放宽"；
-	//   - 全局桶先于分类桶判定的意义在于**顺序**而非阈值：被分类拒绝的请求同样已扣减
-	//     全局令牌（方向更严），而全局被拒时分类桶未被扣减（不会白占分类预算）。
-	//   - 真正的封顶仍是两道：分类桶（严格 per-IP、10/s）与全局桶（20/s），二者皆无界增长风险
-	//     （桶表 maxBuckets=10000 有界）。若将来新增分类使 Σ分类 > 20/s，全局桶才开始真正约束总量。
-	// 注：中间件侧的同一段说明（middleware/ratelimit.go 的 RateLimitByRouteClass 注释）需同步归真。
-	api.Use(middleware.RateLimitByRouteClass(
-		middleware.RateLimitClassByPrefix(
+	// 总量上限 = min(全局桶, Σ各分类预算)。当前有 default（写）、log_query、read 三类。
+	//
+	// 2026-11-12 第二次归真（read 类拆分）：上面的「单桶足以承载合法负载」被实测推翻。
+	// 浏览器实测（本机开发环境，同一 IP）：实例页单标签首屏首秒峰值 16 次请求；
+	// 3 个标签页同开 81 次请求中 30 次 429、6 个标签页 191 次中 131 次 429。
+	// 也就是说一页的扇出本身已贴着旧的每 IP 20/s 总上限，多标签页/多窗口正常使用即互相挤占。
+	// 因此把只读请求（GET/HEAD/OPTIONS）单列一类给足预算，写操作仍保持 10/s、容量 20——
+	// 预算不是无差别放宽，而是按「读多写少」的真实使用面重新分配：
+	//   - 读（read）60/s、容量 80：覆盖单页峰值 × 常见并发标签数；
+	//   - 写（default）10/s、容量 20：启停、改配置、快照等仍按原严格值；
+	//   - 日志查询（log_query）10/s、容量 20：重后端负载，一个数没动；
+	//   - 全局 90/s、容量 160 = 三类之和，仍是有界硬上限（桶表 maxBuckets=10000 有界）。
+	// 判定顺序不变：全局 → 分类；被分类拒绝的请求同样已扣减全局令牌（方向更严）。
+	// 注：中间件侧同一说明见 middleware/ratelimit.go 的 RateLimitClassRead 与
+	// RateLimitClassByMethod 注释，两者需同步归真。
+	// 预算来源与热更新：全部取值集中在 internal/platform/trafficlimit（默认值、边界、
+	// 配对约束单一事实源），并可由平台设置 traffic.rate_limit.* 覆盖，保存即热更新
+	// （见 SettingsService.SetRateLimitApplier）——不再把数字写死在路由装配里。
+	//   - 只读（GET/HEAD/OPTIONS）默认 60/s、容量 80：覆盖单页峰值 × 常见并发标签数；
+	//   - 写（启停、改配置、快照等）默认 10/s、容量 20：有副作用请求保持严格；
+	//   - 日志查询默认 10/s、容量 20：重后端负载；
+	//   - 全局默认 90/s、容量 160 = 三类之和，仍是有界硬上限（桶表有界）。
+	// 判定顺序不变：全局 → 分类；被分类拒绝的请求同样已扣减全局令牌（方向更严）。
+	rateLimiters := middleware.NewRateLimiters(
+		middleware.RateLimitClassByMethod(middleware.RateLimitClassByPrefix(
 			// 日志查询类：跨 Worker 扇出 + 缓存 + 目标解析，单页扇出多路（列表/stats/facets/取证）。
 			middleware.RateLimitPrefixRule{Prefix: "/api/v1/logs/federation", Class: middleware.RateLimitClassLogQuery},
 			middleware.RateLimitPrefixRule{Prefix: "/api/v1/logs", Class: middleware.RateLimitClassLogQuery},
-		),
-		// 默认类（实例/指标/通知/任务等页面外壳）：保持原值 10/s、容量 20。
-		middleware.RateLimitSpec{RatePerSecond: 10, Capacity: 20},
-		map[string]middleware.RateLimitSpec{
-			// 日志查询类：同样保持原值 10/s、容量 20（本次修复不放宽任何分类预算）。
-			middleware.RateLimitClassLogQuery: {RatePerSecond: 10, Capacity: 20},
-		},
-		// 跨分类每 IP 总上限 = 各分类预算之和 ⇒ 分类隔离成立的同时总量仍是硬上限。
-		middleware.RateLimitSpec{RatePerSecond: 20, Capacity: 40},
-	))
+		)),
+		initialRateLimits(svcs),
+	)
+	if svcs.Settings != nil {
+		// 保存设置后热更新；同时把当前生效值立刻推一次，保证重启后 DB 覆盖不回落到默认。
+		svcs.Settings.SetRateLimitApplier(rateLimiters.Apply)
+		rateLimiters.Apply(svcs.Settings.RateLimitSettings())
+	}
+	api.Use(middleware.RateLimitByRouteClass(rateLimiters))
 	// API 错误统一落平台日志：4xx 业务拒绝 warn / 5xx error，经 log_slog 桥进日志中心，
 	// /logs 页可追查「某操作为什么报错」（挂全局含未认证路径；401/404/429 噪音跳过）。
 	api.Use(middleware.ErrorLog())

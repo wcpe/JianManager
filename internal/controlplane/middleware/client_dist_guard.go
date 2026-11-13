@@ -23,7 +23,7 @@ type ClientDistGuardChecker interface {
 // 限流以 **IP 为主键**（机器码不可信）；命中拦截累加计数器（可观测、不写库）。
 // L3/L4 容量型 DDoS 不在此（靠 CDN/云清洗）。
 func ClientDistGuard(guard ClientDistGuardChecker, ratePerSecond, burst, maxConcurrent int) gin.HandlerFunc {
-	limiter := NewRateLimiter(ratePerSecond, burst)
+	limiter := NewRateLimiterForTest(ratePerSecond, burst)
 	var sem chan struct{}
 	var concurrentByIP map[string]int
 	var concurrentMu sync.Mutex

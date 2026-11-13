@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -17,6 +18,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/platform/directprobe"
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/platform/trafficlimit"
 )
 
 // 平台设置可写白名单键。
@@ -129,6 +131,27 @@ const (
 	// 匿名额度即 403。基线取 update.github_token（yml/env），优先级 DB > yml > env；值支持
 	// ${ENV_VAR} 引用（与 SMTP 密码同约定）或字面令牌。明文落库的暴露面与 proxy.url 含凭据时一致。
 	SettingKeyGitHubToken = "github.token"
+
+	// === 控制面入口限流（HTTP 层，与后端业务无关）===
+	//
+	// 这些键控制的是「单个客户端 IP 每分钟/秒能发多少次请求」，不是业务配额。
+	// 分成四组预算（只读 / 写 / 日志查询 / 全局），每组两个键（速率、容量）：
+	//   - 速率 RatePerSecond：稳态补充速度，决定长期吞吐；
+	//   - 容量 Capacity：突发上限，决定「一阵猛点」能撑多久。
+	// 两者同时为 0 表示该组完全不限流（超高并发专场可显式关闭，全局桶除外）。
+	//
+	// 为什么做成平台设置（2026-11-13）：限流阈值与部署形态强相关——单机内网、
+	// 反代后集中出口 IP、多人共用一台跳板机，合理取值差一个数量级。写死在代码里
+	// 只能二选一：要么卡住正常运维（实测 3 标签页 30 次 429），要么为少数场景放宽
+	// 到对所有部署都不设防。
+	SettingKeyRateLimitReadRate      = "traffic.rate_limit.read.rate_per_second"
+	SettingKeyRateLimitReadCapacity  = "traffic.rate_limit.read.capacity"
+	SettingKeyRateLimitWriteRate     = "traffic.rate_limit.write.rate_per_second"
+	SettingKeyRateLimitWriteCapacity = "traffic.rate_limit.write.capacity"
+	SettingKeyRateLimitLogRate       = "traffic.rate_limit.log_query.rate_per_second"
+	SettingKeyRateLimitLogCapacity   = "traffic.rate_limit.log_query.capacity"
+	SettingKeyRateLimitGlobalRate    = "traffic.rate_limit.global.rate_per_second"
+	SettingKeyRateLimitGlobalCap     = "traffic.rate_limit.global.capacity"
 )
 
 var (
@@ -159,6 +182,12 @@ type SettingsService struct {
 	// ginModeApplier 在 debug.mode 切换 / 启动基线时被调用切 Gin 模式（true=debug / false=release）。
 	// 由 main 注入（闭包调 gin.SetMode），使 gin 依赖留在入口层、不渗入 service。为 nil 时仅切日志级别。
 	ginModeApplier func(debug bool)
+	// rateLimitApplier 在 traffic.rate_limit.* 覆盖落库后被调用，令入口限流即时采用新预算。
+	// 由 main 注入（闭包调 middleware.RateLimiters.Apply）；为 nil 时仅落库、下次重启生效。
+	rateLimitApplier func(trafficlimit.Settings)
+	// rateLimitMu 串行化限流预算的「配对校验 → 事务落库」；否则两个并发 Update
+	// 可能分别基于旧快照通过校验，交错写成 rate>0/capacity=0 的非法组合。
+	rateLimitMu sync.Mutex
 }
 
 // NewSettingsService 创建平台配置服务。
@@ -356,6 +385,15 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		s.editableItem(SettingKeyInviteSMTPFrom, s.defaultValue(SettingKeyInviteSMTPFrom), overrides, true),
 		// GitHub API 令牌（敏感，脱敏展示）：自更新与制品版本库同步发请求时读取生效值，即时生效。
 		s.githubTokenItem(overrides),
+		// 控制面入口限流：保存即在 CP 内热更新（下次请求即用新预算），无需重启。
+		s.editableItem(SettingKeyRateLimitReadRate, s.defaultValue(SettingKeyRateLimitReadRate), overrides, true),
+		s.editableItem(SettingKeyRateLimitReadCapacity, s.defaultValue(SettingKeyRateLimitReadCapacity), overrides, true),
+		s.editableItem(SettingKeyRateLimitWriteRate, s.defaultValue(SettingKeyRateLimitWriteRate), overrides, true),
+		s.editableItem(SettingKeyRateLimitWriteCapacity, s.defaultValue(SettingKeyRateLimitWriteCapacity), overrides, true),
+		s.editableItem(SettingKeyRateLimitLogRate, s.defaultValue(SettingKeyRateLimitLogRate), overrides, true),
+		s.editableItem(SettingKeyRateLimitLogCapacity, s.defaultValue(SettingKeyRateLimitLogCapacity), overrides, true),
+		s.editableItem(SettingKeyRateLimitGlobalRate, s.defaultValue(SettingKeyRateLimitGlobalRate), overrides, true),
+		s.editableItem(SettingKeyRateLimitGlobalCap, s.defaultValue(SettingKeyRateLimitGlobalCap), overrides, true),
 	}
 
 	readOnly := []SettingItem{
@@ -390,7 +428,33 @@ func (s *SettingsService) Update(values map[string]string) error {
 			return err
 		}
 	}
-	return s.writeValues(values)
+	// 成组约束与落库必须在同一把锁下，避免并发提交分别读取旧的另一分量。
+	if hasRateLimitSetting(values) {
+		s.rateLimitMu.Lock()
+		err := s.validateRateLimitPair(values)
+		if err == nil {
+			err = s.writeValues(values, false)
+		}
+		s.rateLimitMu.Unlock()
+		if err != nil {
+			return err
+		}
+		// 事务提交后再读取一次完整 overrides 快照并热应用；若紧接着有下一次更新，
+		// 它同样会串行落库，最终应用的是一个完整预算而非跨写混读。
+		s.applyRateLimits()
+		return nil
+	}
+	return s.writeValues(values, true)
+}
+
+// hasRateLimitSetting reports whether a platform update touches any global rate-limit key.
+func hasRateLimitSetting(values map[string]string) bool {
+	for key := range values {
+		if IsRateLimitSettingKey(key) {
+			return true
+		}
+	}
+	return false
 }
 
 // UpdateNodeScoped 写入**某节点的**平台键覆盖，是节点级覆盖的唯一写入口。
@@ -425,7 +489,7 @@ func (s *SettingsService) UpdateNodeScoped(nodeUUID string, values map[string]st
 		}
 		scoped[full] = val
 	}
-	return s.writeValues(scoped)
+	return s.writeValues(scoped, true)
 }
 
 // isWindowsAbsPath 判定 Windows 形态的绝对路径（盘符或 UNC）。
@@ -472,7 +536,7 @@ func escapesUnderWindowsSeparators(p string) bool {
 }
 
 // writeValues 是 Update / UpdateNodeScoped 共用的落库 + 应用实现（调用方已完成校验）。
-func (s *SettingsService) writeValues(values map[string]string) error {
+func (s *SettingsService) writeValues(values map[string]string, applyRateLimit bool) error {
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		for key, val := range values {
 			rec := model.PlatformSetting{Key: key, Value: val, UpdatedAt: time.Now()}
@@ -492,6 +556,14 @@ func (s *SettingsService) writeValues(values map[string]string) error {
 		s.rebuildProxy()
 	} else if _, ok := values[SettingKeyProxyNoProxy]; ok {
 		s.rebuildProxy()
+	}
+	// 入口限流：任一限流键落库即热更新整组预算（回调用「当前生效值」而非本次提交值，
+	// 这样只改容量的提交也能带动速率一起重新下发）。
+	for key := range values {
+		if IsRateLimitSettingKey(key) && applyRateLimit {
+			s.applyRateLimits()
+			break
+		}
 	}
 	return nil
 }
@@ -687,6 +759,22 @@ func (s *SettingsService) defaultValue(key string) string {
 	case SettingKeyGitHubToken:
 		// 基线取 update.github_token（yml/env），DB 覆盖优先于基线（同 proxy.* 语义）。
 		return s.cfg.Update.GitHubToken
+	case SettingKeyRateLimitReadRate:
+		return strconv.Itoa(trafficlimit.Defaults().Read.RatePerSecond)
+	case SettingKeyRateLimitReadCapacity:
+		return strconv.Itoa(trafficlimit.Defaults().Read.Capacity)
+	case SettingKeyRateLimitWriteRate:
+		return strconv.Itoa(trafficlimit.Defaults().Write.RatePerSecond)
+	case SettingKeyRateLimitWriteCapacity:
+		return strconv.Itoa(trafficlimit.Defaults().Write.Capacity)
+	case SettingKeyRateLimitLogRate:
+		return strconv.Itoa(trafficlimit.Defaults().LogQuery.RatePerSecond)
+	case SettingKeyRateLimitLogCapacity:
+		return strconv.Itoa(trafficlimit.Defaults().LogQuery.Capacity)
+	case SettingKeyRateLimitGlobalRate:
+		return strconv.Itoa(trafficlimit.Defaults().Global.RatePerSecond)
+	case SettingKeyRateLimitGlobalCap:
+		return strconv.Itoa(trafficlimit.Defaults().Global.Capacity)
 	}
 	return ""
 }
@@ -725,6 +813,10 @@ func (s *SettingsService) applyPersistedOverrides() {
 	for key, val := range overrides {
 		s.applyOverride(key, val)
 	}
+	// 入口限流：启动时把已落库的预算推给中间件。
+	// 中间件在此之后才装配（main 里先构造 SettingsService 再 router.Setup），
+	// 故这里的调用发生在 SetRateLimitApplier 之前会是空操作——由装配侧补一次
+	// ApplyCurrentRateLimits，保证「重启后覆盖仍生效」而不是回落到默认值。
 }
 
 // applyOverride 把单个覆盖项应用到 CP 内的运行时读取点。
@@ -817,16 +909,188 @@ func isWritableSettingKey(key string) bool {
 		SettingKeyBotReclaimGracePeriod, SettingKeyBotReclaimAuto,
 		SettingKeyPlatformPublicBaseURL, SettingKeyInviteSMTPHost, SettingKeyInviteSMTPPort,
 		SettingKeyInviteSMTPUsername, SettingKeyInviteSMTPPassword, SettingKeyInviteSMTPFrom,
-		SettingKeyGitHubToken:
+		SettingKeyGitHubToken,
+		SettingKeyRateLimitReadRate, SettingKeyRateLimitReadCapacity,
+		SettingKeyRateLimitWriteRate, SettingKeyRateLimitWriteCapacity,
+		SettingKeyRateLimitLogRate, SettingKeyRateLimitLogCapacity,
+		SettingKeyRateLimitGlobalRate, SettingKeyRateLimitGlobalCap:
 		return true
 	}
 	return false
+}
+
+// rateLimitSettingKeys 是入口限流的八个键（四组预算 × 速率/容量）。
+//
+// 为什么把清单集中在这里：写入校验、默认值、Get 展示与热更新回调都按这组键工作，
+// 分开维护会出现「某键能写但不生效」的静默差集（本仓库其他族也踩过这个坑）。
+var rateLimitSettingKeys = []string{
+	SettingKeyRateLimitReadRate, SettingKeyRateLimitReadCapacity,
+	SettingKeyRateLimitWriteRate, SettingKeyRateLimitWriteCapacity,
+	SettingKeyRateLimitLogRate, SettingKeyRateLimitLogCapacity,
+	SettingKeyRateLimitGlobalRate, SettingKeyRateLimitGlobalCap,
+}
+
+// IsRateLimitSettingKey 报告某键是否属于入口限流（供写后判断是否要热更新）。
+func IsRateLimitSettingKey(key string) bool {
+	for _, k := range rateLimitSettingKeys {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
+// RateLimitSettings 汇总当前生效的入口限流预算。
+//
+// 读取口径与其它设置一致：DB 覆盖 > 默认值。任一组解析失败按该组默认值处理
+// （normalize 兜底），绝不让一个脏值把入口限流变成「全拒」或「全放」。
+func (s *SettingsService) RateLimitSettings() trafficlimit.Settings {
+	overrides, err := s.loadOverrides()
+	if err != nil {
+		overrides = map[string]string{}
+	}
+	return s.rateLimitSettingsFromOverrides(overrides)
+}
+
+func (s *SettingsService) rateLimitSettingsFromOverrides(overrides map[string]string) trafficlimit.Settings {
+	atoi := func(key string) int {
+		value, ok := overrides[key]
+		if !ok {
+			value = s.defaultValue(key)
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return -1 // 交给 Normalize 回落到该组默认值
+		}
+		return n
+	}
+	raw := trafficlimit.Settings{
+		Read:     trafficlimit.Spec{RatePerSecond: atoi(SettingKeyRateLimitReadRate), Capacity: atoi(SettingKeyRateLimitReadCapacity)},
+		Write:    trafficlimit.Spec{RatePerSecond: atoi(SettingKeyRateLimitWriteRate), Capacity: atoi(SettingKeyRateLimitWriteCapacity)},
+		LogQuery: trafficlimit.Spec{RatePerSecond: atoi(SettingKeyRateLimitLogRate), Capacity: atoi(SettingKeyRateLimitLogCapacity)},
+		Global:   trafficlimit.Spec{RatePerSecond: atoi(SettingKeyRateLimitGlobalRate), Capacity: atoi(SettingKeyRateLimitGlobalCap)},
+	}
+	return raw.Normalize()
+}
+
+// SetRateLimitApplier 注入入口限流热更新回调。
+// 保存 traffic.rate_limit.* 后以当前生效预算回调，令 CP 入口立即采用新值、
+// 不需要重启；不注入则仅落库、下次重启生效。
+func (s *SettingsService) SetRateLimitApplier(fn func(trafficlimit.Settings)) {
+	s.rateLimitApplier = fn
+}
+
+// applyRateLimits 把当前生效的限流预算推给入口中间件（未注入回调时为空操作）。
+func (s *SettingsService) applyRateLimits() {
+	if s.rateLimitApplier == nil {
+		return
+	}
+	s.rateLimitApplier(s.RateLimitSettings())
+}
+
+// validateRateLimitSetting 校验单个限流键的取值。
+//
+// 语义：速率与容量是同一组预算的两个分量，必须**同时为正**或**同时为 0**。
+//   - 同时为 0 = 该组不限流（超高并发部署的显式选择）；
+//   - 只有一个为 0 = 无从推导桶行为（容量 0 会把所有请求拒掉，速率 0 则永不补充），必须拒绝；
+//   - 全局组不允许「不限流」：那是被限流保护的对象本末倒置。
+func validateRateLimitSetting(key, val string) error {
+	trimmed := strings.TrimSpace(val)
+	if trimmed == "" || trimmed != val {
+		return fmt.Errorf("%w: 限流值须为非负整数且首尾无空白", ErrSettingValueInvalid)
+	}
+	n, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return fmt.Errorf("%w: 限流值须为非负整数", ErrSettingValueInvalid)
+	}
+	if n < 0 {
+		return fmt.Errorf("%w: 限流值不得为负数", ErrSettingValueInvalid)
+	}
+	isRate := strings.HasSuffix(key, ".rate_per_second")
+	limit := trafficlimit.MaxCapacity
+	if isRate {
+		limit = trafficlimit.MaxRatePerSecond
+	}
+	if n > limit {
+		if isRate {
+			return fmt.Errorf("%w: 速率不得超过 %d 次/秒", ErrSettingValueInvalid, trafficlimit.MaxRatePerSecond)
+		}
+		return fmt.Errorf("%w: 容量不得超过 %d", ErrSettingValueInvalid, trafficlimit.MaxCapacity)
+	}
+	// 成对校验：速率与容量必须同为零或同为正。
+	// 全局组不允许关闭：单 IP 无限打 CP 正是限流要防的事，故它的两个键都必须为正。
+	if (key == SettingKeyRateLimitGlobalRate || key == SettingKeyRateLimitGlobalCap) && n == 0 {
+		return fmt.Errorf("%w: 全局上限必须为正数（不允许关闭总闸，否则单个 IP 可无限请求）", ErrSettingValueInvalid)
+	}
+	return nil
+}
+
+// validateRateLimitPair 在整批写入时重新检查每组预算的配对约束。
+//
+// 单键校验只能看到自己：允许把「速率为 5、容量为 0」逐个写进去（各自都是合法的非负整数），
+// 落库后却让该组变成「容量 0 ⇒ 所有请求被拒」。故在 Update 全量校验通过后再按组复核一次，
+// 用的值 = 本次提交值覆盖在现有生效值之上（未提交的分量沿用现值）。
+func (s *SettingsService) validateRateLimitPair(values map[string]string) error {
+	hasAny := false
+	for key := range values {
+		if IsRateLimitSettingKey(key) {
+			hasAny = true
+			break
+		}
+	}
+	if !hasAny {
+		return nil
+	}
+	overrides, err := s.loadOverrides()
+	if err != nil {
+		overrides = map[string]string{}
+	}
+	effective := func(key string) int {
+		if v, ok := values[key]; ok {
+			n, _ := strconv.Atoi(strings.TrimSpace(v))
+			return n
+		}
+		if v, ok := overrides[key]; ok {
+			n, _ := strconv.Atoi(strings.TrimSpace(v))
+			return n
+		}
+		n, _ := strconv.Atoi(strings.TrimSpace(s.defaultValue(key)))
+		return n
+	}
+	groups := []struct {
+		name     string
+		rateKey  string
+		capKey   string
+		allowOff bool
+	}{
+		{"只读请求", SettingKeyRateLimitReadRate, SettingKeyRateLimitReadCapacity, true},
+		{"写操作", SettingKeyRateLimitWriteRate, SettingKeyRateLimitWriteCapacity, true},
+		{"日志查询", SettingKeyRateLimitLogRate, SettingKeyRateLimitLogCapacity, true},
+		{"全局上限", SettingKeyRateLimitGlobalRate, SettingKeyRateLimitGlobalCap, false},
+	}
+	for _, g := range groups {
+		rate, capacity := effective(g.rateKey), effective(g.capKey)
+		if rate == 0 && capacity == 0 {
+			if !g.allowOff {
+				return fmt.Errorf("%w: %s 不允许关闭（速率与容量须为正数）", ErrSettingValueInvalid, g.name)
+			}
+			continue
+		}
+		if rate == 0 || capacity == 0 {
+			return fmt.Errorf("%w: %s 的速率与容量必须同时为 0（不限流）或同时为正数", ErrSettingValueInvalid, g.name)
+		}
+	}
+	return nil
 }
 
 // validateSettingValue 按键的语义校验写入值。
 func validateSettingValue(key, val string) error {
 	// Worker 级覆盖键按基础键走同一套校验——后缀只表达作用域，不改变值语义。
 	baseKey, _, _ := nodeScopeSplit(key)
+	// 入口限流的八个键：非负整数 + 上界 + 全局组不允许 0（成对约束由 Update 另行复核）。
+	if IsRateLimitSettingKey(baseKey) {
+		return validateRateLimitSetting(baseKey, val)
+	}
 	switch baseKey {
 	case SettingKeyLogLevel:
 		if !config.ValidLogLevel(val) {
