@@ -24,6 +24,7 @@ import {
   ScrollText,
   ShieldAlert,
   ShieldCheck,
+  Gauge,
   type LucideIcon,
 } from 'lucide-react'
 import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
@@ -75,6 +76,7 @@ const CATEGORY_ICON: Record<SettingCategory, LucideIcon> = {
   runtime: Cpu,
   policy: HeartPulse,
   network: Network,
+  traffic: Gauge,
   backup: Archive,
   email: Mail,
   security: Lock,
@@ -209,7 +211,7 @@ export function SettingsPageView({
   const [pendingCat, setPendingCat] = useState<SettingCategory | null>(null)
 
   const categories: SettingCategory[] = isPlatformAdmin
-    ? ['appearance', 'logging', 'logAcquisition', 'runtime', 'policy', 'network', 'backup', 'email', 'security']
+    ? ['appearance', 'logging', 'logAcquisition', 'runtime', 'policy', 'network', 'traffic', 'backup', 'email', 'security']
     : ['appearance']
 
   // 当前分类的可编辑项（appearance 无平台项）。

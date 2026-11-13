@@ -1,4 +1,5 @@
-import { keepPreviousData, queryOptions, useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import { keepPreviousData, queryOptions, useInfiniteQuery, useQuery, useMutation, useMutationState, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import api from '@/api/client'
@@ -214,48 +215,118 @@ export function useInstance(id: number) {
   })
 }
 
+/** 同一 QueryClient 中的启停请求共享在途状态；不改写后端 status，避免预检未通过却先闪 STARTING。 */
+const LIFECYCLE_MUTATION_KEY = ['instance-lifecycle'] as const
+const lifecycleRequests = new WeakMap<QueryClient, Set<number>>()
+type LifecycleAction = 'start' | 'stop' | 'restart'
+class LifecycleRequestBusyError extends Error {}
+
+async function postLifecycleRequest(qc: QueryClient, id: number, action: LifecycleAction) {
+  let requests = lifecycleRequests.get(qc)
+  if (!requests) { requests = new Set(); lifecycleRequests.set(qc, requests) }
+  if (requests.has(id)) throw new LifecycleRequestBusyError('该实例已有启停请求进行中，请等待当前操作完成')
+  requests.add(id)
+  try {
+    return await api.post(`/instances/${id}/${action}`)
+  } finally {
+    requests.delete(id)
+  }
+}
+
+export interface InstanceLifecyclePending {
+  starting: boolean
+  stopping: boolean
+  restarting: boolean
+  busy: boolean
+}
+const NO_LIFECYCLE_PENDING: InstanceLifecyclePending = { starting: false, stopping: false, restarting: false, busy: false }
+
+/** 只观察 mutation cache，不产生网络请求；页面可一次订阅后按实例 ID 下发给受控列表。 */
+export function useInstanceLifecyclePendingMap(): ReadonlyMap<number, InstanceLifecyclePending> {
+  const pending = useMutationState({
+    filters: { mutationKey: LIFECYCLE_MUTATION_KEY, status: 'pending' },
+    select: (mutation) => ({ id: mutation.state.variables as number, action: mutation.options.mutationKey?.[1] as LifecycleAction }),
+  })
+  return useMemo(() => {
+    const map = new Map<number, InstanceLifecyclePending>()
+    for (const { id, action } of pending) {
+      const current = map.get(id) ?? { ...NO_LIFECYCLE_PENDING }
+      if (action === 'start') current.starting = true
+      if (action === 'stop') current.stopping = true
+      if (action === 'restart') current.restarting = true
+      current.busy = true
+      map.set(id, current)
+    }
+    return map
+  }, [pending])
+}
+
+/** 接线层订阅该实例在任一入口发出的启动/停止/重启请求。 */
+export function useInstanceLifecyclePending(id: number): InstanceLifecyclePending {
+  return useInstanceLifecyclePendingMap().get(id) ?? NO_LIFECYCLE_PENDING
+}
+
 /** 启动实例。 */
 export function useStartInstance() {
   const qc = useQueryClient()
+  const { t } = useTranslation()
   return useMutation({
-    mutationFn: (id: number) => api.post(`/instances/${id}/start`),
+    mutationKey: [...LIFECYCLE_MUTATION_KEY, 'start'],
+    mutationFn: (id: number) => postLifecycleRequest(qc, id, 'start'),
     onSuccess: () => {
       toast.success('实例启动中…')
-      qc.invalidateQueries({ queryKey: ['instances'] })
     },
-    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-      toast.error(err.response?.data?.message || '启动失败')
+    onError: (err: Error) => {
+      if (err instanceof LifecycleRequestBusyError) {
+        toast.message(t('instances.lifecycle.requestBusy', { defaultValue: err.message }))
+        return
+      }
+      toast.error(apiErrorMessage(err, '启动失败'))
     },
+    // 预检失败也会写 statusReason，失败分支必须刷新，不能只靠成功或下一次心跳。
+    onSettled: () => qc.invalidateQueries({ queryKey: ['instances'] }),
   })
 }
 
 /** 停止实例。 */
 export function useStopInstance() {
   const qc = useQueryClient()
+  const { t } = useTranslation()
   return useMutation({
-    mutationFn: (id: number) => api.post(`/instances/${id}/stop`),
+    mutationKey: [...LIFECYCLE_MUTATION_KEY, 'stop'],
+    mutationFn: (id: number) => postLifecycleRequest(qc, id, 'stop'),
     onSuccess: () => {
       toast.success('实例已停止')
-      qc.invalidateQueries({ queryKey: ['instances'] })
     },
-    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-      toast.error(err.response?.data?.message || '停止失败')
+    onError: (err: Error) => {
+      if (err instanceof LifecycleRequestBusyError) {
+        toast.message(t('instances.lifecycle.requestBusy', { defaultValue: err.message }))
+        return
+      }
+      toast.error(apiErrorMessage(err, '停止失败'))
     },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['instances'] }),
   })
 }
 
 /** 重启实例。 */
 export function useRestartInstance() {
   const qc = useQueryClient()
+  const { t } = useTranslation()
   return useMutation({
-    mutationFn: (id: number) => api.post(`/instances/${id}/restart`),
+    mutationKey: [...LIFECYCLE_MUTATION_KEY, 'restart'],
+    mutationFn: (id: number) => postLifecycleRequest(qc, id, 'restart'),
     onSuccess: () => {
       toast.success('实例重启中…')
-      qc.invalidateQueries({ queryKey: ['instances'] })
     },
-    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-      toast.error(err.response?.data?.message || '重启失败')
+    onError: (err: Error) => {
+      if (err instanceof LifecycleRequestBusyError) {
+        toast.message(t('instances.lifecycle.requestBusy', { defaultValue: err.message }))
+        return
+      }
+      toast.error(apiErrorMessage(err, '重启失败'))
     },
+    onSettled: () => qc.invalidateQueries({ queryKey: ['instances'] }),
   })
 }
 

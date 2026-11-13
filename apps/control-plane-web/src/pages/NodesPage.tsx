@@ -68,6 +68,7 @@ import { NodeSelector } from '@/components/views/nodes/NodeSelector'
 import { NodeConfigSection } from '@/components/views/nodes/NodeConfigSection'
 import { useDynamicPageSize } from '@/lib/hooks/use-dynamic-page-size'
 import {
+  NODE_TABLE_ROW_HEIGHT,
   applyNodeColumnMove,
   clampNodeColumnWidth,
   readStoredNodeColumnWidths,
@@ -119,8 +120,8 @@ function readNodesLayout(searchParams: URLSearchParams): NodesLayout {
   } catch {
     /* 无存储能力时用默认值 */
   }
-  // 默认列表：节点数量通常偏少但字段多，列表的密度与可比性优于卡片。
-  return 'list'
+  // 默认使用卡片；列表通过 URL 显式选择，便于深链和保留用户选择。
+  return 'card'
 }
 
 
@@ -288,8 +289,8 @@ export default function NodesPage() {
   const nodesTableRef = useRef<HTMLDivElement | null>(null)
   const dynamicPageSize = useDynamicPageSize({
     containerRef: nodesTableRef,
-    // 实测：单行 33px、表头 36px；分页条在容器外故传 0。
-    rowHeight: 33,
+    // 行高与节点表的实际样式一致，避免自动分页按 33px 估算而出现滚动或空白。
+    rowHeight: NODE_TABLE_ROW_HEIGHT,
     headerHeight: 36,
     footerHeight: 0,
   })
@@ -890,7 +891,13 @@ export default function NodesPage() {
         ) : (
           layout === 'card' ? (
             <div className="flex min-h-0 flex-1 flex-col gap-2">
-            <CardsGrid className="min-h-0 flex-1">
+            <div className="min-h-0 flex-1 overflow-auto">
+            <CardsGrid
+              className="min-h-0 flex-none items-start content-start overflow-visible"
+              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 360px), 1fr))' }}
+              data-testid="nodes-cards-grid"
+            >
+
               {pagedNodes.map((node) => (
                 <NodeCard
                   key={node.id}
@@ -903,6 +910,7 @@ export default function NodesPage() {
                 />
               ))}
             </CardsGrid>
+            </div>
             {/* 卡片视图同样分页：此前直接 map 全量，超过一页的节点被静默隐藏。 */}
             <NodePaginationBar
               page={page}

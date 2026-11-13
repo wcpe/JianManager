@@ -40,12 +40,7 @@ beforeEach(() => {
   )
 })
 
-/** 
- * 切到列表视图。
- *
- * 列表自起已是默认视图，故这里通常只是「确认已在列表」的一次点击（幂等）；
- * 保留它是因为正文用例仍是从默认入口进入，写法不必随默认值变化。
- */
+/** 列表交互测试显式切换视图，避免依赖页面的默认卡片模式。 */
 async function switchToListView(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: '列表视图' }))
 }
@@ -162,13 +157,13 @@ describe('InstancesPage（mock 假后端）', () => {
     fireEvent.change(await screen.findByRole('searchbox', { name: '搜索实例' }), { target: { value: 'survival' } })
     await waitFor(() => expect(new URLSearchParams(window.location.search).get('q')).toBe('survival'))
 
-    fireEvent.click(screen.getByRole('button', { name: /运行/ }))
+    fireEvent.click(within(screen.getByRole('group', { name: '实例状态概览' })).getByRole('button', { name: /运行/ }))
     await waitFor(() => expect(new URLSearchParams(window.location.search).get('status')).toBe('RUNNING'))
 
-    // list 已成为默认视图 → 选中它时不再写 view 参数（缺省即 list）。
-    fireEvent.click(screen.getByRole('button', { name: '卡片视图' }))
-    expect(new URLSearchParams(window.location.search).get('view')).toBe('card')
+    // 卡片为默认视图；列表必须显式写入 URL，返回卡片时移除该参数。
     fireEvent.click(screen.getByRole('button', { name: '列表视图' }))
+    expect(new URLSearchParams(window.location.search).get('view')).toBe('list')
+    fireEvent.click(screen.getByRole('button', { name: '卡片视图' }))
     expect(new URLSearchParams(window.location.search).get('view')).toBeNull()
   })
 

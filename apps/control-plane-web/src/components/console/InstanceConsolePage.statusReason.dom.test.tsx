@@ -36,6 +36,24 @@ describe('InstanceConsolePage 失败原因横幅', () => {
     expect(banner).toHaveTextContent('实例未绑定 JDK，启动委托失败')
   })
 
+  it('启动中的阶段说明不显示为上次启动失败', async () => {
+    db<MockInstance>('instances').update(3, { status: 'STARTING', statusReason: '正在等待上一代实例退出' })
+    renderWithProviders(<InstanceConsolePage instanceId={3} />, { route: '/instances/3' })
+    const banner = await screen.findByTestId('instance-lifecycle-banner')
+    expect(banner).toHaveAttribute('role', 'status')
+    expect(banner).toHaveTextContent('正在等待上一代实例退出')
+    expect(banner).not.toHaveTextContent('上次启动失败')
+  })
+
+  it('结果待确认单独显示为进行中状态，不能宣称失败', async () => {
+    db<MockInstance>('instances').update(3, { status: 'STARTING', statusReason: '操作结果待确认，状态查询/心跳收敛: 连接断开' })
+    renderWithProviders(<InstanceConsolePage instanceId={3} />, { route: '/instances/3' })
+    const banner = await screen.findByTestId('instance-lifecycle-banner')
+    expect(banner).toHaveAttribute('role', 'status')
+    expect(banner).toHaveTextContent('操作结果待确认')
+    expect(banner).not.toHaveTextContent('上次启动失败')
+  })
+
   it('再次点启动后 reason 被清空，横幅随查询刷新消失', async () => {
     const user = userEvent.setup()
     renderWithProviders(<InstanceConsolePage instanceId={3} />, { route: '/instances/3' })

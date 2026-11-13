@@ -21,9 +21,8 @@ import { ChevronDown, ChevronRight, Play, Square, TriangleAlert, X } from 'lucid
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { TableCell, TableRow } from '@jianmanager/ui/components/table'
-import { cn, instanceStatusLevel } from '@jianmanager/ui'
+import { cn } from '@jianmanager/ui'
 import { envOf, freeTagsOf, regionOf, zoneOf } from '@/lib/instances/instance-grouping'
 import { INSTANCE_KIND_LABEL_KEY, instanceKindOf, type InstanceKind } from '@/lib/instances/instance-kind'
 import type { InstanceInfo } from '@/lib/instances/instance-types'
@@ -36,12 +35,11 @@ import type { InstanceMetricSnapshot } from '@/components/views/instances/Instan
 import { DEFAULT_COLUMNS, type InstanceOptionalColumn } from '@/lib/instances/instance-view-prefs'
 import type { BusinessStatus } from '@/api/businessStatus'
 import { sameBusinessStatus, summarizeBusiness } from '@/lib/instances/business-summary'
+import { InstanceLifecycleStatus } from '@/lib/instances/InstanceLifecycleStatus'
+import { instanceLifecyclePresentation } from '@/lib/instances/instance-lifecycle-status'
 
 /** 列设置的缺省可见集（常用三列，与 `readStoredColumns` 的缺省一致）。 */
 const ALL_OPTIONAL_COLUMNS: ReadonlySet<InstanceOptionalColumn> = new Set(DEFAULT_COLUMNS)
-
-/** 未知状态的兜底文案键；单列常量是因为登记表是索引签名，取 `.STOPPED` 拿不回确定类型。 */
-const STATUS_LABEL_FALLBACK = 'instances.stopped'
 
 /** 
  * 服务端类别 → 标签配色。
@@ -63,18 +61,6 @@ const KIND_CHIP_CLASS: Record<InstanceKind, string> = {
   plugin: 'bg-primary/10 text-primary',
   proxy: 'bg-status-info/15 text-status-info',
   binary: 'bg-muted text-muted-foreground',
-}
-
-/** 
- * 实例状态 → i18n 文案键（与实例页状态筛选项同源）。
- * 未知状态回退「已停止」文案，与迁移前 `statusConfig[status] || statusConfig.STOPPED` 等价。
- */
-const STATUS_LABEL_KEY: Record<string, string> = {
-  STOPPED: STATUS_LABEL_FALLBACK,
-  STARTING: 'instances.starting',
-  RUNNING: 'instances.running',
-  STOPPING: 'instances.stopping',
-  CRASHED: 'instances.crashed',
 }
 
 /** 
@@ -168,6 +154,8 @@ export interface InstanceRowViewProps {
   starting?: boolean
   /** 停止在途。 */
   stopping?: boolean
+  /** 重启在途。 */
+  restarting?: boolean
   /** 「⋯」次要操作菜单元素（生命周期 / 标签 / 配置 / 限额 / 代理后端 / 克隆 / 接管 / 删除，由容器渲染）。 */
   menu: ReactNode
   /** 打开实例控制台（容器注入路由跳转）。 */
@@ -210,6 +198,7 @@ function InstanceRowViewImpl({
   renderBackends,
   starting = false,
   stopping = false,
+  restarting = false,
   menu,
   onOpenInstance,
   onStart,
@@ -220,7 +209,9 @@ function InstanceRowViewImpl({
   businessStatus,
 }: InstanceRowViewProps) {
   const { t } = useTranslation()
-  const statusLabel = t(STATUS_LABEL_KEY[inst.status] ?? STATUS_LABEL_FALLBACK)
+  const pendingAction = starting ? 'start' : stopping ? 'stop' : restarting ? 'restart' : undefined
+  const lifecycle = instanceLifecyclePresentation(inst, { provisioning, pendingAction })
+  const statusLabel = t(lifecycle.labelKey, { defaultValue: lifecycle.labelFallback })
   /** 服务端类别（插件服 / 代理 / 二进制）：类型列标签与名称列图标共用同一判据。 */
   const kindOf = (i: InstanceInfo) => instanceKindOf(i)
   const instEnv = envOf(inst)
@@ -236,7 +227,7 @@ function InstanceRowViewImpl({
    * 异常强化（常态弱化）：崩溃或存在运行态漂移的行给出左侧警示条 + 淡红底。
    * 只加背景与伪元素，不动行盒高度——虚拟窗口的 36px 模型不受影响（见 INSTANCE_ROW_HEIGHT）。
    */
-  const attention = inst.status === 'CRASHED' || Boolean(drift)
+  const attention = lifecycle.kind === 'failed' || Boolean(drift)
 
   const cell_select = (
       <TableCell key="select">
@@ -302,7 +293,7 @@ function InstanceRowViewImpl({
             色点用与状态徽章同一判据（instanceStatusLevel），不会出现两处不一致。
           */}
           <span
-            className={cn('size-1.5 shrink-0 rounded-full', STATUS_DOT_CLASS[instanceStatusLevel(inst.status)])}
+            className={cn('size-1.5 shrink-0 rounded-full', STATUS_DOT_CLASS[lifecycle.tone], lifecycle.transitioning && 'animate-pulse motion-reduce:animate-none')}
             title={statusLabel}
             aria-hidden="true"
           />
@@ -403,11 +394,7 @@ function InstanceRowViewImpl({
   )
   const cell_status = (
       <TableCell key="status">
-        <StatusBadge
-          level={instanceStatusLevel(inst.status)}
-          label={statusLabel}
-          pulse={inst.status === 'STARTING' || inst.status === 'STOPPING'}
-        />
+        <InstanceLifecycleStatus inst={inst} provisioning={provisioning} pendingAction={pendingAction} compact />
       </TableCell>
   )
   const cell_health = (
@@ -482,7 +469,7 @@ function InstanceRowViewImpl({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                disabled={provisioning || starting}
+                disabled={provisioning || lifecycle.transitioning}
                 onClick={onStart}
                 aria-label={t('instances.start')}
                 className="text-green-600 hover:text-green-700"
@@ -495,7 +482,7 @@ function InstanceRowViewImpl({
             <Button
               variant="ghost"
               size="icon-xs"
-              disabled={stopping}
+              disabled={lifecycle.transitioning}
               onClick={onStop}
               aria-label={t('instances.stop')}
               title={t('instances.stop')}
@@ -625,6 +612,7 @@ export const InstanceRowView = memo(InstanceRowViewImpl, (prev, next) => {
   if (prev.drift !== next.drift) return false
   if (prev.starting !== next.starting) return false
   if (prev.stopping !== next.stopping) return false
+  if (prev.restarting !== next.restarting) return false
   if (prev.proxyExpanded !== next.proxyExpanded) return false
   if (prev.nodeName !== next.nodeName) return false
   // 列集合按内容比较：容器每次都可能传新 Set，引用不同但内容相同不该重渲染。

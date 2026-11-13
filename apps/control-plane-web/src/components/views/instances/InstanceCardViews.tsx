@@ -35,37 +35,11 @@ export interface BackendsInlineProps {
   onOpenInstance: (id: number) => void
 }
 
-/** 
- * 工作台卡行高（px）：**声明值 = 真实行盒**，卡片行流与 `InstanceGroupManager` 右列表共用。
- *
- * 数值依据（Chromium 1440×900 实测卡片实高，逐段相加核对）：
- * 卡片实高 = 固定骨架 + 附加提示区高度 − 40（头部基础高，被提示区顶掉时不重复计）。
- * 固定骨架 = 32 内边距 + 2 边框 + 3×12 段间距 + 16 类型行 + 36 资源条 + 37.5 底部操作行
- *            + 26 大区·小区行（含 mt-2 与 text-micro 行盒）。
- *
- * 大区·小区由分组头改为卡面文字后，卡片多出约 26px；260 → 280 把它计入行盒：
- * 行盒 = 280 − 16 = 264 = 225.5 固定骨架 + 35 提示区上限 + 3.5 余量。
- * 提示区上限由卡片内的 `CARD_EXTRA_MAX_HEIGHT`（`max-height` 硬封）保证，
- * 故卡片实高由构造不超过行盒，不会与下一行重叠。
- *
- * 为什么不继续用 260：加上大区·小区行后 225.5 + 35 = 260.5 > 244（旧行盒），
- * 必然重叠；而「声明值 = 真实行盒」要求行盒是常量、不是各卡实高的最大值——
- * 卡片行流按本常量定位，行盒若随内容变长就会与下一行打架。
+/**
+ * 卡片行高与分组管理器共用。行盒 304px，容纳独立地址行、资源读数和有界异常提示；
+ * 行距另留 8px。改变卡片内容高度时必须同步此值，不能靠裁掉底栏维持虚拟定位。
  */
-/* 
-  【实测值，不是估算】卡片实高由内容决定，实测区间 169~229px（标签多/名称换行的更高）。
-  这里取 272：卡片内部分区高度（含外边距）实测合计 233，加左右内边距 24 得 257，
-  再加 CARD_ROW_GAP 8 = 265；取 272 留 7px 余量。
-  **不要凭感觉调小这个值**：调小后卡片会被 overflow-hidden 裁掉内容（实测裁掉
-  「节点:端口」那行的下半截），比重叠更难看。需要压缩卡片时，先减分区再改这里。
-
-  【历史教训】此常量曾从 280 被调到 200（对应行盒 192），但卡片内容没跟着压缩，
-  于是 229px 的卡片盖到下一行上，表现为「卡片重叠」。更糟的是上方注释仍写着 280/264，
-  文档与代码已经脱节——所以这里改成**以实测值为基准**并写清来源。
-  即便将来卡片变高，行盒内还有 overflow-hidden 兜底（见 renderCard 的包裹层），
-  不会再次重叠；但那时应同步抬高本常量，而不是让内容被裁掉。
-*/
-export const CARD_ROW_HEIGHT = 272
+export const CARD_ROW_HEIGHT = 312
 
 /** 卡片行的行间与列间留白（px）：行盒 = CARD_ROW_HEIGHT − 本值，故行距与行盒不会各自漂移。 */
 export const CARD_ROW_GAP = 8
@@ -228,20 +202,12 @@ export function VirtualizedGroupedCardView({
           return (
             <div
               key={row.key}
-              // 行盒高度 = CARD_ROW_HEIGHT − CARD_ROW_GAP；`gap-4` 即 CARD_ROW_GAP（16），
-              // 列间距与行间距同一口径。
-              style={{ top, height: CARD_ROW_HEIGHT - CARD_ROW_GAP, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
-              className="absolute inset-x-0 grid gap-4"
+              // 行高与内外间隙共用常量，虚拟定位和真实网格不能各取一套值。
+              style={{ top, height: CARD_ROW_HEIGHT - CARD_ROW_GAP, gap: CARD_ROW_GAP, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+              className="absolute inset-x-0 grid"
             >
               {row.items.map((inst) => (
-                /* 
-                  【卡片被钉在行盒高度内】虚拟化按 `CARD_ROW_HEIGHT - CARD_ROW_GAP` 这个常量
-                  给每一行定位，而卡片内容是自适应的：实测卡片实高在 169~229px 之间浮动
-                  （标签多的、名称换行的更高），而行盒只有 192px——超出的卡片直接盖住下一行，
-                  表现为「卡片重叠」。这里给包裹层 `h-full overflow-hidden`：
-                  卡实高不再决定行盒，行盒由常量决定，结构上不可能溢出。
-                  卡片内部对超出内容做裁剪（见 InstanceWorktableCard 的 min-h-0）。
-                */
+                // 每张卡填满同一行盒；卡片内容变更时同步 CARD_ROW_HEIGHT，不能让内容盖到下一行。
                 <div
                   key={inst.id}
                   data-testid="instances-card-virtual-item"

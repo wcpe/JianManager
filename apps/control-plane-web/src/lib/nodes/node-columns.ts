@@ -120,6 +120,9 @@ export function writeStoredNodeColumnWidths(widths: NodeColumnWidths): void {
   }
 }
 
+/** 节点表行高与自动分页共享同一个尺寸，避免测量和渲染的行数不同。 */
+export const NODE_TABLE_ROW_HEIGHT = 60
+
 /** 分页大小档位（与服务器页同一组数值，减少两页之间的认知切换）。 */
 export const NODE_PAGE_SIZES = [10, 20, 50] as const
 export const NODE_DEFAULT_PAGE_SIZE = 20

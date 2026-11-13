@@ -14,8 +14,9 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 import type { ArchivedNode, NodeInfo } from '@/lib/nodes/node-types'
-/** 
+/**
  * 节点身份块操作菜单：进入/解除维护、排空、下线收入「⋯」kebab。
  * 排空与下线标危险色；下线在线节点禁用 + tooltip。
  */
@@ -120,12 +121,18 @@ function RowUsage({ label, pct, online }: { label: string; pct: number; online: 
   )
 }
 
-/** 
- * 节点卡片（阶段 6 重做，原型 `.node-card`）：列表态的主展示单元。
- *
- * 与 `NodeListRow` 分工不同——那是双栏形态下给「已选中节点」当导航用的紧凑行；
- * 卡片墙要在一屏里横向铺开、彼此可比，故把 host / 核数 / 内存 / 实例数 / 三项水位都摆出来。
- */
+function formatNodeCapacity(ratio: number | null | undefined, totalMb: number, online: boolean): string {
+  if (!online || ratio == null || !Number.isFinite(ratio) || totalMb <= 0) return '--'
+  const totalBytes = totalMb * 1024 * 1024
+  return `${Math.round(ratio * 100)}% · ${formatFileSize(ratio * totalBytes)} / ${formatFileSize(totalBytes)}`
+}
+
+function formatNodeCpu(ratio: number | null | undefined, cores: number, online: boolean, unit: string): string {
+  if (!online || ratio == null || !Number.isFinite(ratio) || cores <= 0) return '--'
+  return `${Math.round(ratio * 100)}% · ${(ratio * cores).toFixed(1)} / ${cores} ${unit}`
+}
+
+/** 节点卡片：按内容自适应高度，展示巡检所需的容量与实时信号。 */
 export function NodeCard({
   node,
   instanceCount,
@@ -152,6 +159,7 @@ export function NodeCard({
     /* 整块可点击卡片 → Card 的 interactive（hover 抬升 + 焦点环）；额外 hover 涂层沿用原值。
        语义：原为 <button>，Card 渲染 div，故补 role/tabIndex 与 Enter/Space 键处理保持键盘可达。 */
     <Card
+      data-testid={`node-card-${node.id}`}
       interactive
       role="button"
       tabIndex={0}
@@ -168,7 +176,7 @@ export function NodeCard({
       // 收敛为「节点名 + 状态」——状态 chip 已是页面级的概览，卡片这里表达的是「这台怎么样」。
       aria-label={`${node.name} ${statusLabel}`}
       className={cn(
-        'cursor-pointer gap-2 p-3 text-left transition-colors hover:bg-accent/40',
+        'min-w-0 cursor-pointer gap-2 p-3 text-left transition-colors hover:bg-accent/40',
         !online && 'opacity-70',
       )}
     >
@@ -202,41 +210,48 @@ export function NodeCard({
         <StatusBadge level={level} label={statusLabel} />
       </div>
       <div className="truncate text-[11px] text-muted-foreground" title={node.host}>
-        {node.host}
+        {node.host || '--'}
       </div>
-      {/*
-        卡片补齐与表格一致的关键字段：端口 / 系统 / 隧道 / 心跳。
-        原先卡片只有 名/host/核数/内存/实例数，切到卡片视图就丢掉了排障要看的那几项，
-        用户得切回表格才能确认「这台是不是走隧道、端口是多少」。
-      */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+      <div className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+        <span className="truncate" title={`${node.os} / ${node.arch}`}>
+          {node.os || '--'} / {node.arch || '--'}
+        </span>
+        <span className="truncate" title={t('nodes.tunnel', '隧道')}>
+          {online ? (node.tunnelConnected ? t('nodes.tunnelConnected') : t('nodes.tunnelDirect')) : '--'}
+        </span>
         <span className="tabular-nums" title={t('nodes.grpcPort')}>
-          {node.grpcPort || '--'}/{node.wsPort || '--'}
+          {node.grpcPort > 0 ? `${node.grpcPort} / ${node.wsPort > 0 ? node.wsPort : '--'}` : '--'}
         </span>
-        <span className="truncate" title={`${node.os} ${node.arch}`}>
-          {node.os || '--'} {node.arch || ''}
-        </span>
-        <span className={node.tunnelConnected ? 'text-status-success' : undefined}>
-          {node.tunnelConnected ? t('nodes.tunnelConnected') : t('nodes.tunnelDirect')}
-        </span>
-        <span title={node.lastHeartbeat ?? ''}>
-          {relativeAge(node.lastHeartbeat)}
+        <span title={node.lastHeartbeat ?? undefined}>
+          {t('nodes.heartbeat', '心跳')} {relativeAge(node.lastHeartbeat)}
         </span>
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-        <span>
-          {node.cpuCores} {t('nodes.cpuCores')}
+      <div className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+        <span className="tabular-nums">
+          {t('nodes.cpuCores')} {node.cpuCores > 0 ? `${node.cpuCores} ${t('nodes.coreUnit', '核')}` : '--'}
         </span>
-        <span>{Math.round(node.memoryMb / 1024)} GB</span>
+        <span className="tabular-nums">
+          {t('nodes.memoryTotal', '内存总量')} {node.memoryMb > 0 ? formatFileSize(node.memoryMb * 1024 * 1024) : '--'}
+        </span>
         <span className="inline-flex items-center gap-0.5">
-          <Box className="size-3" />
-          <span className="tabular-nums">{instanceCount}</span>
+          <Box className="size-3" aria-hidden />
+          <span className="tabular-nums">{t('nodes.instances')} {instanceCount}</span>
+        </span>
+        <span className="tabular-nums">
+          {t('nodes.load', '负载')} {online && Number.isFinite(node.loadAvg1) ? node.loadAvg1.toFixed(2) : '--'}
         </span>
       </div>
-      <div className="flex items-center gap-3">
-        <RowUsage label={t('nodes.cpu')} pct={(node.cpuUsage ?? 0) * 100} online={online} />
-        <RowUsage label={t('nodes.memory')} pct={(node.memoryUsage ?? 0) * 100} online={online} />
-        <RowUsage label={t('nodes.disk')} pct={(node.diskUsage ?? 0) * 100} online={online} />
+      <div className="grid min-w-0 grid-cols-1 gap-1 text-[11px] text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="tabular-nums">{t('nodes.cpu')} {formatNodeCpu(node.cpuUsage, node.cpuCores, online, t('nodes.coreUnit', '核'))}</span>
+          {online && Number.isFinite(node.cpuUsage) && <MiniBar value={node.cpuUsage * 100} className="w-16" />}
+        </div>
+        <span className="tabular-nums">
+          {t('nodes.memory')} {formatNodeCapacity(node.memoryUsage, node.memoryMb, online)}
+        </span>
+        <span className="tabular-nums">
+          {t('nodes.disk')} {formatNodeCapacity(node.diskUsage, node.diskTotalMb, online)}
+        </span>
       </div>
     </Card>
   )

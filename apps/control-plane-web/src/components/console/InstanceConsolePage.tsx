@@ -77,13 +77,25 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const { data: nodes = [] } = useNodes({ refetchInterval: 30_000 })
   const { data: metrics } = useInstanceMetrics(instanceId, true)
   const { data: serverState } = useServerState(instanceId, true, 15_000)
-  // 控制台底部「最近 8 行」：数据源改为 VL 联邦（GET /logs/federation）。
+  // 概览最近日志快照：复用 VL 联邦查询；只在概览可见时刷新，不建立尾随通道。
   // 原因：CP `logs` 表正在废弃（正文与业务数据混库、关键词检索全表扫），
   // 而实例日志的权威副本本就在 Worker 的 VL 里。
   // 注意：实例停机不影响本查询——Worker 仍在跑、VL 数据仍在。
-  const { data: logFederation } = useLogsFederation(
-    { instanceId, limit: 8 },
-    { refetchInterval: 10_000 },
+  const [overviewLogTime, setOverviewLogTime] = useState(() => Date.now())
+  useEffect(() => {
+    if (activeTab !== 'overview') return
+    const timer = window.setInterval(() => setOverviewLogTime(Date.now()), 10_000)
+    return () => window.clearInterval(timer)
+  }, [activeTab])
+  const overviewLogWindow = useMemo(() => ({
+    instanceId,
+    limit: 40,
+    from: new Date(overviewLogTime - 3_600_000).toISOString(),
+    to: new Date(overviewLogTime).toISOString(),
+  }), [instanceId, overviewLogTime])
+  const { data: logFederation, isLoading: logsLoading, isError: logsError } = useLogsFederation(
+    overviewLogWindow,
+    { enabled: activeTab === 'overview', refetchInterval: false },
   )
   const logs = useMemo<LogEntry[]>(() => {
     const items = logFederation?.response.items
@@ -145,9 +157,10 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const rebuilding = isRebuildingInstance(instance)
   // 运行态漂移：>0 即存在未纳管活进程；无漂移时为 undefined（不渲染任何标记）。
   const runtimeDrift = runtimeDriftOf(instance)
-	const overviewLogs = logs ?? []
+  const overviewLogs = logs
 
   const setActiveTab = (tab: TabKey) => {
+    if (tab === 'overview') setOverviewLogTime(Date.now())
     const next = new URLSearchParams(searchParams)
     if (tab === 'overview') next.delete('tab')
     else next.set('tab', tab)
@@ -172,7 +185,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const activityFeed = (
     <InstanceActivityFeed
       instanceId={instance.id}
-      logs={overviewLogs}
+      logs={[]}
       watchItems={watchItems}
       uptimeSeconds={metrics?.uptimeSeconds}
     />
@@ -188,11 +201,6 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
          backend 画像（唯一没有 process 的画像）看不到这两个能力。 */
       return (
         <div className="space-y-3">
-          <QuotaPanel instanceId={instance.id} />
-          <BinaryVersionPanel instanceId={instance.id} />
-          {/* TPS 火花线的取数包一层：迁包前它挂在概览面板内，只有概览挂载时才建立查询与订阅；
-              放进容器顶部会在实例未加载时先造一个空 targetId 的查询，既多一次无用订阅，
-              也让「等页面就绪」的信号被提前满足。 */}
           <OverviewTpsData instanceUuid={instance.uuid} mcSemantics={profile.mcSemantics}>
             {(tpsPoints) => (
               <InstanceConsoleOverviewPanel
@@ -204,6 +212,15 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                 maxPlayersAvailable={maxPlayersAvailable}
                 nodeDiskUsage={node?.diskUsage}
                 logs={overviewLogs}
+                logsLoading={logsLoading}
+                logsIncomplete={!!logFederation && logFederation.response.coverage?.complete !== true}
+                logsError={logsError || !!logFederation?.degraded || !!logFederation?.failure || !!logFederation?.federatedNotReady}
+                configuration={(
+                  <div className="grid gap-2 lg:grid-cols-2">
+                    <QuotaPanel instanceId={instance.id} />
+                    <BinaryVersionPanel instanceId={instance.id} />
+                  </div>
+                )}
                 watchItems={watchItems}
                 probeConnected={serverState?.connected ?? false}
                 mcSemantics={profile.mcSemantics}

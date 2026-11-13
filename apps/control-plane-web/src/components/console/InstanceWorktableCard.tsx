@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router'
-import { isProvisioningInstance, type InstanceInfo } from '@/api/instances'
+import { isProvisioningInstance, useInstanceLifecyclePending, type InstanceInfo } from '@/api/instances'
 import { runtimeDriftOf } from '@/lib/runtime-assets/runtime-drift'
 import { envOf, freeTagsOf, regionOf, zoneOf } from '@/lib/instances/instance-grouping'
 import { useInstanceMetrics } from '@/api/metrics'
@@ -17,6 +17,7 @@ import { InstanceWorktableCard as InstanceWorktableCardView } from '@/components
 export function InstanceWorktableCard({
   inst,
   nodeName,
+  nodeHost,
   roleBadge,
   menu,
   onOpen,
@@ -33,6 +34,8 @@ export function InstanceWorktableCard({
   inst: InstanceInfo
   /** 所属节点名（由列表统一解析后传入，避免卡内各自查节点表）。 */
   nodeName: string
+  /** 节点上报的主机地址；与实例的游戏端口组合，不能用节点名或探针端口代替。 */
+  nodeHost?: string
   /** 角色徽标元素（统一语义色，由页面渲染）。 */
   roleBadge: ReactNode
   /** 「⋯」次要操作菜单元素（标签/限额/克隆/删除，由页面渲染）。 */
@@ -64,6 +67,7 @@ export function InstanceWorktableCard({
   const openConsole = onOpen ?? ((id: number) => navigate(`/instances/${id}`))
 
   const running = inst.status === 'RUNNING'
+  const lifecyclePending = useInstanceLifecyclePending(inst.id)
   // 搭建中硬性禁启：provision 未终态期间启动按钮直接禁用，不再只靠琥珀文案劝阻。
   const provisioning = isProvisioningInstance(inst)
   // 仅运行态拉实时指标；停机/过渡态不轮询（省请求，避免离线 422）。
@@ -81,14 +85,14 @@ export function InstanceWorktableCard({
         zone: zoneOf(inst),
       }}
       nodeName={nodeName}
+      nodeHost={nodeHost}
       isProxy={isProxy}
       provisioning={provisioning}
       drift={runtimeDriftOf(inst) ?? undefined}
       metrics={metrics}
-      // 在途状态由视图内部按「已点击」自管：动作已上移到页面，接线层拿不到 mutation 状态。
-      starting={false}
-      stopping={false}
-      restarting={false}
+      starting={lifecyclePending.starting}
+      stopping={lifecyclePending.stopping}
+      restarting={lifecyclePending.restarting}
       roleBadge={roleBadge}
       menu={menu}
       onOpen={openConsole}

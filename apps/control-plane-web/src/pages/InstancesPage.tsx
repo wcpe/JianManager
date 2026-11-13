@@ -5,7 +5,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { usePageContext } from '@/lib/assistant/page-context'
 import { useTranslation } from 'react-i18next'
 import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Settings2, Bookmark, Trash2, ServerCog, CircleCheck, CircleSlash, TriangleAlert, ChevronDown } from 'lucide-react'
-import { useSearchInstances, useInstanceAggregate, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance, useAdoptInstanceRuntime, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
+import { useSearchInstances, useInstanceAggregate, useStartInstance, useStopInstance, useRestartInstance, useInstanceLifecyclePendingMap, useDeleteInstance, useKillInstance, useAdoptInstanceRuntime, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
 import type { InstanceListParams, InstanceSearchParams } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useNetworks } from '@/api/networks'
@@ -71,6 +71,7 @@ import { BackendsInline, VirtualizedGroupedCardView } from '@/components/views/i
 import { PaginatedInstanceTable } from '@/components/views/instances/PaginatedInstanceTable'
 import { InstancePaginationBar } from '@/components/views/instances/InstancePaginationBar'
 import { InstanceHealthHoverLayer } from '@/components/views/instances/InstanceRowSpark'
+import { InstanceRuntimeOverview } from '@/components/views/instances/InstanceRuntimeOverview'
 import { InstanceContextMenu } from '@/components/views/instances/InstanceContextMenu'
 import { buildContextMenuActions } from '@/components/views/instances/instanceContextMenuActions'
 import {
@@ -135,12 +136,9 @@ const INSTANCE_PAGE_SIZES = [50, 100, 200] as const
  */
 const SEARCH_DEBOUNCE_MS = 300
 
-/** 
- * 视图模式：起 `list`（分组树表）为 `/instances` 默认——64 台跨区可一屏折叠管理。
- * 卡片视图保留为紧凑模式（`?view=card`）。
- */
+/** 卡片为默认入口；显式列表深链与保存视图仍按 URL 恢复。 */
 function readViewMode(searchParams: URLSearchParams): ViewMode {
-  return searchParams.get('view') === 'card' ? 'card' : 'list'
+  return searchParams.get('view') === 'list' ? 'list' : 'card'
 }
 
 /** 列设置项的文案键（复用既有列名键，不另造同义键）。 */
@@ -231,7 +229,7 @@ function writeInstanceUrlState(searchParams: URLSearchParams, updates: InstanceU
   if (updates.q !== undefined) writeParam(searchParams, 'q', updates.q, '')
   if (updates.status !== undefined) writeParam(searchParams, 'status', updates.status)
   if (updates.page !== undefined) writeParam(searchParams, 'page', updates.page, '1')
-  if (updates.view !== undefined) writeParam(searchParams, 'view', updates.view, 'list')
+  if (updates.view !== undefined) writeParam(searchParams, 'view', updates.view, 'card')
   if (updates.groupBy !== undefined) writeParam(searchParams, 'groupBy', updates.groupBy, DEFAULT_GROUP_DIMENSION)
   if (updates.sort !== undefined) writeParam(searchParams, 'sort', updates.sort, 'createdAt')
   if (updates.order !== undefined) writeParam(searchParams, 'order', updates.order, 'asc')
@@ -453,6 +451,7 @@ export default function InstancesPage() {
   const start = useStartInstance()
   const stop = useStopInstance()
   const restart = useRestartInstance()
+  const lifecyclePending = useInstanceLifecyclePendingMap()
   const kill = useKillInstance()
   const adopt = useAdoptInstanceRuntime()
   const del = useDeleteInstance()
@@ -525,6 +524,7 @@ export default function InstancesPage() {
     for (const n of nodes ?? []) map.set(n.id, n.name)
     return map
   }, [nodes])
+  const nodeHostById = useMemo(() => new Map((nodes ?? []).map((node) => [node.id, node.host])), [nodes])
   const nodeName = useCallback(
     (id: number) => nodeNameById.get(id) ?? t('console.unknownNode', { id }),
     [nodeNameById, t],
@@ -963,8 +963,9 @@ export default function InstancesPage() {
       proxyExpanded={expandedProxies.has(inst.id)}
       onToggleProxy={() => toggleProxy(inst.id)}
       renderBackends={() => <BackendsInlineContainer proxyId={inst.id} />}
-      starting={start.isPending && start.variables === inst.id}
-      stopping={stop.isPending && stop.variables === inst.id}
+      starting={lifecyclePending.get(inst.id)?.starting}
+      stopping={lifecyclePending.get(inst.id)?.stopping}
+      restarting={lifecyclePending.get(inst.id)?.restarting}
       menu={buildMenu(inst)}
       onOpenInstance={openInstance}
       onStart={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'start' })}
@@ -977,11 +978,9 @@ export default function InstancesPage() {
   return (
     // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
     // data-page 由 PageShell spread 透传，e2e 的就绪信号依赖它。
-    // variant="fixed"：本页的滚动发生在**表格内部**（表头吸顶 + 容器内滚），不是整页滚动。
-    // `default` 变体会给一个 overflow-auto 的整页滚动容器，页内 `flex-1` 就拿不到
-    // 「视口剩余高度」，退回按内容撑高、又被外层滚动——两层滚动叠加，表格底部被推出视口。
-    // fixed 是 overflow-hidden，高度钉在视口内，`flex-1` 才有意义。
-    <PageShell data-page="instances" variant="fixed">
+    // 桌面固定视口、数据区内部滚动。窄屏中概览/筛选会换行，允许整页纵向滚动，
+    // 并给数据区保留最小高度，避免工具栏把卡片挤成零高、底部操作永久不可达。
+    <PageShell data-page="instances" variant="fixed" className="max-lg:overflow-y-auto">
       {/*
         【页头只留小标题 + 右侧按钮】此前标题下还有一行「42 台服务器 · 36 运行中 · 3 异常 ·
         2,431 在线玩家」的统计副标题——那些数字已经由下面的 KPI 卡片承担，两处重复表达同一信息，
@@ -1061,6 +1060,8 @@ export default function InstancesPage() {
           />
         ))}
       </div>
+
+      <InstanceRuntimeOverview counts={counts} instances={instances} metrics={windowMetrics} />
 
       {/* 多维筛选 + 分组视图（137）：sticky + 可折叠，避免长筛选条在移动端翻屏。 */}
       {/*
@@ -1373,7 +1374,7 @@ export default function InstancesPage() {
           `max-h-[calc(100vh-20rem)]` 猜一个定值，页面一变高就算错、把列表顶出视口。
           `min-h-0` 是 flex 列里子项可收缩的前提，缺了它表格仍会被内容撑高、溢出照旧。
         */
-        <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 max-lg:min-h-80 max-lg:shrink-0">
           {/*
             批量栏只在列表视图出现：卡片视图的卡片**没有勾选入口**（卡片组件不接选择相关 props），
             所以从列表选中若干实例再切到卡片时，会出现一个「选着东西但无法取消」的批量栏，
@@ -1413,6 +1414,7 @@ export default function InstancesPage() {
               renderCard={(args) => (
                 <InstanceWorktableCard
                   {...args}
+                  nodeHost={nodeHostById.get(args.inst.nodeId)}
                   /* 
                     卡片视图的启停/右键：与列表视图走完全相同的页面级流程。
                     此前卡片自己 useStartInstance().mutate()，绕过了二次确认——

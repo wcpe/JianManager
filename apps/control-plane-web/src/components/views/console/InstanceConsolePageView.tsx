@@ -48,20 +48,14 @@ import {
 } from '@jianmanager/ui/components/dropdown-menu'
 import { PageShell } from '@jianmanager/ui/components/layout'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@jianmanager/ui/components/table'
+import { InstanceOverviewLatestLogs } from './InstanceOverviewLatestLogs'
 import { KpiCard, formatNumber, formatUptime } from '@/components/views/console/console-kpi-parts'
 import { MetricDivider, MetricSegment, ProbeMissingChip } from '@/components/views/console/metric-segment'
 import { MetricSourceChips } from '@/components/views/instances/MetricSourceChips'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import type { LogEntry } from '@/lib/console/console-log-types'
 import { instanceStatusGlowClass } from '@/lib/instances/instance-glow'
+import { instanceLifecyclePresentation } from '@/lib/instances/instance-lifecycle-status'
 import { TAB_CARD_TYPE, TAB_GROUP_BREAK, TAB_ICON, TAB_LABEL_KEY } from '@/lib/instances/instance-console-tabs'
 import type { TabKey } from '@/lib/instances/instance-console-tabs'
 import type { InstanceMetricsData } from '@/lib/instances/instance-metrics'
@@ -238,7 +232,11 @@ export function InstanceConsolePageView({
   // 冲回 STOPPED，若以状态为前置条件横幅会随之消失；再次启动时 CP transition 清空 reason，
   // 横幅纯受查询数据驱动消失，不留本地状态。
   // 搭建中的 statusReason 是进行时状态而非失败：不落红色失败横幅，走下方琥珀状态横幅。
-  const startFailReason = provisioning || rebuilding ? undefined : instance.statusReason?.trim()
+  const lifecycle = instanceLifecyclePresentation(instance, { provisioning })
+  const showLifecycleBanner = !provisioning && !rebuilding && lifecycle.transitioning
+  const lifecycleLabel = t(lifecycle.labelKey, { defaultValue: lifecycle.labelFallback })
+  const lifecycleDetail = lifecycle.detailKey ? t(lifecycle.detailKey, { defaultValue: lifecycle.detail }) : lifecycle.detail
+  const startFailReason = provisioning || rebuilding || showLifecycleBanner ? undefined : instance.statusReason?.trim()
   // <md 主操作（可用性增强）：按状态给唯一带文字的主按钮，其余收进「更多」菜单。
   const primaryAction = canStart
     ? { label: t('instances.start'), icon: Play, disabled: provisioning || !canOperate, title: !canOperate ? t('permissions.operateDenied') : provisioning ? t('instances.provisioningBlocked') : undefined, onClick: actions.start }
@@ -265,6 +263,15 @@ export function InstanceConsolePageView({
     // data-page 由 PageShell spread 透传，e2e 的就绪信号依赖它。
     <PageShell variant="tool" data-page="instance-console" className="text-[13px] text-foreground">
       <div className="flex min-h-0 flex-1 flex-col gap-2">
+        {showLifecycleBanner && (
+          <div data-testid="instance-lifecycle-banner" data-lifecycle-kind={lifecycle.kind} role="status" className="flex shrink-0 items-start gap-2 rounded-md border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
+            <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />
+            <div className="min-w-0">
+              <p className="font-semibold">{lifecycleLabel}</p>
+              <p className="mt-0.5 whitespace-pre-wrap break-words">{lifecycleDetail}</p>
+            </div>
+          </div>
+        )}
         {startFailReason && (
           <div
             role="alert"
@@ -605,10 +612,6 @@ function useIsNarrowViewport(): boolean {
   return narrow
 }
 
-/** 「查看全部日志」入口样式（renderLink 注入与原生 `<a>` 兜底共用）。 */
-const LOGS_LINK_CLASS =
-  'shrink-0 text-[11px] text-muted-foreground underline-offset-2 transition-colors hover:text-primary hover:underline'
-
 /** 概览面板的注入契约（数据由容器取数后传入；本面板不取数、不弹 toast）。 */
 export interface InstanceConsoleOverviewPanelProps {
   /** 实例 id（日志预览「查看全部」深链的 `?instanceId=` 参数）。 */
@@ -625,8 +628,13 @@ export interface InstanceConsoleOverviewPanelProps {
   maxPlayersAvailable: boolean
   /** 节点磁盘占用百分比（无节点数据时 undefined，按 0 呈现）。 */
   nodeDiskUsage?: number
-  /** 最近日志（新的在前；概览只渲染前 8 条）。 */
+  /** 最近日志快照；视图按时间倒序且最多显示30条。 */
   logs: LogEntry[]
+  logsLoading?: boolean
+  logsIncomplete?: boolean
+  logsError?: boolean
+  /** 紧凑运行配置区（配额与版本，由容器注入）。 */
+  configuration?: ReactNode
   /** 关注事项（容器 `buildWatchItems` 产出，空数组=一切正常）。 */
   watchItems: string[]
   /** 探针连接态（探针横幅与动态流行共用）。 */
@@ -656,6 +664,10 @@ export function InstanceConsoleOverviewPanel({
   maxPlayersAvailable,
   nodeDiskUsage,
   logs,
+  logsLoading,
+  logsIncomplete,
+  logsError,
+  configuration,
   watchItems,
   probeConnected,
   mcSemantics,
@@ -683,9 +695,8 @@ export function InstanceConsoleOverviewPanel({
     : null
 
   return (
-    // 分栏重排：KPI 一行在上，下方左 62%（图表 + 日志）/ 右 38%（动态与告警）。
-    // 全部 flex 撑满内容区，不再整块纵向堆叠后在底部留白。
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    // KPI 在前，运行配置并排；下方最近日志与趋势、动态告警两栏，窄屏自然堆叠。
+    <div className="flex min-h-0 flex-col gap-3">
       <div className="grid flex-none gap-2 [grid-template-columns:repeat(auto-fit,minmax(122px,1fr))]">
         <KpiCard icon={Gauge} label={t('serverConsole.cpu')} value={`${cpuPct}%`} progress={Math.min(100, cpuPct)} />
         <KpiCard icon={HardDrive} label={t('serverConsole.memory')} value={hasHeapMax ? `${memoryPct}%` : `${formatNumber(metrics?.memoryMb, 0)} MB`} sub={hasHeapMax ? `${formatNumber(metrics?.memoryMb, 0)} / ${formatNumber(metrics?.heapMaxMb, 0)} MB` : 'RSS'} progress={memoryPct} />
@@ -712,10 +723,20 @@ export function InstanceConsoleOverviewPanel({
         </Alert>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row">
-        {/* 左栏 62%：图表在上（占 42% 高）、日志表在下吃满剩余——日志需要横向空间放消息全文。 */}
-        <div className="flex min-h-0 flex-[1.6] flex-col gap-2">
-          <Card className="min-h-0 flex-[0_0_42%] py-0">
+      {configuration}
+      <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <div className="flex min-w-0 flex-col gap-3">
+          <InstanceOverviewLatestLogs
+            logs={logs}
+            isLoading={logsLoading}
+            isIncomplete={logsIncomplete}
+            isError={logsError}
+            renderLink={(args) => {
+              const link = { ...args, to: `/logs?instanceId=${instanceId}` }
+              return renderLink ? renderLink(link) : <a href={link.to} className={link.className}>{link.children}</a>
+            }}
+          />
+          <Card className="min-h-[140px] gap-0 py-0">
             <h2 className="flex-none border-b px-3 py-2 text-sm font-semibold">{mcSemantics ? `${t('serverConsole.tps')} / ${t('serverConsole.mspt')}` : t('serverConsole.nonMcTitle')}</h2>
             {!mcSemantics ? (
               <div className="flex min-h-0 flex-1 items-center justify-center px-3 text-center text-xs text-muted-foreground">
@@ -729,7 +750,7 @@ export function InstanceConsoleOverviewPanel({
                   max: tpsStats.max.toFixed(1),
                   avg: tpsStats.avg.toFixed(1),
                 }) : undefined}
-                className="grid min-h-0 flex-1 grid-cols-24 items-end gap-1 p-3"
+                className="grid h-[100px] grid-cols-24 items-end gap-1 p-3"
               >
                 {tpsBars.map((v, i) => (
                   <span key={i} className="rounded-t-sm bg-primary/75" style={{ height: `${v}%` }} />
@@ -742,48 +763,6 @@ export function InstanceConsoleOverviewPanel({
             )}
           </Card>
 
-          <Card className="min-h-0 flex-1 py-0">
-            <div className="flex flex-none items-center justify-between gap-2 border-b px-3 py-2">
-              <h2 className="text-sm font-semibold">{t('serverConsole.logsPreview')}</h2>
-              {/* 预览只有 8 行：给一条到日志中心的出口（页面接受 ?instanceId=），行与全量接起来。 */}
-              {renderLink
-                ? renderLink({
-                    to: `/logs?instanceId=${instanceId}`,
-                    className: LOGS_LINK_CLASS,
-                    children: `${t('serverConsole.viewAllLogs')} →`,
-                  })
-                : (
-                  <a href={`/logs?instanceId=${instanceId}`} className={LOGS_LINK_CLASS}>
-                    {t('serverConsole.viewAllLogs')} →
-                  </a>
-                )}
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-20">{t('serverConsole.logTime')}</TableHead>
-                    <TableHead className="w-16">{t('serverConsole.logLevel')}</TableHead>
-                    <TableHead>{t('serverConsole.logMessage')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {logs.slice(0, 8).map((log) => (
-                    <TableRow key={log.id}>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{new Date(log.time).toLocaleTimeString()}</TableCell>
-                      <TableCell className="font-mono text-xs uppercase">{log.level}</TableCell>
-                      <TableCell className="max-w-0 truncate">{log.message}</TableCell>
-                    </TableRow>
-                  ))}
-                  {logs.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={3} className="text-center text-muted-foreground">{t('serverConsole.noLogs')}</TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </Card>
         </div>
 
         {/* 右栏 38%：三卡合流——最近事件 + 关注事项 + 崩溃诊断同一条时间线。 */}

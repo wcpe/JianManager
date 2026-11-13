@@ -85,6 +85,43 @@ describe('NodesPage（mock 假后端）', () => {
     expect(screen.getAllByText('10.0.0.11').length).toBeGreaterThan(0) // alpha host：列表 + 详情
   })
 
+  it('默认卡片视图：卡片按内容高度展示完整节点信息，离线未知不伪报 0', async () => {
+    loginMockUser()
+    localStorage.removeItem('jm.nodes.layout')
+    renderWithProviders(<NodesPage />, { route: '/nodes' })
+
+    const grid = await screen.findByTestId('nodes-cards-grid')
+    expect(grid).toBeInTheDocument()
+    const onlineCard = await screen.findByTestId('node-card-1')
+    expect(onlineCard).toHaveTextContent('alpha')
+    expect(onlineCard).toHaveTextContent('10.0.0.11')
+    expect(onlineCard).toHaveTextContent('linux')
+    expect(onlineCard).toHaveTextContent('amd64')
+    expect(onlineCard).toHaveTextContent('8 核')
+    expect(onlineCard).toHaveTextContent('32.0 GB')
+    expect(onlineCard).toHaveTextContent('32% · 2.6 / 8 核')
+    expect(onlineCard).toHaveTextContent('55% · 17.6 GB / 32.0 GB')
+    expect(onlineCard).toHaveTextContent('40% · 200.0 GB / 500.0 GB')
+    expect(onlineCard).toHaveTextContent('负载 1.60')
+    expect(onlineCard).toHaveTextContent('隧道')
+    expect(onlineCard).toHaveTextContent('心跳')
+
+    const offlineCard = await screen.findByTestId('node-card-2')
+    expect(offlineCard).toHaveTextContent('--')
+    expect(offlineCard).not.toHaveTextContent('0%')
+  })
+  it('显式卡片 URL 优先于持久化列表，用户主动选择列表可在无参数时恢复', async () => {
+    loginMockUser()
+    localStorage.setItem('jm.nodes.layout', 'list')
+    const first = renderWithProviders(<NodesPage />, { route: '/nodes?layout=card' })
+    expect(await screen.findByTestId('nodes-cards-grid')).toBeInTheDocument()
+    expect(screen.queryByTestId('nodes-table')).not.toBeInTheDocument()
+    first.unmount()
+
+    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    expect(await screen.findByTestId('nodes-table')).toBeInTheDocument()
+  })
+
   it('顶部 KPI：状态卡带图标，资源占用卡用环形仪表', async () => {
     loginMockUser()
     stubInstances()
@@ -393,9 +430,9 @@ describe('NodesPage（mock 假后端）', () => {
    * 原来只有卡片网格：2 个节点时页面约 62% 是空白，且卡片只用到了 NodeInfo 二十多个
    * 字段里的 4 个。列表视图把密度提上来，并把负载/系统/隧道/心跳这些已有信号摆出来。
    */
-  it('默认列表视图：表头齐全且展示此前卡片未用的字段', async () => {
+  it('显式列表 URL：表头齐全并使用与自动分页一致的 60px 行高', async () => {
     loginMockUser()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
 
     const table = await screen.findByTestId('nodes-table')
     expect(table).toBeInTheDocument()
@@ -407,12 +444,13 @@ describe('NodesPage（mock 假后端）', () => {
 
     // 至少渲染出一行节点
     await waitFor(() => expect(screen.getAllByTestId('nodes-table-row').length).toBeGreaterThan(0))
+    expect(screen.getAllByTestId('nodes-table-row')[0]).toHaveStyle({ height: '60px' })
   })
 
   it('点表头排序：写入 URL 并切换方向', async () => {
     const user = userEvent.setup()
     loginMockUser()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
 
     const table = await screen.findByTestId('nodes-table')
     const nameHeader = within(table).getByRole('button', { name: /名称/ })
@@ -427,7 +465,7 @@ describe('NodesPage（mock 假后端）', () => {
 
   it('离线节点不画空资源条（改为明确的无数据占位）', async () => {
     loginMockUser()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
 
     const table = await screen.findByTestId('nodes-table')
     // 离线节点（beta）那一行的负载列应是 `--`，而不是三条 0% 空轨
@@ -443,7 +481,7 @@ describe('NodesPage（mock 假后端）', () => {
   it('视图切换：卡片 / 列表可切换，且选择持久化', async () => {
     const user = userEvent.setup()
     loginMockUser()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
 
     await screen.findByTestId('nodes-table')
 
@@ -467,7 +505,7 @@ describe('NodesPage（mock 假后端）', () => {
   it('拖拽表头换位：列顺序变化、行内同步、且持久化', async () => {
     loginMockUser()
     localStorage.removeItem('jm.nodes.columnOrder')
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
 
     const table = await screen.findByTestId('nodes-table')
     const headers = () => [...table.querySelectorAll('thead th')].map((th) => th.getAttribute('data-column-key'))
@@ -503,7 +541,7 @@ describe('NodesPage（mock 假后端）', () => {
 
   it('钉住的列不可拖拽：状态列没有 draggable', async () => {
     loginMockUser()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
     const table = await screen.findByTestId('nodes-table')
     const statusTh = table.querySelector('thead th[data-column-key="status"]')
     expect(statusTh?.getAttribute('draggable')).toBeNull()
@@ -512,7 +550,7 @@ describe('NodesPage（mock 假后端）', () => {
   /** 节点表与服务器表同款列宽拖拽：钉住只限制「换位」，不限制「调宽」。 */
   it('节点表每列都有列宽手柄，排序表头也不例外', async () => {
     loginMockUser()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
     const table = await screen.findByTestId('nodes-table')
     for (const key of ['status', 'name', 'address', 'load', 'heartbeat']) {
       expect(table.querySelector(`[data-testid="node-col-resize-${key}"]`)).not.toBeNull()
@@ -529,7 +567,7 @@ describe('NodesPage（mock 假后端）', () => {
     loginMockUser()
     stubInstances()
     const user = userEvent.setup()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
 
     const box = await screen.findByTestId('node-select-1')
     await user.click(box)
@@ -544,7 +582,7 @@ describe('NodesPage（mock 假后端）', () => {
   it('分页条存在且能翻页', async () => {
     const user = userEvent.setup()
     loginMockUser()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
 
     const summary = await screen.findByTestId('nodes-loaded-count')
     expect(summary.textContent).toMatch(/第\s*1\s*\//)
@@ -561,7 +599,7 @@ describe('NodesPage（mock 假后端）', () => {
   /** 各节点负载改成折线图（用户要求「统计表格那种折线图」）。 */
   it('节点运行概览渲染 CPU 折线图容器', async () => {
     loginMockUser()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
 
     // 集群平均水位仍在
     expect(await screen.findByTestId('nodes-avg-cpu')).toBeInTheDocument()
@@ -577,7 +615,7 @@ describe('NodesPage（mock 假后端）', () => {
   it('点 KPI「离线」卡即按状态筛选，再点取消', async () => {
     const user = userEvent.setup()
     loginMockUser()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
 
     await screen.findByTestId('nodes-table')
 
@@ -597,7 +635,7 @@ describe('NodesPage（mock 假后端）', () => {
   it('异常优先：写 URL 且离线节点排在最前', async () => {
     const user = userEvent.setup()
     loginMockUser()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
     await screen.findByTestId('nodes-table')
 
     await user.click(screen.getByRole('button', { name: '异常优先' }))

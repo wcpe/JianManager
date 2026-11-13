@@ -45,7 +45,6 @@ export function QuotaPanel({ quota, isLoading, isError, onRetry }: QuotaPanelPro
       icon={<Gauge className="size-3.5" />}
       bodyClassName="p-2.5"
     >
-      <p className="pb-1.5 text-[11px] text-muted-foreground">{t('serverConsole.quotaHint')}</p>
       {isLoading ? (
         <p className="py-1 text-[11px] text-muted-foreground">{t('common.loading')}</p>
       ) : isError ? (
@@ -60,18 +59,23 @@ export function QuotaPanel({ quota, isLoading, isError, onRetry }: QuotaPanelPro
         <p className="py-1 text-[11px] text-muted-foreground">{t('common.noData')}</p>
       ) : (
         <div className="space-y-2 text-xs">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div data-testid="quota-summary" className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-mono">CPU {quota.cpuPercent.toFixed(1)}% / {quota.cpuCores > 0 ? `${quota.cpuCores} ${t('serverConsole.quotaCores')}` : t('serverConsole.quotaUnlimited')}</span>
+            <span className="font-mono">{t('serverConsole.quotaMemory')} {formatMiB(quota.rssBytes)} / {quota.memLimitMb > 0 ? `${quota.memLimitMb} MiB` : t('serverConsole.quotaUnlimited')}</span>
+            <span className="font-mono">{t('serverConsole.quotaDisk')} {formatMiB(quota.diskBytes)} / {quota.diskLimitMb > 0 ? `${quota.diskLimitMb} MiB` : t('serverConsole.quotaUnlimited')}</span>
             <span data-testid="quota-mode" className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
               {t(`serverConsole.quotaMode.${quota.enforceMode}`, { defaultValue: quota.enforceMode })}
             </span>
-            {!quota.supportedThrottle && (
-              <span data-testid="quota-throttle-unsupported" className="text-[11px] text-status-warning">
-                {t('serverConsole.quotaThrottleUnsupported')}
-              </span>
-            )}
-            {quota.sampleNote && <span className="text-[11px] text-muted-foreground">{quota.sampleNote}</span>}
+            {(quota.enforcedCpu || quota.enforcedMem || quota.enforcedDisk) && <span className="text-[11px] font-medium text-status-warning">{t('serverConsole.quotaEnforced')}</span>}
+            {pendingThrottle && <span className="text-[11px] font-medium text-status-warning">{t('serverConsole.quotaPendingSummary', { defaultValue: '待收紧 · 下次启动生效' })}</span>}
           </div>
-          <ul className="space-y-1">
+          <details data-testid="quota-details" className="text-[11px]">
+            <summary role="button" className="w-fit cursor-pointer text-muted-foreground hover:text-foreground">{t('serverConsole.quotaDetails', { defaultValue: '查看配额详情' })}</summary>
+            <div className="mt-2 space-y-2 border-t pt-2">
+              <p className="text-muted-foreground">{t('serverConsole.quotaHint')}</p>
+              {!quota.supportedThrottle && <p data-testid="quota-throttle-unsupported" className="text-status-warning">{t('serverConsole.quotaThrottleUnsupported')}</p>}
+              {quota.sampleNote && <p className="text-muted-foreground">{quota.sampleNote}</p>}
+          <ul className="grid gap-2 sm:grid-cols-3">
             <QuotaRow
               label={t('serverConsole.quotaCpu')}
               usage={`${quota.cpuPercent.toFixed(1)}%`}
@@ -111,6 +115,8 @@ export function QuotaPanel({ quota, isLoading, isError, onRetry }: QuotaPanelPro
             </p>
           )}
           <p className="text-[11px] text-muted-foreground">{t('serverConsole.quotaWriteHint')}</p>
+            </div>
+          </details>
         </div>
       )}
     </Panel>

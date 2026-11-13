@@ -241,7 +241,8 @@ describe('实例控制台 快照 / 配额 / 二进制版本（467/468）', () =>
 
     const panel = await screen.findByTestId('quota-panel')
     // 实例 3 种子 memLimitMb=2048 → 内存行显示实例级来源（限额与「/」同处一个元素）。
-    expect(await within(panel).findByText(/\/ 2048 MiB/)).toBeInTheDocument()
+    const details = await within(panel).findByTestId('quota-details')
+    expect(await within(details).findByText(/\/ 2048 MiB/)).toBeInTheDocument()
     expect(within(panel).getAllByText('实例级').length).toBeGreaterThan(0)
     expect(within(panel).getByTestId('quota-mode')).toHaveTextContent('超限只告警')
     // 实例 3 种子 processType=docker → 支持内核级限流，不标注降级提示。

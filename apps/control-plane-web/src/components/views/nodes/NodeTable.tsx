@@ -13,6 +13,7 @@ import { nodeStatusLevel } from '@/lib/nodes/node-list'
 import type { NodeInfo } from '@/lib/nodes/node-types'
 import {
   NODE_COLUMN_WIDTH,
+  NODE_TABLE_ROW_HEIGHT,
   NODE_DEFAULT_ORDER,
   NODE_PAGE_SIZES,
   NODE_PINNED_COLUMNS,
@@ -211,7 +212,9 @@ function DraggableNodeHead({
     className: cn(
       headProps.className,
       'select-none',
-      resizable && 'relative',
+      // 共享手柄向右越出 2px；收回表头内，避免末列制造虚假的横滚。
+      resizable && 'relative [&>[role=separator]]:right-0',
+
       draggable && 'cursor-grab active:cursor-grabbing',
       draggingKey === columnKey && 'opacity-40',
       // 插入位提示：左侧一条实色竖线（不用背景色，避免与表头 muted 底混淆）
@@ -322,6 +325,10 @@ export function NodeTable({
   const dragSourceRef = useRef<NodeColumnKey | null>(null)
 
   const orderedKeys = columnOrder.filter((k) => (NODE_DEFAULT_ORDER as readonly string[]).includes(k))
+  const tableMinWidth = orderedKeys.reduce(
+    (sum, key) => sum + (columnWidths?.[key] ?? NODE_COLUMN_WIDTH[key] ?? 0),
+    0,
+  )
 
   /** 列 key → 表头元素（与 colgroup、行单元格共用同一顺序）。 */
   const renderHead = (key: NodeColumnKey) => {
@@ -376,10 +383,10 @@ export function NodeTable({
         显式高度又会被 `overflow:hidden` 的 flex 父级压回下限，两头都不可靠。）
       */
       ref={containerRef}
-      className="min-h-0 flex-1 overflow-auto rounded-md border"
+      className="min-h-0 flex-1 overflow-x-auto overflow-y-auto rounded-md border"
       data-testid="nodes-table"
     >
-      <Table className="table-fixed">
+      <Table className="table-fixed w-full min-w-0 max-w-none" style={{ minWidth: tableMinWidth }}>
         <colgroup>
           {orderedKeys.map((key) => {
             const width = columnWidths?.[key] ?? NODE_COLUMN_WIDTH[key]
@@ -583,6 +590,7 @@ export function NodeTable({
                   data-testid="nodes-table-row"
                   data-node-id={node.id}
                   onClick={() => onOpen(node.id)}
+                  style={{ height: NODE_TABLE_ROW_HEIGHT }}
                   className={cn('cursor-pointer border-b border-border/60', !online && 'opacity-70')}
                 >
                   {orderedKeys.map((key) => (

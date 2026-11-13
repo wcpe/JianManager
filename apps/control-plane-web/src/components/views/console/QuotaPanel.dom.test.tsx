@@ -103,7 +103,22 @@ describe('QuotaPanel（实例配额区受控视图）', () => {
     expect(screen.getByText('无数据')).toBeInTheDocument()
   })
 
-  it('有数据：三行用量 + 限额 + 来源标签，强制状态按维度标注。', () => {
+  it('默认只展示一行摘要，详细配额语义收进可展开区。', async () => {
+    const user = userEvent.setup()
+    renderPanel()
+
+    expect(screen.getByTestId('quota-summary')).toHaveTextContent('限流')
+    expect(screen.getAllByText('已强制')).toHaveLength(2)
+    const details = screen.getByTestId('quota-details')
+    expect(details).not.toHaveAttribute('open')
+    expect(details).toHaveTextContent('强制状态作用域')
+
+    await user.click(screen.getByRole('button', { name: '查看配额详情' }))
+    expect(details).toHaveAttribute('open')
+  })
+
+
+  it('有数据：详细区保留三资源用量、限额、来源与强制状态。', () => {
     renderPanel()
     expect(screen.getByTestId('quota-mode')).toHaveTextContent('限流')
     // CPU：用量百分比 + 组派生来源 + 已强制。

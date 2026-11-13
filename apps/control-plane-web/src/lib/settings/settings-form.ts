@@ -17,6 +17,7 @@ export type SettingCategory =
   | 'runtime'
   | 'policy'
   | 'network'
+  | 'traffic'
   | 'backup'
   | 'email'
   | 'security'
@@ -46,6 +47,8 @@ export function keyCategory(key: string): SettingCategory {
   // （CP 自身日志级别）语义不同，故必须在 `log.` 判定之前分流到独立分类。
   if (key.startsWith('log.acq.')) return 'logAcquisition'
   if (key.startsWith('log.') || key.startsWith('debug.')) return 'logging'
+  // 入口限流（traffic.rate_limit.*）：与业务配额、节点资源无关，单列流量分类。
+  if (key.startsWith('traffic.rate_limit.')) return 'traffic'
   if (key.startsWith('jdk.') || key.startsWith('graceful_stop.') || key.startsWith('direct_probe.')) return 'runtime'
   if (key.startsWith('runtime.mirror.')) return 'runtime'
   if (key.startsWith('proxy.') || key === 'github.token') return 'network'
@@ -123,6 +126,18 @@ export function durationToMillis(value: string): number | undefined {
  */
 export function validateSettingDraft(key: string, value: string): string | undefined {
   const v = value.trim()
+  // 入口限流：八个键都是非负整数（速率≤1e6、容量≤1e7，与后端同界）。
+  // 成对约束（速率与容量须同时为正或同时为 0、全局组不得 0）由保存时后端整体复核，
+  // 前端单键只能先拦「格式不对」，不在这一层猜另一项的值。
+  if (key.startsWith('traffic.rate_limit.')) {
+    if (!/^\d+$/.test(v)) return 'settings.invalidNonNegativeInt'
+    const n = Number(v)
+    const isRate = key.endsWith('.rate_per_second')
+    if (n > (isRate ? 1_000_000 : 10_000_000)) return 'settings.invalidNonNegativeInt'
+    const isGlobal = key.startsWith('traffic.rate_limit.global.')
+    if (isGlobal && n === 0) return 'settings.invalidTrafficGlobalZero'
+    return undefined
+  }
   switch (key) {
     case 'graceful_stop.timeout': {
       // Go duration，支持多段组合（如 1h30m）；须为正（全零如 0s 拒绝）。

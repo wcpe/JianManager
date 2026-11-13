@@ -128,6 +128,36 @@ describe('InstanceWorktableCard 点击卡片打开实例（FIX-9）', () => {
   })
 })
 
+describe('InstanceWorktableCard 生命周期状态', () => {
+  it('HTTP 启动提交中立刻显示进行中说明并禁用重复启动', () => {
+    renderCard({ starting: true })
+    expect(screen.getByText('启动请求提交中')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '启动' })).toBeDisabled()
+    expect(screen.getByTestId('instance-lifecycle-status')).toHaveAttribute('aria-busy', 'true')
+  })
+
+  it('STARTING 没有原因仍提供等待节点确认说明', () => {
+    renderCard({ inst: { ...stoppedInst, status: 'STARTING' } })
+    expect(screen.getByText('正在启动，等待节点状态确认')).toBeInTheDocument()
+    expect(screen.queryByText(/\d+%|READY/)).not.toBeInTheDocument()
+  })
+
+  it('待确认原因使用琥珀且完整原文可通过 title 读取', () => {
+    const statusReason = '操作结果待确认，状态查询/心跳收敛: RPC canceled，等待后续观测'
+    renderCard({ inst: { ...stoppedInst, status: 'STARTING', statusReason } })
+    expect(screen.getByText('操作结果待确认')).toBeInTheDocument()
+    expect(screen.getByTestId('instance-lifecycle-status')).toHaveAttribute('title', expect.stringContaining(statusReason))
+    expect(screen.getByTestId('instance-lifecycle-detail')).toHaveClass('text-status-warning')
+  })
+
+  it('明确启动失败保留红色完整原因', () => {
+    const statusReason = '启动失败：上一代进程未在预算内退出'
+    renderCard({ inst: { ...stoppedInst, status: 'CRASHED', statusReason } })
+    expect(screen.getByTestId('instance-lifecycle-detail')).toHaveClass('text-status-danger')
+    expect(screen.getByTestId('instance-lifecycle-status')).toHaveAttribute('title', expect.stringContaining(statusReason))
+  })
+})
+
 /** 运行态可用性渲染（447）：缺测显「不可用」，有值显真实值，不再以 0 冒充「0 人在线」。 */
 describe('InstanceWorktableCard 卡内在线数/TPS 可用性', () => {
   const runningInst = { ...stoppedInst, status: 'RUNNING' }
@@ -157,5 +187,99 @@ describe('InstanceWorktableCard 卡内在线数/TPS 可用性', () => {
     renderCard()
     expect(screen.queryByText('不可用')).not.toBeInTheDocument()
     expect(screen.getAllByText('--').length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('InstanceWorktableCard 指标与连接信息', () => {
+  const runningInst = { ...stoppedInst, status: 'RUNNING', serverPort: 25565 }
+
+  it('CPU 未取到时不冒充 0%，真实零值仍显示', () => {
+    const { rerender } = renderCard({ inst: runningInst })
+    expect(screen.queryByText('0%')).not.toBeInTheDocument()
+    rerender(
+      <I18nextProvider i18n={testI18n}>
+        <InstanceWorktableCard
+          inst={runningInst}
+          nodeName="node-a"
+          roleBadge={null}
+          menu={null}
+          onStart={vi.fn()}
+          onStop={vi.fn()}
+          onRestart={vi.fn()}
+          metrics={{ cpuPercent: 0, memoryMb: 0 }}
+        />
+      </I18nextProvider>,
+    )
+    expect(screen.getByText('0%')).toBeInTheDocument()
+    expect(screen.getByText('0 MiB')).toBeInTheDocument()
+  })
+
+  it('显示真实资源读数、内存上限、在线人数/上限与 TPS', () => {
+    renderCard({
+      inst: runningInst,
+      nodeHost: '192.0.2.102',
+      metrics: {
+        cpuPercent: 12.5, memoryMb: 1024, heapMaxMb: 4096,
+        onlinePlayers: 7, maxPlayers: 20, tps: 19.8,
+        playersAvailable: true, maxPlayersAvailable: true, probeAvailable: true,
+      },
+    })
+    expect(screen.getByText('13%')).toBeInTheDocument()
+    expect(screen.getByText('1.0 GiB / 4.0 GiB')).toBeInTheDocument()
+    expect(screen.getByText('在线人数')).toBeInTheDocument()
+    expect(screen.getByText('7 / 20')).toBeInTheDocument()
+    expect(screen.getByText('TPS')).toBeInTheDocument()
+    expect(screen.getByText('19.8')).toBeInTheDocument()
+    expect(screen.getByText('192.0.2.102:25565')).toBeInTheDocument()
+    expect(screen.getByText('node-a')).toBeInTheDocument()
+  })
+
+  it('不可用或非有限指标不显示伪造数字，并说明接入来源', () => {
+    renderCard({
+      inst: runningInst,
+      metrics: {
+        cpuPercent: Number.NaN, memoryMb: Number.POSITIVE_INFINITY,
+        onlinePlayers: Number.NaN, tps: Number.POSITIVE_INFINITY,
+        playersAvailable: true, probeAvailable: true,
+      },
+    })
+    expect(screen.queryByText(/NaN|Infinity|0%/)).not.toBeInTheDocument()
+    expect(screen.getByTitle('在线人数需要 ServerProbe、SLP 或 Query 上报')).toBeInTheDocument()
+    expect(screen.getByTitle('TPS 需要 ServerProbe 上报')).toBeInTheDocument()
+  })
+
+  it('未知玩家上限不拼成 /0，真实 0 人在线与 0 TPS 可见', () => {
+    renderCard({
+      inst: runningInst,
+      metrics: { onlinePlayers: 0, maxPlayers: 0, tps: 0, playersAvailable: true, maxPlayersAvailable: false, probeAvailable: true },
+    })
+    expect(screen.getByText('0')).toBeInTheDocument()
+    expect(screen.getByText('0.0')).toBeInTheDocument()
+    expect(screen.queryByText('0 / 0')).not.toBeInTheDocument()
+  })
+
+  it('IPv6 使用方括号，缺失 IP 或端口保留明确占位', () => {
+    const { unmount } = renderCard({ inst: runningInst, nodeHost: '2001:db8::1' })
+    expect(screen.getByText('[2001:db8::1]:25565')).toBeInTheDocument()
+    unmount()
+    renderCard({ nodeHost: '192.0.2.102' })
+    expect(screen.getByText('192.0.2.102 · 端口未分配')).toBeInTheDocument()
+  })
+
+  it('没有 IP 时不把节点名称当作地址，也不拼 undefined:port', () => {
+    renderCard({ inst: runningInst })
+    expect(screen.getByText('IP 未知 · 端口 25565')).toBeInTheDocument()
+    expect(screen.queryByText(/undefined:|node-a:25565/)).not.toBeInTheDocument()
+  })
+
+  it('正常卡片不保留空白故障提示槽，角色只展示一处', () => {
+    renderCard({ roleBadge: <span>重复角色徽标</span> })
+    expect(screen.queryByTestId('instance-card-extra')).not.toBeInTheDocument()
+    expect(screen.queryByText('重复角色徽标')).not.toBeInTheDocument()
+  })
+
+  it('代理卡片不显示 TPS', () => {
+    renderCard({ inst: runningInst, isProxy: true, metrics: { tps: 20, probeAvailable: true } })
+    expect(screen.queryByText('TPS')).not.toBeInTheDocument()
   })
 })

@@ -1,15 +1,15 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Cpu, MemoryStick, Users, Zap, Play, Square, RotateCw } from 'lucide-react'
+import { Cpu, MemoryStick, Users, Zap, Play, Square, RotateCw, Server, Globe } from 'lucide-react'
 
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { Button } from '@jianmanager/ui/components/button'
 import { Card } from '@jianmanager/ui/components/card'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { cn } from '@jianmanager/ui'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { InstanceIdentityBadges } from '@/components/views/instances/InstanceIdentityBadges'
-import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
+import { InstanceLifecycleStatus } from '@/lib/instances/InstanceLifecycleStatus'
+import { instanceLifecyclePresentation } from '@/lib/instances/instance-lifecycle-status'
 
 
 
@@ -46,6 +46,9 @@ export interface InstanceWorktableMetricsView {
   /** JVM 堆上限（探针）；> 0 时优先作为内存条分母。 */
   heapMaxMb?: number
   onlinePlayers?: number
+  maxPlayers?: number
+  /** 玩家容量与在线人数分别可用，不能用缺失容量拼出 /0。 */
+  maxPlayersAvailable?: boolean
   tps?: number
   /** 在线数是否可得（探针/SLP/Query 任一有值）。 */
   playersAvailable?: boolean
@@ -59,27 +62,11 @@ export interface InstanceWorktableDriftView {
   cmdline?: string
 }
 
-/** 
- * 卡片内「附加提示区」（失败原因 / 搭建中 / 运行态漂移）的最大高度（px）= 35。
- *
- * 两段提示各按一行（16.5）加段间距（2）计满；再多（如失败原因本身折了两行）就从这里裁掉——
- * 卡面只需把事实说清到两行以内，完整文本仍在各段的 `title` 里。
- *
- * 【为什么必须硬封】卡片实高 = 固定骨架 199.5 + 头部超出基础高（40）的部分，而不封顶时该区
- * 可到 4 行（66），卡片实高 267.5 会顶穿列表行盒（`CARD_ROW_HEIGHT` − 行间距 = 244）
- * 与下一行重叠。封到 35 后卡片实高上限 = 234.5，行盒内留有 9.5px 余量——「声明值 = 真实行盒」
- * 由构造保证，而不是靠「现有数据恰好不长」。
- */
+/** 可选故障提示的高度上限，完整文本仍可通过 title 读取。 */
 export const CARD_EXTRA_MAX_HEIGHT = 35
 
-/** 
- * 身份徽章槽位高度（px）：两行徽章。
- *
- * 为什么要固定：徽章数量随实例而变（无标签 / 只有类型 / 类型+角色+环境+两个标签），
- * 自然占位会让下面的节点、资源条、底栏逐卡错位，一排卡片看起来是斜的。
- * 固定成槽位后各分区对齐，视觉上等价于表格的「每列对齐」。
- */
-export const CARD_IDENTITY_HEIGHT = 40
+/** 身份徽章保持紧凑单行；没有徽章时不留空白占位。 */
+export const CARD_IDENTITY_HEIGHT = 24
 
 /** 
  * 实例工作台卡（§4.5 运行实体范式）。
@@ -98,6 +85,8 @@ export interface InstanceWorktableCardProps {
   inst: InstanceWorktableCardInstanceView
   /** 所属节点名（由列表统一解析后传入，避免卡内各自查节点表）。 */
   nodeName: string
+  /** 节点的主机地址，用于展示游戏连接地址。 */
+  nodeHost?: string
   /** 是否为代理实例（外壳按能力画像判定）。 */
   isProxy?: boolean
   /** 是否搭建中（provision 未终态）：启动按钮硬性禁用并给提示。 */
@@ -153,6 +142,7 @@ export interface InstanceWorktableCardProps {
 export function InstanceWorktableCard({
   inst,
   nodeName,
+  nodeHost,
   isProxy = false,
   provisioning = false,
   drift,
@@ -160,7 +150,6 @@ export function InstanceWorktableCard({
   starting = false,
   stopping = false,
   restarting = false,
-  roleBadge,
   menu,
   onOpen,
   onContextMenu,
@@ -179,25 +168,38 @@ export function InstanceWorktableCard({
 
   const running = inst.status === 'RUNNING'
   const stopped = inst.status === 'STOPPED' || inst.status === 'CRASHED'
-  const level: StatusLevel = instanceStatusLevel(inst.status)
+  const pendingAction = starting ? 'start' : stopping ? 'stop' : restarting ? 'restart' : undefined
+  const lifecycle = instanceLifecyclePresentation(inst, { provisioning, pendingAction })
+  const busy = lifecycle.transitioning
 
-  const statusLabel = t(`instances.${inst.status.toLowerCase()}`, inst.status)
-  const cpuPct = running ? (metrics?.cpuPercent ?? 0) : 0
-  // 内存条分母：优先 JVM 堆上限（探针），其次容器内存上限（docker，经 heapMaxMb 承载），
-  // 再次实例配置限额；均无则为 0（仅以绝对值标签呈现，不画占比）。
-  const memMax = running && metrics ? (metrics.heapMaxMb && metrics.heapMaxMb > 0 ? metrics.heapMaxMb : (inst.memLimitMb ?? 0)) : 0
-  const memMb = running && metrics ? (metrics.memoryMb ?? 0) : 0
-  const memPct = memMax > 0 ? Math.min(100, (memMb / memMax) * 100) : 0
-  // 标签用绝对值（docker/无探针实例 heapMaxMb 为 0 时，百分比恒 0 看不出占用，故统一显绝对内存）。
-  const cpuLabel = running ? `${cpuPct.toFixed(cpuPct > 0 && cpuPct < 10 ? 1 : 0)}%` : '--'
-  const memLabel = running && memMb > 0 ? fmtMem(memMb) : '--'
-  // 447 可用性位：运行态缺测显示「不可用」，不再把 0 当「0 人在线」/0.0 TPS。
-  // 停机态保留「--」（是明确的「不适用」，非缺测）。在线数任一来源（探针/SLP/Query）有值即显值。
+  // 缺测不能退回 0；合法的零 CPU / 零内存仍是可展示的测量值。
+  const cpuPct = running ? nonnegative(metrics?.cpuPercent) : null
+  const memMb = running ? nonnegative(metrics?.memoryMb) : null
+  const heapMax = nonnegative(metrics?.heapMaxMb)
+  const configuredMax = nonnegative(inst.memLimitMb)
+  const memMax = heapMax != null && heapMax > 0 ? heapMax : configuredMax != null && configuredMax > 0 ? configuredMax : null
+  const memPct = memMb != null && memMax != null ? Math.min(100, (memMb / memMax) * 100) : null
+  const cpuLabel = cpuPct == null ? '--' : `${cpuPct.toFixed(cpuPct > 0 && cpuPct < 10 ? 1 : 0)}%`
+  const memLabel = memMb == null ? '--' : memMax == null ? fmtMem(memMb) : `${fmtMem(memMb)} / ${fmtMem(memMax)}`
   const unavailable = t('metrics.unavailable')
-  const playersAvailable = running && (metrics?.playersAvailable ?? false)
-  const playersLabel = !running ? '--' : playersAvailable ? String(metrics?.onlinePlayers ?? 0) : unavailable
-  const tpsAvailable = running && (metrics?.probeAvailable ?? false)
-  const tpsLabel = !running ? '--' : tpsAvailable ? (metrics?.tps ?? 0).toFixed(1) : unavailable
+  const onlinePlayers = nonnegative(metrics?.onlinePlayers)
+  const maxPlayers = nonnegative(metrics?.maxPlayers)
+  const tps = nonnegative(metrics?.tps)
+  const playersAvailable = running && metrics?.playersAvailable === true && onlinePlayers != null
+  const maxPlayersAvailable = metrics?.maxPlayersAvailable === true && maxPlayers != null
+  const playersLabel = !running ? '--' : !playersAvailable ? unavailable
+    : maxPlayersAvailable ? `${Math.round(onlinePlayers)} / ${Math.round(maxPlayers)}` : String(Math.round(onlinePlayers))
+  const tpsAvailable = running && metrics?.probeAvailable === true && tps != null
+  const tpsLabel = !running ? '--' : tpsAvailable ? tps.toFixed(1) : unavailable
+
+  // IPv6 地址需要方括号；连接端口只取游戏端口，不取节点的 WS / gRPC 端口。
+  const host = nodeHost?.trim()
+  const addressHost = host && host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+  const validPort = Number.isInteger(inst.serverPort) && inst.serverPort > 0 && inst.serverPort <= 65535
+  const endpoint = addressHost
+    ? validPort ? `${addressHost}:${inst.serverPort}` : `${addressHost} · ${t('instances.card.portUnassigned', '端口未分配')}`
+    : validPort ? `${t('instances.card.addressUnknown', 'IP 未知')} · ${t('instances.card.port', '端口')} ${inst.serverPort}`
+      : t('instances.card.endpointUnassigned', 'IP / 端口未分配')
 
   // 大区 · 小区：两者都有时用「·」分隔；只有一个时直接显示那个；都没有则不渲染整行。
   const region = inst.region?.trim() ?? ''
@@ -218,14 +220,8 @@ export function InstanceWorktableCard({
       data-testid="instance-worktable-card"
       data-selected={selected ? 'true' : undefined}
       className={cn(
-        /* 
-          【必须固定高度】虚拟化按 `CARD_ROW_HEIGHT` 常量给每行定位，而卡片内容是自适应的：
-          实测同一页里卡片实高在 169~277px 之间浮动（标签多、名称换行、状态原因多行的更高）。
-          卡片若被内容撑高，就会盖住下一行——用户看到的「卡片重叠」就是这个。
-          `h-full` 让卡片填满包裹层给定的行盒高度，`overflow-hidden` 裁掉超出部分：
-          行盒由常量决定、卡片不再反向影响布局，结构上不可能重叠。
-        */
-        'group relative flex h-full shrink-0 cursor-pointer flex-col gap-0 overflow-hidden p-3',
+        // 虚拟列表提供固定行盒，内部提示和徽章有界，底部操作区始终保留。
+        'group relative flex h-full min-h-0 min-w-0 shrink-0 cursor-pointer flex-col gap-0 overflow-hidden p-3',
         // 选中态用描边：卡片没有行高可挂，靠边框表达最省空间也最不易误读。
         selected && 'ring-2 ring-primary/60 ring-offset-1',
       )}
@@ -267,7 +263,8 @@ export function InstanceWorktableCard({
         否则点勾选会同时触发卡片的 onClick，变成「勾上又立刻按修饰键逻辑取消」。
       */}
       {onToggleSelect && (
-        <div className="absolute right-2 top-2 z-10" onClick={(e) => e.stopPropagation()}>
+        // 为 Checkbox 向外扩展的触区留 12px，避免制造几像素的横向溢出。
+        <div className="absolute right-3 top-2 z-10" onClick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={selected}
             onCheckedChange={() => onToggleSelect({ shiftKey: false, ctrlKey: false, metaKey: false })}
@@ -288,7 +285,7 @@ export function InstanceWorktableCard({
       )}
       {/* 头部：名称 + 状态徽章 + 菜单。去掉 40px 图标块——
           卡片每行放 4 张后，图标块占掉近 1/6 宽度却不携带信息（状态已由徽章表达）。 */}
-      <div className="flex items-center gap-2">
+      <div className={cn('flex min-w-0 shrink-0 items-start gap-2', onToggleSelect && 'pr-5')}>
         <div className="min-w-0 flex-1">
           {/* 卡片标题即进详情入口：外观是纯标题文字，取 invisible + auto。
               onClick 内部 stopPropagation 阻止冒泡到卡片自身的选中逻辑，原样保留。 */}
@@ -305,70 +302,32 @@ export function InstanceWorktableCard({
           >
             {inst.name}
           </Button>
-          <div className="mt-0.5 flex items-center gap-1.5">
-            <StatusBadge
-              level={level}
-              label={statusLabel}
-              pulse={inst.status === 'STARTING' || inst.status === 'STOPPING'}
-              className="bg-transparent px-0 py-0"
-            />
+          <div className="mt-0.5 min-w-0">
+            <InstanceLifecycleStatus inst={inst} provisioning={provisioning} pendingAction={pendingAction} compact={Boolean(drift)} />
           </div>
-          {/* 附加提示区（失败原因 / 搭建中 / 运行态漂移）——整区高度硬封在 CARD_EXTRA_MAX_HEIGHT
-              以内：两段 `line-clamp-2` 同时出现时，不封顶的卡片实高会顶穿行盒、与下一行重叠
-              （行高口径见 InstanceCardViews 的 CARD_ROW_HEIGHT 说明）。
-              失败原因非空即显、不看 status：Worker 心跳会把 CRASHED 冲回 STOPPED，
-              以 CRASHED 为前置条件时原因随之不可见；搭建中的 reason 是进行时状态而非失败，
-              故只走琥珀行、不落红。运行态漂移只说清事实，接管入口在「⋯」菜单。 */}
-          {/*
-            【固定高度槽位，不再条件渲染】
-            原来整块用 `(statusReason || drift) && ...` 包着：无提示时这块**完全不占高**，
-            有提示时占 1~2 行。结果提示区下面的「身份徽章」上下浮动——同一排卡片里，
-            有错误原因的那张（如 creative-1）徽章被顶到下一行，与其它卡对不齐。
-            表格模式天然对齐是因为每列独立；卡片只能靠**固定槽位**换来同款整齐。
-
-            现在无论有没有提示都占 `CARD_EXTRA_MAX_HEIGHT`：
-            有内容时最多两行、超出裁剪；无内容时留空。徽章因此恒在同一水平线。
-          */}
-          <div
-            className="mt-0.5 shrink-0 overflow-hidden"
-            style={{ height: CARD_EXTRA_MAX_HEIGHT }}
-            data-testid="instance-card-extra"
-          >
-            {inst.statusReason && (
-              <p
-                className={cn('line-clamp-2 text-meta', provisioning ? 'text-status-warning' : 'text-status-danger')}
-                title={inst.statusReason}
-              >
-                {inst.statusReason}
-              </p>
-            )}
-            {drift && (
-              <p className="mt-0.5 line-clamp-2 text-meta text-status-warning" title={drift.cmdline}>
+          {drift && (
+            <div
+              className="mt-1 shrink-0 overflow-hidden"
+              style={{ maxHeight: CARD_EXTRA_MAX_HEIGHT }}
+              data-testid="instance-card-extra"
+            >
+              <p className="truncate text-meta text-status-warning" title={drift.cmdline}>
                 {t('serverConsole.runtimeDriftDesc', { pid: drift.pid })}
               </p>
-            )}
-          </div>
+            </div>
+          )}
         </div>
-        {roleBadge}
+        {/* 角色只在下面的身份徽章行展示，避免头部和正文重复。 */}
         {/* 次要操作菜单（⋯）不冒泡到卡片，避免点菜单误开工作区（FIX-9）。 */}
         <span onClick={(e) => e.stopPropagation()}>{menu}</span>
       </div>
 
-      {/*
-        【身份徽章与表格对齐】原来这里显示 `inst.type` 的原始值（minecraft_java 之类），
-        而表格的身份列显示「本地化类型徽章 + 角色 + 环境 + 标签」——同一台实例两处对不上。
-        现在共用 `InstanceIdentityBadges`，文案、配色、标签截断规则完全一致。
-      */}
-      {/*
-        身份徽章同样固定槽位：徽章数量因实例而异（有的无标签、有的带环境+标签），
-        若让它们自然占位，下面的「节点:端口 / 资源条 / 底栏」会随之上下错位。
-        固定两行高度（`CARD_IDENTITY_HEIGHT`）后，一排卡片的所有分区都落在同一水平线，
-        达到与表格「每列对齐」相同的整齐度。
-      */}
+      {/* 徽章按内容占位，只保留有界高度，不再用两行空槽挤压实时指标。 */}
       <div
-        className="mt-2 shrink-0 overflow-hidden"
-        style={{ height: CARD_IDENTITY_HEIGHT }}
+        className="mt-2 min-h-0 shrink-0 overflow-hidden"
+        style={{ maxHeight: CARD_IDENTITY_HEIGHT }}
         data-testid="instance-card-identity"
+        title={[env, ...freeTags].filter(Boolean).join(' · ')}
       >
         <InstanceIdentityBadges
           type={inst.type}
@@ -378,35 +337,56 @@ export function InstanceWorktableCard({
           showType={showType}
           showRole={showRole}
           showTags={showTags}
-          layout="wrap"
+          layout="row"
+          className="overflow-hidden"
         />
       </div>
-      {/* 节点:端口单独一行（表格里它是独立一列，卡片没有列，靠这行承载） */}
-      <div className="mt-1 truncate text-xs text-muted-foreground" title={`${nodeName}${inst.serverPort > 0 ? `:${inst.serverPort}` : ''}`}>
-        {nodeName}
-        {inst.serverPort > 0 && <span className="tabular-nums">:{inst.serverPort}</span>}
+      {/* 节点归属与实际连接地址分别展示，避免把节点名误读为 IP。 */}
+      <div className="mt-2 min-w-0 shrink-0 space-y-1 text-xs text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-1.5" title={nodeName}>
+          <Server className="size-3 shrink-0" aria-hidden />
+          <span className="truncate">{nodeName}</span>
+        </div>
+        <div className="flex min-w-0 items-center gap-1.5" title={endpoint} data-testid="instance-card-endpoint">
+          <Globe className="size-3 shrink-0" aria-hidden />
+          <span className="truncate font-mono text-[11px] tabular-nums">{endpoint}</span>
+        </div>
       </div>
 
-      {/* 内嵌资源条：CPU / 内存（仅运行态有值，否则空轨） */}
-      <div className="mt-2 shrink-0 space-y-1">
-        <ResourceLine icon={<Cpu className="size-3" />} label={t('nodes.cpu')} pct={cpuPct} active={running} valueLabel={cpuLabel} />
-        <ResourceLine icon={<MemoryStick className="size-3" />} label={t('nodes.memory')} pct={memPct} active={running} valueLabel={memLabel} />
+      <div className="mt-2 shrink-0 space-y-1.5">
+        <ResourceLine icon={<Cpu className="size-3" />} label={t('nodes.cpu')} pct={cpuPct} valueLabel={cpuLabel} />
+        <ResourceLine
+          icon={<MemoryStick className="size-3" />}
+          label={t('nodes.memory')}
+          pct={memPct}
+          valueLabel={memLabel}
+          hint={memMax == null ? t('instances.card.memoryNoLimit', '未设置内存上限，显示实际已用内存') : undefined}
+        />
       </div>
 
-      {/* 玩家 / TPS + 启停按钮 */}
-      <div className="mt-2 flex items-center gap-2 border-t pt-2">
-        <span className="inline-flex items-center gap-1 text-sm font-semibold text-primary">
-          <Users className="size-3.5" />
-          <span className={cn('tabular-nums', running && !playersAvailable && 'text-xs font-normal text-muted-foreground')}>
+      <div className="mt-auto flex min-w-0 shrink-0 items-end gap-2 border-t pt-2">
+        <span
+          className="flex min-w-0 flex-1 flex-col gap-0.5"
+          title={running && !playersAvailable ? t('instances.card.playersUnavailable', '在线人数需要 ServerProbe、SLP 或 Query 上报') : undefined}
+        >
+          <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+            <Users className="size-3 shrink-0" aria-hidden />
+            {t('instances.card.players', '在线人数')}
+          </span>
+          <span className={cn('truncate text-xs font-semibold tabular-nums', running && !playersAvailable ? 'font-normal text-muted-foreground' : 'text-primary')}>
             {playersLabel}
           </span>
         </span>
         {!isProxy && (
-          <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
-            <Zap className="size-3.5" />
-            <span className={cn('tabular-nums', running && !tpsAvailable && 'text-xs')}>
-              {tpsLabel}
+          <span
+            className="flex min-w-0 flex-1 flex-col gap-0.5"
+            title={running && !tpsAvailable ? t('instances.card.tpsUnavailable', 'TPS 需要 ServerProbe 上报') : undefined}
+          >
+            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+              <Zap className="size-3 shrink-0" aria-hidden />
+              TPS
             </span>
+            <span className="truncate text-xs tabular-nums text-muted-foreground">{tpsLabel}</span>
           </span>
         )}
         <div className="ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -416,7 +396,7 @@ export function InstanceWorktableCard({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                disabled={provisioning || starting}
+                disabled={provisioning || busy}
                 onClick={(e) => {
                   // 阻止冒泡：卡片根 onClick 是「打开实例控制台」，动作按钮不该顺带跳页。
                   e.stopPropagation()
@@ -435,7 +415,7 @@ export function InstanceWorktableCard({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                disabled={restarting}
+                disabled={busy}
                 onClick={(e) => {
                   e.stopPropagation()
                   onRestart()
@@ -449,7 +429,7 @@ export function InstanceWorktableCard({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                disabled={stopping}
+                disabled={busy}
                 onClick={(e) => {
                   e.stopPropagation()
                   onStop()
@@ -468,37 +448,37 @@ export function InstanceWorktableCard({
   )
 }
 
-/** 卡内单条资源行：图标 + 标签 + MiniBar（停机时空轨 + 「--」）。
- * valueLabel 覆盖右侧数值文案（如内存显绝对值、CPU 小数）；缺省回退百分比。 */
+/** 资源读数先呈现数值；没有分母或未取到数据时不画误导性的 0% 水位。 */
 function ResourceLine({
   icon,
   label,
   pct,
-  active,
   valueLabel,
+  hint,
 }: {
   icon: ReactNode
   label: string
-  pct: number
-  active: boolean
-  valueLabel?: string
+  pct: number | null
+  valueLabel: string
+  hint?: string
 }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="flex w-12 shrink-0 items-center gap-1 text-micro text-muted-foreground">
-        {icon}
-        {label}
-      </span>
-      <MiniBar value={active ? pct : 0} className="flex-1" />
-      <span className="w-12 shrink-0 text-right text-micro tabular-nums text-muted-foreground">
-        {active ? (valueLabel ?? `${pct.toFixed(0)}%`) : '--'}
-      </span>
+    <div className="min-w-0 space-y-1" title={hint}>
+      <div className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="inline-flex shrink-0 items-center gap-1">{icon}{label}</span>
+        <span className="ml-auto min-w-0 truncate text-right tabular-nums">{valueLabel}</span>
+      </div>
+      {pct == null ? <div className="h-1" aria-hidden /> : <MiniBar value={pct} className="h-1 w-full" />}
     </div>
   )
 }
 
-/** 内存 MiB → 人类可读（≥1024 显 GB 一位小数，否则整 MB）。 */
+function nonnegative(value: number | undefined): number | null {
+  return value != null && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+/** 后端内存单位是 MiB，显示时不把二进制容量误标为十进制 MB。 */
 function fmtMem(mb: number): string {
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)}G`
-  return `${Math.round(mb)}M`
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GiB`
+  return `${Math.round(mb)} MiB`
 }
