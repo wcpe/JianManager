@@ -8,6 +8,7 @@ import { type LogQueryParams } from '@/api/logs'
 import {
 	buildFederationResult,
   describeLogAggregate,
+  normalizeFederationCoverage,
   logQueryErrorMessage,
   isLogRequestCanceled,
 	exportFederatedLogs,
@@ -40,6 +41,7 @@ import { LogTimeline } from '@/components/logs/LogTimeline'
 import { TextLogWorkbench } from '@/components/logs/TextLogWorkbench'
 import { AllLogsWorkbench } from '@/components/logs/AllLogsWorkbench'
 import { LogFieldExplorer } from '@/components/logs/LogFieldExplorer'
+import { fieldExplorerStatus } from '@/components/logs/log-field-explorer-utils'
 import { PageHeader, PageHelp, PageShell } from '@jianmanager/ui/components/layout'
 import { resolveSourceLabel } from '@/lib/logs/logs-source-label'
 import { useDebounced } from '@/lib/hooks/use-debounced'
@@ -209,7 +211,7 @@ function escapeLogsQLString(value: string): string {
  * 实例日志使用 VL 的授权 Query View、字段分析和高级过滤；节点/平台使用文件窗口。
  * 实例跟随优先订阅原生 SSE，只有明确不支持时才轮询；原生选区与回看冻结显示。
  * 列表、统计和导出共享查询身份；失败与覆盖不完整均不得呈现为空成功。
- * 工具栏、洞察、状态与页脚保留固定槽位，日志只在结果区域内滚动。
+ * 洞察、筛选与页脚有各自布局；状态区仅在有反馈时呈现，日志只在结果区域内滚动。
  */
 export default function LogsPage() {
   const { t } = useTranslation()
@@ -512,12 +514,29 @@ export default function LogsPage() {
 		aggregateReady && (federationFacets.isSuccess || federationFacets.isError),
 	)
   const fieldDiscovery = describeLogAggregate(federationFields.data)
-  const fieldDiscoveryUnsupported = (federationFields.error as { response?: { status?: number } } | null)?.response?.status === 501
-    || fieldDiscovery.reasons.some((reason) => /unsupported|unimplemented/i.test(reason))
+  const fieldDiscoveryHealth = fieldExplorerStatus(federationFields.data, federationFields.error)
+  const fieldCoverage = normalizeFederationCoverage(federationFields.data?.coverage, 'federated')
+  const fieldUnavailableTargets = fieldCoverage?.targets.filter((target) => !target.included) ?? []
+  const fieldUnavailableTargetNames = fieldUnavailableTargets.map((target) => {
+    const [kind, rawId] = target.targetId.split(':')
+    const id = Number(rawId)
+    if (kind === 'inst') return instances?.find((instance) => instance.id === id)?.name ?? target.targetId
+    if (kind === 'node') return nodes?.find((node) => node.id === id)?.name ?? target.targetId
+    return target.name || target.targetId
+  })
+  const fieldDiscoveryReasons = fieldDiscoveryHealth.reasons
+  const fieldDiscoveryUnsupported = fieldDiscoveryHealth.issues.includes('unsupported')
+  const discoveredFields = federationFields.data?.fields
+  const fieldListValid = Array.isArray(discoveredFields)
+    && discoveredFields.every((field) => typeof field === 'string' && isSafeLogsField(field))
+  const fieldHasKnownSubset = fieldListValid && discoveredFields.length > 0
+  const fieldDiscoveryDenied = fieldDiscoveryReasons.some((reason) => /unauthori[sz]ed|forbidden|permission_revoked|cancelled|view_stale/i.test(reason))
   const fieldDiscoveryStatus = fieldDiscoveryUnsupported ? 'unsupported'
-    : federationFields.isError ? 'failed' : federationFields.isSuccess
-      ? Array.isArray(federationFields.data.fields) && federationFields.data.coverage?.complete === true
-        && !fieldDiscovery.partial && !fieldDiscovery.truncated && !fieldDiscovery.pending ? 'ready' : 'failed'
+    : federationFields.isError || fieldDiscoveryHealth.issues.includes('failed') || fieldDiscoveryDenied ? 'failed' : federationFields.isSuccess
+      ? fieldListValid && fieldCoverage !== null
+        ? fieldCoverage.complete && !fieldDiscovery.partial && !fieldDiscovery.truncated && !fieldDiscovery.pending && fieldUnavailableTargets.length === 0 ? 'ready'
+          : fieldHasKnownSubset ? 'partial' : 'failed'
+        : 'failed'
       : 'loading'
 	const federationStreamFieldNames = useLogsFederationStreamFieldNames(
 		aggregateParams,
@@ -1169,6 +1188,8 @@ export default function LogsPage() {
             fields={availableFields}
             onFilter={appendStructuredFilter}
             fieldsStatus={fieldDiscoveryStatus}
+            fieldsUnavailableTargets={fieldUnavailableTargetNames}
+            fieldsReasons={fieldDiscoveryReasons}
             onRetryFields={() => { void federationFields.refetch() }}
           />
           <DropdownMenu>
@@ -1253,7 +1274,7 @@ export default function LogsPage() {
 
       <div
         data-testid="logs-coverage-slot"
-        className="flex h-11 shrink-0 items-center gap-2 overflow-hidden"
+        className="flex shrink-0 items-start gap-2 empty:hidden"
       >
         {follow ? (
           <>

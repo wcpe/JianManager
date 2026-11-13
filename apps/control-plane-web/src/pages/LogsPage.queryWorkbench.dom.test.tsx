@@ -105,13 +105,76 @@ describe('LogsPage 查询分析工作台', () => {
     await waitFor(() => expect(searches.some((params) => params.get('keyword') === `${JSON.stringify(field)}:*`)).toBe(true))
   })
 
+  it('字段部分覆盖展示已确认字段与缺失目标，常见值保持同View且不开放数字统计', async () => {
+    let searchParams: URLSearchParams | undefined
+    let fieldsParams: URLSearchParams | undefined
+    const valueRequests: URLSearchParams[] = []
+    let numericRequests = 0
+    const partialCoverage = {
+      complete: false, partial_reasons: ['ENGINE_NOT_READY', 'RANGE_UNAVAILABLE'],
+      targets: [
+        { target_id: 'inst:1', state: 'not_ready', reasons: ['RANGE_UNAVAILABLE'] },
+        { target_id: 'inst:2', state: 'success' },
+      ],
+    }
+    server.use(
+      http.get(API('/instances'), () => HttpResponse.json([{ id: 1, name: 'unavailable-instance', nodeId: 1 }, { id: 2, name: 'instance-2', nodeId: 1 }])),
+      http.get(API('/logs/federation'), ({ request }) => {
+        searchParams = new URL(request.url).searchParams
+        return HttpResponse.json({ sourceTag: 'federated', items: [logEvent], view: { view_id: 'partial-fields-view' }, ...summary, coverage: { ...summary.coverage, pending: true }, exhausted: true })
+      }),
+      http.get(API('/logs/federation/fields'), ({ request }) => {
+        fieldsParams = new URL(request.url).searchParams
+        return HttpResponse.json({ fields: ['level', 'stream'], explore_applied: true, coverage: partialCoverage, truncated: false })
+      }),
+      http.get(API('/logs/federation/facets'), ({ request }) => {
+        const params = new URL(request.url).searchParams
+        if (params.get('dimensions') === 'level') {
+          valueRequests.push(params)
+          return HttpResponse.json({ explore_applied: true, dimensions: [{ dimension: 'level', values: [{ value: 'INFO', count: 4 }] }], coverage: partialCoverage, quality: { duplicate_quality: 'exact', stats_quality: 'partial' } })
+        }
+        return HttpResponse.json({ dimensions: [{ dimension: 'level', values: [{ value: 'INFO', count: 10 }] }], ...summary })
+      }),
+      http.get(API('/logs/federation/stats'), ({ request }) => {
+        if (new URL(request.url).searchParams.has('metricField')) numericRequests++
+        return HttpResponse.json({ points: [], ...summary })
+      }),
+    )
+    renderWithProviders(<LogsPage />)
+    await screen.findByText('structured-message')
+    await userEvent.setup().click(screen.getByTestId('log-field-explorer-trigger'))
+    expect(await screen.findByText('字段列表尚不完整，显示已确认的字段。')).toBeInTheDocument()
+    const discoveryStatus = screen.getByTestId('field-discovery-status')
+    expect(discoveryStatus).toHaveAttribute('data-state', 'partial')
+    expect(discoveryStatus).toHaveTextContent('unavailable-instance')
+    expect(discoveryStatus).toHaveTextContent('RANGE_UNAVAILABLE')
+    expect(screen.queryByText('字段列表查询失败。')).not.toBeInTheDocument()
+    await userEvent.setup().selectOptions(screen.getByLabelText('字段', { exact: true }), 'level')
+    expect(await screen.findByTestId('field-value-row')).toHaveTextContent('≈4')
+    expect(screen.getByRole('tab', { name: '数值统计', exact: true })).toBeDisabled()
+    expect(numericRequests).toBe(0)
+    expect(valueRequests).toHaveLength(1)
+    for (const key of ['view', 'source', 'instanceId', 'nodeId', 'from', 'to', 'keyword']) {
+      expect(fieldsParams?.get(key)).toBe(searchParams?.get(key))
+      expect(valueRequests[0].get(key)).toBe(searchParams?.get(key))
+    }
+    expect(fieldsParams?.get('viewId')).toBe('partial-fields-view')
+    expect(valueRequests[0].get('viewId')).toBe('partial-fields-view')
+    expect(fieldsParams?.get('explore')).toBe('true')
+    expect(valueRequests[0].get('explore')).toBe('true')
+    expect(valueRequests[0].get('dimensionLimit')).toBe('20')
+    expect(screen.getByTestId('field-discovery-status')).toHaveAttribute('data-state', 'partial')
+  })
+
   it.each([
-    { name: '旧CP缺少ack', status: 200, body: { fields: [], ...summary }, message: '当前节点不支持字段枚举。' },
+    { name: '旧CP缺少ack', status: 200, body: { fields: ['level'], ...summary }, message: '当前节点不支持字段枚举。' },
     { name: 'HTTP501', status: 501, body: { error: 'LOG_UNSUPPORTED' }, message: '当前节点不支持字段枚举。' },
-    { name: 'Worker不支持', status: 200, body: { explore_applied: true, fields: [], coverage: { complete: false, partial_reasons: ['UNSUPPORTED'] } }, message: '当前节点不支持字段枚举。' },
+    { name: 'Worker不支持', status: 200, body: { explore_applied: true, fields: ['level'], coverage: { complete: false, partial_reasons: ['UNSUPPORTED'] } }, message: '当前节点不支持字段枚举。' },
+    { name: '权限拒绝', status: 200, body: { explore_applied: true, fields: ['level'], coverage: { complete: false, partial_reasons: ['UNAUTHORIZED_TARGET'] } }, message: '字段列表查询失败。' },
+    { name: '错误信封夹带字段', status: 200, body: { explore_applied: true, fields: ['level'], error: 'FORBIDDEN', ...summary }, message: '字段列表查询失败。' },
     { name: '上游失败', status: 200, body: { explore_applied: true, fields: [], coverage: { complete: false, partial_reasons: ['RANGE_UNAVAILABLE'] } }, message: '字段列表查询失败。' },
     { name: '预算截断', status: 200, body: { explore_applied: true, fields: [], coverage: { complete: false }, truncated: true }, message: '字段列表查询失败。' },
-  ])('$name不把空fields当成功，允许重试恢复', async ({ status, body, message }) => {
+  ])('$name不会冒充可用字段列表，允许重试恢复', async ({ status, body, message }) => {
     let recovered = false
     server.use(http.get(API('/logs/federation/fields'), () => recovered
       ? HttpResponse.json({ explore_applied: true, fields: [], ...summary })

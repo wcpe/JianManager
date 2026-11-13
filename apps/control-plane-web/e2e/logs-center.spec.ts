@@ -259,3 +259,16 @@ test('六项修复：英文深色与窄视口仍可操作两个既有设计系�
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(migration).not.toBeVisible()
 })
+
+test('实例日志无反馈时不预留空白状态区域', async ({ page }) => {
+  await prepareBrowserLogs(page)
+  const feedback = page.getByTestId('logs-coverage-slot')
+  await expect(feedback).toHaveText('')
+  await expect(feedback).toBeHidden()
+  const gap = await page.evaluate(() => {
+    const toolbar = document.querySelector('[data-testid="logs-toolbar"]')!.getBoundingClientRect()
+    const viewport = document.querySelector('[data-log-viewport]')!.getBoundingClientRect()
+    return viewport.top - toolbar.bottom
+  })
+  expect(gap, '没有提示时日志面板应紧接筛选栏').toBeLessThanOrEqual(20)
+})

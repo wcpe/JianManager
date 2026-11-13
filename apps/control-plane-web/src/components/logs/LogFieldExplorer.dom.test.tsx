@@ -36,6 +36,122 @@ describe('LogFieldExplorer', () => {
     expect(Object.fromEntries(seen[0])).toMatchObject({ ...params, instanceId: '2', dimensions: 'shard', dimensionLimit: '20', explore: 'true' })
   })
 
+  it('partial字段保留缺失目标和原因，按同一视图查询常见值并禁用数值统计', async () => {
+    const partialParams = { ...params, source: 'instance', view: 'node_instance', nodeId: 1 }
+    const seen: URLSearchParams[] = []
+    const statsRequest = vi.fn()
+    const retryFields = vi.fn()
+    server.use(
+      http.get(API('/logs/federation/facets'), ({ request }) => {
+        seen.push(new URL(request.url).searchParams)
+        return HttpResponse.json({
+          explore_applied: true,
+          coverage: { complete: false, partial_reasons: ['RANGE_UNAVAILABLE'] },
+          dimensions: [{ dimension: 'shard', values: [{ value: 'blue', count: 4 }] }],
+        })
+      }),
+      http.get(API('/logs/federation/stats'), () => { statsRequest(); return HttpResponse.json({ ...exact, points: [] }) }),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<LogFieldExplorer params={partialParams} enabled fields={fields} fieldsStatus="partial" fieldsUnavailableTargets={['代理测试服']} fieldsReasons={['RANGE_UNAVAILABLE']} onRetryFields={retryFields} onFilter={() => {}} />)
+    await user.click(screen.getByTestId('log-field-explorer-trigger'))
+    const notice = screen.getByTestId('field-discovery-status')
+    expect(notice).toHaveAttribute('data-state', 'partial')
+    expect(notice).toHaveTextContent('字段列表尚不完整，显示已确认的字段。')
+    expect(notice).toHaveTextContent('代理测试服')
+    expect(notice).toHaveTextContent('RANGE_UNAVAILABLE')
+    expect(notice).toHaveTextContent('缩小到具体实例')
+    expect(seen).toHaveLength(0)
+    await user.click(within(notice).getByRole('button', { name: '重试' }))
+    expect(retryFields).toHaveBeenCalledTimes(1)
+    await user.selectOptions(screen.getByLabelText('字段'), 'shard')
+    expect(await screen.findByTestId('field-value-row')).toHaveTextContent('blue')
+    expect(screen.getByTestId('field-value-row')).toHaveTextContent('≈4')
+    expect(screen.getByRole('columnheader', { name: '观测条数' })).toBeInTheDocument()
+    expect(screen.getByTestId('field-explorer-status')).toHaveTextContent('仅返回部分结果，覆盖不完整。')
+    expect(screen.getByTestId('field-discovery-status')).toHaveTextContent('代理测试服')
+    expect(Object.fromEntries(seen[0])).toEqual({ ...partialParams, instanceId: '2', nodeId: '1', dimensions: 'shard', dimensionLimit: '20', explore: 'true' })
+    const numericTab = screen.getByRole('tab', { name: '数值统计' })
+    expect(numericTab).toBeDisabled()
+    expect(screen.getByText('字段列表完整后才能执行数值统计。')).toBeInTheDocument()
+    await user.click(numericTab)
+    expect(screen.queryByRole('button', { name: '运行统计' })).not.toBeInTheDocument()
+    expect(statsRequest).not.toHaveBeenCalled()
+  })
+
+  it('partial空字段保留未完整提示与重试，不呈现无字段成功', async () => {
+    const get = vi.spyOn(api, 'get')
+    const retryFields = vi.fn()
+    const user = userEvent.setup()
+    renderWithProviders(<LogFieldExplorer params={params} enabled fields={[]} fieldsStatus="partial" onRetryFields={retryFields} onFilter={() => {}} />)
+    await user.click(screen.getByTestId('log-field-explorer-trigger'))
+    expect(screen.getByTestId('field-discovery-status')).toHaveAttribute('data-state', 'partial')
+    expect(screen.getByText('尚无可确认的字段，请重试或缩小到具体实例。')).toBeInTheDocument()
+    expect(screen.queryByText('当前查询尚未提供字段，请先完成实例日志查询。')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('字段')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '重试' }))
+    expect(retryFields).toHaveBeenCalledTimes(1)
+    expect(get.mock.calls.filter(([path]) => path.startsWith('/logs/federation'))).toHaveLength(0)
+  })
+
+  it('ready数值统计在同一视图降为partial后停止，并切回受限常见值', async () => {
+    const statsRequest = vi.fn()
+    server.use(
+      http.get(API('/logs/federation/facets'), () => HttpResponse.json({ ...exact, explore_applied: true, dimensions: [{ dimension: 'duration_ms', values: [{ value: '7', count: 1 }] }] })),
+      http.get(API('/logs/federation/stats'), () => {
+        statsRequest()
+        return HttpResponse.json({ ...exact, points: [{ agg: { count: 1, sum: 7, min: 7, max: 7, avg: 7 } }] })
+      }),
+    )
+    let setStatus = (_status: 'ready' | 'partial') => { void _status }
+    function Harness() {
+      const [fieldsStatus, updateStatus] = useState<'ready' | 'partial'>('ready')
+      setStatus = updateStatus
+      return <LogFieldExplorer params={params} enabled fields={fields} fieldsStatus={fieldsStatus} onFilter={() => {}} />
+    }
+    const user = userEvent.setup()
+    renderWithProviders(<Harness />)
+    await user.click(screen.getByTestId('log-field-explorer-trigger'))
+    await user.selectOptions(screen.getByLabelText('字段'), 'duration_ms')
+    await user.click(screen.getByRole('tab', { name: '数值统计' }))
+    await user.click(screen.getByRole('button', { name: '运行统计' }))
+    await screen.findByTestId('field-stats-row')
+    expect(statsRequest).toHaveBeenCalledTimes(1)
+    act(() => setStatus('partial'))
+    expect(screen.getByRole('tab', { name: '数值统计' })).toBeDisabled()
+    expect(screen.queryByTestId('field-stats-row')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '运行统计' })).not.toBeInTheDocument()
+    expect(await screen.findByTestId('field-value-row')).toHaveTextContent('7')
+    expect(screen.getByTestId('field-discovery-status')).toHaveAttribute('data-state', 'partial')
+    expect(statsRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('同一视图字段子集更新后不再读取或筛选已移除的字段', async () => {
+    let calls = 0
+    const onFilter = vi.fn()
+    server.use(http.get(API('/logs/federation/facets'), () => {
+      calls++
+      return HttpResponse.json({ ...exact, explore_applied: true, dimensions: [{ dimension: 'shard', values: [{ value: 'blue', count: 4 }] }] })
+    }))
+    let setFields = (_fields: string[]) => { void _fields }
+    function Harness() {
+      const [currentFields, updateFields] = useState(fields)
+      setFields = updateFields
+      return <LogFieldExplorer params={params} enabled fields={currentFields} fieldsStatus="partial" onFilter={onFilter} />
+    }
+    const user = userEvent.setup()
+    renderWithProviders(<Harness />)
+    await user.click(screen.getByTestId('log-field-explorer-trigger'))
+    await user.selectOptions(screen.getByLabelText('字段'), 'shard')
+    await screen.findByTestId('field-value-row')
+    act(() => setFields(['duration_ms']))
+    expect(screen.getByText('该字段已不在当前查询范围中，请重新选择。')).toBeInTheDocument()
+    expect(screen.queryByTestId('field-value-row')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /仅包含/ })).not.toBeInTheDocument()
+    expect(calls).toBe(1)
+    expect(onFilter).not.toHaveBeenCalled()
+  })
+
   it('常见值支持正向/排除精确筛选，恶意值与OR仍在字符串中', async () => {
     const value = 'blue" OR * \\ tail'
     const onFilter = vi.fn()

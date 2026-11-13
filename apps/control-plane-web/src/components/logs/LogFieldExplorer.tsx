@@ -27,7 +27,9 @@ export interface LogFieldExplorerProps {
   fields: readonly string[]
   /** Append this already quoted, parenthesized filter to the query. */
   onFilter: (expression: string) => void
-  fieldsStatus?: 'loading' | 'ready' | 'failed' | 'unsupported'
+  fieldsStatus?: 'loading' | 'ready' | 'partial' | 'failed' | 'unsupported'
+  fieldsUnavailableTargets?: readonly string[]
+  fieldsReasons?: readonly string[]
   onRetryFields?: () => void
 }
 
@@ -60,25 +62,27 @@ export function LogFieldExplorer(props: LogFieldExplorerProps) {
   )
 }
 
-function FieldExplorerPanel({ params, enabled, fields, onFilter, fieldsStatus = 'ready', onRetryFields }: LogFieldExplorerProps) {
+function FieldExplorerPanel({ params, enabled, fields, onFilter, fieldsStatus = 'ready', fieldsUnavailableTargets = [], fieldsReasons = [], onRetryFields }: LogFieldExplorerProps) {
   const { t } = useTranslation(LOG_FIELD_EXPLORER_NS)
   const id = useId()
   const [field, setField] = useState('')
-  const [mode, setMode] = useState<'values' | 'stats'>('values')
+  const [selectedMode, setMode] = useState<'values' | 'stats'>('values')
+  const mode = fieldsStatus === 'partial' ? 'values' : selectedMode
   const [groupBy, setGroupBy] = useState('')
   const [timeBucket, setTimeBucket] = useState('')
   const [analysis, setAnalysis] = useState<{ groupBy: string; timeBucket: string } | null>(null)
   const [formError, setFormError] = useState(false)
   const options = [...new Set(fields)].filter((name) => name.length > 0).sort()
   const validField = field.length > 0 && options.includes(field) && isQueryableLogField(field)
-  const queryEnabled = enabled && fieldsStatus === 'ready' && validField
+  const queryEnabled = enabled && (fieldsStatus === 'ready' || fieldsStatus === 'partial') && validField
+  const statsEnabled = queryEnabled && fieldsStatus === 'ready'
   // TanStack hashes these bounded params by value; manual memoization is unnecessary.
   const facetParams = validField ? buildFieldFacetParams(params, field) : { ...params }
-  const statsParams = queryEnabled && analysis
+  const statsParams = statsEnabled && analysis
     ? buildFieldStatsParams(params, field, analysis.groupBy, analysis.timeBucket)
     : { ...params }
   const facets = useLogsFederationFacets(facetParams, queryEnabled && mode === 'values')
-  const stats = useLogsFederationStats(statsParams, queryEnabled && mode === 'stats' && analysis !== null)
+  const stats = useLogsFederationStats(statsParams, statsEnabled && mode === 'stats' && analysis !== null)
   const activeQuery = mode === 'values' ? facets : stats
   const dimensions = Array.isArray(facets.data?.dimensions) ? facets.data.dimensions : []
   const dimension = dimensions.find((item) => item.dimension === field)
@@ -105,7 +109,7 @@ function FieldExplorerPanel({ params, enabled, fields, onFilter, fieldsStatus = 
   }
 
   if (!enabled) return <p role="status" className="mt-3 text-xs text-muted-foreground">{t('contextRequired')}</p>
-  if (fieldsStatus !== 'ready') {
+  if (fieldsStatus !== 'ready' && fieldsStatus !== 'partial') {
     return (
       <div role={fieldsStatus === 'loading' ? 'status' : 'alert'} className="mt-3 space-y-2 text-xs">
         <p>{t(fieldsStatus === 'loading' ? 'fieldsLoading' : fieldsStatus === 'failed' ? 'fieldsFailed' : 'fieldsUnsupported')}</p>
@@ -114,11 +118,25 @@ function FieldExplorerPanel({ params, enabled, fields, onFilter, fieldsStatus = 
     )
   }
 
+  const discoveryNotice = fieldsStatus === 'partial' && (
+    <div role="status" className="space-y-2 rounded-md border p-2 text-muted-foreground" data-testid="field-discovery-status" data-state="partial">
+      <p>{t('fieldsPartial')}</p>
+      {fieldsUnavailableTargets.length > 0 && <p>{t('fieldsUnavailableTargets', { targets: fieldsUnavailableTargets.join(', ') })}</p>}
+      {fieldsReasons.length > 0 && <p className="break-words font-mono text-[11px]">{fieldsReasons.join(', ')}</p>}
+      <p>{t('fieldsNarrowScope')}</p>
+      {onRetryFields && <Button size="sm" variant="outline" onClick={onRetryFields}>{t('retry')}</Button>}
+    </div>
+  )
+  if (fieldsStatus === 'partial' && options.length === 0) {
+    return <div className="mt-3 space-y-3 text-xs">{discoveryNotice}<p role="status">{t('noVerifiedFields')}</p></div>
+  }
+
   return (
     <div className="mt-3 space-y-3 text-xs">
+      {discoveryNotice}
       <label htmlFor={`${id}-field`} className="flex items-center gap-2">
         <span className="shrink-0 font-medium">{t('field')}</span>
-        <NativeSelect size="sm" id={`${id}-field`} value={field} className={`${selectClass} flex-1`} onChange={(event) => {
+        <NativeSelect size="sm" id={`${id}-field`} aria-label={t('field')} value={field} className={`${selectClass} flex-1`} onChange={(event) => {
           setField(event.target.value)
           setAnalysis(null)
           setFormError(false)
@@ -135,8 +153,9 @@ function FieldExplorerPanel({ params, enabled, fields, onFilter, fieldsStatus = 
         <Tabs value={mode} onValueChange={(value) => setMode(value as 'values' | 'stats')}>
           <TabsList aria-label={t('title')}>
             <TabsTrigger value="values">{t('values')}</TabsTrigger>
-            <TabsTrigger value="stats">{t('numeric')}</TabsTrigger>
+            <TabsTrigger value="stats" disabled={fieldsStatus !== 'ready'}>{t('numeric')}</TabsTrigger>
           </TabsList>
+          {fieldsStatus === 'partial' && <p className="text-muted-foreground">{t('numericRequiresCompleteFields')}</p>}
           <TabsContent value={mode} className="space-y-3">
           {mode === 'stats' && (
             <form className="space-y-2" onSubmit={(event) => {
@@ -153,14 +172,14 @@ function FieldExplorerPanel({ params, enabled, fields, onFilter, fieldsStatus = 
               <div className="flex flex-wrap items-end gap-2">
                 <label htmlFor={`${id}-group`} className="flex min-w-0 flex-1 flex-col gap-1">
                   {t('groupBy')}
-                  <NativeSelect size="sm" id={`${id}-group`} value={groupBy} onChange={(event) => setGroupBy(event.target.value)} className={selectClass}>
+                  <NativeSelect size="sm" id={`${id}-group`} aria-label={t('groupBy')} value={groupBy} onChange={(event) => setGroupBy(event.target.value)} className={selectClass}>
                     <NativeSelectOption value="">{t('ungrouped')}</NativeSelectOption>
                     {options.map((name) => <NativeSelectOption key={name} value={name}>{name}</NativeSelectOption>)}
                   </NativeSelect>
                 </label>
                 <label htmlFor={`${id}-bucket`} className="flex min-w-0 flex-1 flex-col gap-1">
                   {t('bucket')}
-                  <NativeSelect size="sm" id={`${id}-bucket`} value={timeBucket} onChange={(event) => setTimeBucket(event.target.value)} className={selectClass}>
+                  <NativeSelect size="sm" id={`${id}-bucket`} aria-label={t('bucket')} value={timeBucket} onChange={(event) => setTimeBucket(event.target.value)} className={selectClass}>
                     {LOG_FIELD_TIME_BUCKETS.map((value) => <NativeSelectOption key={value} value={value}>{value || t('noBucket')}</NativeSelectOption>)}
                   </NativeSelect>
                 </label>
