@@ -223,7 +223,7 @@ describe('McpActivityPage（DOM）', () => {
     // 于是它会被 /踢线/ 命中。它是说明入口、不是动作按钮，踢线动作仍须不存在。
     const actionButtons = screen
       .queryAllByRole('button', { name: /踢线|Kick/i })
-      .filter((el) => !el.matches('[data-slot="page-header-help"]'))
+      .filter((el) => !el.closest('[data-slot="page-header-help"]'))
     expect(actionButtons).toHaveLength(0)
   })
 })
