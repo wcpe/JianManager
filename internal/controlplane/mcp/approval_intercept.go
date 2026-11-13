@@ -83,6 +83,22 @@ func interceptApproval(
 		if _, authErr := service.Authorize(p, action, targetForApproval(deps, action, id)); authErr != nil {
 			return true, toolForbidden(authErr)
 		}
+		// 批量工具的目标是多个：只校「代表 id」等于给越权开了口子。
+		//
+		// 具体风险：票据里存的是完整 args（含全部 ids），而执行器
+		// （approval_adapters.go）逐台调 Instance.Start/Stop 且**不再校验 scope**。
+		// 若只校首个 id，Agent 拿 scope={3} 提交 ids=[3,999] 就能出票，
+		// 批准人以为只停一个，实际停两个——正是上面那段注释要堵的事
+		// （「批准人不该被安排成提权的最后一步」）。
+		//
+		// 因此这里对**每一个**目标 id 都过一遍授权；任一个不过就整体拒绝、不出票。
+		// 与 execInstanceBatch 的「逐一过 scope，任一越界整体拒绝」保持同一语义，
+		// 避免出现「工具自己拦了但审批先放了」的两套标准。
+		for _, tid := range approvalTargetIDs(name, args) {
+			if _, authErr := service.Authorize(p, action, targetForApproval(deps, action, tid)); authErr != nil {
+				return true, toolForbidden(authErr)
+			}
+		}
 	}
 
 	// 申请人：优先取 principal 自带的“代表哪个用户”（助手委托身份），
@@ -278,21 +294,69 @@ func WithApprovalBypassForTest(t interface{ Cleanup(func()) }) func() {
 // 这些工具在拦截层直接取 `id` 会恒判「缺少 id」，表现为**该工具永远无法提交审批**，
 // 而工具自身的授权路径是能通过的（它自己解析快照→实例）。
 //
+// 同理，批量工具（instance_batch）的目标是**数组** `ids`，不是标量 id。
+// 它必须单独分支处理：下面的「首个 *id 后缀参数」兜底分支拿不到它——
+// 判据里 `strings.HasSuffix("ids", "id")` 为 false（"ids" 以 "ds" 结尾），
+// 数组会被整条跳过，结果与「工具没有 id 参数」完全一样。
+// 历史教训：该分支是后补的，当时只想着「id 的变体」，漏了「id 的复数」；
+// 表现是 instance_batch 在 MCP 审批路径上 100% 不可用，而执行侧
+// （approval_adapters.go）早写好了它的 adapter——两边从未接通过。
+//
 // 取舍：这里只做「拿到一个可用于 scope 判定的 id」。对 snapshotId 这类**非实例 id**，
 // 用它去判实例 scope 会偏严（可能误拒）——因此宁可显式承认这一点：
 // 若工具 schema 里没有 `id`，就退回按它的首个 `*Id` 数字参数判定，
 // 真正的归属解析仍由工具内部（它持有 deps）完成。
-// 复查条件：新增「实例不是 id 参数」的工具时，检查这里是否取到了合适的 id。
+// 批量同理：只取数组首个 id 做判定，**逐台授权仍由工具内部**对每个 id 单独过 scope
+// （instance_batch 的执行器逐台调 Instance.Start/Stop，授权越界会当场被拒），
+// 因此这里取首个只是「让票据能出、让越权意图先被拦」，不是把 N 台当成 1 台放行。
+// 复查条件：新增「实例不是 id 参数」或「目标为数组」的工具时，检查这里是否取到了合适的 id。
 func approvalTargetID(name string, args map[string]any) (uint, bool) {
-	if args == nil {
+	ids := approvalTargetIDs(name, args)
+	if len(ids) == 0 {
 		return 0, false
 	}
+	return ids[0], true
+}
+
+// approvalTargetIDs 返回**全部**需受 scope 校验的目标 id（主体在前）。
+//
+// 与 approvalTargetID 的关系：前者是「一个代表 id」（票据目标、流水记录用它），
+// 本函数是「所有要校验的 id」（授权用它）。两者不能混：
+//   - 票据/流水只需要一个目标用于展示与幂等键；
+//   - 授权必须覆盖全集，否则批量工具只校首台就能绕过（详见调用处注释）。
+//
+// 非批量工具恒返回单元素（或空），因此单目标工具的授权行为与以前完全一致。
+func approvalTargetIDs(name string, args map[string]any) []uint {
+	if args == nil {
+		return nil
+	}
+	// instance_batch 的资源目标语义是整个 ids 数组。必须在通用标量 id 解析之前处理：
+	// MCP 调用方可以附加 schema 未声明的 id 字段，若先取它就能用 scope 内 id 掩盖 ids 中的越权目标。
+	// 数组必须完整、非空、正整数且无重复；审批出票前不替调用方静默修正目标列表。
+	if name == "instance_batch" {
+		ids, err := toUintSlice(args["ids"])
+		if err != nil || len(ids) == 0 {
+			return nil
+		}
+		seen := make(map[uint]struct{}, len(ids))
+		for _, id := range ids {
+			if id == 0 {
+				return nil
+			}
+			if _, ok := seen[id]; ok {
+				return nil
+			}
+			seen[id] = struct{}{}
+		}
+		return ids
+	}
+	// 标量 id：绝大多数非批量工具走这条。
 	if id, err := toUint(args["id"]); err == nil && id != 0 {
-		return id, true
+		return []uint{id}
 	}
 	spec, ok := findToolSpec(name)
 	if !ok {
-		return 0, false
+		return nil
 	}
 	// 按 schema 属性名稳定取值（map 遍历无序，排序后取，保证同一请求结果确定）。
 	names := make([]string, 0, 4)
@@ -308,8 +372,8 @@ func approvalTargetID(name string, args map[string]any) (uint, bool) {
 	sort.Strings(names)
 	for _, k := range names {
 		if id, err := toUint(args[k]); err == nil && id != 0 {
-			return id, true
+			return []uint{id}
 		}
 	}
-	return 0, false
+	return nil
 }
