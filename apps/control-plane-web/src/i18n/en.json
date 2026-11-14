@@ -402,7 +402,9 @@
     "stopInstanceTitle": "Stop instance “{{name}}”?",
     "stopInstanceDesc": "Stopping disconnects all online players immediately; unsaved world data may be lost.",
     "restartInstanceTitle": "Restart instance “{{name}}”?",
-    "restartInstanceDesc": "Restarting disconnects all online players; the server comes back automatically."
+    "restartInstanceDesc": "Restarting disconnects all online players; the server comes back automatically.",
+    "instanceLifecycleTitle": "{{action}} server \"{{name}}\"?",
+    "instanceLifecycleDesc": "This restarts the process and disconnects online players (start is unaffected)."
   },
   "common": {
     "noData": "No data",
@@ -663,6 +665,8 @@
   "dashboard": {
     "title": "Home",
     "subtitle": "Cluster overview: resource levels, abnormal instances, recent tasks and alerts, health wall and trends. Click any metric to drill down.",
+    "metricsUnavailable": "Overview metrics are unavailable (values show --, not 0)",
+    "unknownValue": "--",
     "nodesOnline": "{{count}} Online",
     "nodesTotal": "{{count}} Total",
     "instancesTotal": "{{count}} Total",
@@ -823,6 +827,11 @@
     "gcCount": "GC count",
     "gcTime": "GC pause time"
   },
+  "overview": {
+    "freshness": {
+      "stale": "Stale"
+    }
+  },
   "monitor": {
     "title": "Monitoring",
     "subtitle": "Node and instance metric time series: drag the brush to zoom, hover to read each series at that moment.",
@@ -855,13 +864,15 @@
     },
     "overview": {
       "title": "Key metrics",
-      "empty": "No key metric data yet"
+      "empty": "No key metric data yet",
+      "error": "Failed to load key metrics"
     },
     "compare": {
       "title": "Compare metrics",
       "hint": "Tick metrics below to overlay them in one chart (at the current resolution & range).",
       "pick": "Pick metrics to compare",
-      "empty": "Tick metrics above to overlay"
+      "empty": "Tick metrics above to overlay",
+      "error": "Failed to load metrics"
     },
     "drill": {
       "platform": "Platform",
@@ -954,7 +965,8 @@
     "processTerminateConfirm": "Terminate managed child process",
     "processThreadCount": "Threads",
     "processUptime": "Uptime",
-    "processWindow": "Window"
+    "processWindow": "Window",
+    "processTopError": "Failed to load process data"
   },
   "probe": {
     "title": "ServerProbe Update",
@@ -1520,7 +1532,10 @@
     "batchSelectPage": "Select page",
     "emptyNoMatch": "No matching nodes — try clearing the search or filters",
     "pageSize": "Per page",
-    "pageSizeAuto": "Auto"
+    "pageSizeAuto": "Auto",
+    "monitorUnavailable": "Failed to load monitoring data",
+    "pageOutOfRange": "(page out of range, showing the last page)",
+    "openNodeDetail": "Open node {{name}} details"
   },
   "nodeProxy": {
     "title": "Outbound proxy",
@@ -1635,7 +1650,13 @@
       "stoppingDetail": "Stopping; waiting for node status confirmation",
       "operationFailed": "Operation failed (runtime status awaiting confirmation)",
       "startFailed": "Start failed",
-      "requestBusy": "A lifecycle request is already in progress for this instance. Wait for it to finish."
+      "requestBusy": "A lifecycle request is already in progress for this instance. Wait for it to finish.",
+      "toastStarting": "Starting…",
+      "toastStopped": "Instance stopped",
+      "toastRestarting": "Restarting…",
+      "toastStartFailed": "Failed to start",
+      "toastStopFailed": "Failed to stop",
+      "toastRestartFailed": "Failed to restart"
     },
     "subtitle": "All managed server instances. Batch start/stop, clone, migrate and column views; click a row to open its console.",
     "columnsLabel": "Columns",
@@ -1784,7 +1805,8 @@
     "helpBulkTitle": "Bulk actions",
     "helpBulkBody": "Select rows to reveal the bulk bar. Start/stop are applied per machine; partial failures report only the machines that failed — there is no rollback.",
     "helpCreateTitle": "Four ways to create",
-    "helpCreateBody": "The main button opens Create instance; the dropdown also offers one-click backend provisioning (downloads the core and sets up the directory), proxy setup, and adopting an existing server directory."
+    "helpCreateBody": "The main button opens Create instance; the dropdown also offers one-click backend provisioning (downloads the core and sets up the directory), proxy setup, and adopting an existing server directory.",
+    "updateFailed": "Failed to update instance"
   },
   "diagnostics": {
     "linesLabel": "Lines",
@@ -2558,7 +2580,8 @@
     "disabledLabel": "Disabled",
     "notScheduled": "Not scheduled",
     "cardCount": "{{total}} schedules",
-    "cardSummary": "{{total}} schedules · {{enabled}} enabled · {{disabled}} disabled"
+    "cardSummary": "{{total}} schedules · {{enabled}} enabled · {{disabled}} disabled",
+    "loadFailed": "Failed to load schedules"
   },
   "backups": {
     "title": "Backup Management",
@@ -2619,7 +2642,8 @@
     "basedOn": "based on",
     "dependentsWarn": "{{count}} incremental backup(s) depend on this one; deleting it breaks their restore chain",
     "checksum": "Checksum",
-    "checksumMissing": "Not recorded"
+    "checksumMissing": "Not recorded",
+    "loadFailed": "Failed to load backups"
   },
   "backupStorages": {
     "title": "Backup Storage Backends",
@@ -4349,7 +4373,8 @@
     "helpNotifyTitle": "Notification channels",
     "helpNotifyBody": "When a rule fires it pushes through the configured channels. Channels themselves live in settings; this page only decides who this rule notifies.",
     "helpStateTitle": "Firing and recovery",
-    "helpStateBody": "A metric returning within threshold recovers automatically and leaves a record. Recovery never deletes history — the list is time-descending so you can see the whole duration."
+    "helpStateBody": "A metric returning within threshold recovers automatically and leaves a record. Recovery never deletes history — the list is time-descending so you can see the whole duration.",
+    "loadFailed": "Unable to load alert data. Please retry."
   },
   "settings": {
     "title": "Settings",
@@ -4740,7 +4765,8 @@
     "health": "Health",
     "config": "Config",
     "nonMcTitle": "World metrics",
-    "nonMcHint": "TPS/world metrics do not apply to this instance (no MC world semantics). See the dedicated tabs for process and health."
+    "nonMcHint": "TPS/world metrics do not apply to this instance (no MC world semantics). See the dedicated tabs for process and health.",
+    "loadFailed": "Failed to load server information"
   },
   "palette": {
     "title": "Command palette",
@@ -4961,6 +4987,7 @@
     "activeClients": "Active Clients",
     "activeClients1h": "Active in 1h",
     "adminOnly": "Client Distribution Ops requires platform admin",
+    "noPermission": "This account lacks the client distribution ops permission (dist.ops.read)",
     "allChannels": "All channels (total)",
     "allKinds": "All kinds",
     "artifactPulls": "Artifact Pulls",
@@ -6015,7 +6042,8 @@
     "metricDiskUsed": "Node disk",
     "metricMemUsed": "Node memory",
     "loading": "Loading…",
-    "error": "Failed to load capacity forecast"
+    "error": "Failed to load capacity forecast",
+    "unknown": "Not enough data to estimate"
   },
   "attribution": {
     "title": "Performance attribution",
@@ -6457,7 +6485,8 @@
     "proxyHint": "Supports http / https / socks5. The URL is uploaded only on save and never echoed back.",
     "proxyHasAuth": "A proxy URL with credentials is already saved; neither the URL nor the credentials are echoed back. Leave empty to keep it.",
     "historyEditInput": "Edit message content",
-    "historyEditHint": "Only corrects the text; the reply is not regenerated and the original stays traceable."
+    "historyEditHint": "Only corrects the text; the reply is not regenerated and the original stays traceable.",
+    "settingsNotLoaded": "Settings are still loading, please try again shortly"
   },
   "approvals": {
     "title": "Approvals",
@@ -6602,7 +6631,8 @@
     "capSchema": "Form mode",
     "capSchemaHint": "Has a JSON Schema, so the detail page can render a form instead of raw text.",
     "capSensitive": "Sensitive keys",
-    "capSensitiveHint": "Sensitive key paths are marked; values are masked in views and exports."
+    "capSensitiveHint": "Sensitive key paths are marked; values are masked in views and exports.",
+    "layerConflict": "This layer was saved by someone else. You have been refreshed to the latest version; please re-apply your changes."
   },
   "configAdopt": {
     "title": "Config adoption",

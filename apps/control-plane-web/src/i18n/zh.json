@@ -402,7 +402,9 @@
     "stopInstanceTitle": "停止实例「{{name}}」？",
     "stopInstanceDesc": "停止会立即断开全部在线玩家，未保存的世界数据可能丢失。",
     "restartInstanceTitle": "重启实例「{{name}}」？",
-    "restartInstanceDesc": "重启会断开全部在线玩家，服务器随后自动恢复运行。"
+    "restartInstanceDesc": "重启会断开全部在线玩家，服务器随后自动恢复运行。",
+    "instanceLifecycleTitle": "确认{{action}}服务器「{{name}}」？",
+    "instanceLifecycleDesc": "该操作会结束当前进程并让在线玩家掉线（启动不受影响）。"
   },
   "common": {
     "noData": "暂无数据",
@@ -641,6 +643,8 @@
   "dashboard": {
     "title": "首页",
     "subtitle": "集群总览：资源水位、异常实例、近期任务与告警、健康墙与趋势。点任一指标可下钻到对应实体。",
+    "metricsUnavailable": "总览指标暂不可用（读数显示 --，不代表为 0）",
+    "unknownValue": "--",
     "nodesOnline": "{{count}} 在线",
     "nodesTotal": "{{count}} 总计",
     "instancesTotal": "{{count}} 总计",
@@ -801,6 +805,11 @@
     "gcCount": "GC 次数",
     "gcTime": "GC 暂停占用"
   },
+  "overview": {
+    "freshness": {
+      "stale": "陈旧"
+    }
+  },
   "monitor": {
     "title": "监控",
     "subtitle": "节点与实例的指标时序：拖选择条缩放时间窗，悬停查看该时刻各序列取值。",
@@ -833,13 +842,15 @@
     },
     "overview": {
       "title": "关键指标概览",
-      "empty": "暂无关键指标数据"
+      "empty": "暂无关键指标数据",
+      "error": "关键指标加载失败"
     },
     "compare": {
       "title": "多指标对比",
       "hint": "勾选下方指标在同一图内叠加对比（按当前粒度与范围）。",
       "pick": "选择对比指标",
-      "empty": "勾选上方指标以叠加对比"
+      "empty": "勾选上方指标以叠加对比",
+      "error": "指标加载失败"
     },
     "drill": {
       "platform": "平台",
@@ -932,7 +943,8 @@
     "processTerminateConfirm": "终止受管子进程",
     "processThreadCount": "线程数",
     "processUptime": "运行时长",
-    "processWindow": "窗口"
+    "processWindow": "窗口",
+    "processTopError": "进程数据加载失败"
   },
   "probe": {
     "title": "ServerProbe 探针更新",
@@ -1498,7 +1510,10 @@
     "batchSelectPage": "全选本页",
     "emptyNoMatch": "没有匹配的节点，试试清空搜索或筛选",
     "pageSize": "每页",
-    "pageSizeAuto": "自动"
+    "pageSizeAuto": "自动",
+    "monitorUnavailable": "监控数据加载失败",
+    "pageOutOfRange": "（页码超出范围，已显示最后一页）",
+    "openNodeDetail": "打开节点 {{name}} 详情"
   },
   "artifactVersions": {
     "title": "ServerProbe 制品版本库",
@@ -1567,7 +1582,13 @@
       "stoppingDetail": "正在停止，等待节点状态确认",
       "operationFailed": "操作失败（运行状态待确认）",
       "startFailed": "启动失败",
-      "requestBusy": "该实例已有启停请求进行中，请等待当前操作完成"
+      "requestBusy": "该实例已有启停请求进行中，请等待当前操作完成",
+      "toastStarting": "实例启动中…",
+      "toastStopped": "实例已停止",
+      "toastRestarting": "实例重启中…",
+      "toastStartFailed": "启动失败",
+      "toastStopFailed": "停止失败",
+      "toastRestartFailed": "重启失败"
     },
     "subtitle": "全部受管服务器实例。支持批量启停、克隆、迁移与按列视图；点行进入实例控制台。",
     "columnsLabel": "列设置",
@@ -1716,7 +1737,8 @@
     "helpBulkTitle": "批量操作",
     "helpBulkBody": "勾选多行后顶部出现批量条。启停类操作会逐台下发，部分失败时只报失败的机器，不会整体回滚。",
     "helpCreateTitle": "四种新建入口",
-    "helpCreateBody": "主按钮进「创建实例」；右侧下拉另有「一键搭建后端子服」（自动下载核心并配好目录）、「搭建代理」、「导入现有服务器」（接管已经在跑的目录）。"
+    "helpCreateBody": "主按钮进「创建实例」；右侧下拉另有「一键搭建后端子服」（自动下载核心并配好目录）、「搭建代理」、「导入现有服务器」（接管已经在跑的目录）。",
+    "updateFailed": "更新实例失败"
   },
   "diagnostics": {
     "linesLabel": "显示行数",
@@ -2512,7 +2534,8 @@
     "disabledLabel": "已停用",
     "notScheduled": "未计划",
     "cardCount": "{{total}} 个任务",
-    "cardSummary": "共 {{total}} 个任务 · 启用 {{enabled}} · 停用 {{disabled}}"
+    "cardSummary": "共 {{total}} 个任务 · 启用 {{enabled}} · 停用 {{disabled}}",
+    "loadFailed": "定时任务加载失败"
   },
   "backups": {
     "title": "备份管理",
@@ -2573,7 +2596,8 @@
     "basedOn": "基于",
     "dependentsWarn": "有 {{count}} 个增量备份依赖此备份，删除将一并影响其恢复链",
     "checksum": "校验和",
-    "checksumMissing": "未记录"
+    "checksumMissing": "未记录",
+    "loadFailed": "备份列表加载失败"
   },
   "backupStorages": {
     "title": "备份存储后端",
@@ -4303,7 +4327,8 @@
     "helpNotifyTitle": "通知渠道",
     "helpNotifyBody": "规则命中后按配置的渠道推送。渠道本身在设置里维护；这里只决定「这条规则发给谁」。",
     "helpStateTitle": "告警与恢复",
-    "helpStateBody": "指标回到阈值内会自动恢复并留下记录。恢复不会删除历史，列表按时间倒序可查到整段持续时间。"
+    "helpStateBody": "指标回到阈值内会自动恢复并留下记录。恢复不会删除历史，列表按时间倒序可查到整段持续时间。",
+    "loadFailed": "暂时无法读取告警数据，可重试"
   },
   "settings": {
     "title": "系统设置",
@@ -4740,7 +4765,8 @@
     "health": "健康检查",
     "config": "配置",
     "nonMcTitle": "世界语义指标",
-    "nonMcHint": "该实例不适用 TPS/世界指标（非 MC 世界语义）；进程与端口健康见对应页签。"
+    "nonMcHint": "该实例不适用 TPS/世界指标（非 MC 世界语义）；进程与端口健康见对应页签。",
+    "loadFailed": "服务器信息加载失败"
   },
   "palette": {
     "title": "命令面板",
@@ -4961,6 +4987,7 @@
     "activeClients": "活跃客户端",
     "activeClients1h": "近 1h 活跃",
     "adminOnly": "客户端分发运维需平台管理员权限",
+    "noPermission": "当前账号没有客户端分发运维权限（需 dist.ops.read）",
     "allChannels": "全部频道（总）",
     "allKinds": "全部类型",
     "artifactPulls": "制品拉取",
@@ -6015,7 +6042,8 @@
     "metricDiskUsed": "节点磁盘",
     "metricMemUsed": "节点内存",
     "loading": "加载中…",
-    "error": "加载容量预测失败"
+    "error": "加载容量预测失败",
+    "unknown": "数据不足以估算"
   },
   "attribution": {
     "title": "性能归因",
@@ -6457,7 +6485,8 @@
     "proxyHint": "支持 http / https / socks5。地址只在保存时上传，之后不回显。",
     "proxyHasAuth": "已保存过带口令的代理地址；地址与口令不会回显，留空表示保持原值。",
     "historyEditInput": "编辑消息内容",
-    "historyEditHint": "只更正文本，不会自动重新生成回复；原文保留可追溯。"
+    "historyEditHint": "只更正文本，不会自动重新生成回复；原文保留可追溯。",
+    "settingsNotLoaded": "设置尚未加载完成，请稍后重试"
   },
   "approvals": {
     "title": "审批中心",
@@ -6602,7 +6631,8 @@
     "capSchema": "表单模式",
     "capSchemaHint": "该配置带 JSON Schema，详情页可按表单编辑，不必手写原文。",
     "capSensitive": "含敏感键",
-    "capSensitiveHint": "该配置标记了敏感键路径，展示与导出时会脱敏。"
+    "capSensitiveHint": "该配置标记了敏感键路径，展示与导出时会脱敏。",
+    "layerConflict": "该层已被其他人保存更新，已为你刷新到最新版本，请重新修改。"
   },
   "configAdopt": {
     "title": "配置纳管",
