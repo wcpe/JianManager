@@ -29,7 +29,7 @@ describe('ClientDistLogsTab', () => {
     loginMockUser()
     const user = userEvent.setup()
     renderWithProviders(
-      <ClientDistLogsTab channelId={undefined} range="7d" enabled link={{}} onClearLink={() => {}} />,
+      <ClientDistLogsTab channelId={undefined} window={{ range: '7d' }} enabled link={{}} onClearLink={() => {}} />,
       { route: '/client-dist-ops?tab=logs' },
     )
 
@@ -53,7 +53,7 @@ describe('ClientDistLogsTab', () => {
   it('type=all：出安全聚合多类型表（含 hello/telemetry）', async () => {
     loginMockUser()
     renderWithProviders(
-      <ClientDistLogsTab channelId={undefined} range="7d" enabled link={{}} onClearLink={() => {}} />,
+      <ClientDistLogsTab channelId={undefined} window={{ range: '7d' }} enabled link={{}} onClearLink={() => {}} />,
       { route: '/client-dist-ops?tab=logs&type=all' },
     )
 
@@ -70,7 +70,7 @@ describe('ClientDistLogsTab', () => {
     renderWithProviders(
       <ClientDistLogsTab
         channelId={undefined}
-        range="7d"
+        window={{ range: '7d' }}
         enabled
         link={{ machineId: 'm-aaaa', ip: '203.0.113.1', errCode: 'INVALID_CLIENT_KEY' }}
         onClearLink={() => {}}

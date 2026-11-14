@@ -11,6 +11,7 @@ import type { ClientDistStats } from '@/lib/client-dist/client-dist-stats-contra
 import type { ClientDistEvent, ClientDistRealtime } from '@/lib/client-dist/client-dist-events-contracts'
 import type { ClientRuntimeOverview, RuntimeUpdateSeriesPoint } from '@/lib/client-dist/client-runtime-contracts'
 import type { DistBucket } from '@/lib/overview/platform-stats'
+import type { ObsWindow } from '@/lib/metrics/obs-window'
 
 /** 
  * 页面 B「客户端分发运维」共享展示件与格式化。
@@ -38,8 +39,14 @@ export type RuntimeLink = {
   ip?: string
 }
 
-/** 预设档 → 下游观测端点 range 枚举。 */
-export function toApiRange(r: MetricRange): string {
+/** 预设档 → 下游观测端点 range 枚举。
+ *
+ * 入参放宽为 string：时间选择器（ObsWindow）直接产出分发观测端点自己的枚举
+ * （24h/7d/30d/90d/180d），其中 `180d` 不在 MetricRange 里。此前调用方把 `180d`
+ * 强转成 MetricRange 再进来，switch 落到 default 被降成 `7d`——选「近 180 天」实际只查 7 天（R30）。
+ * 现在两套枚举都在这里显名处理：`1y` 与 `180d` 同归 180 天。
+ */
+export function toApiRange(r: MetricRange | string): string {
   switch (r) {
     case '1h':
     case '6h':
@@ -52,14 +59,15 @@ export function toApiRange(r: MetricRange): string {
     case '90d':
       return '90d'
     case '1y':
+    case '180d':
       return '180d'
     default:
       return '7d'
   }
 }
 
-/** 预设档 →日看板天数。 */
-export function toStatsDays(r: MetricRange): number {
+/** 预设档 →日看板天数（同 toApiRange：`180d` 必须认成 180，否则选 180 天看的是 7 天）。 */
+export function toStatsDays(r: MetricRange | string): number {
   switch (r) {
     case '1h':
     case '6h':
@@ -72,6 +80,7 @@ export function toStatsDays(r: MetricRange): number {
     case '90d':
       return 90
     case '1y':
+    case '180d':
       return 180
     default:
       return 7
@@ -90,6 +99,18 @@ export function rangeForSpan(fromIso?: string, toIso?: string): MetricRange | nu
   if (hours <= 24 * 30) return '30d'
   if (hours <= 24 * 90) return '90d'
   return '1y'
+}
+
+/**
+ * 派生日志/导出共用的时间参数（R31）。
+ *
+ * 列表与导出必须落在同一集合：自定义区间直接透传 from/to（不再近似成最近预设档，
+ * 否则「列表按真实区间、导出按取整档」又对不上），预设档则走 range 枚举。
+ * 纯函数不放 hook 语义，以免被 react-hooks 规则误判。
+ */
+export function logWindowParams(w: ObsWindow): { range?: string; from?: string; to?: string } {
+  if ('range' in w) return { range: toApiRange(w.range) }
+  return { from: w.from, to: w.to }
 }
 
 /** 字节数（紧凑）→ 人类可读。 */

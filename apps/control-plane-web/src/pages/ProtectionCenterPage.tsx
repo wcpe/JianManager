@@ -35,7 +35,6 @@ import { ActionsTab } from '@/components/client-dist/SecurityActionsTab'
 import { GroupsTab } from '@/components/client-dist/SecurityGroupsTab'
 import { OPS_ALL_CHANNELS, rangeForSpan, toApiRange, toStatsDays } from '@/components/views/client-dist/OpsShared'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
-import { type MetricRange } from '@jianmanager/ui'
 
 const ROLE_PLATFORM_ADMIN = 10
 
@@ -88,14 +87,18 @@ export default function ProtectionCenterPage() {
   }
 
   // 时间窗 = URL from/to（自定义）优先，否则本地预设档。
-  const [range, setRange] = useState<MetricRange>('7d')
+  //
+  // 状态类型用分发观测端点自己的枚举（string）而非 MetricRange：选择器可选「近 180 天」（`180d`），
+  // 而 MetricRange 只到 `1y`。以前硬转 MetricRange，`180d` 在换算函数里落到 default 变 `7d`
+  // （R30：选 180 天实际只查 7 天）。现在原值直达下游，换算函数同时认两套枚举。
+  const [range, setRange] = useState<string>('7d')
   const customWindow: ObsWindow | null = query.from && query.to ? { from: query.from, to: query.to } : null
   const obsWindow: ObsWindow = customWindow ?? { range: toApiRange(range) }
-  const effRange: MetricRange = customWindow ? (rangeForSpan(customWindow.from, customWindow.to) ?? range) : range
+  const effRange: string = customWindow ? (rangeForSpan(customWindow.from, customWindow.to) ?? range) : range
   const setTimeWindow = (w: ObsWindow) => {
     if ('range' in w) {
       setSearchParams(updateClientDistQuery(searchParams, { from: null, to: null }), { replace: true })
-      setRange(w.range as MetricRange)
+      setRange(w.range)
       return
     }
     setSearchParams(updateClientDistQuery(searchParams, { from: w.from, to: w.to }), { replace: true })
@@ -240,7 +243,7 @@ export default function ProtectionCenterPage() {
           </TabsContent>
 
           <TabsContent value="logs" className="space-y-4">
-            <ClientDistLogsTab channelId={channelId} range={toApiRange(effRange)} enabled={isPlatformAdmin} link={runtimeLink} onClearLink={clearRuntimeLink} />
+            <ClientDistLogsTab channelId={channelId} window={obsWindow} enabled={isPlatformAdmin} link={runtimeLink} onClearLink={clearRuntimeLink} />
           </TabsContent>
 
           <TabsContent value="clients" className="space-y-4">
