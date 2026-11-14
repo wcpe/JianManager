@@ -215,8 +215,29 @@ export default function ConfigAdoptPage() {
     if (res) setReport({ stage: 'preview', res })
   }
 
+  /**
+   * 执行纳管。
+   *
+   * 【预演→执行绑定】若刚预演过，把预演里每个文件的 `contentHash` 带回执行请求：
+   * 后端会比对实际读到的内容，不一致就拒绝该文件（CONTENT_CHANGED）。
+   * 不绑的话，预演与执行之间服主改了配置，就会落库一份没人看过、也未被同意的基线。
+   */
   const handleExecute = async () => {
-    const res = await adopt.mutateAsync(request).catch(() => null)
+    const previewHashes = new Map<string, string>()
+    for (const row of report?.stage === 'preview' ? report.res.results : []) {
+      if (row.contentHash) previewHashes.set(`${row.instanceId}\u0000${row.path}`, row.contentHash)
+    }
+    const boundRequest: AdoptRequest =
+      request.files && previewHashes.size > 0
+        ? {
+            ...request,
+            files: request.files.map((f) => {
+              const hash = previewHashes.get(`${f.instanceId}\u0000${f.path}`)
+              return hash ? { ...f, expectedContentHash: hash } : f
+            }),
+          }
+        : request
+    const res = await adopt.mutateAsync(boundRequest).catch(() => null)
     if (res) setReport({ stage: 'executed', res })
   }
 
