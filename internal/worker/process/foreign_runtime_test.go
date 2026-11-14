@@ -436,7 +436,8 @@ func TestPreflight_WorkDirBusy_ExcludesOwnProcessTree(t *testing.T) {
 	orig := preflightListProcesses
 	defer func() { preflightListProcesses = orig }()
 
-	workDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "5002")
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
 	// 根 5000（wrapper）→ 5001（sh -c）→ 5002（java，占目录）；另有外来 9000 也占同目录。
 	preflightListProcesses = func() ([]ScannedProcess, error) {
 		return []ScannedProcess{
@@ -459,7 +460,7 @@ func TestPreflight_WorkDirBusy_ExcludesOwnProcessTree(t *testing.T) {
 	err := checkWorkDirBusy(workDir, 5000)
 	require.Error(t, err, "外来进程占用仍应被判为占用")
 	assert.Contains(t, err.Error(), "9000")
-	assert.NotContains(t, err.Error(), "5002", "自身进程不应出现在占用提示里")
+	assert.NotContains(t, err.Error(), "pid=5002", "自身进程不应出现在占用提示里")
 }
 
 // TestPreflight_PortFree预检正反各一例：真占一个端口 → 失败并带端口号；空闲端口 → 通过；
