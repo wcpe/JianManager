@@ -42,6 +42,28 @@ var sensitiveColumnTokens = []string{
 	"api_key", "access_key", "credential", "pull_key", "key_hash",
 }
 
+// sensitiveTableColumns 是「列名本身不敏感、但内容承载凭据」的精确清单。
+//
+// 为什么不把这些列名直接加进 sensitiveColumnTokens：`config` / `metadata` / `value`
+// 这类通用列名在别的表里是普通配置，按子串一律打码会把 DB 浏览变得没用。
+// 这里按 (表, 列) 精确定位，宁可列一份短清单，也不放宽全局判据。
+var sensitiveTableColumns = map[string]map[string]struct{}{
+	// 告警通道配置：内含 webhook URL / token / 密钥字段。
+	"alert_channels": {"config": {}},
+	// Assistant 供应商凭据引用（只是变量名，但同属凭据面，一并打码）。
+	"assistant_providers": {"credential_env": {}},
+}
+
+// isSensitiveTableColumn 判断 (表, 列) 是否属于内容敏感列。
+func isSensitiveTableColumn(table, name string) bool {
+	cols, ok := sensitiveTableColumns[strings.ToLower(table)]
+	if !ok {
+		return false
+	}
+	_, hit := cols[strings.ToLower(name)]
+	return hit
+}
+
 // isSensitiveColumn 判断列名是否敏感（应脱敏其值）。
 func isSensitiveColumn(name string) bool {
 	lower := strings.ToLower(name)
@@ -122,7 +144,7 @@ func (s *DBBrowseService) tableColumns(table string) ([]DBColumn, error) {
 		cols = append(cols, DBColumn{
 			Name:      name,
 			Type:      strings.ToLower(ct.DatabaseTypeName()),
-			Sensitive: isSensitiveColumn(name),
+			Sensitive: isSensitiveColumn(name) || isSensitiveTableColumn(table, name),
 		})
 	}
 	return cols, nil
@@ -191,6 +213,12 @@ func (s *DBBrowseService) TableRows(table string, p DBRowsParams) (*DBRowsResult
 	}
 
 	maskRows(rows, cols)
+	// KV 型表（platform_settings 这类 key/value 表）按列名识别不出来：列叫 `value`，
+	// 但里面装的是 `github.token` / `invite.smtp.password` / 带凭据的 `proxy.url`。
+	// 正常设置接口对这些是脱敏的（见 settings.go 的 githubTokenItem 等），
+	// 数据库浏览若不跟进，等于给「只有 db 浏览权限、没有设置写权限」的账号
+	// 留了一条读取明文的旁路。
+	maskSensitiveKV(rows, cols)
 
 	return &DBRowsResult{
 		Table:    table,
@@ -223,6 +251,47 @@ func maskRows(rows []map[string]interface{}, cols []DBColumn) {
 			if v, ok := row[name]; ok && v != nil {
 				row[name] = maskedValue
 			}
+		}
+	}
+}
+
+// kvSensitiveKeys 是「值必须脱敏」的平台配置键白名单。
+//
+// 与 settings.go 中标记为 sensitive 的可编辑项保持一致：这些项的值是凭据本身或
+// 内嵌凭据的 URL，正常读取路径一律打码。
+var kvSensitiveKeys = map[string]struct{}{
+	SettingKeyGitHubToken:        {},
+	SettingKeyInviteSMTPPassword: {},
+	SettingKeyProxyURL:           {},
+}
+
+// maskSensitiveKV 对 KV 型行做键级脱敏（就地替换）。
+//
+// 只作用于「同时存在 key 列与 value 列」的行，且仅当该行的 key 命中敏感白名单。
+// 识别用 keysOf 而不是写死列名大小写：SQLite / MySQL 的 map 键大小写不一致。
+func maskSensitiveKV(rows []map[string]interface{}, cols []DBColumn) {
+	keyCol, valueCol := "", ""
+	for _, c := range cols {
+		switch strings.ToLower(c.Name) {
+		case "key":
+			keyCol = c.Name
+		case "value":
+			valueCol = c.Name
+		}
+	}
+	if keyCol == "" || valueCol == "" {
+		return
+	}
+	for _, row := range rows {
+		key, _ := row[keyCol].(string)
+		if key == "" {
+			continue
+		}
+		if _, ok := kvSensitiveKeys[strings.TrimSpace(key)]; !ok {
+			continue
+		}
+		if v, exists := row[valueCol]; exists && v != nil {
+			row[valueCol] = maskedValue
 		}
 	}
 }
