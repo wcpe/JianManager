@@ -206,6 +206,62 @@ func TestClientSecurityGroupsCRUD(t *testing.T) {
 	}
 }
 
+func TestClientSecurityProfilesAndEventsHonorFilters(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	now := time.Now()
+	profiles := []model.ClientSecurityProfile{
+		{ChannelID: "s1", MachineID: "m1", InstallID: "i1", PlayerName: "Steve", PlayerNameNorm: "steve", LastIP: "192.0.2.10", FirstSeen: now, LastSeen: now},
+		{ChannelID: "s2", MachineID: "m2", InstallID: "i2", PlayerName: "Alex", PlayerNameNorm: "alex", LastIP: "198.51.100.7", FirstSeen: now, LastSeen: now},
+	}
+	for i := range profiles {
+		if err := db.Create(&profiles[i]).Error; err != nil {
+			t.Fatalf("写入安全画像失败: %v", err)
+		}
+	}
+	risks := []model.ClientSecurityRiskEvent{
+		{SubjectType: "client", SubjectValue: "i1", ChannelID: "s1", MachineID: "m1", InstallID: "i1", PlayerName: "Steve", IP: "192.0.2.10", RuleCode: "INVALID_PLAYER_NAME", Severity: "low", CreatedAt: now},
+		{SubjectType: "client", SubjectValue: "i2", ChannelID: "s2", MachineID: "m2", InstallID: "i2", PlayerName: "Alex", IP: "198.51.100.7", RuleCode: "ARTIFACT_NOT_ALLOWED", Severity: "medium", CreatedAt: now},
+	}
+	for i := range risks {
+		if err := db.Create(&risks[i]).Error; err != nil {
+			t.Fatalf("写入风险事件失败: %v", err)
+		}
+	}
+
+	// 画像：按频道筛只应拿到 s1 那一行（此前 handler 不读参数，全局最新两条都会返回）。
+	rows := parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/profiles?channelId=s1", nil, token))
+	if len(rows) != 1 || rows[0].(map[string]any)["channelId"] != "s1" {
+		t.Fatalf("画像按 channelId 筛选应只返 s1，实际 %+v", rows)
+	}
+	// 玩家名按归一化列匹配，大小写不敏感。
+	rows = parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/profiles?playerName=STEVE", nil, token))
+	if len(rows) != 1 || rows[0].(map[string]any)["playerName"] != "Steve" {
+		t.Fatalf("画像按 playerName 筛选应命中 Steve，实际 %+v", rows)
+	}
+	// IP / 机器码筛同样要生效。
+	rows = parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/profiles?ip=198.51.100.7", nil, token))
+	if len(rows) != 1 || rows[0].(map[string]any)["machineId"] != "m2" {
+		t.Fatalf("画像按 ip 筛选应命中 m2，实际 %+v", rows)
+	}
+
+	// 风险事件：按频道/规则筛，只应看到对应那一条。
+	events := parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/events?channelId=s1", nil, token))
+	if len(events) != 1 || events[0].(map[string]any)["channelId"] != "s1" {
+		t.Fatalf("风险事件按 channelId 筛选应只返 s1，实际 %+v", events)
+	}
+	events = parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/events?riskRule=ARTIFACT_NOT_ALLOWED", nil, token))
+	if len(events) != 1 || events[0].(map[string]any)["ruleCode"] != "ARTIFACT_NOT_ALLOWED" {
+		t.Fatalf("风险事件按规则筛应只命中一条，实际 %+v", events)
+	}
+	// 不存在的目标必须给空集——不能因为参数被忽略而回退成「全部」。
+	events = parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/events?ip=10.0.0.1", nil, token))
+	if len(events) != 0 {
+		t.Fatalf("风险事件按不存在的 ip 筛应为空，实际 %+v", events)
+	}
+}
+
 func TestClientSecurityAnalysisEndpoints_ReturnAggregates(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)

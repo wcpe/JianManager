@@ -206,6 +206,34 @@ func TestClientDistTracking_SearchEventsRuntimeFiltersAndPagination(t *testing.T
 	require.Equal(t, "m2", page.Items[0].MachineID)
 }
 
+// TestClientDistTracking_RuntimeFilterKeepsChannelScope 全频道口径下，
+// runtime 维度下钻必须按 (channel_id, machine_id) 复合键收敛（R33）。
+//
+// 触发场景：机器码是客户端自报的，两台不同频道的机器完全可能同码。
+// 只按 machine_id 拼 IN 列表时，筛「A 频道的 M = v15」会把「B 频道的 M = v3」的请求一起捞进来。
+func TestClientDistTracking_RuntimeFilterKeepsChannelScope(t *testing.T) {
+	db := newTrackingDB(t)
+	svc := NewClientDistTrackingService(db)
+	require.NoError(t, db.Create(&model.ClientRuntimeState{ChannelID: "chA", MachineID: "shared", LocalVersion: 15}).Error)
+	require.NoError(t, db.Create(&model.ClientRuntimeState{ChannelID: "chB", MachineID: "shared", LocalVersion: 3}).Error)
+	// 两条明细同机器码、不同频道。
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "chA", MachineID: "shared", Kind: "manifest", Version: 15, Status: 200}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "chB", MachineID: "shared", Kind: "manifest", Version: 3, Status: 200}).Error)
+
+	// 全频道下按 v15 下钻：只应命中 chA 那一条。
+	page, err := svc.SearchEvents(ClientDistEventSearchFilter{RuntimeVersion: intPtr(15), Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, "chA", page.Items[0].ChannelID, "不得混入同机器码的 chB 请求")
+
+	// 按 v3 下钻：只应命中 chB。
+	page, err = svc.SearchEvents(ClientDistEventSearchFilter{RuntimeVersion: intPtr(3), Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Equal(t, "chB", page.Items[0].ChannelID)
+}
+
 func TestClientDistTracking_RealtimeOverview(t *testing.T) {
 	db := newTrackingDB(t)
 	svc := NewClientDistTrackingService(db)

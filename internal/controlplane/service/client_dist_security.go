@@ -302,7 +302,18 @@ func (s *ClientDistSecurityService) SetKeyState(keyID uint, state, note string) 
 	if err := s.db.Model(&model.ClientPullKey{}).Where("id = ?", keyID).Updates(updates).Error; err != nil {
 		return err
 	}
-	return s.db.Create(&model.ClientProtectionAction{TargetType: "key", TargetValue: strconv.FormatUint(uint64(keyID), 10), Action: "key_state", Status: "active", Reason: note, CreatedAt: now, UpdatedAt: now}).Error
+	// 处置记录必须带上密钥所属频道（R37）。
+	//
+	// 此前没填 ChannelID：流水按频道筛选时（`channel_id = ? OR target_value = ?`），
+	// 一条「改了 A 频道 key」的记录只有在 target_value 恰好等于频道 slug 时才出现——
+	// 而 key 记录的 target_value 是密钥 ID，于是选 A 频道看不到刚做的动作，切「全部」才看得到。
+	// 取不到密钥归属时留空（不阻断处置本身），流水退化为只在「全部」下可见。
+	channelID := ""
+	var key model.ClientPullKey
+	if err := s.db.Select("channel_id").Where("id = ?", keyID).First(&key).Error; err == nil {
+		channelID = key.ChannelID
+	}
+	return s.db.Create(&model.ClientProtectionAction{TargetType: "key", TargetValue: strconv.FormatUint(uint64(keyID), 10), ChannelID: channelID, Action: "key_state", Status: "active", Reason: note, CreatedAt: now, UpdatedAt: now}).Error
 }
 
 func (s *ClientDistSecurityService) SetChannelProtection(channelID, mode string) error {
@@ -605,9 +616,50 @@ func (s *ClientDistSecurityService) rankProfiles(column, where string, limit int
 	return rows, err
 }
 
-func (s *ClientDistSecurityService) ListProfiles() ([]model.ClientSecurityProfile, error) {
+// ClientSecurityProfileFilter 是客户端画像列表的筛选条件（R32）。
+//
+// 现实缺陷：handler 完全不读查询参数，页面把 channelId/playerName/machineId/ip 都发了过去
+// 却始终拿到「全局最新 200 条」——想靠筛选定位某个旧目标根本查不出来。
+type ClientSecurityProfileFilter struct {
+	ChannelID  string
+	MachineID  string
+	InstallID  string
+	PlayerName string
+	IP         string
+	Limit      int
+}
+
+// ListProfiles 按筛选条件列出客户端画像（缺省=全局最新 200 条）。
+func (s *ClientDistSecurityService) ListProfiles(f ...ClientSecurityProfileFilter) ([]model.ClientSecurityProfile, error) {
+	var filter ClientSecurityProfileFilter
+	if len(f) > 0 {
+		filter = f[0]
+	}
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	} else if limit > 1000 {
+		limit = 1000
+	}
 	var p []model.ClientSecurityProfile
-	return p, s.db.Order("last_seen DESC").Limit(200).Find(&p).Error
+	q := s.db.Model(&model.ClientSecurityProfile{})
+	if filter.ChannelID != "" {
+		q = q.Where("channel_id = ?", filter.ChannelID)
+	}
+	if filter.MachineID != "" {
+		q = q.Where("machine_id = ?", filter.MachineID)
+	}
+	if filter.InstallID != "" {
+		q = q.Where("install_id = ?", filter.InstallID)
+	}
+	if filter.PlayerName != "" {
+		// 画像同时存了原始名与归一化名：按小写查归一化列，避免大小写不同查不到。
+		q = q.Where("player_name_norm = ?", strings.ToLower(filter.PlayerName))
+	}
+	if filter.IP != "" {
+		q = q.Where("last_ip = ?", filter.IP)
+	}
+	return p, q.Order("last_seen DESC").Limit(limit).Find(&p).Error
 }
 
 func (s *ClientDistSecurityService) ProfileDetail(id uint) (*ClientSecurityProfileDetail, error) {
@@ -683,20 +735,82 @@ func securityLevelRank(level string) int {
 	}
 }
 
-func (s *ClientDistSecurityService) ListRiskEvents() ([]model.ClientSecurityRiskEvent, error) {
+// ClientSecurityRiskEventFilter 是风险事件列表的筛选条件（R32）。
+//
+// 与画像同源问题：handler 之前不读任何参数，前端把频道/IP/机器/玩家/规则都发过来，
+// 却永远只能看到「全局最新 200 条」，旧目标的风险记录无法检出。
+type ClientSecurityRiskEventFilter struct {
+	ChannelID  string
+	MachineID  string
+	InstallID  string
+	PlayerName string
+	IP         string
+	RuleCode   string
+	KeyID      string
+	Limit      int
+}
+
+// ListRiskEvents 按筛选条件列出风险事件（缺省=全局最新 200 条）。
+func (s *ClientDistSecurityService) ListRiskEvents(f ...ClientSecurityRiskEventFilter) ([]model.ClientSecurityRiskEvent, error) {
+	var filter ClientSecurityRiskEventFilter
+	if len(f) > 0 {
+		filter = f[0]
+	}
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	} else if limit > 1000 {
+		limit = 1000
+	}
 	var e []model.ClientSecurityRiskEvent
-	return e, s.db.Order("created_at DESC").Limit(200).Find(&e).Error
+	q := s.db.Model(&model.ClientSecurityRiskEvent{})
+	if filter.ChannelID != "" {
+		q = q.Where("channel_id = ?", filter.ChannelID)
+	}
+	if filter.MachineID != "" {
+		q = q.Where("machine_id = ?", filter.MachineID)
+	}
+	if filter.InstallID != "" {
+		q = q.Where("install_id = ?", filter.InstallID)
+	}
+	if filter.PlayerName != "" {
+		q = q.Where("player_name = ?", filter.PlayerName)
+	}
+	if filter.IP != "" {
+		q = q.Where("ip = ?", filter.IP)
+	}
+	if filter.RuleCode != "" {
+		q = q.Where("rule_code = ?", filter.RuleCode)
+	}
+	if filter.KeyID != "" {
+		if id, err := strconv.ParseUint(filter.KeyID, 10, 64); err == nil {
+			q = q.Where("key_id = ?", uint(id))
+		} else {
+			// 非法 keyId 直接给空集：不能静默忽略，否则用户以为是「没有记录」以外的筛选生效。
+			return []model.ClientSecurityRiskEvent{}, nil
+		}
+	}
+	return e, q.Order("created_at DESC").Limit(limit).Find(&e).Error
 }
 
 // ClientDistSecurityLogFilter 是客户端分发安全全量日志查询条件。
+//
+// From/To 是时间窗（R31）：列表与导出必须属于同一集合，而此前列表不带时间窗
+// （返回全量历史）、导出却按 range 过滤，两边对不上。现在两者都从页头同一个
+// 时间选择器派生参数（range 或 from/to）。
 type ClientDistSecurityLogFilter struct {
 	Type       string
 	ChannelID  string
 	MachineID  string
 	PlayerName string
 	IP         string
-	Page       int
-	PageSize   int
+	// ErrCode 按语义错误码精确筛（R36）。前端一直在发 errCode，导出也确实按它过滤，
+	// 只有列表端点没接——于是「筛 INVALID_CLIENT_KEY 的视图」里混进了其它错误码的行。
+	ErrCode  string
+	From     *time.Time
+	To       *time.Time
+	Page     int
+	PageSize int
 }
 
 // ClientDistSecurityLogItem 是安全日志页统一列表项。
@@ -733,47 +847,93 @@ func (s *ClientDistSecurityService) SearchLogs(f ClientDistSecurityLogFilter) (*
 	if f.PageSize <= 0 || f.PageSize > 200 {
 		f.PageSize = 50
 	}
-	items := make([]ClientDistSecurityLogItem, 0, f.PageSize*2)
-	appenders := []struct {
-		typ string
-		fn  func(ClientDistSecurityLogFilter, int) ([]ClientDistSecurityLogItem, error)
+	sources := []struct {
+		typ   string
+		query func(ClientDistSecurityLogFilter) *gorm.DB
+		fn    func(ClientDistSecurityLogFilter, int) ([]ClientDistSecurityLogItem, error)
 	}{
-		{"hello", s.securityHelloLogs},
-		{"risk", s.securityRiskLogs},
-		{"action", s.securityActionLogs},
-		{"request", s.securityRequestLogs},
-		{"runtime", s.securityRuntimeLogs},
-		{"telemetry", s.securityTelemetryLogs},
+		{"hello", s.securityHelloQuery, s.securityHelloLogs},
+		{"risk", s.securityRiskQuery, s.securityRiskLogs},
+		{"action", s.securityActionQuery, s.securityActionLogs},
+		{"request", s.securityRequestQuery, s.securityRequestLogs},
+		{"runtime", s.securityRuntimeQuery, s.securityRuntimeLogs},
+		{"telemetry", s.securityTelemetryQuery, s.securityTelemetryLogs},
 	}
-	limit := f.Page * f.PageSize
-	for _, app := range appenders {
-		if f.Type != "" && f.Type != app.typ {
+	// total 必须是**真实命中数**（R38）。先逐源 COUNT，再按真实总数决定页边界，
+	// 避免把不可信的 page 乘进分配容量或查询 LIMIT。
+	counts := make([]int, len(sources))
+	total := 0
+	selectedSources := 0
+	for i, src := range sources {
+		if f.Type != "" && f.Type != src.typ {
 			continue
 		}
-		rows, err := app.fn(f, limit)
+		var count int64
+		if err := src.query(f).Count(&count).Error; err != nil {
+			return nil, err
+		}
+		counts[i] = int(count)
+		total += counts[i]
+		selectedSources++
+	}
+	lastPage := total > 0 && f.Page <= 1+(total-1)/f.PageSize
+	if !lastPage {
+		return &ClientDistSecurityLogPage{
+			Items: []ClientDistSecurityLogItem{}, Total: total, Page: f.Page, PageSize: f.PageSize,
+		}, nil
+	}
+
+	// Page 已落在真实结果范围内，因此 start 与 limit 均不会溢出；limit 是合并排序
+	// 所需的各源头部长度，而不是按用户页码直接预分配。
+	start := (f.Page - 1) * f.PageSize
+	pageLen := f.PageSize
+	if remaining := total - start; remaining < pageLen {
+		pageLen = remaining
+	}
+	limit := start + pageLen
+	items := make([]ClientDistSecurityLogItem, 0, selectedSources*f.PageSize)
+	for i, src := range sources {
+		if f.Type != "" && f.Type != src.typ {
+			continue
+		}
+		sourceLimit := limit
+		if counts[i] < sourceLimit {
+			sourceLimit = counts[i]
+		}
+		if sourceLimit == 0 {
+			continue
+		}
+		rows, err := src.fn(f, sourceLimit)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, rows...)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
-	total := len(items)
-	start := (f.Page - 1) * f.PageSize
-	if start > total {
-		start = total
+
+	// COUNT 与取数之间可能有并发删改；再次按实际长度钳位，避免切片越界。
+	if start > len(items) {
+		start = len(items)
 	}
-	end := start + f.PageSize
-	if end > total {
-		end = total
+	available := len(items) - start
+	if pageLen > available {
+		pageLen = available
 	}
+	end := start + pageLen
 	return &ClientDistSecurityLogPage{Items: items[start:end], Total: total, Page: f.Page, PageSize: f.PageSize}, nil
+}
+
+// securityHelloQuery 是 hello 源的筛选后查询；取数与计数共用同一份条件（R38）。
+func (s *ClientDistSecurityService) securityHelloQuery(f ClientDistSecurityLogFilter) *gorm.DB {
+	db := s.db.Model(&model.ClientSecurityHello{})
+	db = applySecurityErrCode(db, f, "err_code")
+	db = applySecurityTimeWindow(db, f, "created_at")
+	return applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
 }
 
 func (s *ClientDistSecurityService) securityHelloLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
 	var rows []model.ClientSecurityHello
-	db := s.db.Order("created_at DESC").Limit(limit)
-	db = applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
-	if err := db.Find(&rows).Error; err != nil {
+	if err := s.securityHelloQuery(f).Order("created_at DESC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]ClientDistSecurityLogItem, 0, len(rows))
@@ -787,11 +947,18 @@ func (s *ClientDistSecurityService) securityHelloLogs(f ClientDistSecurityLogFil
 	return out, nil
 }
 
+// securityRiskQuery 是风险事件源的筛选后查询（R38：与计数共用）。
+func (s *ClientDistSecurityService) securityRiskQuery(f ClientDistSecurityLogFilter) *gorm.DB {
+	db := s.db.Model(&model.ClientSecurityRiskEvent{})
+	// 风险事件的错误码维度就是规则码。
+	db = applySecurityErrCode(db, f, "rule_code")
+	db = applySecurityTimeWindow(db, f, "created_at")
+	return applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
+}
+
 func (s *ClientDistSecurityService) securityRiskLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
 	var rows []model.ClientSecurityRiskEvent
-	db := s.db.Order("created_at DESC").Limit(limit)
-	db = applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
-	if err := db.Find(&rows).Error; err != nil {
+	if err := s.securityRiskQuery(f).Order("created_at DESC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]ClientDistSecurityLogItem, 0, len(rows))
@@ -801,19 +968,39 @@ func (s *ClientDistSecurityService) securityRiskLogs(f ClientDistSecurityLogFilt
 	return out, nil
 }
 
+// securityActionQuery 是处置流水源的筛选后查询（R38：与计数共用）。
+// 处置记录没有机器码/玩家名维度，命中这两项筛选时整源排除。
+func (s *ClientDistSecurityService) securityActionQuery(f ClientDistSecurityLogFilter) *gorm.DB {
+	db := s.db.Model(&model.ClientProtectionAction{})
+	// 处置流水没有机器码/玩家名维度，命中这两项筛选时整源排除。
+	if f.MachineID != "" || f.PlayerName != "" {
+		return db.Where("1 = 0")
+	}
+	// 处置流水也没有错误码维度，必须显式排除（而不是静默忽略筛选）。
+	db = applySecurityErrCode(db, f, "")
+	db = applySecurityTimeWindow(db, f, "created_at")
+	if f.ChannelID != "" {
+		// 频道维度的语义是「本频道产生的处置，或目标值恰好是本频道的处置（频道保护记录）」。
+		//
+		// 这里显式写括号是**纵深防御，不是修一个正在发生的 bug**：GORM 会把每个 Where 子句
+		// 各自包成一组（`WHERE (a) AND (b OR c)`），所以即使不写括号，AND/OR 优先级也不会被破坏——
+		// 复审已实测确认这一点，原先「会退化成 channel_id = c OR (...)，IP 条件被整体绕过」的
+		// 判断是误报。保留显式括号的理由只有一个：不让正确性依赖 ORM 的拼接实现细节
+		// （升级 GORM、或有人把这些条件合并进同一个 Where 字符串时，语义就会静默改变）。
+		db = db.Where("(channel_id = ? OR target_value = ?)", f.ChannelID, f.ChannelID)
+	}
+	if f.IP != "" {
+		db = db.Where("(target_type = ? AND target_value = ?)", "ip", f.IP)
+	}
+	return db
+}
+
 func (s *ClientDistSecurityService) securityActionLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
-	var rows []model.ClientProtectionAction
 	if f.MachineID != "" || f.PlayerName != "" {
 		return []ClientDistSecurityLogItem{}, nil
 	}
-	db := s.db.Order("created_at DESC").Limit(limit)
-	if f.ChannelID != "" {
-		db = db.Where("channel_id = ? OR target_value = ?", f.ChannelID, f.ChannelID)
-	}
-	if f.IP != "" {
-		db = db.Where("target_type = ? AND target_value = ?", "ip", f.IP)
-	}
-	if err := db.Find(&rows).Error; err != nil {
+	var rows []model.ClientProtectionAction
+	if err := s.securityActionQuery(f).Order("created_at DESC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]ClientDistSecurityLogItem, 0, len(rows))
@@ -823,11 +1010,17 @@ func (s *ClientDistSecurityService) securityActionLogs(f ClientDistSecurityLogFi
 	return out, nil
 }
 
+// securityRequestQuery 是请求明细源的筛选后查询（R38：与计数共用）。
+func (s *ClientDistSecurityService) securityRequestQuery(f ClientDistSecurityLogFilter) *gorm.DB {
+	db := s.db.Model(&model.ClientDistEvent{})
+	db = applySecurityErrCode(db, f, "err_code")
+	db = applySecurityTimeWindow(db, f, "created_at")
+	return applySecurityCommonFilter(db, f, "channel_id", "machine_id", "", "ip")
+}
+
 func (s *ClientDistSecurityService) securityRequestLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
 	var rows []model.ClientDistEvent
-	db := s.db.Order("created_at DESC").Limit(limit)
-	db = applySecurityCommonFilter(db, f, "channel_id", "machine_id", "", "ip")
-	if err := db.Find(&rows).Error; err != nil {
+	if err := s.securityRequestQuery(f).Order("created_at DESC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]ClientDistSecurityLogItem, 0, len(rows))
@@ -837,11 +1030,19 @@ func (s *ClientDistSecurityService) securityRequestLogs(f ClientDistSecurityLogF
 	return out, nil
 }
 
+// securityRuntimeQuery 是运行态快照源的筛选后查询（R38：与计数共用）。
+func (s *ClientDistSecurityService) securityRuntimeQuery(f ClientDistSecurityLogFilter) *gorm.DB {
+	db := s.db.Model(&model.ClientRuntimeState{})
+	// 运行态快照没有错误码维度，必须显式排除（否则带 errCode 筛选时会把整片运行态混进结果）。
+	db = applySecurityErrCode(db, f, "")
+	// 运行态是快照表，时间列不是 created_at，时间窗按 last_heartbeat_at 下推（R31）。
+	db = applySecurityTimeWindow(db, f, "last_heartbeat_at")
+	return applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
+}
+
 func (s *ClientDistSecurityService) securityRuntimeLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
 	var rows []model.ClientRuntimeState
-	db := s.db.Order("last_heartbeat_at DESC").Limit(limit)
-	db = applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
-	if err := db.Find(&rows).Error; err != nil {
+	if err := s.securityRuntimeQuery(f).Order("last_heartbeat_at DESC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]ClientDistSecurityLogItem, 0, len(rows))
@@ -851,11 +1052,18 @@ func (s *ClientDistSecurityService) securityRuntimeLogs(f ClientDistSecurityLogF
 	return out, nil
 }
 
+// securityTelemetryQuery 是更新遥测源的筛选后查询（R38：与计数共用）。
+func (s *ClientDistSecurityService) securityTelemetryQuery(f ClientDistSecurityLogFilter) *gorm.DB {
+	db := s.db.Model(&model.ClientTelemetry{})
+	// 遥测表的错误列叫 error。
+	db = applySecurityErrCode(db, f, "error")
+	db = applySecurityTimeWindow(db, f, "created_at")
+	return applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
+}
+
 func (s *ClientDistSecurityService) securityTelemetryLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
 	var rows []model.ClientTelemetry
-	db := s.db.Order("created_at DESC").Limit(limit)
-	db = applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
-	if err := db.Find(&rows).Error; err != nil {
+	if err := s.securityTelemetryQuery(f).Order("created_at DESC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]ClientDistSecurityLogItem, 0, len(rows))
@@ -872,6 +1080,8 @@ func (s *ClientDistSecurityService) securityTelemetryLogs(f ClientDistSecurityLo
 	return out, nil
 }
 
+// applySecurityCommonFilter 只做维度筛选；时间窗由各源按自己的时间列单独下推
+// （运行态是快照表，时间列是 last_heartbeat_at，不能统一用 created_at）。
 func applySecurityCommonFilter(db *gorm.DB, f ClientDistSecurityLogFilter, channelCol, machineCol, playerCol, ipCol string) *gorm.DB {
 	if f.ChannelID != "" {
 		if channelCol == "" {
@@ -901,6 +1111,38 @@ func applySecurityCommonFilter(db *gorm.DB, f ClientDistSecurityLogFilter, chann
 }
 
 func logID(prefix string, id uint) string { return prefix + ":" + strconv.FormatUint(uint64(id), 10) }
+
+// applySecurityErrCode 把错误码筛下推到单个日志源（R36）。
+//
+// 各源的「错误码」列不同（hello/request 是 err_code，risk 是 rule_code，telemetry 是 error），
+// 处置流水与运行态没有这一维度，由调用方传空列名表示「本类型不参与该筛」。
+// 空列名 + 非空筛值 = 该源整体排除（返回 1=0）：静默忽略会让用户以为筛选生效却看到无关行。
+func applySecurityErrCode(db *gorm.DB, f ClientDistSecurityLogFilter, errCol string) *gorm.DB {
+	if f.ErrCode == "" {
+		return db
+	}
+	if errCol == "" {
+		return db.Where("1 = 0")
+	}
+	return db.Where(errCol+" = ?", f.ErrCode)
+}
+
+// applySecurityTimeWindow 把时间窗下推到单个日志源（R31）。
+//
+// 各源的时间列不同（明细/安全表用 created_at，运行态快照表用 last_heartbeat_at），
+// 所以列名由调用方给。窗口为空即不约束（兼容不带时间参数的旧请求）。
+func applySecurityTimeWindow(db *gorm.DB, f ClientDistSecurityLogFilter, timeCol string) *gorm.DB {
+	if timeCol == "" {
+		return db
+	}
+	if f.From != nil {
+		db = db.Where(timeCol+" >= ?", *f.From)
+	}
+	if f.To != nil {
+		db = db.Where(timeCol+" <= ?", *f.To)
+	}
+	return db
+}
 
 func parseLogJSON(raw string) any {
 	if strings.TrimSpace(raw) == "" {

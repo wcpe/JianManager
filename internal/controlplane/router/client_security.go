@@ -72,7 +72,16 @@ func (h *ClientSecurityHandler) Profiles(c *gin.Context) {
 	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
-	out, err := h.svc.ListProfiles()
+	// 筛选参数（R32）：前端一直在发 channelId/machineId/playerName/ip，
+	// 此前 handler 一个都不读，页面无论怎么筛都是「全局最新 200 条」。
+	out, err := h.svc.ListProfiles(service.ClientSecurityProfileFilter{
+		ChannelID:  c.Query("channelId"),
+		MachineID:  c.Query("machineId"),
+		InstallID:  c.Query("installId"),
+		PlayerName: c.Query("playerName"),
+		IP:         c.Query("ip"),
+		Limit:      parseIntDefault(c.Query("limit"), 200),
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
 		return
@@ -120,7 +129,17 @@ func (h *ClientSecurityHandler) Events(c *gin.Context) {
 	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
-	out, err := h.svc.ListRiskEvents()
+	// 筛选参数（R32）：频道/IP/机器/玩家/规则/keyId 此前全部被忽略。
+	out, err := h.svc.ListRiskEvents(service.ClientSecurityRiskEventFilter{
+		ChannelID:  c.Query("channelId"),
+		MachineID:  c.Query("machineId"),
+		InstallID:  c.Query("installId"),
+		PlayerName: c.Query("playerName"),
+		IP:         c.Query("ip"),
+		RuleCode:   c.Query("riskRule"),
+		KeyID:      c.Query("keyId"),
+		Limit:      parseIntDefault(c.Query("limit"), 200),
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
 		return
@@ -150,7 +169,30 @@ func (h *ClientSecurityHandler) Logs(c *gin.Context) {
 	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
-	out, err := h.svc.SearchLogs(service.ClientDistSecurityLogFilter{Type: c.Query("type"), ChannelID: c.Query("channelId"), MachineID: c.Query("machineId"), PlayerName: c.Query("playerName"), IP: c.Query("ip"), Page: parseIntDefault(c.Query("page"), 1), PageSize: parseIntDefault(c.Query("pageSize"), 50)})
+	// 时间窗（R31）：列表此前完全不读时间参数，于是「页头选 7 天、列表给全量历史」
+	// 而导出却按 7 天过滤——同一屏两块数据不是同一集合。
+	//
+	// 但传窗仍是**可选**：不带 from/to/range 的调用方（旧客户端、排障脚本、MCP）
+	// 保持原有「全量最近 N 条」语义，不因缺参被 400 拒掉、也不被悄悄默认成 7d。
+	filter := service.ClientDistSecurityLogFilter{
+		Type: c.Query("type"), ChannelID: c.Query("channelId"), MachineID: c.Query("machineId"),
+		PlayerName: c.Query("playerName"), IP: c.Query("ip"),
+		// errCode 也一并接入（R36）：前端一直在发它，导出也确实按它过滤，
+		// 只有列表没接——同一个筛选条下，列表混着别的错误码、导出的 CSV 却是干净的。
+		ErrCode:  c.Query("errCode"),
+		Page:     parseIntDefault(c.Query("page"), 1),
+		PageSize: parseIntDefault(c.Query("pageSize"), 50),
+	}
+	if hasObsRangeParam(c) {
+		from, to, ok := parseObsRange(c)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_RANGE", "message": "range/from/to 非法"})
+			return
+		}
+		filter.From = &from
+		filter.To = &to
+	}
+	out, err := h.svc.SearchLogs(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
 		return
