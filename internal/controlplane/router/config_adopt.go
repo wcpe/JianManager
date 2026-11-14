@@ -72,9 +72,15 @@ func (h *ConfigAdoptHandler) run(c *gin.Context, req service.ConfigAdoptRequest,
 	if forceDryRun {
 		req.DryRun = true
 	}
+	// 实例范围守卫：显式 files[].instanceId 逐台校验；批量的 target 交给
+	// Service 用 ResolveScoped 收敛（解析后只保留可见实例）。
+	guard := newConfigScopeGuard(c, h.authz)
+	if !guard.requireAllAccessible(explicitAdoptInstanceIDs(req)) {
+		return
+	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	authorID, _ := uid.(uint)
-	resp, err := h.svc.Adopt(req, authorID)
+	resp, err := h.svc.AdoptScoped(req, authorID, guard.targetScope())
 	if err != nil {
 		h.respondErr(c, err)
 		return

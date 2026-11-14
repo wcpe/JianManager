@@ -300,9 +300,19 @@ type adoptTask struct {
 
 // Adopt 执行纳管（单文件/多文件 或 批量，由请求形态决定）。
 func (s *ConfigAdoptService) Adopt(req ConfigAdoptRequest, authorID uint) (*ConfigAdoptResponse, error) {
+	return s.AdoptScoped(req, authorID, BusinessTargetScope{})
+}
+
+// AdoptScoped 是 Adopt 的范围收敛版：scope.Scoped=true 时，批量目标只会解析到
+// 调用者可访问的实例（ResolveScoped 内部求交），而不会去读盘无权实例。
+//
+// 路由必须传真实 scope：纳管会读实例磁盘并写入配置层版本，越权目标不得进入流程。
+func (s *ConfigAdoptService) AdoptScoped(req ConfigAdoptRequest, authorID uint, scope BusinessTargetScope) (*ConfigAdoptResponse, error) {
 	if req.Target != nil {
-		return s.adoptBatch(req, authorID)
+		return s.adoptBatch(req, authorID, scope)
 	}
+	// 显式文件列表没有 selector 可收敛，越权判定只能由路由层逐项做
+	//（CanAccessInstance），属于调用方职责；这里不做二次过滤。
 	return s.adoptFiles(req, authorID)
 }
 
@@ -391,7 +401,7 @@ type adoptInstancePlan struct {
 }
 
 // adoptBatch 按分组 / 实例集合批量纳管。
-func (s *ConfigAdoptService) adoptBatch(req ConfigAdoptRequest, authorID uint) (*ConfigAdoptResponse, error) {
+func (s *ConfigAdoptService) adoptBatch(req ConfigAdoptRequest, authorID uint, scope BusinessTargetScope) (*ConfigAdoptResponse, error) {
 	if s.source == nil {
 		return nil, fmt.Errorf("磁盘配置读取源未初始化")
 	}
@@ -408,7 +418,7 @@ func (s *ConfigAdoptService) adoptBatch(req ConfigAdoptRequest, authorID uint) (
 	if len(patterns) == 0 {
 		return nil, ErrAdoptPatternRequired
 	}
-	resolved, err := s.resolver.Resolve(*req.Target)
+	resolved, err := s.resolver.ResolveScoped(*req.Target, scope)
 	if err != nil {
 		return nil, err
 	}

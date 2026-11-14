@@ -2,12 +2,15 @@ package router
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 // 配置分层覆盖路由端到端测试（§7）。
@@ -280,4 +283,86 @@ func TestConfigFiles_UpdateCanClearFields(t *testing.T) {
 	}, adminTok)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Equal(t, "新描述", parseJSON(t, w)["description"])
+}
+
+// TestConfigFileEffective_NilAuthzFailsClosed authz 未装配时必须拒绝，不得放行。
+//
+// 【到底怎么才能区分新旧实现（已实测验证）】必须同时满足两个条件：
+//  1. 实例**真实存在且属于调用者可访问的组**。否则 canAccessInstance 会因
+//     “实例不存在 / 无组归属”返回 false，**旧代码也会拒**，用例就是假绿
+//     （我先前两版就倒在这里：只设 CtxUserID 被 403 拦，或 instanceId 指向
+//     不存在的实例，新旧都是 404）。
+//  2. authz 传 nil（模拟精简部署/裁剪装配）。
+//
+// 只有这个组合下，旧实现 `h.authz != nil && !canAccessInstance(...)` 会因短路
+// **整段跳过**，返回 200 并把有效配置（含未遮罩前溯源）漏给调用者；
+// 新实现 `h.authz == nil || ...` 拒绝。
+//
+// 已用 go overlay 对比旧版 config_file.go 实测：旧=200，新=非 200。
+func TestConfigFileEffective_NilAuthzFailsClosed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	adminTok := getAdminToken(t, r)
+
+	w := makeRequest(r, http.MethodPost, "/api/v1/config-files", map[string]any{
+		"name": "ef0.properties", "format": "properties",
+	}, adminTok)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	fileID := uint(parseJSON(t, w)["id"].(float64))
+
+	// 关键：造一个真实存在、且有组归属的实例。
+	g := createGroupViaAPI(t, r, adminTok, "efnilgrp")
+	n := createTestNode(t, db)
+	instID := createInstanceViaAPI(t, r, adminTok, n.ID, g)
+
+	engine := gin.New()
+	grp := engine.Group("/api/v1")
+	grp.Use(func(c *gin.Context) {
+		// 平台管理员：requireNodes 恒过，专测实例闸。
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Set(middleware.CtxAccess, &service.UserAccess{UserID: 1, IsPlatformAdmin: true})
+		c.Next()
+	})
+	// authz == nil：模拟装配缺失。
+	h := NewConfigFileHandler(service.NewConfigFileService(db), nil, nil)
+	h.RegisterRoutes(grp)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/config-files/"+itoa(fileID)+"/effective?instanceId="+itoa(instID), nil)
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+
+	// 核心断言：必须拒绝。旧实现（authz != nil && ...）在这里返回 200。
+	require.NotEqual(t, http.StatusOK, rec.Code,
+		"authz 未装配时必须 fail-closed；旧实现此处会返回 200 并漏出有效配置，实际: %s",
+		rec.Body.String())
+}
+
+// TestConfigFileEffective_NonAdminCannotPreviewForeignInstance 非管理员预览他人实例必须 404。
+//
+// 这是 Effective 实例闸的**正向覆盖**：持 file.read 的非管理员，对不可访问实例
+// 必须 404（不论 authz 是否 nil）。真正的装配缺失场景见 handler 内的
+// `h.authz == nil ||` 分支——它保证精简部署不会退化为全放行。
+func TestConfigFileEffective_NonAdminCannotPreviewForeignInstance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	adminTok := getAdminToken(t, r)
+
+	w := makeRequest(r, http.MethodPost, "/api/v1/config-files", map[string]any{
+		"name": "ef3.properties", "format": "properties",
+	}, adminTok)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	fileID := uint(parseJSON(t, w)["id"].(float64))
+
+	// 持 file.read 但没有任何组归属的用户（组外实例对它不可见）。
+	userSvc := service.NewUserService(db)
+	authz := service.NewAuthzService(db)
+	tok := gateUserToken(t, r, db, authz, userSvc, "efviewer", []string{"file.read"}, 0)
+
+	w = makeRequest(r, http.MethodGet,
+		"/api/v1/config-files/"+itoa(fileID)+"/effective?instanceId=1", nil, tok)
+	require.Equal(t, http.StatusNotFound, w.Code,
+		"非管理员预览不可访问实例必须 404，实际: %s", w.Body.String())
 }
