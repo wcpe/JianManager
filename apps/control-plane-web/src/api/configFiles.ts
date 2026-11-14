@@ -172,6 +172,14 @@ export interface SaveLayerInput {
   scopeId: number
   content: string
   remark?: string
+  /**
+   * 乐观并发：本次编辑基于哪一版 head（该层当前版本 id）。
+   *
+   * 不传 = 不检查（新建该层 v1）；传了但服务端发现 head 已变，会回 409
+   * `CONFIG_LAYER_CONFLICT`——说明别人刚保存过，必须重新加载后再改，
+   * 否则会把对方的整层内容静默覆盖。
+   */
+  expectedHeadVersionId?: number
 }
 
 /** 后端错误信封（网关约定 `{error, message}`；校验失败额外带 `issues`）。 */

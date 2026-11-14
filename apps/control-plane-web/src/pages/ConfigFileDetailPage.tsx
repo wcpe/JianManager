@@ -56,6 +56,17 @@ function formatUnixSeconds(sec: number): string {
   return formatRelativeTime(ms)
 }
 
+/**
+ * 是否为「层被他人抢先更新」（409 CONFIG_LAYER_CONFLICT）。
+ *
+ * 必须与普通保存失败分开处理：它不是可重试的抖动，而是「你看到的已不是最新」，
+ * 正确反应是刷新到新 head 再看一眼，而不是原样重试（重试会再撞一次）。
+ */
+function isLayerConflict(err: unknown): boolean {
+  const e = err as { response?: { status?: number; data?: { error?: string } } } | undefined
+  return e?.response?.status === 409 && e.response.data?.error === 'CONFIG_LAYER_CONFLICT'
+}
+
 /** 把扁平分组节点排成带缩进的下拉选项（先序，父在前）。 */
 function groupOptions(nodes: InstanceGroupNode[] | undefined): ComboboxOption[] {
   const list = nodes ?? []
@@ -210,10 +221,22 @@ export default function ConfigFileDetailPage() {
         scopeId: selected.id,
         content: draft,
         remark: remark.trim() || undefined,
+        /*
+          乐观并发：告诉服务端「我是基于这一版改的」。
+          不带它时，两个人同时编辑同一层，后保存的会静默把对方的整层内容覆盖掉
+          （新版本成为 head，对方改动只剩在历史里，也没人被告知）。
+        */
+        ...(headVersion ? { expectedHeadVersionId: headVersion.id } : {}),
       })
       toast.success(t('configFiles.layerSaved'))
       setRemark('')
     } catch (err) {
+      // 409 = 别人先保存了：说明情况并刷新历史，让用户看到新的 head 再决定怎么合。
+      if (isLayerConflict(err)) {
+        toast.error(t('configFiles.layerConflict', '该层已被其他人保存更新，已为你刷新到最新版本，请重新修改'))
+        await historyQuery.refetch()
+        return
+      }
       toast.error(apiErrorMessage(err, t('configFiles.layerSaveFailed')))
     }
   }
