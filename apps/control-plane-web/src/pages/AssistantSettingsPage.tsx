@@ -156,15 +156,22 @@ export default function AssistantSettingsPage() {
     successKey: string,
   ): Promise<boolean> => {
     const current = settingsQuery.data
+    // 设置尚未取回时**不许提交**：整体替换语义下，缺省字段会被置空。
+    // 此时提交等于用「null / [] / ''」覆盖服务端既有配置（后端已改为拒绝 version=0，
+    // 这里再挡一次，避免把用户操作变成一次必然失败的往返）。
+    if (!current) {
+      toast.error(t('assistant.settingsNotLoaded', '设置尚未加载完成，请稍后重试'))
+      return false
+    }
     try {
       await saveSettings.mutateAsync({
         defaultModelId:
-          patch.defaultModelId !== undefined ? patch.defaultModelId : (current?.defaultModelId ?? null),
-        allowPrivateCidrs: patch.allowPrivateCidrs ?? current?.allowPrivateCidrs ?? [],
+          patch.defaultModelId !== undefined ? patch.defaultModelId : current.defaultModelId,
+        allowPrivateCidrs: patch.allowPrivateCidrs ?? current.allowPrivateCidrs,
         // 整体替换语义：未 patch 时必须回填当前值，否则会把已保存的提示词清空。
-        systemPrompt: patch.systemPrompt ?? current?.systemPrompt ?? '',
+        systemPrompt: patch.systemPrompt ?? current.systemPrompt,
         builtinToolsEnabled: patch.builtinToolsEnabled,
-        version: current?.version ?? 0,
+        version: current.version,
       })
       toast.success(t(successKey, '已保存'))
       return true
