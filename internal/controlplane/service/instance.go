@@ -2743,7 +2743,7 @@ func (s *InstanceService) InspectManagedProcess(id uint, pid int32) (*ManagedPro
 	if !resp.Success {
 		return nil, &ManagedProcessError{Code: resp.Code, Message: resp.Message}
 	}
-	history, rows, err := s.managedProcessHistory(instance.UUID, pid)
+	history, rows, err := s.managedProcessHistory(instance.UUID, pid, processStartedAt(resp))
 	if err != nil {
 		return nil, fmt.Errorf("查询进程历史样本失败: %w", err)
 	}
@@ -2796,11 +2796,17 @@ func (s *InstanceService) managedProcessClient(id uint) (*model.Instance, *model
 
 const managedProcessHistoryWindow = 30 * time.Minute
 
-func (s *InstanceService) managedProcessHistory(instanceUUID string, pid int32) (ManagedProcessHistory, []model.ProcessMetricSnapshot, error) {
+func (s *InstanceService) managedProcessHistory(instanceUUID string, pid int32, startedAt time.Time) (ManagedProcessHistory, []model.ProcessMetricSnapshot, error) {
 	var rows []model.ProcessMetricSnapshot
 	// 采样入库统一存 UTC（metric.go 写入 sampledAt.UTC()），查询窗口须用 UTC 时间对齐，
 	// 否则本地时区（如 +08:00）比较会把窗口起点推后 8 小时、永远查不到样本（真机验收抓到）。
 	from := time.Now().UTC().Add(-managedProcessHistoryWindow)
+	// 跨代过滤：快照只记 instance_uuid + pid，没有进程启动时间；30 分钟内发生 PID 复用
+	// （重启/子进程周转）时，前一代样本会被算进当前进程的平均 CPU、RSS 首尾差与诊断。
+	// Worker 的进程详情带了 started_at，早于它的样本不可能属于当前这个进程，直接裁掉。
+	if !startedAt.IsZero() && startedAt.After(from) {
+		from = startedAt.UTC()
+	}
 	err := s.db.Where("instance_uuid = ? AND pid = ? AND sampled_at >= ?", instanceUUID, pid, from).
 		Order("sampled_at ASC").Find(&rows).Error
 	if err != nil {
@@ -2903,6 +2909,17 @@ func managedProcessDetailFromProto(resp *workerpb.ManagedProcessInspectResponse,
 
 func managedProcessInstanceSummary(instance *model.Instance, node *model.Node) ManagedProcessInstanceSummary {
 	return ManagedProcessInstanceSummary{ID: instance.ID, UUID: instance.UUID, Name: instance.Name, NodeID: node.ID, NodeUUID: node.UUID, NodeName: node.Name}
+}
+
+// processStartedAt 取进程详情里目标进程的启动时刻（UTC）；Worker 未上报时返回零值。
+//
+// 用途：把「同一 PID 的前一代」挡在历史统计之外——快照本身没有代次，只有启动时刻
+// 能可靠区分「这个进程」与「之前踩过同一 PID 的进程」。
+func processStartedAt(resp *workerpb.ManagedProcessInspectResponse) time.Time {
+	if resp == nil || resp.Target == nil || resp.Target.StartedAtUnixMs <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(resp.Target.StartedAtUnixMs).UTC()
 }
 
 func managedProcessInfoFromProto(info *workerpb.ManagedProcessInfo) ManagedProcessInfo {
