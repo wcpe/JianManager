@@ -4986,7 +4986,6 @@
     "granularityCrossChannel": "Cross-channel",
     "activeClients": "Active Clients",
     "activeClients1h": "Active in 1h",
-    "adminOnly": "Client Distribution Ops requires platform admin",
     "noPermission": "This account lacks the client distribution ops permission (dist.ops.read)",
     "allChannels": "All channels (total)",
     "allKinds": "All kinds",

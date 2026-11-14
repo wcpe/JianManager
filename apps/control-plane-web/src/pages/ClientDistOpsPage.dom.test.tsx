@@ -5,7 +5,8 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { useAuthStore } from '@/stores/auth'
-import { mockInject } from '@jianmanager/devmock/inject'
+import { HttpResponse } from 'msw'
+import { domainRoute, mockInject } from '@jianmanager/devmock/inject'
 import { server } from '@jianmanager/devmock/server'
 import ProtectionCenterPage from './ProtectionCenterPage'
 import ClientDistRedirect from './ClientDistRedirect'
@@ -582,13 +583,29 @@ describe('页面 B 补充：a11y 名称与去重标题（P0-3/P0-4）', () => {
     expect(within(tablist).getAllByRole('tab')).toHaveLength(7)
   })
 
-  it('非管理员分支：仅一处「客户端分发运维」标题（Panel 不再重复），文案为运维口径，且不渲染 Tabs', async () => {
+  it('无 dist.ops 权限分支：仅一处「客户端分发运维」标题（Panel 不再重复），文案为权限口径，且不渲染 Tabs', async () => {
     loginAs(MEMBER_TOKEN)
     renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops' })
 
-    expect(await screen.findByText('客户端分发运维需平台管理员权限')).toBeInTheDocument()
+    // R29：判据从 role===10 改成权限节点，文案也跟着从「需平台管理员」改成「没有权限」。
+    expect(await screen.findByText('当前账号没有客户端分发运维权限（需 dist.ops.read）')).toBeInTheDocument()
     // h1 恰好一次；若 Panel 仍带重复 title 会 >1。
     expect(screen.getAllByText('客户端分发运维')).toHaveLength(1)
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+  })
+
+  it('委派角色（非平台管理员，但持有 dist.ops.read）可进页并渲染 7 Tab（R29）', async () => {
+    // 自定义角色：role 不是 10，但被授了 dist.ops.read——此前路由层硬判 role===10 会把它赶回首页。
+    // 真源必须是 /auth/me（权限 store 每次登录都会拉一次），单改 store 会被异步回包覆盖。
+    loginAs(MEMBER_TOKEN)
+    server.use(
+      domainRoute('get', '/auth/me', () =>
+        HttpResponse.json({ userId: 2, username: 'bob', role: 0, roleKey: 'custom_dist_ops', isPlatformAdmin: false, nodes: ['dist.ops.read'] }),
+      ),
+    )
+    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops' })
+
+    expect(await screen.findByRole('tablist', { name: '视图切换' })).toBeInTheDocument()
+    expect(screen.queryByText('当前账号没有客户端分发运维权限（需 dist.ops.read）')).not.toBeInTheDocument()
   })
 })

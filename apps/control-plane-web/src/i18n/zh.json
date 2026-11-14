@@ -4986,7 +4986,6 @@
     "granularityCrossChannel": "跨频道口径",
     "activeClients": "活跃客户端",
     "activeClients1h": "近 1h 活跃",
-    "adminOnly": "客户端分发运维需平台管理员权限",
     "noPermission": "当前账号没有客户端分发运维权限（需 dist.ops.read）",
     "allChannels": "全部频道（总）",
     "allKinds": "全部类型",
