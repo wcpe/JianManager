@@ -213,6 +213,11 @@ func (h *SnapshotHandler) Delete(c *gin.Context) {
 	actor := binaryVersionActorID(c)
 	if err := h.svc.Delete(sid); err != nil {
 		h.recordAudit(actor, "instance.snapshot_delete", target.InstanceID, "snapshot#"+itoaUint(sid), c.ClientIP(), false, err.Error())
+		// 在途/未完成快照：409 而不是 500——这是可重试的业务态，不是服务故障。
+		if errors.Is(err, service.ErrSnapshotOperationInFlight) {
+			c.JSON(http.StatusConflict, gin.H{"error": "OPERATION_IN_FLIGHT", "message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "删除快照失败"})
 		return
 	}
