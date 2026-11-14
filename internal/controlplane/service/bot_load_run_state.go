@@ -70,6 +70,15 @@ func TransitionRunState(from model.BotLoadRunState, intent BotLoadRunIntent) (to
 		if from == model.BotLoadRunPreflighting || from == model.BotLoadRunPending {
 			return model.BotLoadRunReady, false, nil
 		}
+		// ready → ready：重新预检。
+		//
+		// 预检每次都会重新规划并落库新 token，token 有有效期，过期后就靠「再次预检」重取。
+		// 原状态机不接受 ready→ready，于是第二次预检在**新 plan 已落库之后**报状态冲突，
+		// 客户端拿不到 token，只能另建一个运行——从事务上看，它做的事都一样，只是没重取。
+		// 这里判为幂等：状态不变，也不当作「发生转移」。
+		if from == model.BotLoadRunReady {
+			return model.BotLoadRunReady, true, nil
+		}
 	case BotLoadIntentStart:
 		if from == model.BotLoadRunReady {
 			return model.BotLoadRunStarting, false, nil

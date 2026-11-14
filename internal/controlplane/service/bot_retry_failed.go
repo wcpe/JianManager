@@ -245,6 +245,26 @@ func (s *BotLoadExecutionService) lookupNodeUUID(ctx context.Context, nodeID uin
 }
 
 func (s *BotLoadExecutionService) dispatchRetryBots(ctx context.Context, session *model.BotStressSession, nodeUUID string, bots []model.Bot, fromStepID string) ([]botLoadDispatchItem, error) {
+	// Worker 对单个 ApplyBotBatch 有 assignments 上限（目前 50）。超过就整批被拒（InvalidArgument），
+	// 重试反而全部不生效——而候选在此之前已经被置为 pending，下一次重试又只挑 error/disconnected，
+	// 于是一批 >50 的失败 Bot 会卡在 pending 上无法靠重试拉回。这里按上限切片、逐片下发。
+	const maxAssignmentBatch = 50
+	items := make([]botLoadDispatchItem, 0, len(bots))
+	for start := 0; start < len(bots); start += maxAssignmentBatch {
+		end := start + maxAssignmentBatch
+		if end > len(bots) {
+			end = len(bots)
+		}
+		chunkItems, err := s.dispatchRetryBotChunk(ctx, session, nodeUUID, bots[start:end], fromStepID)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, chunkItems...)
+	}
+	return items, nil
+}
+
+func (s *BotLoadExecutionService) dispatchRetryBotChunk(ctx context.Context, session *model.BotStressSession, nodeUUID string, bots []model.Bot, fromStepID string) ([]botLoadDispatchItem, error) {
 	assignments := make([]*workerpb.BotAssignment, 0, len(bots))
 	for index := range bots {
 		bot := &bots[index]
@@ -274,11 +294,19 @@ func (s *BotLoadExecutionService) dispatchRetryBots(ctx context.Context, session
 }
 
 func (s *BotLoadExecutionService) loadRetryIdempotentResult(ctx context.Context, sessionID uint, requestID string) (*BotLoadRetryResult, bool, error) {
+	// 这里必须只认**带 result 的**审计记录。
+	//
+	// handler 在 service 之后还会用同一 action/target/requestId 再写一条审计，那条只有
+	// requestId 与 count、没有 result。此前按 id DESC 取最新，于是第二次相同 requestId
+	// 命中 handler 那条，detail 解出零值 Result（且 unmarshal 成功、不报错），
+	// 调用方拿到全 0 的「幂等回执」——看起来像什么都没做，实际第一次已经下发过。
 	var log model.AuditLog
 	err := s.db.WithContext(ctx).
 		Where("action = ? AND target_type = ? AND target_id = ? AND failed = ?",
 			botLoadRetryAuditAction, "bot_load_run", fmt.Sprintf("%d", sessionID), false).
 		Where("detail LIKE ?", "%\"requestId\":\""+requestID+"\"%").
+		// 只要 service 写的那条：它的 detail 里带 "result" 键。
+		Where("detail LIKE ?", "%\"result\"%").
 		Order("id DESC").
 		First(&log).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
