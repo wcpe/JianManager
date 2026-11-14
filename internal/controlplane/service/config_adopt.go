@@ -77,6 +77,13 @@ const (
 	AdoptCodeConfigFileArchived = "CONFIG_FILE_ARCHIVED"
 	// AdoptCodeWriteFailed 落库失败。
 	AdoptCodeWriteFailed = "WRITE_FAILED"
+	// AdoptCodeContentChanged 预演后磁盘文件又变了，与预演时看到的 hash 不一致。
+	//
+	// 【为什么需要它】预演的价值在于「先看会写什么，再决定要不要写」。若两次之间文件被改
+	// （服主刚改了配置、另一个进程在重写），执行会落库一份用户没看过、也没同意过的内容，
+	// 而且纳管是不可覆盖的基线，事后只能靠历史对比发现。故执行时要求 hash 与预演一致，
+	// 不一致就拒绝该文件并提示重新预演。
+	AdoptCodeContentChanged = "CONTENT_CHANGED"
 )
 
 // 逐实例的纳管状态（批量路径）。
@@ -125,6 +132,11 @@ type AdoptFileItem struct {
 	Path string `json:"path"`
 	// AsName 可选的 config_file 逻辑名；留空则用 path。
 	AsName string `json:"asName,omitempty"`
+	// ExpectedContentHash 预演时看到的磁盘 sha256（小写 hex）。
+	//
+	// 非空时，执行阶段要求实际读到的内容与它一致，否则该文件判失败（CONTENT_CHANGED）。
+	// 留空 = 不做校验（直接纳管，或预演与执行不是同一批人）。
+	ExpectedContentHash string `json:"expectedContentHash,omitempty"`
 }
 
 // ConfigAdoptRequest 是纳管请求（单文件/多文件与批量两种形态共用一个入口）。
@@ -282,6 +294,8 @@ type adoptTask struct {
 	// ReadErrCode 非空表示读阶段已失败，写阶段原样落这个结果。
 	ReadErrCode    string
 	ReadErrMessage string
+	// ExpectedContentHash 调用方在预演时看到的磁盘 sha256；非空则要求本次读到的内容与之一致。
+	ExpectedContentHash string
 }
 
 // Adopt 执行纳管（单文件/多文件 或 批量，由请求形态决定）。
@@ -346,7 +360,12 @@ func (s *ConfigAdoptService) readExplicitFiles(items []AdoptFileItem) []adoptTas
 			defer func() { <-sem }()
 			for _, idx := range indexes {
 				it := items[idx]
-				tasks[idx] = s.readTask(instanceID, it.Path, it.AsName)
+				t := s.readTask(instanceID, it.Path, it.AsName)
+				// 预演→执行的绑定：执行时要求磁盘内容与预演时一致。
+				// 不一致不在这里判（读阶段只负责把两个 hash 放在一起），交给 applyTask
+				// 统一出 CONTENT_CHANGED 结果，这样 dryRun 与实跑的返回形状一致。
+				t.ExpectedContentHash = it.ExpectedContentHash
+				tasks[idx] = t
 			}
 		}(instanceID, indexes)
 	}
@@ -551,6 +570,14 @@ func (s *ConfigAdoptService) applyTask(t adoptTask, createBaseline, dryRun bool,
 		out.Status = AdoptStatusFailed
 		out.Code = t.ReadErrCode
 		out.Message = t.ReadErrMessage
+		return out
+	}
+	// 预演→执行绑定：预演时看到的 hash 与现在读到的不一致，说明文件在这期间被改过。
+	// 此时落库等于把用户没看过的内容写成不可覆盖的基线，故拒绝该文件并提示重新预演。
+	if t.ExpectedContentHash != "" && !strings.EqualFold(t.ExpectedContentHash, t.ContentHash) {
+		out.Status = AdoptStatusFailed
+		out.Code = AdoptCodeContentChanged
+		out.Message = "文件在预演之后已被修改，请重新预演后再纳管"
 		return out
 	}
 	// 只读探测：内容能否被解析。失败不阻断纳管（纳管的语义是「记录现状」，
