@@ -298,6 +298,31 @@ func (s *JDKService) Delete(nodeID, jdkID uint) ([]model.Instance, error) {
 		return used, ErrJDKInUse
 	}
 
+	// 还有一条绑定路径：实例可以只声明「Java 大版本」（jdk_id=0 + java_major_version=N），
+	// 启动时由 resolveJDKPath 在该节点上按大版本挑一个托管 JDK。这条路径不写 jdk_id，
+	// 所以上面那句查不到——但删掉这个 JDK 目录后，实例下次启动就找不到运行时了。
+	// 只在托管 JDK 上有意义（外部 JDK 目录不归平台删，删记录不影响磁盘）。
+	if jdk.Managed && jdk.MajorVersion > 0 {
+		var byMajor []model.Instance
+		if err := s.db.Where("node_id = ? AND jdk_id = 0 AND java_major_version = ?", nodeID, jdk.MajorVersion).
+			Find(&byMajor).Error; err != nil {
+			return nil, err
+		}
+		if len(byMajor) > 0 {
+			// 同大版本还有别的托管 JDK 时不算占用：resolveJDKPath 会挑到另一个，
+			// 报占用会让「多装一个同版本再删旧的」这类正常操作被误拦。
+			var sameMajor int64
+			if err := s.db.Model(&model.NodeJDK{}).
+				Where("node_id = ? AND major_version = ? AND id <> ? AND managed = ?", nodeID, jdk.MajorVersion, jdkID, true).
+				Count(&sameMajor).Error; err != nil {
+				return nil, err
+			}
+			if sameMajor == 0 {
+				return byMajor, ErrJDKInUse
+			}
+		}
+	}
+
 	// 仅「内部下载（托管）」的 JDK 才删除 Worker 上的文件；外部登记的只删记录、绝不动用户磁盘文件（细化：
 	// 外部 JDK 由用户自管，平台无权删其文件；托管 JDK 在平台 data 目录下，删记录时一并清理文件）。
 	if jdk.Managed && s.pool != nil {
