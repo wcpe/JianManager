@@ -492,6 +492,19 @@ type ClientSecurityProfileDetail struct {
 	ProtectionActions []model.ClientProtectionAction  `json:"protectionActions"`
 }
 
+// ipAnalysisRow 是 IP 剖析的聚合中间行（SQL 聚合结果，再补密钥数/封禁态后转成对外的 ClientDistIPAnalysis）。
+type ipAnalysisRow struct {
+	IP              string
+	RequestCount    int64
+	RejectCount     int64
+	InvalidKeyCount int64
+	NotFoundCount   int64
+	RangeCount      int64
+	DownloadBytes   int64
+	ChannelCount    int64
+	LastSeen        string
+}
+
 type ClientDistIPAnalysis struct {
 	IP              string    `json:"ip"`
 	RequestCount    int64     `json:"requestCount"`
@@ -1187,17 +1200,6 @@ func (s *ClientDistSecurityService) ListIPAnalysis(limit int) ([]ClientDistIPAna
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	type ipAnalysisRow struct {
-		IP              string
-		RequestCount    int64
-		RejectCount     int64
-		InvalidKeyCount int64
-		NotFoundCount   int64
-		RangeCount      int64
-		DownloadBytes   int64
-		ChannelCount    int64
-		LastSeen        string
-	}
 	var rawRows []ipAnalysisRow
 	if err := s.db.Model(&model.ClientDistEvent{}).
 		Select("ip, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) AS reject_count, COALESCE(SUM(CASE WHEN err_code = 'INVALID_CLIENT_KEY' THEN 1 ELSE 0 END), 0) AS invalid_key_count, COALESCE(SUM(CASE WHEN err_code = 'ARTIFACT_NOT_FOUND' THEN 1 ELSE 0 END), 0) AS not_found_count, COALESCE(SUM(CASE WHEN err_code IN ('INVALID_RANGE','RANGE_SMALL') THEN 1 ELSE 0 END), 0) AS range_count, COALESCE(SUM(bytes), 0) AS download_bytes, COUNT(DISTINCT channel_id) AS channel_count, MAX(created_at) AS last_seen").
@@ -1212,31 +1214,59 @@ func (s *ClientDistSecurityService) ListIPAnalysis(limit int) ([]ClientDistIPAna
 	for _, a := range actions {
 		blocked[a.TargetValue] = true
 	}
+	// 关联密钥数（R39）：事件明细不含 key_id，权威来源是安全画像的 last_ip → key_id。
+	// 此前 KeyCount 从未赋值，界面上永远显示 0——一个用了 5 把密钥的 IP 和只试过一次的 IP 看起来一样。
+	keyCounts, err := s.ipKeyCounts(rawRows)
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]ClientDistIPAnalysis, 0, len(rawRows))
 	for _, row := range rawRows {
 		out := ClientDistIPAnalysis{
 			IP: row.IP, RequestCount: row.RequestCount, RejectCount: row.RejectCount,
 			InvalidKeyCount: row.InvalidKeyCount, NotFoundCount: row.NotFoundCount, RangeCount: row.RangeCount,
-			DownloadBytes: row.DownloadBytes, ChannelCount: row.ChannelCount, LastSeen: parseSecurityAggregateTime(row.LastSeen),
+			DownloadBytes: row.DownloadBytes, KeyCount: keyCounts[row.IP], ChannelCount: row.ChannelCount,
+			LastSeen:  parseSecurityAggregateTime(row.LastSeen),
 			RiskScore: row.RejectCount + row.RangeCount, Blocked: blocked[row.IP],
 		}
 		rows = append(rows, out)
 	}
 	return rows, nil
 }
+
+// ipKeyCounts 按 IP 统计「见过的不同密钥数」（R39）。只查本页涉及的 IP，不做全表聚合。
+func (s *ClientDistSecurityService) ipKeyCounts(rawRows []ipAnalysisRow) (map[string]int64, error) {
+	out := make(map[string]int64, len(rawRows))
+	if len(rawRows) == 0 {
+		return out, nil
+	}
+	ips := make([]string, 0, len(rawRows))
+	for _, row := range rawRows {
+		if row.IP != "" {
+			ips = append(ips, row.IP)
+		}
+	}
+	if len(ips) == 0 {
+		return out, nil
+	}
+	type ipKeyRow struct {
+		IP       string
+		KeyCount int64
+	}
+	var raws []ipKeyRow
+	if err := s.db.Model(&model.ClientSecurityProfile{}).
+		Select("last_ip AS ip, COUNT(DISTINCT key_id) AS key_count").
+		Where("last_ip IN ?", ips).Group("last_ip").Scan(&raws).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range raws {
+		out[r.IP] = r.KeyCount
+	}
+	return out, nil
+}
 func (s *ClientDistSecurityService) ListPlayerAnalysis(limit int) ([]ClientDistPlayerAnalysis, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
-	}
-	type playerAnalysisRow struct {
-		PlayerName   string
-		InstallCount int64
-		MachineCount int64
-		IPCount      int64
-		KeyCount     int64
-		ChannelCount int64
-		RiskScore    int64
-		LastSeen     string
 	}
 	var rawRows []playerAnalysisRow
 	if err := s.db.Model(&model.ClientSecurityProfile{}).
@@ -1244,15 +1274,115 @@ func (s *ClientDistSecurityService) ListPlayerAnalysis(limit int) ([]ClientDistP
 		Where("player_name != ''").Group("player_name").Order("install_count DESC").Limit(limit).Scan(&rawRows).Error; err != nil {
 		return nil, err
 	}
+	// 下载量与异常请求数（R39）：此前从未赋值，界面上永远显示 0 与 0 B。
+	// 画像表没有字节维度，权威来源是分发明细（按 player_name + 频道 + 机器码关联）：
+	// 画像的 (channel_id, machine_id) 是稳定身份，明细每行的 bytes/status 就是该玩家的实际行为。
+	downloads, abnormals, err := s.playerTraffic(rawRows)
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]ClientDistPlayerAnalysis, 0, len(rawRows))
 	for _, row := range rawRows {
 		rows = append(rows, ClientDistPlayerAnalysis{
 			PlayerName: row.PlayerName, InstallCount: row.InstallCount, MachineCount: row.MachineCount,
 			IPCount: row.IPCount, KeyCount: row.KeyCount, ChannelCount: row.ChannelCount,
+			DownloadBytes: downloads[row.PlayerName], AbnormalRequests: abnormals[row.PlayerName],
 			RiskScore: row.RiskScore, LastSeen: parseSecurityAggregateTime(row.LastSeen),
 		})
 	}
 	return rows, nil
+}
+
+// playerAnalysisRow 是玩家剖析的聚合中间行（画像表聚合结果，再补流量维度）。
+type playerAnalysisRow struct {
+	PlayerName   string
+	InstallCount int64
+	MachineCount int64
+	IPCount      int64
+	KeyCount     int64
+	ChannelCount int64
+	RiskScore    int64
+	LastSeen     string
+}
+
+// playerTraffic 按玩家名汇总下载字节数与异常请求数（R39）。
+//
+// 关联路径：画像给出该玩家名对应的 (channel_id, machine_id) 身份集合，再用同一套复合键
+// 去分发明细里取 bytes 之和与 status>=400 的条数。只查本页玩家，不做全表聚合；
+// 机器码属于同一玩家但跨频道重复计数是可接受的——那本来就是两条独立的客户端身份。
+func (s *ClientDistSecurityService) playerTraffic(rawRows []playerAnalysisRow) (map[string]int64, map[string]int64, error) {
+	downloads := make(map[string]int64, len(rawRows))
+	abnormals := make(map[string]int64, len(rawRows))
+	if len(rawRows) == 0 {
+		return downloads, abnormals, nil
+	}
+	names := make([]string, 0, len(rawRows))
+	for _, row := range rawRows {
+		if row.PlayerName != "" {
+			names = append(names, row.PlayerName)
+		}
+	}
+	if len(names) == 0 {
+		return downloads, abnormals, nil
+	}
+	var profiles []model.ClientSecurityProfile
+	if err := s.db.Select("player_name, channel_id, machine_id").
+		Where("player_name IN ? AND machine_id <> ''", names).Find(&profiles).Error; err != nil {
+		return nil, nil, err
+	}
+	if len(profiles) == 0 {
+		return downloads, abnormals, nil
+	}
+	// 同一 (channel, machine) 可能对应多个画像行（不同 installId），去重后作为身份集合。
+	type identity struct {
+		playerName string
+		channelID  string
+		machineID  string
+	}
+	seen := make(map[identity]struct{}, len(profiles))
+	identities := make([]identity, 0, len(profiles))
+	for _, p := range profiles {
+		key := identity{playerName: p.PlayerName, channelID: p.ChannelID, machineID: p.MachineID}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		identities = append(identities, key)
+	}
+
+	type aggRow struct {
+		ChannelID string
+		MachineID string
+		Bytes     int64
+		Abnormals int64
+	}
+	var raws []aggRow
+	q := s.db.Model(&model.ClientDistEvent{}).
+		Select("channel_id, machine_id, COALESCE(SUM(bytes), 0) AS bytes, COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) AS abnormals")
+	// 用 (channel_id, machine_id) 复合键收敛，避免同名机器码跨频道串味（与 R33 同口径）。
+	conds := make([]string, 0, len(identities))
+	args := make([]any, 0, len(identities)*2)
+	for _, id := range identities {
+		conds = append(conds, "(channel_id = ? AND machine_id = ?)")
+		args = append(args, id.channelID, id.machineID)
+	}
+	q = q.Where(strings.Join(conds, " OR "), args...).Group("channel_id, machine_id")
+	if err := q.Scan(&raws).Error; err != nil {
+		return nil, nil, err
+	}
+	byIdentity := make(map[[2]string]aggRow, len(raws))
+	for _, r := range raws {
+		byIdentity[[2]string{r.ChannelID, r.MachineID}] = r
+	}
+	for _, id := range identities {
+		row, ok := byIdentity[[2]string{id.channelID, id.machineID}]
+		if !ok {
+			continue
+		}
+		downloads[id.playerName] += row.Bytes
+		abnormals[id.playerName] += row.Abnormals
+	}
+	return downloads, abnormals, nil
 }
 
 func parseSecurityAggregateTime(v string) time.Time {

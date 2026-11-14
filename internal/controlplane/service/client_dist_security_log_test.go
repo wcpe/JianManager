@@ -176,6 +176,29 @@ func TestClientDistSecurity_SearchLogsReportsTrueTotal(t *testing.T) {
 //
 // 原状：IP 剖析的 keyCount、玩家剖析的 downloadBytes/abnormalRequests 从未赋值，
 // 序列化出去恒为 0——界面上「0 把密钥 / 0 B 下载 / 0 次异常」和「真的没有」无法区分。
+func TestClientDistSecurity_AnalysisFillsTrafficFields(t *testing.T) {
+	db := newSecurityLogDB(t)
+	svc := NewClientDistSecurityService(db, nil, nil)
+	now := time.Now()
+
+	// 同一玩家两台机器：一台正常下载、一台有 4xx。
+	require.NoError(t, db.Create(&model.ClientSecurityProfile{ChannelID: "s1", MachineID: "m1", InstallID: "i1", PlayerName: "Alex", PlayerNameNorm: "alex", LastIP: "192.0.2.10", KeyID: 7, FirstSeen: now, LastSeen: now}).Error)
+	require.NoError(t, db.Create(&model.ClientSecurityProfile{ChannelID: "s1", MachineID: "m2", InstallID: "i2", PlayerName: "Alex", PlayerNameNorm: "alex", LastIP: "192.0.2.10", KeyID: 8, FirstSeen: now, LastSeen: now}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "s1", MachineID: "m1", IP: "192.0.2.10", Kind: "artifact", Status: 200, Bytes: 1000, CreatedAt: now}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "s1", MachineID: "m2", IP: "192.0.2.10", Kind: "artifact", Status: 500, Bytes: 250, CreatedAt: now}).Error)
+
+	ips, err := svc.ListIPAnalysis(200)
+	require.NoError(t, err)
+	require.Len(t, ips, 1)
+	require.Equal(t, int64(2), ips[0].KeyCount, "同一 IP 见过 2 把不同密钥")
+	require.Equal(t, int64(1250), ips[0].DownloadBytes)
+
+	players, err := svc.ListPlayerAnalysis(200)
+	require.NoError(t, err)
+	require.Len(t, players, 1)
+	require.Equal(t, int64(1250), players[0].DownloadBytes, "下载量应汇总两台机器")
+	require.Equal(t, int64(1), players[0].AbnormalRequests, "status>=400 计一次异常")
+}
 
 // TestClientDistSecurity_ActionFilterChannelAndIPCombined 处置流水的「频道 + IP」组合筛选
 // 必须同时生效（review 发现：`channel_id = ? OR target_value = ?` 与后续 AND 条件拼接时，
