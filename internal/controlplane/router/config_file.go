@@ -237,7 +237,14 @@ func (h *ConfigFileHandler) SaveLayer(c *gin.Context) {
 	h.recordAudit(c, authorID, "config_layer_save", id,
 		"scope="+string(ver.ScopeLevel)+":"+strconv.FormatUint(uint64(ver.ScopeRefID), 10)+
 			" v"+strconv.Itoa(ver.VersionNo)+" hash="+ver.ContentHash)
-	c.JSON(http.StatusOK, ver)
+	// 对外展示必须与 GET history 同口径脱敏：直接返回 model.ConfigLayerVersion
+	// 会让「保存一个含密钥的层」的响应体把明文吐回给调用方。
+	view, verr := h.svc.LayerVersionViewOf(id, ver)
+	if verr != nil {
+		h.respondErr(c, verr)
+		return
+	}
+	c.JSON(http.StatusOK, view)
 }
 
 type layerRollbackRequest struct {
@@ -274,7 +281,13 @@ func (h *ConfigFileHandler) RollbackLayer(c *gin.Context) {
 		"scope="+string(ver.ScopeLevel)+":"+strconv.FormatUint(uint64(ver.ScopeRefID), 10)+
 			" to=v"+strconv.Itoa(ver.VersionNo)+" from=#"+
 			strconv.FormatUint(uint64(derefUint(ver.BasedOnVersionID)), 10))
-	c.JSON(http.StatusOK, ver)
+	// 同 SaveLayer：响应体走脱敏视图，不回原文。
+	view, verr := h.svc.LayerVersionViewOf(id, ver)
+	if verr != nil {
+		h.respondErr(c, verr)
+		return
+	}
+	c.JSON(http.StatusOK, view)
 }
 
 // DeleteLayer 删除某作用域的全部版本（撤销该层覆盖）。
@@ -388,6 +401,10 @@ func (h *ConfigFileHandler) respondErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": err.Error()})
 	case errors.Is(err, service.ErrConfigFileExists):
 		c.JSON(http.StatusConflict, gin.H{"error": "ALREADY_EXISTS", "message": err.Error()})
+	case errors.Is(err, service.ErrConfigLayerConflict):
+		// 409 + 稳定错误码：前端据此提示「已被他人更新」并重新拉历史，
+		// 而不是把这条当成可无脑重试的业务错误（重试会再撞一次）。
+		c.JSON(http.StatusConflict, gin.H{"error": "CONFIG_LAYER_CONFLICT", "message": err.Error()})
 	case errors.Is(err, service.ErrConfigFormatImmutable),
 		errors.Is(err, service.ErrConfigNameImmutable),
 		errors.Is(err, service.ErrConfigScopeInvalid):
