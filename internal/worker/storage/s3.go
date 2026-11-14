@@ -136,7 +136,7 @@ func newS3Backend(cfg Config) (Backend, error) {
 		region:    region,
 		accessKey: cfg.AccessKey,
 		secretKey: cfg.SecretKey,
-		client:    defaultHTTPClient(),
+		client:    backendHTTPClient(cfg),
 	}, nil
 }
 
