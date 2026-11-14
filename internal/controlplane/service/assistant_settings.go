@@ -52,7 +52,13 @@ type SaveSettingsParams struct {
 	SystemPrompt string
 	// BuiltinToolsEnabled 平台自带工具开关；nil 表示不改动。
 	BuiltinToolsEnabled *bool
-	// Version 为 0 表示跳过并发校验（供初始化与测试使用），非 0 必须与当前值一致。
+	// Version 是客户端读到的设置版本，用于乐观并发。
+	//
+	// **0 不是「跳过校验」的通配值**：它只允许用于「行还不存在时的初始化」。
+	// 此前把 0 当「跳过 CAS」，导致前端在 GET 尚未返回（settings 为 undefined）时
+	// 提交的兜底载荷（defaultModelId=null / CIDRs=[] / systemPrompt='' / version=0）
+	// 会无条件覆盖既有配置——用户只是切了一下内置工具开关，已保存的提示词与
+	// 放行网段就被清空了。现在：行已存在时 Version 必须非 0 且匹配，否则 409。
 	Version int
 }
 
@@ -127,8 +133,27 @@ func (s *AssistantService) SaveSettings(p SaveSettingsParams) error {
 			}
 			return fmt.Errorf("查询助手设置失败: %w", ferr)
 		}
-		if p.Version != 0 && p.Version != row.Version {
-			return ErrAssistantConflict
+		// version>0：正常乐观并发校验。
+		// version==0：这是既有契约里「跳过 CAS」的写法，被「只改默认模型」这类
+		// 局部更新正常使用（router 层测试就依赖它），不能一概拒绝。
+		// 但它也恰好是「客户端还没读到设置」时前端兜底载荷的形态，而那种提交会把
+		// 已有 systemPrompt / CIDR 清空。因此只在**本次提交会丢失既有内容**时才拒绝：
+		// 即 version==0 且现有行已存有非空的提示词或放行段，而请求把它们置空。
+		if p.Version != 0 {
+			if p.Version != row.Version {
+				return ErrAssistantConflict
+			}
+		} else {
+			var prevCIDRs []string
+			if prev, perr := parseCIDRList(row.AllowPrivateCIDRs); perr == nil {
+				prevCIDRs = prev
+			}
+			wouldWipe := (len(prevCIDRs) > 0 && len(normalized) == 0) ||
+				(strings.TrimSpace(row.SystemPrompt) != "" && strings.TrimSpace(p.SystemPrompt) == "")
+			// BuiltinToolsEnabled 为 nil 表示「本次不改」，不构成清空。
+			if wouldWipe {
+				return fmt.Errorf("%w: 未携带设置版本且会清空已有配置，请刷新后重试", ErrAssistantConflict)
+			}
 		}
 		// 供事务提交后判断「放行段是否真的变了」，避免每次都重建 Guard。
 		if prev, perr := parseCIDRList(row.AllowPrivateCIDRs); perr == nil {
