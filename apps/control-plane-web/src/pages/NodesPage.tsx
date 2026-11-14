@@ -393,10 +393,22 @@ export default function NodesPage() {
     })
   }, [filtered, sortKey, sortOrder, instanceCountByNode])
 
+  /*
+    【越界页收敛】`?page=99` 是可能的：删节点、改筛选、改页大小、或分享了一个旧链接，
+    都可能让 URL 里的页码超出实际页数。不处理的话表格会是一片空白，
+    而分页条同时显示「第 99 / 3 页」——看起来像页面坏了。
+
+    只把**渲染**收敛到最后一页（不写 URL）：写 URL 会在 render 期间触发导航，
+    那是一次副作用；页码仍可分享，用户手动改回小页码仍生效。
+    页码超出时在分页条上给一条提示（见 NodePaginationBar 的 pageOutOfRange）。
+  */
+  const totalPages = Math.max(1, Math.ceil(sortedNodes.length / Math.max(1, pageSize)))
+  const effectivePage = Math.min(page, totalPages)
+  const pageOutOfRange = page > totalPages
   /** 当前页的节点（分页切片）。分页只影响渲染，不影响排序与统计。 */
   const pagedNodes = useMemo(
-    () => sortedNodes.slice((page - 1) * pageSize, page * pageSize),
-    [sortedNodes, page, pageSize],
+    () => sortedNodes.slice((effectivePage - 1) * pageSize, effectivePage * pageSize),
+    [sortedNodes, effectivePage, pageSize],
   )
 
   const filteredArchived = useMemo(() => {
@@ -913,13 +925,14 @@ export default function NodesPage() {
             </div>
             {/* 卡片视图同样分页：此前直接 map 全量，超过一页的节点被静默隐藏。 */}
             <NodePaginationBar
-              page={page}
+              page={effectivePage}
               pageSize={pageSize}
               total={sortedNodes.length}
               loaded={pagedNodes.length}
               onPageChange={setPage}
               onPageSizeChange={changePageSize}
               autoSize={!sizeParam}
+              pageOutOfRange={pageOutOfRange}
             />
             </div>
           ) : (
@@ -941,12 +954,13 @@ export default function NodesPage() {
               onToggleRow={toggleRowSelect}
               emptyKind={filtered.length === 0 && (query.trim() !== '' || statusFilter !== 'all') ? 'noMatch' : 'noNodes'}
               pagination={{
-                page,
+                page: effectivePage,
                 pageSize,
                 total: sortedNodes.length,
                 onPageChange: setPage,
                 onPageSizeChange: changePageSize,
                 autoSize: !sizeParam,
+                pageOutOfRange,
               }}
             />
           )
@@ -1629,7 +1643,7 @@ function NodeInstanceCompareContainer({ node }: { node: NodeInfo }) {
  */
 function NodeMonitorChartsContainer({ node }: { node: NodeInfo }) {
   const rangeState = useNodeMetricRange()
-  const { data, isFetching } = useMetricSeries({
+  const { data, isFetching, isError, refetch } = useMetricSeries({
     scope: 'node',
     targetId: node.uuid,
     range: rangeState.range,
@@ -1642,6 +1656,8 @@ function NodeMonitorChartsContainer({ node }: { node: NodeInfo }) {
         series={data?.series ?? []}
         nodeUuid={node.uuid}
         resolution={data?.resolution}
+        isError={isError}
+        onRetry={() => void refetch()}
       />
       {/*
         实例指标对比并入监控页签：它回答的是「这些实例谁快谁慢」，

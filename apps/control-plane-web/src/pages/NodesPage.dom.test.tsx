@@ -478,6 +478,72 @@ describe('NodesPage（mock 假后端）', () => {
     expect(table).toBeInTheDocument()
   })
 
+  /*
+    【三态状态】节点正在拉起（status=2）时既非在线也非离线。
+    原来只分二态，启动中会被写成「离线」——运维据此会去查网络，而它其实正在启动。
+  */
+  it('启动中节点显示「启动中」而非「离线」', async () => {
+    loginMockUser()
+    stubInstances()
+    server.use(
+      http.get(API('/nodes'), () =>
+        HttpResponse.json([
+          {
+            id: 9, uuid: 'node-starting', name: 'node-starting', host: '10.0.0.99',
+            grpcPort: 9100, wsPort: 9200, status: 2, maintenance: false, tunnelConnected: false,
+            os: 'linux', arch: 'amd64', cpuCores: 4, memoryMb: 8192, diskTotalMb: 100000,
+            cpuUsage: 0, memoryUsage: 0, diskUsage: 0, networkBytesSent: 0, networkBytesRecv: 0,
+            loadAvg1: 0, lastHeartbeat: null, createdAt: new Date().toISOString(),
+          },
+        ]),
+      ),
+    )
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
+
+    const row = await screen.findByTestId('nodes-table-row')
+    expect(row).toHaveTextContent('启动中')
+    expect(row).not.toHaveTextContent('离线')
+  })
+
+  /*
+    【load=0 是合法读数】0 表示机器空闲，不是「没采到」。
+    原来用 falsy 判据（`node.loadAvg1 ? ... : '--'`），空闲机被写成「无数据」。
+  */
+  it('load=0 正常显示为 0.00 而不是 --', async () => {
+    loginMockUser()
+    stubInstances()
+    server.use(
+      http.get(API('/nodes'), () =>
+        HttpResponse.json([
+          {
+            id: 8, uuid: 'node-idle', name: 'node-idle', host: '10.0.0.98',
+            grpcPort: 9100, wsPort: 9200, status: 1, maintenance: false, tunnelConnected: true,
+            os: 'linux', arch: 'amd64', cpuCores: 4, memoryMb: 8192, diskTotalMb: 100000,
+            cpuUsage: 0.01, memoryUsage: 0.02, diskUsage: 0.03, networkBytesSent: 0, networkBytesRecv: 0,
+            loadAvg1: 0, lastHeartbeat: new Date().toISOString(), createdAt: new Date().toISOString(),
+          },
+        ]),
+      ),
+    )
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list' })
+
+    const row = await screen.findByTestId('nodes-table-row')
+    await waitFor(() => expect(row).toHaveTextContent('0.00'))
+  })
+
+  /*
+    【越界页收敛】`?page=99` 可能来自删节点/改筛选/旧链接。不处理时表格一片空白，
+    分页条还显示「第 99 / N 页」，看起来像页面坏了。
+  */
+  it('URL 页码越界时渲染最后一页并提示，不出现空白页', async () => {
+    loginMockUser()
+    stubInstances()
+    renderWithProviders(<NodesPage />, { route: '/nodes?layout=list&size=5&page=99' })
+
+    await waitFor(() => expect(screen.getAllByTestId('nodes-table-row').length).toBeGreaterThan(0))
+    expect(screen.getByTestId('nodes-page-out-of-range')).toBeInTheDocument()
+  })
+
   it('视图切换：卡片 / 列表可切换，且选择持久化', async () => {
     const user = userEvent.setup()
     loginMockUser()

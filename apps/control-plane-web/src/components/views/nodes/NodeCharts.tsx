@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Button } from '@jianmanager/ui/components/button'
 import { Segments, Segment } from '@jianmanager/ui/components/layout'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { CalendarRange } from 'lucide-react'
@@ -59,6 +60,16 @@ export interface NodeMonitorChartsProps {
    * 仅用于「区间总消耗」的桶宽兜底——点数太少时无法从序列推出桶宽。
    */
   resolution?: string
+  /**
+   * 取数失败。
+   *
+   * 必须与「窗口内确实没有数据」分开：失败时 `series` 是空数组，五张图会各画一个
+   * 空坐标轴，看起来像「这台机器最近一小时什么都没干」。改为一处统一的错误条，
+   * 并保留重试入口。
+   */
+  isError?: boolean
+  /** 重试取数（错误条上的按钮）。 */
+  onRetry?: () => void
 }
 
 /** 
@@ -404,6 +415,8 @@ export function NodeMonitorCharts({
   series: nodeSeries,
   nodeUuid,
   resolution,
+  isError = false,
+  onRetry,
 }: NodeMonitorChartsProps) {
   const { t } = useTranslation()
 
@@ -434,6 +447,24 @@ export function NodeMonitorCharts({
   return (
     <div className="space-y-3">
       <MetricRangeBar state={range} />
+      {/*
+        取数失败：五张图共用一条错误提示，而不是让每张图各画一个空坐标轴。
+        空图会被读成「这台机器窗口内没有活动」，而失败只是「这次没拉到」。
+      */}
+      {isError && (
+        <div
+          role="alert"
+          data-testid="node-monitor-error"
+          className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+        >
+          <span className="min-w-0 flex-1">{t('nodes.monitorUnavailable', '监控数据加载失败')}</span>
+          {onRetry && (
+            <Button size="sm" variant="outline" onClick={onRetry}>
+              {t('common.retry')}
+            </Button>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {/*
           负载置顶且占满两列：负载是「这台机器还扛不扛得住」的第一信号，
