@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http/httpproxy"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -187,14 +188,18 @@ func TestBackupProbeHTTPClient_ProxyDisabled(t *testing.T) {
 	// 真的设置代理环境变量：确认探测 client 不会把请求交给它。
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
-	// ProxyFromEnvironment 会读环境变量；用同一个请求验证它确实会接管，
-	// 而我们的探测 Transport 不会——两相对比才有判别力。
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+	t.Setenv("REQUEST_METHOD", "")
+	// 标准库会缓存首次读取的代理环境；对照必须现场解析本用例的配置，
+	// 避免先前请求和宿主的绕过列表改变前置条件。
 	req, err := http.NewRequest(http.MethodGet, "http://example.com/", nil)
 	require.NoError(t, err)
 
-	proxied, perr := http.ProxyFromEnvironment(req)
+	proxied, perr := httpproxy.FromEnvironment().ProxyFunc()(req.URL)
 	require.NoError(t, perr)
-	require.NotNil(t, proxied, "前置条件：设了 HTTP_PROXY 后 ProxyFromEnvironment 应当接管")
+	require.NotNil(t, proxied, "前置条件：当前代理环境应当接管请求")
+	require.Equal(t, "http://127.0.0.1:1", proxied.String())
 	require.Nil(t, tr.Proxy, "而探测 Transport 的 Proxy 必须是 nil，不受环境变量影响")
 }
 

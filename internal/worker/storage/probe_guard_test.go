@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/net/http/httpproxy"
 )
 
 // TestIsBlockedProbeIP_Worker 与 CP 同套网段枚举：内网/回环/元数据必须拦。
@@ -150,13 +151,17 @@ func TestProbeHTTPClient_ProxyDisabled(t *testing.T) {
 
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+	t.Setenv("REQUEST_METHOD", "")
 	req, err := http.NewRequest(http.MethodGet, "http://example.com/", nil)
 	require.NoError(t, err)
 
-	// 前置条件：ProxyFromEnvironment 确实会接管（证明环境变量已生效）。
-	proxied, perr := http.ProxyFromEnvironment(req)
+	// 现场解析本用例的配置，避开标准库的进程级首次读取缓存。
+	proxied, perr := httpproxy.FromEnvironment().ProxyFunc()(req.URL)
 	require.NoError(t, perr)
-	require.NotNil(t, proxied, "设了 HTTP_PROXY 后 ProxyFromEnvironment 应当接管")
+	require.NotNil(t, proxied, "当前代理环境应当接管请求")
+	require.Equal(t, "http://127.0.0.1:1", proxied.String())
 	// 而探测 Transport 不受影响。
 	require.Nil(t, tr.Proxy)
 }
