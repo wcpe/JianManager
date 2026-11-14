@@ -74,6 +74,13 @@ export function wizardReducer(state: BotLoadWizardDraft, action: WizardAction): 
       if (shouldInvalidate(state, action.patch)) {
         next.planToken = null
         next.planExpiresAt = null
+        // runId 也必须一并作废。
+        //
+        // 服务端在**创建**时就冻结了 instanceId/count/config/命令计划等参数，后续预检/启动只认
+        // 已持久化的那份快照。若只清 token 而保留 runId，`ensureRun` 会直接返回旧 runId，
+        // 用户改完目标实例/连接地址/负载再预检，「表单显示新值、实际跑的旧值」。
+        // 置 null 后 ensureRun 会重新创建一份带新参数的会话（旧会话留在列表里，可见可停）。
+        next.runId = null
       }
       return next
     }
@@ -83,6 +90,7 @@ export function wizardReducer(state: BotLoadWizardDraft, action: WizardAction): 
         commandSchedule: action.schedule,
         planToken: null,
         planExpiresAt: null,
+        runId: null,
         dirty: true,
       }
     case 'setLoadProfile':
@@ -91,6 +99,7 @@ export function wizardReducer(state: BotLoadWizardDraft, action: WizardAction): 
         loadProfile: action.profile,
         planToken: null,
         planExpiresAt: null,
+        runId: null,
         dirty: true,
       }
     case 'setThresholds':
@@ -99,6 +108,7 @@ export function wizardReducer(state: BotLoadWizardDraft, action: WizardAction): 
         thresholds: action.thresholds,
         planToken: null,
         planExpiresAt: null,
+        runId: null,
         dirty: true,
       }
     case 'setPreflight':
