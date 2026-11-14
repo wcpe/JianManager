@@ -9,6 +9,12 @@ import { login, pinClassicHome } from './helpers'
  */
 
 async function logout(page: Page): Promise<void> {
+  // 用户更新后的成功通知位于右上角，会遮住账户入口；鼠标悬停还会暂停通知计时。
+  // 按真实交互关闭已确认的通知，再操作账户菜单，不能用 force 点击穿过浮层。
+  const updatedToast = page.locator('[data-sonner-toast]').filter({ hasText: '用户已更新' })
+  await expect(updatedToast).toBeVisible()
+  await updatedToast.getByRole('button', { name: 'Close toast', exact: true }).click()
+  await expect(updatedToast).not.toBeVisible()
   await page.getByRole('button', { name: '账户' }).click()
   await page.getByRole('menuitem', { name: '退出登录' }).click()
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible()
