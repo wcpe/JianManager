@@ -24,7 +24,7 @@ func newWebDAVBackend(cfg Config) (Backend, error) {
 	if base == "" {
 		return nil, fmt.Errorf("WebDAV 缺少 endpoint")
 	}
-	return &webdavBackend{base: base, user: cfg.AccessKey, pass: cfg.SecretKey, client: defaultHTTPClient()}, nil
+	return &webdavBackend{base: base, user: cfg.AccessKey, pass: cfg.SecretKey, client: backendHTTPClient(cfg)}, nil
 }
 
 // url 拼接基地址与对象键。

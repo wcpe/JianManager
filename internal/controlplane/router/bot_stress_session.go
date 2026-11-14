@@ -274,9 +274,11 @@ func (h *BotStressSessionHandler) RetryFailed(c *gin.Context) {
 		return
 	}
 	result, err := h.execution.RetryFailed(c.Request.Context(), id, req)
-	h.recordRunAudit(c, "bot_load.run.retry_failed", id, gin.H{
-		"requestId": req.RequestID, "botUuidCount": len(req.BotUUIDs), "errorCodeCount": len(req.ErrorCodes),
-	}, err)
+	// 这里**不再**用同一 action/target/requestId 补写审计。
+	//
+	// service 已经写过一条带完整 result 的幂等审计；handler 再写一条同名但无 result 的记录，
+	// 会让「同 requestId 重放」按 id DESC 取到后者，解出零值回执（看起来像什么都没做，
+	// 实际第一次已经下发）。失败路径 service 也会写（failed=true），这里同样不需要重复。
 	if err != nil {
 		writeBotLoadError(c, err)
 		return

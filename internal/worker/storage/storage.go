@@ -33,6 +33,16 @@ type Config struct {
 	AccessKey string // S3 access key / SFTP 用户名 / WebDAV 用户名
 	SecretKey string // S3 secret key / SFTP 密码 / WebDAV 密码
 	UseSSL    bool   // S3 是否启用 TLS
+
+	// probe 标记本次构造是为「探测（Probe）」而建，不是正式传输。
+	//
+	// 探测要受 SSRF 限制（禁内网/回环/元数据 + 不跟随重定向 + 连接前复核），
+	// 而正式上传/下载必须能连内网自建 MinIO/NAS。两条路径共用同一套构造逻辑，
+	// 差异只在这里：置位时后端选探测专用 client/dialer。
+	//
+	// 未导出：只能经 Probe() → probeConfig() 置位，外部无法构造出「探测态」配置，
+	// 也就不会有人误把限制带到正式传输上。
+	probe bool
 }
 
 // Backend 是一个对象式远程存储后端：以 key 为单位上传/下载/删除归档。
@@ -62,8 +72,14 @@ func New(cfg Config) (Backend, error) {
 }
 
 // Probe 执行一次小对象上传、下载校验与删除，验证后端读写删除权限。
+//
+// 走探测态（probeConfig）：先校验目标地址，再用受限 client/dialer 发请求。
+// 正式传输（BackupService 的 Upload/Download）不经此函数，因而不受目标限制。
 func Probe(ctx context.Context, cfg Config) error {
-	backend, err := New(cfg)
+	if err := validateProbeConfig(cfg); err != nil {
+		return err
+	}
+	backend, err := New(probeConfig(cfg))
 	if err != nil {
 		return err
 	}

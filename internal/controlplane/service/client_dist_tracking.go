@@ -567,14 +567,37 @@ func (s *ClientDistTrackingService) applyRuntimeFilters(q *gorm.DB, f ClientDist
 		}
 		states = filtered
 	}
-	machines := make([]string, 0, len(states))
-	for _, st := range states {
-		machines = append(machines, st.MachineID)
-	}
-	if len(machines) == 0 {
+	if len(states) == 0 {
 		return q.Where("1 = 0")
 	}
-	return q.Where("machine_id IN ?", machines)
+	// 必须按 (channel_id, machine_id) 复合键收敛（R33）。
+	//
+	// 之前只取 machine_id 拼 IN 列表：全频道口径下，A 频道的 M 是 v15、B 频道的 M 是 v3，
+	// 筛 v15 时 B/M 也被放进来——下钻结果被混入别的频道同一台机器的请求。
+	// 机器码是客户端自报的，跨频道同值完全正常（换包/复刻），所以只能按复合键约束。
+	return applyRuntimeIdentityFilter(q, states)
+}
+
+// applyRuntimeIdentityFilter 用 (channel_id, machine_id) 复合键过滤明细事件。
+//
+// 按频道分组成「(channel_id = ? AND machine_id IN ?)」再 OR 起来，比逐行一对更紧凑，
+// 也不会因为机器数量多而把 SQL 撑爆。
+func applyRuntimeIdentityFilter(q *gorm.DB, states []model.ClientRuntimeState) *gorm.DB {
+	byChannel := make(map[string][]string, 4)
+	order := make([]string, 0, 4)
+	for _, st := range states {
+		if _, ok := byChannel[st.ChannelID]; !ok {
+			order = append(order, st.ChannelID)
+		}
+		byChannel[st.ChannelID] = append(byChannel[st.ChannelID], st.MachineID)
+	}
+	conds := make([]string, 0, len(order))
+	args := make([]any, 0, len(order)*2)
+	for _, channelID := range order {
+		conds = append(conds, "(channel_id = ? AND machine_id IN ?)")
+		args = append(args, channelID, byChannel[channelID])
+	}
+	return q.Where(strings.Join(conds, " OR "), args...)
 }
 
 func normalizePage(page, size int) (int, int) {

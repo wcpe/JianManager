@@ -108,6 +108,65 @@ func TestMetric_ForecastCapacity_MultiSeriesSamplesNotInflated(t *testing.T) {
 	require.InDelta(t, 2000*1024*1024, got.LimitValue, 1, "上限仍取 inst_heap_max 序列（2000MiB）")
 }
 
+// TestMetric_ForecastCapacity_MultiSeriesLimitUsesLatest 迁移后旧/新上限序列共存时取最新一条。
+//
+// 缺陷背景：用量（inst_heap_used）已按「窗口内最新时点」收敛，上限（inst_heap_max）却直接取
+// 枚举第一条正值——实例迁到新节点、Xmx 改大后，仍会用旧节点的旧上限去算剩余空间，
+// 结果可能直接报「已超上限」。
+func TestMetric_ForecastCapacity_MultiSeriesLimitUsesLatest(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	const step = 30 * time.Second
+	const n = 240
+	from := base
+	to := base.Add(time.Duration(n-1) * step)
+
+	// 旧节点的上限序列先写入（1 GiB），新节点后写入（4 GiB），两者都在窗口内。
+	require.NoError(t, svc.Ingest([]Sample{
+		{NodeUUID: "node-old", InstanceID: "u-limit", Scope: model.MetricScopeInstance,
+			MetricKey: model.MetricInstHeapMax, Unit: "bytes", TS: base, Value: fp(1024 * 1024 * 1024)},
+		{NodeUUID: "node-new", InstanceID: "u-limit", Scope: model.MetricScopeInstance,
+			MetricKey: model.MetricInstHeapMax, Unit: "bytes", TS: base.Add(time.Minute), Value: fp(4 * 1024 * 1024 * 1024)},
+	}))
+	seedHeapSeries(t, svc, "node-new", "u-limit", base, n, step, 1536*1024*1024)
+
+	res, err := svc.ForecastCapacity(ForecastQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "u-limit",
+		Metrics: []string{model.MetricInstHeapUsed}, From: from, To: to,
+	})
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	require.InDelta(t, 4*1024*1024*1024, res[0].LimitValue, 1,
+		"上限必须取最新身份序列（4GiB），而不是枚举第一条旧值（1GiB）")
+}
+
+// TestMetric_ForecastCapacity_StaleSampleNotProjected 最新样本过旧时不给预测，避免日期随查询时刻漂移。
+func TestMetric_ForecastCapacity_StaleSampleNotProjected(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	const step = 30 * time.Second
+	const n = 240
+	from := base
+	// 样本只覆盖窗口前段；查询末点比最后一个样本晚 1 小时（超过 capacityStaleTolerance）。
+	to := base.Add(time.Duration(n-1)*step + time.Hour)
+	seedHeapSeries(t, svc, "node-stale", "u-stale", base, n, step, 900*1024*1024)
+	require.NoError(t, svc.Ingest([]Sample{{
+		NodeUUID: "node-stale", InstanceID: "u-stale", Scope: model.MetricScopeInstance,
+		MetricKey: model.MetricInstHeapMax, Unit: "bytes", TS: base, Value: fp(2000 * 1024 * 1024),
+	}}))
+
+	res, err := svc.ForecastCapacity(ForecastQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "u-stale",
+		Metrics: []string{model.MetricInstHeapUsed}, From: from, To: to,
+	})
+	require.NoError(t, err)
+	require.Len(t, res, 1)
+	require.Equal(t, ForecastConfidenceInsufficient, res[0].Confidence)
+	require.Nil(t, res[0].ExhaustAt, "陈旧样本不得外推耗尽时间")
+	require.Contains(t, res[0].Note, "过期")
+	require.Zero(t, res[0].NowValue, "陈旧值不得当作当前值展示")
+}
+
 // TestMetric_ForecastCapacity_SingleSeriesUnchanged 反向确认：单序列数据的数值与修复前一致。
 func TestMetric_ForecastCapacity_SingleSeriesUnchanged(t *testing.T) {
 	svc := newMetricSvc(t)
@@ -132,4 +191,57 @@ func TestMetric_ForecastCapacity_SingleSeriesUnchanged(t *testing.T) {
 	require.InDelta(t, 900*1024*1024, res[0].NowValue, 1)
 	require.Equal(t, n, res[0].Samples, "单序列样本数不变")
 	require.InDelta(t, 2000*1024*1024, res[0].LimitValue, 1)
+}
+
+func TestMetric_ForecastCapacity_PreservesSampleTimeOrigin(t *testing.T) {
+	svc := newMetricSvc(t)
+	from := metricBase()
+	lastTS := from.Add(119 * 30 * time.Second)
+	to := lastTS.Add(2 * time.Minute)
+	for i := 0; i < 120; i++ {
+		require.NoError(t, svc.Ingest([]Sample{{
+			NodeUUID: "time-node", InstanceID: "time-inst", Scope: model.MetricScopeInstance,
+			MetricKey: model.MetricInstHeapUsed, Unit: "bytes", TS: from.Add(time.Duration(i) * 30 * time.Second),
+			Value: fp(float64(512+i) * 1024 * 1024),
+		}}))
+	}
+	require.NoError(t, svc.Ingest([]Sample{{
+		NodeUUID: "time-node", InstanceID: "time-inst", Scope: model.MetricScopeInstance,
+		MetricKey: model.MetricInstHeapMax, Unit: "bytes", TS: lastTS, Value: fp(2048 * 1024 * 1024),
+	}}))
+	result, err := svc.ForecastCapacity(ForecastQuery{Scope: model.MetricScopeInstance, InstanceID: "time-inst", From: from, To: to})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	got := result[0]
+	require.NotNil(t, got.ExhaustAt)
+	remaining := time.Duration((got.LimitValue - got.NowValue) / got.SlopePerSec * float64(time.Second))
+	require.WithinDuration(t, lastTS.Add(remaining), *got.ExhaustAt, time.Second,
+		"exhaustion must remain anchored to the actual value timestamp, not move with the query end")
+	wantDays := got.ExhaustAt.Sub(to).Hours() / 24
+	require.InDelta(t, wantDays, *got.ExhaustLowDays, 1e-8)
+}
+
+func TestMetric_ForecastCapacity_RecentHourlyBucketsAreNotStale(t *testing.T) {
+	svc := newMetricSvc(t)
+	from := metricBase()
+	to := from.Add(60*24*time.Hour + 40*time.Minute) // auto uses hourly rollups
+	used := model.MetricSeries{NodeUUID: "hour-node", InstanceID: "hour-inst", Scope: model.MetricScopeInstance, MetricKey: model.MetricInstHeapUsed, Unit: "bytes"}
+	limit := model.MetricSeries{NodeUUID: "hour-node", InstanceID: "hour-inst", Scope: model.MetricScopeInstance, MetricKey: model.MetricInstHeapMax, Unit: "bytes"}
+	require.NoError(t, svc.db.Create(&used).Error)
+	require.NoError(t, svc.db.Create(&limit).Error)
+	var rows []model.MetricRollup1h
+	for i := 0; i < 120; i++ {
+		ts := from.Add(time.Duration(60*24-120+i) * time.Hour)
+		v := float64(512+i) * 1024 * 1024
+		rows = append(rows, model.MetricRollup1h{SeriesID: used.ID, BucketTS: ts, Avg: v, Min: v, Max: v, Last: v, Count: 120})
+		v = 2048 * 1024 * 1024
+		rows = append(rows, model.MetricRollup1h{SeriesID: limit.ID, BucketTS: ts, Avg: v, Min: v, Max: v, Last: v, Count: 120})
+	}
+	require.NoError(t, svc.db.CreateInBatches(rows, 100).Error)
+	result, err := svc.ForecastCapacity(ForecastQuery{Scope: model.MetricScopeInstance, InstanceID: "hour-inst", From: from, To: to})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Equal(t, ForecastConfidenceHigh, result[0].Confidence,
+		"the latest complete hourly bucket is normally older than 15 minutes; it is not a stale data source")
+	require.NotNil(t, result[0].ExhaustAt)
 }

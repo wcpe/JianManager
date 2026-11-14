@@ -241,6 +241,13 @@ func (h *BotHandler) Create(c *gin.Context) {
 }
 
 // Delete 删除 Bot。
+//
+// 与 UpdateBehavior / SendCommand / Batch 同口径：先过 `bot.manage` **权限节点**，
+// 再过 CanManageBot（资源级 = 实例组归属）。
+//
+// 只做 CanManageBot 是不够的：它最终落到 CanManageInstance，而那个只看
+// IsPlatformAdmin || CanAccessGroup，**根本不看 bot:manage**——缺这一行时，
+// 只有 bot.read 的同组 viewer 也能删除 Bot（真会停连 + 软删记录）。
 func (h *BotHandler) Delete(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -250,6 +257,10 @@ func (h *BotHandler) Delete(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN"})
+		return
+	}
+	if !access.HasPermission(service.PermBotManage) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
 		return
 	}
 	ok, err := h.authz.CanManageBot(access, id)

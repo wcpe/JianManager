@@ -257,13 +257,15 @@ describe('MonitoringPage（mock 假后端）', () => {
     expect(Number(requestedPid)).toBeGreaterThan(0)
   })
 
-  it('⑤ 注入 500（/metrics/overview）→ 页面不崩溃，骨架仍在', async () => {
+  it('⑤ 总览 500 显示明确失败，不能冒充无数据', async () => {
     loginMockUser()
     mockInject('get', '/metrics/overview', { kind: 'status', status: 500 })
     renderWithProviders(<MonitoringPage />)
-    // 总览失败 → 图卡落到空数据态（暂无数据），但页面与骨架标题仍渲染（非崩溃）。
     expect(await screen.findByRole('heading', { name: '监控' })).toBeInTheDocument()
     expect(await screen.findByText('负载')).toBeInTheDocument()
-    expect((await screen.findAllByText('暂无数据')).length).toBeGreaterThan(0)
+    expect(await screen.findByText('关键指标加载失败')).toBeInTheDocument()
+    expect((await screen.findAllByRole('alert')).length).toBeGreaterThan(0)
+    expect(screen.queryAllByText('暂无数据')).toHaveLength(0)
+    expect(screen.queryByText('暂无关键指标数据')).not.toBeInTheDocument()
   })
 })

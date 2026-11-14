@@ -6,8 +6,9 @@ import ClientDistExportButton from '@/components/client-dist/ClientDistExportBut
 import { useClientDistSecurityLogs } from '@/api/clientDistSecurity'
 import { useClientDistEventDetail, useClientDistEventSearch } from '@/api/clientDistEvents'
 import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist/client-dist-query'
-import { OPS_ALL } from '@/components/views/client-dist/OpsShared'
+import { OPS_ALL, logWindowParams } from '@/components/views/client-dist/OpsShared'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
+import type { ObsWindow } from '@/lib/metrics/obs-window'
 
 /** 
  * 页面 B · 全量日志 Tab（去重合并的**唯一入口**）。
@@ -30,13 +31,14 @@ const renderLink: ClientDistLogsLinkRenderer = ({ to, className, children }) => 
 
 export default function ClientDistLogsTab({
   channelId,
-  range,
+  window: obsWindow,
   enabled,
   link,
   onClearLink,
 }: {
   channelId?: string
-  range: string
+  /** 页头时间窗：列表与导出共用同一份（R31），自定义区间保留真实 from/to。 */
+  window: ObsWindow
   enabled: boolean
   link: RuntimeLink
   onClearLink: () => void
@@ -56,7 +58,7 @@ export default function ClientDistLogsTab({
     return (
       <RequestLogsContainer
         channelId={channelId}
-        range={range}
+        obsWindow={obsWindow}
         enabled={enabled}
         link={link}
         onClearLink={onClearLink}
@@ -67,13 +69,13 @@ export default function ClientDistLogsTab({
       />
     )
   }
-  return <AggregateLogsContainer channelId={channelId} range={range} type={type} onTypeChange={setType} />
+  return <AggregateLogsContainer channelId={channelId} obsWindow={obsWindow} type={type} onTypeChange={setType} />
 }
 
 /** 加厚请求日志分支容器：取数、筛选状态（触发重新取数故归容器）与导出接线。 */
 function RequestLogsContainer({
   channelId,
-  range,
+  obsWindow,
   enabled,
   link,
   onClearLink,
@@ -83,7 +85,7 @@ function RequestLogsContainer({
   channelWorkbenchHref,
 }: {
   channelId?: string
-  range: string
+  obsWindow: ObsWindow
   enabled: boolean
   link: RuntimeLink
   onClearLink: () => void
@@ -96,9 +98,13 @@ function RequestLogsContainer({
   const [kind, setKind] = useState<string>(OPS_ALL)
   const [detailId, setDetailId] = useState<number | null>(null)
 
+  // 时间窗与导出同一份（R31）：此前列表不带时间参数、导出却按 range 过滤，
+  // 用户看到的行和下载的 CSV 不是同一集合。
+  const window = logWindowParams(obsWindow)
   const { data, isError, isLoading } = useClientDistEventSearch({
     channelId,
     ...link,
+    ...window,
     kind: kind === OPS_ALL ? undefined : kind,
     outcome: outcome === OPS_ALL ? '' : (outcome as 'success' | 'failure'),
     page: 1,
@@ -134,11 +140,18 @@ function RequestLogsContainer({
           kind="dist-events"
           filters={{
             channelId,
-            range,
+            range: window.range,
+            from: window.from,
+            to: window.to,
             machineId: link.machineId,
             version: link.version,
             errCode: link.errCode,
             ip: link.ip,
+            // 运行态维度（R34）：列表按这四项过滤，导出必须同一口径。
+            runtimeVersion: link.runtimeVersion,
+            coreVersion: link.coreVersion,
+            platform: link.platform,
+            lag: link.lag,
             eventKind: kind === OPS_ALL ? undefined : (kind as 'manifest' | 'artifact'),
             outcome: outcome === OPS_ALL ? undefined : outcome,
           }}
@@ -151,12 +164,12 @@ function RequestLogsContainer({
 /** 安全聚合分支容器：取数（含路由查询串筛选）与导出接线。 */
 function AggregateLogsContainer({
   channelId,
-  range,
+  obsWindow,
   type,
   onTypeChange,
 }: {
   channelId?: string
-  range: string
+  obsWindow: ObsWindow
   type: ClientDistLogTypeValue
   onTypeChange: (v: ClientDistLogTypeValue) => void
 }) {
@@ -166,8 +179,11 @@ function AggregateLogsContainer({
     setSearchParams(updateClientDistQuery(searchParams, patch), { replace: true })
   }
   const [playerName, setPlayerName] = useState('')
+  // 时间窗（R31）：列表与导出共用页头时间窗，避免「列表全量、导出按窗」对不上。
+  const window = logWindowParams(obsWindow)
   const { data, isError, isLoading } = useClientDistSecurityLogs({
     type,
+    ...window,
     channelId: query.channelId ?? channelId,
     machineId: query.machineId,
     playerName: playerName || undefined,
@@ -193,7 +209,9 @@ function AggregateLogsContainer({
         <ClientDistExportButton
           kind="security-logs"
           filters={{
-            range,
+            range: window.range,
+            from: window.from,
+            to: window.to,
             type: type === 'all' ? undefined : type,
             channelId: query.channelId ?? channelId,
             machineId: query.machineId,

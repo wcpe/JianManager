@@ -349,6 +349,13 @@ func (s *ConfigDeliveryService) SetAudit(audit *AuditService) { s.audit = audit 
 
 // Create 创建交付单（draft）并解析目标。
 func (s *ConfigDeliveryService) Create(in ConfigDeliveryInput, authorID uint) (*model.ConfigDeliveryOrder, error) {
+	return s.CreateScoped(in, authorID, BusinessTargetScope{})
+}
+
+// CreateScoped 是 Create 的范围收敛版：selector 只会解析到调用者可访问的实例。
+//
+// 路由必须传真实 scope：交付会对目标实例批量写盘，越权目标不得进入交付单。
+func (s *ConfigDeliveryService) CreateScoped(in ConfigDeliveryInput, authorID uint, scope BusinessTargetScope) (*model.ConfigDeliveryOrder, error) {
 	if s.files == nil {
 		return nil, errors.New("配置分层服务未装配")
 	}
@@ -360,7 +367,7 @@ func (s *ConfigDeliveryService) Create(in ConfigDeliveryInput, authorID uint) (*
 	if err != nil {
 		return nil, err
 	}
-	insts, err := s.resolveSelector(normalized.Selector)
+	insts, err := s.resolveSelectorScoped(normalized.Selector, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -415,6 +422,18 @@ func (s *ConfigDeliveryService) Create(in ConfigDeliveryInput, authorID uint) (*
 
 // Update 编辑交付单（仅 draft）。
 func (s *ConfigDeliveryService) Update(id uint, in ConfigDeliveryInput, authorID uint) (*model.ConfigDeliveryOrder, error) {
+	return s.UpdateScoped(id, in, authorID, BusinessTargetScope{})
+}
+
+// UpdateScoped 是 Update 的范围收敛版（越权修复）。
+//
+// 【缺陷现场】Create 走的是 CreateScoped（selector 收窄），Update 却直接
+// resolveSelector——于是「建单时被正确收窄到可见实例 A」的草稿，再用 PUT 提交一次
+// 就能把目标整体换成不可见的 B、C。路由层 requireDeliveryOwned 校的是**更新前**
+// 的目标集合，拦不住更新后的新集合。
+//
+// 与 CreateScoped 同口径：先解析全部候选，再与可见集合求交，越权目标不进单。
+func (s *ConfigDeliveryService) UpdateScoped(id uint, in ConfigDeliveryInput, authorID uint, scope BusinessTargetScope) (*model.ConfigDeliveryOrder, error) {
 	order, err := s.mustGet(id)
 	if err != nil {
 		return nil, err
@@ -433,7 +452,7 @@ func (s *ConfigDeliveryService) Update(id uint, in ConfigDeliveryInput, authorID
 	if err != nil {
 		return nil, err
 	}
-	insts, err := s.resolveSelector(normalized.Selector)
+	insts, err := s.resolveSelectorScoped(normalized.Selector, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -489,6 +508,23 @@ func (s *ConfigDeliveryService) Delete(id uint) error {
 		}
 		return tx.Delete(&model.ConfigDeliveryOrder{}, id).Error
 	})
+}
+
+// TargetInstanceIDs 返回该交付单已生成的目标实例 ID 集合（供路由做范围授权）。
+//
+// 读的是 config_delivery_targets 而非重解 selector：后者会随实例变动而漂移，
+// 与执行时真正会写盘的集合不一致，授权必须以实际目标为准。
+func (s *ConfigDeliveryService) TargetInstanceIDs(orderID uint) ([]uint, error) {
+	if _, err := s.mustGet(orderID); err != nil {
+		return nil, err
+	}
+	var ids []uint
+	if err := s.db.Model(&model.ConfigDeliveryTarget{}).
+		Where("order_id = ?", orderID).
+		Pluck("instance_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 // Get 读取交付单详情。
@@ -559,6 +595,16 @@ func (s *ConfigDeliveryService) Targets(orderID uint, status string, batchNo int
 
 // Impact 影响预览：解析选择器并逐台比对目标内容与当前版本。
 func (s *ConfigDeliveryService) Impact(orderID uint) (*DeliveryImpact, error) {
+	return s.ImpactScoped(orderID, BusinessTargetScope{})
+}
+
+// ImpactScoped 在调用者可见范围下返回影响预览（越权修复）。
+//
+// 【为什么不能再调 Impact】原实现校验了持久目标归属，但接着用 **无 scope**
+// 的 resolveSelector 重解 selector——selector 可以是 `nodeIds:[N]`，而节点下可能
+// 挂着调用者无权访问的实例 B。于是「目标列表」被拦住了，「影响预览」却把 B 的
+// ID 与名称、当前 hash、是否需要变更全返回了。
+func (s *ConfigDeliveryService) ImpactScoped(orderID uint, scope BusinessTargetScope) (*DeliveryImpact, error) {
 	order, err := s.mustGet(orderID)
 	if err != nil {
 		return nil, err
@@ -567,7 +613,7 @@ func (s *ConfigDeliveryService) Impact(orderID uint) (*DeliveryImpact, error) {
 	if err := json.Unmarshal([]byte(order.SelectorJSON), &selector); err != nil {
 		return nil, fmt.Errorf("选择器解析失败: %w", err)
 	}
-	insts, err := s.resolveSelector(selector)
+	insts, err := s.resolveSelectorScoped(selector, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -1920,6 +1966,32 @@ func normalizeDeliveryInput(in ConfigDeliveryInput, file *model.ConfigFile) (Con
 
 // resolveSelector 把选择器解析为实例集合（按 ID 升序，保证分批顺序稳定）。
 func (s *ConfigDeliveryService) resolveSelector(sel DeliverySelector) ([]model.Instance, error) {
+	return s.resolveSelectorScoped(sel, BusinessTargetScope{})
+}
+
+// resolveSelectorScoped 在 resolveSelector 基础上按调用者可见实例收敛。
+//
+// scope.Scoped=true 时先算出全部候选，再与可见集合求交——保持原有的
+// “分组 ∪ 显式 ID，再用节点/标签收敛”语义不变，只是最后多一道交集。
+func (s *ConfigDeliveryService) resolveSelectorScoped(sel DeliverySelector, scope BusinessTargetScope) ([]model.Instance, error) {
+	all, err := s.resolveSelectorAll(sel)
+	if err != nil || !scope.Scoped {
+		return all, err
+	}
+	allowed := make(map[uint]struct{}, len(scope.IDs))
+	for _, id := range scope.IDs {
+		allowed[id] = struct{}{}
+	}
+	out := make([]model.Instance, 0, len(all))
+	for _, inst := range all {
+		if _, ok := allowed[inst.ID]; ok {
+			out = append(out, inst)
+		}
+	}
+	return out, nil
+}
+
+func (s *ConfigDeliveryService) resolveSelectorAll(sel DeliverySelector) ([]model.Instance, error) {
 	if sel.Empty() {
 		return nil, fmt.Errorf("%w：选择器为空", ErrDeliveryInvalid)
 	}
@@ -2033,7 +2105,10 @@ func (s *ConfigDeliveryService) layerHeads(configFileID uint, level model.Config
 	if s.files == nil {
 		return 0, nil, errors.New("配置分层服务未装配")
 	}
-	history, herr := s.files.LayerHistory(configFileID, level, scopeID)
+	// 这里只要版本 ID，走 unmasked 版本：LayerHistory 默认会按敏感字段脱敏，
+	// 而脱敏后的文本长度/行数变化不影响 ID 读取，但语义上不应把展示层脱敏
+	// 误用到内部下发链路（后续若在此取内容就会拿到 ***）。
+	history, herr := s.files.LayerHistoryUnmasked(configFileID, level, scopeID)
 	if herr != nil {
 		return 0, nil, herr
 	}

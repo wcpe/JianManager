@@ -29,6 +29,17 @@ function formatRate(read: number, write: number): string {
   return total > 0 ? `${formatFileSize(total)}/s` : '--'
 }
 
+/**
+ * 带符号的字节差（RSS 变化）：负值表示内存在下降，不能当“无数据”。
+ * 共享格式化器只接受非负数（<=0 直接回落占位），故负数在此单独处理。
+ */
+function formatSignedFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes)) return '--'
+  if (bytes === 0) return '0 B'
+  const sign = bytes < 0 ? '-' : '+'
+  return `${sign}${formatFileSize(Math.abs(bytes), BYTES_FALLBACK)}`
+}
+
 function formatTime(value: string): string {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString()
@@ -41,7 +52,7 @@ function formatDuration(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)}h`
 }
 
-function ProcessTopPanel({ rows, onInspect }: { rows: ProcessTopItem[]; onInspect: (row: ProcessTopItem) => void }) {
+function ProcessTopPanel({ rows, onInspect, isError = false }: { rows: ProcessTopItem[]; onInspect: (row: ProcessTopItem) => void; isError?: boolean }) {
   const { t } = useTranslation()
   return (
     <Panel title={t('monitor.processTop', '进程 TOP10')}>
@@ -49,16 +60,18 @@ function ProcessTopPanel({ rows, onInspect }: { rows: ProcessTopItem[]; onInspec
         <ShieldCheck className="size-3.5" />
         {t('monitor.processManagedOnly', '仅展示 JianManager 受管实例进程树，命令摘要已脱敏。')}
       </p>
-      {rows.length === 0 ? (
+      {isError ? (
+        <p className="py-5 text-center text-sm text-muted-foreground">{t('monitor.processTopError', '进程数据加载失败')}</p>
+      ) : rows.length === 0 ? (
         <p className="py-5 text-center text-sm text-muted-foreground">{t('monitor.processTopEmpty', '暂无进程采样')}</p>
       ) : (
         <div className="divide-y divide-border text-xs">
           {rows.map((row) => (
             <div
-              // key 只用 pid：`sampledAt` 每轮采样（30s）都会变，把它并进 key 等于
-              // 每轮把整张 TOP 表的每一行全部卸载重挂——行内焦点、悬停态与 DOM 身份全丢，
-              // 而这只是一次数据刷新，不是换了一行。
-              key={row.pid}
+              // key 用「节点 + 实例 + PID」：PID 只在单台主机内唯一，平台榜会把多个节点的
+              // 同号 PID 放在同一张表里（如各节点都有 4321）。只用 pid 会重复 key，
+              // 且榜单变化时 React 会复用错行——用户会看到一条已经不存在的进程且仍能探查。
+              key={`${row.nodeUuid}:${row.instanceUuid}:${row.pid}`}
               tabIndex={0}
               data-testid="process-top-row"
               aria-label={t('monitor.processTopRow', { pid: row.pid, name: row.name, defaultValue: `进程 ${row.pid} ${row.name}` })}
@@ -170,7 +183,7 @@ function ProcessDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <GitBranch className="size-5 text-primary" />
@@ -203,7 +216,7 @@ function ProcessDetailDialog({
                 <ProcessField label={t('monitor.processSamples', '样本数')} value={String(detail.history.sampleCount)} mono />
                 <ProcessField label={t('monitor.processAvgCpu', '平均 CPU')} value={`${detail.history.avgCpuPercent.toFixed(1)}%`} mono />
                 <ProcessField label={t('monitor.processAvgWrite', '平均写入')} value={`${formatFileSize(detail.history.avgWriteBytesPerSec, BYTES_FALLBACK)}/s`} mono />
-                <ProcessField label={t('monitor.processRssDelta', 'RSS 变化')} value={formatFileSize(detail.history.rssDeltaBytes, BYTES_FALLBACK)} mono />
+                <ProcessField label={t('monitor.processRssDelta', 'RSS 变化')} value={formatSignedFileSize(detail.history.rssDeltaBytes)} mono />
                 <ProcessField label={t('monitor.processLatestSample', '最近采样')} value={formatTime(detail.history.latestSampledAt)} />
               </Panel>
             </div>
@@ -265,8 +278,12 @@ export interface MonitoringPageProps {
   /** 概览/对比共享的原始序列。 */
   raw: RawSeries[]
   rawLoading?: boolean
+  /** 概览/对比取数失败（403/404/5xx）。必须与「合法无数据」区分，否则权限与故障都被显示成空图。 */
+  rawError?: boolean
   /** 进程 TOP。 */
   processTop: ProcessTopItem[]
+  /** 进程榜取数失败（与「暂无采样」区分）。 */
+  processTopError?: boolean
   /** 进程详情（弹窗内）。 */
   processDetail?: ManagedProcessDetail
   processDetailError?: boolean
@@ -323,7 +340,9 @@ export default function MonitoringPage(props: MonitoringPageProps) {
     onCompareToggle,
     raw,
     rawLoading = false,
+    rawError = false,
     processTop,
+    processTopError = false,
     processDetail,
     processDetailError = false,
     processDetailRefreshing = false,
@@ -396,15 +415,23 @@ export default function MonitoringPage(props: MonitoringPageProps) {
 
       {/* 关键指标概览：当前值 + sparkline 趋势缩略 */}
       <Panel title={t('monitor.overview.title')}>
-        <MetricsOverviewStrip kind={target.kind} raw={raw} isLoading={rawLoading} />
+        {rawError ? (
+          <p className="px-2 py-3 text-xs text-muted-foreground">{t('monitor.overview.error', '关键指标加载失败')}</p>
+        ) : (
+          <MetricsOverviewStrip kind={target.kind} raw={raw} isLoading={rawLoading} />
+        )}
       </Panel>
 
       {/* 多指标对比/叠加 */}
       <Panel title={t('monitor.compare.title')}>
-        <MetricComparePanel kind={target.kind} raw={raw} selected={compareSel} onToggle={onCompareToggle} />
+        {rawError ? (
+          <p className="px-2 py-3 text-xs text-muted-foreground">{t('monitor.compare.error', '指标加载失败')}</p>
+        ) : (
+          <MetricComparePanel kind={target.kind} raw={raw} selected={compareSel} onToggle={onCompareToggle} />
+        )}
       </Panel>
 
-      <ProcessTopPanel rows={processTop} onInspect={onSelectedProcessChange} />
+      <ProcessTopPanel rows={processTop} onInspect={onSelectedProcessChange} isError={processTopError} />
 
       {/* 处置失败反馈：确认框已收起（见 confirmAction），失败原因在这里落地，
           否则用户只看到弹窗消失、进程还在，无从判断刚才那一下到底成没成。 */}

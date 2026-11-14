@@ -5,7 +5,7 @@ import { useClientStats } from '@/api/clientStats'
 import { useClientDistErrorSummary, useClientDistRealtime } from '@/api/clientDistEvents'
 import { useClientRuntimeOverview } from '@/api/clientRuntimeStates'
 import { useClientChannels } from '@/api/clientChannels'
-import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
@@ -35,9 +35,6 @@ import { ActionsTab } from '@/components/client-dist/SecurityActionsTab'
 import { GroupsTab } from '@/components/client-dist/SecurityGroupsTab'
 import { OPS_ALL_CHANNELS, rangeForSpan, toApiRange, toStatsDays } from '@/components/views/client-dist/OpsShared'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
-import { type MetricRange } from '@jianmanager/ui'
-
-const ROLE_PLATFORM_ADMIN = 10
 
 /** Tab 内分档切换器（次要分段控件，写回 `seg`）。 */
 function SegSwitcher({
@@ -64,7 +61,10 @@ function SegSwitcher({
 /** 
  * 页面 B「客户端分发运维」外壳。
  * 7 Tab（总览/统计/实时监控/全量日志/机器·客户端/画像/处置）；旧安全页 8 Tab 收敛进其中 4 个（`seg` 分档）。
- * `data-page="client-dist-ops"`；查询级 `enabled: isPlatformAdmin` 纵深防御（路由守卫见 Workspace）。
+ * `data-page="client-dist-ops"`；查询级 `enabled: canReadOps` 纵深防御（路由守卫见 Workspace）。
+ *
+ * 页面访问不再硬判平台管理员（R29）：频道/分发运维权限可以委派给自定义角色，
+ * 这里与路由层、后端 requireNodes 用同一套节点判定（平台管理员 hasPerm 恒 true）。
  *
  * 安全侧 6 个 Tab 已抽为独立组件（`components/client-dist/Security*`），本文件仅保留外壳与分档切换。
  */
@@ -72,7 +72,7 @@ export default function ProtectionCenterPage() {
   const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const query = readClientDistQuery(searchParams)
-  const isPlatformAdmin = useAuthStore((s) => s.role) === ROLE_PLATFORM_ADMIN
+  const canReadOps = usePermissionsStore((s) => s.hasPerm('dist.ops.read') || s.hasPerm('dist.ops.write'))
 
   const normalized = normalizeOpsTab(searchParams.get('tab'), 'security')
   const tab: OpsTab = normalized.tab
@@ -88,14 +88,18 @@ export default function ProtectionCenterPage() {
   }
 
   // 时间窗 = URL from/to（自定义）优先，否则本地预设档。
-  const [range, setRange] = useState<MetricRange>('7d')
+  //
+  // 状态类型用分发观测端点自己的枚举（string）而非 MetricRange：选择器可选「近 180 天」（`180d`），
+  // 而 MetricRange 只到 `1y`。以前硬转 MetricRange，`180d` 在换算函数里落到 default 变 `7d`
+  // （R30：选 180 天实际只查 7 天）。现在原值直达下游，换算函数同时认两套枚举。
+  const [range, setRange] = useState<string>('7d')
   const customWindow: ObsWindow | null = query.from && query.to ? { from: query.from, to: query.to } : null
   const obsWindow: ObsWindow = customWindow ?? { range: toApiRange(range) }
-  const effRange: MetricRange = customWindow ? (rangeForSpan(customWindow.from, customWindow.to) ?? range) : range
+  const effRange: string = customWindow ? (rangeForSpan(customWindow.from, customWindow.to) ?? range) : range
   const setTimeWindow = (w: ObsWindow) => {
     if ('range' in w) {
       setSearchParams(updateClientDistQuery(searchParams, { from: null, to: null }), { replace: true })
-      setRange(w.range as MetricRange)
+      setRange(w.range)
       return
     }
     setSearchParams(updateClientDistQuery(searchParams, { from: w.from, to: w.to }), { replace: true })
@@ -149,17 +153,17 @@ export default function ProtectionCenterPage() {
     }), { replace: true })
   }
 
-  const statsQuery = useClientStats(channelId, toStatsDays(effRange), { enabled: isPlatformAdmin && (tab === 'overview' || tab === 'statistics') })
-  const realtimeQuery = useClientDistRealtime({ channelId, enabled: isPlatformAdmin && tab === 'monitor' })
+  const statsQuery = useClientStats(channelId, toStatsDays(effRange), { enabled: canReadOps && (tab === 'overview' || tab === 'statistics') })
+  const realtimeQuery = useClientDistRealtime({ channelId, enabled: canReadOps && tab === 'monitor' })
   const runtimeQuery = useClientRuntimeOverview({
     channelId,
     range: toApiRange(effRange),
-    enabled: isPlatformAdmin && (tab === 'overview' || tab === 'clients'),
+    enabled: canReadOps && (tab === 'overview' || tab === 'clients'),
   })
   const errorSummaryQuery = useClientDistErrorSummary({
     channelId,
     range: toApiRange(effRange),
-    enabled: isPlatformAdmin && (tab === 'monitor' || tab === 'statistics'),
+    enabled: canReadOps && (tab === 'monitor' || tab === 'statistics'),
   })
 
   const channelHref = buildClientDistHref('/client-channels', searchParams, { tab: 'stats' })
@@ -188,17 +192,17 @@ export default function ProtectionCenterPage() {
         description={t('clientDistOps.subtitle')}
         actions={
           <>
-            {isPlatformAdmin && channelPicker}
-            {isPlatformAdmin && <ObsTimeRangePicker value={obsWindow} onChange={setTimeWindow} />}
-            {isPlatformAdmin && <ClientDistExportButton kind="stats-summary" filters={{ channelId, range: toApiRange(effRange) }} />}
+            {canReadOps && channelPicker}
+            {canReadOps && <ObsTimeRangePicker value={obsWindow} onChange={setTimeWindow} />}
+            {canReadOps && <ClientDistExportButton kind="stats-summary" filters={{ channelId, range: toApiRange(effRange) }} />}
             <Button asChild size="sm" variant="outline"><Link to={channelHref}>{t('clientDistOps.openChannelWorkbench')}</Link></Button>
           </>
         }
       />
 
-      {!isPlatformAdmin ? (
+      {!canReadOps ? (
         <Panel>
-          <p className="py-10 text-center text-sm text-muted-foreground">{t('clientDistOps.adminOnly')}</p>
+          <p className="py-10 text-center text-sm text-muted-foreground">{t('clientDistOps.noPermission')}</p>
         </Panel>
       ) : (
         <Tabs value={tab} onValueChange={setTab} className="space-y-4">
@@ -240,7 +244,7 @@ export default function ProtectionCenterPage() {
           </TabsContent>
 
           <TabsContent value="logs" className="space-y-4">
-            <ClientDistLogsTab channelId={channelId} range={toApiRange(effRange)} enabled={isPlatformAdmin} link={runtimeLink} onClearLink={clearRuntimeLink} />
+            <ClientDistLogsTab channelId={channelId} window={obsWindow} enabled={canReadOps} link={runtimeLink} onClearLink={clearRuntimeLink} />
           </TabsContent>
 
           <TabsContent value="clients" className="space-y-4">

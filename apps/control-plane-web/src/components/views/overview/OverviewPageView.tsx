@@ -1020,6 +1020,17 @@ export interface OverviewPageViewProps {
   onRangeChange: (range: MetricRange) => void
   /** `/metrics/overview` 快照（容器做 10s 轮询的渲染降级后注入；缺省时读数回落到 0/兜底值）。 */
   overview?: OverviewMetricSnapshot
+  /** `/metrics/overview` 取数中（首帧与切窗口时）。 */
+  overviewLoading?: boolean
+  /**
+   * `/metrics/overview` 取数失败。
+   *
+   * 必须与「还没有数据」分开：失败时若继续按 `?? 0` 渲染，用户看到的是
+   * 「CPU 0% · 正常 / 0 台在线」，即把「这次没拉到」读成「集群空了」。
+   */
+  overviewError?: boolean
+  /** 总览指标重试（错误态里的显式入口；查询自带 10s 轮询，但显式重试更快）。 */
+  onRetryOverview?: () => void
   /** 节点总数兜底（`/metrics/overview` 的 `nodeCount` 缺省时用它算「在线/总数」）。 */
   nodeTotal?: number
   /** 已展开的归因 Tooltip；`null` 表示全部收起（容器据此不发归因请求）。 */
@@ -1074,13 +1085,19 @@ export function OverviewPageView({
   range,
   onRangeChange,
   overview,
+  overviewLoading = false,
+  overviewError = false,
+  onRetryOverview,
   nodeTotal,
   activeGauge,
   onActiveGaugeChange,
   attribution,
   attributionLoading,
   attributionError,
+  canSeePlatformObs,
   platformOverview,
+  platformOverviewLoading,
+  platformOverviewError,
   playerTrend,
   playerTrendLoading = false,
   playerTrendError = false,
@@ -1091,7 +1108,37 @@ export function OverviewPageView({
   const { t } = useTranslation()
 
   const totals = overview?.totals
-  const memPct = totals && totals.memTotalBytes > 0 ? (totals.memUsedBytes / totals.memTotalBytes) * 100 : 0
+  /**
+   * 读数是否可用。缺数据（首帧 / 查询失败）时仪表与 KPI 一律显示「--」，
+   * 不再用 `?? 0` 兜底——「0% 正常」与「不知道」是两条完全不同的结论。
+   */
+  const hasTotals = totals != null
+  /** 缺数时传 NaN：`ResourceGauge` 中心显示「—」，环按 0 画但不着色为正常绿。 */
+  const UNKNOWN_GAUGE = Number.NaN
+  const memPct = totals && totals.memTotalBytes > 0 ? (totals.memUsedBytes / totals.memTotalBytes) * 100 : UNKNOWN_GAUGE
+
+  /**
+   * 「在线/总数」两个数分开算：在线数只认后端快照（未知就写 --），
+   * 总数允许用节点列表的 `nodeTotal` 兑底（它来自另一个已成功的查询，不是猜的）。
+   */
+  const onlineNodeDisplay = totals ? String(totals.onlineNodeCount) : '--'
+  const nodeCountDisplay = totals ? totals.nodeCount || nodeTotal || 0 : (nodeTotal ?? '--')
+  /** 首帧/切窗口：解释「为什么现在是 --」，不让用户误以为集群真的空。 */
+  const metricsPendingHint = overviewLoading && !hasTotals ? t('common.loading') : undefined
+
+  /**
+   * 三张平台 KPI 卡（崩溃/停止/总数）的缺数说明。
+   *
+   * 它们读的是 `/observability/overview`：无权、取数中或失败时都拿不到数据，
+   * 此时卡上写「--」，并用原生 title 说清是哪种情况（而不是默默写 0）。
+   */
+  const platformCardHint = !canSeePlatformObs
+    ? t('dashboard.platformOverviewUnavailable', '平台全景观测暂不可用')
+    : platformOverviewLoading
+      ? t('common.loading')
+      : platformOverviewError
+        ? t('dashboard.platformOverviewUnavailable', '平台全景观测暂不可用')
+        : undefined
 
   /** Esc 关闭已展开的归因 Tooltip：受控状态在容器，故经回调上报（本组件不持该状态）。 */
   useEffect(() => {
@@ -1215,6 +1262,29 @@ export function OverviewPageView({
         }
       />
 
+      {/*
+        取数失败横幅：失败时下面的仪表与 KPI 一律显示「--」。
+        不把失败当成「0% 正常 / 0 台在线」——那是与事实相反的结论。
+        带显式重试：查询本身有 10s 轮询，但用户看到红条时不应该只能干等。
+      */}
+      {overviewError && (
+        <div
+          role="alert"
+          data-testid="overview-metrics-error"
+          className="flex shrink-0 items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+        >
+          <AlertTriangle className="size-4 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1">
+            {t('dashboard.metricsUnavailable', '总览指标暂不可用（读数已置为 --，不代表为 0）')}
+          </span>
+          {onRetryOverview && (
+            <Button size="sm" variant="outline" onClick={onRetryOverview}>
+              {t('common.retry')}
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* 顶部：环形仪表盘 + 统计块 */}
       {/*
         【三个球补「结论句」】环上只有百分比，是精确读数；而首页第一眼要的是判断——
@@ -1235,12 +1305,17 @@ export function OverviewPageView({
           isError={attributionError}
           renderLink={renderLink}
           caption={
-            <span className="text-sm font-semibold" style={{ color: statusColorVar(resourceLevel(totals?.cpuPct ?? 0)) }}>
-              {t(`dashboard.loadVerdict.${resourceLevel(totals?.cpuPct ?? 0)}`, VERDICT_FALLBACK[resourceLevel(totals?.cpuPct ?? 0)])}
+            <span
+              className="text-sm font-semibold"
+              style={{ color: hasTotals ? statusColorVar(resourceLevel(totals.cpuPct)) : 'var(--muted-foreground)' }}
+            >
+              {hasTotals
+                ? t(`dashboard.loadVerdict.${resourceLevel(totals.cpuPct)}`, VERDICT_FALLBACK[resourceLevel(totals.cpuPct)])
+                : t('dashboard.unknownValue', '--')}
             </span>
           }
         >
-          <ResourceGauge label={t('dashboard.totalCpu')} value={totals?.cpuPct ?? 0} unit="%" />
+          <ResourceGauge label={t('dashboard.totalCpu')} value={hasTotals ? totals.cpuPct : UNKNOWN_GAUGE} unit="%" />
         </GaugeAttributionTooltip>
         <GaugeAttributionTooltip
           gauge="load"
@@ -1252,16 +1327,27 @@ export function OverviewPageView({
           isError={attributionError}
           renderLink={renderLink}
           caption={
-            <span className="text-sm font-semibold" style={{ color: statusColorVar(resourceLevel(totals?.loadAvg ?? 0)) }}>
-              {t(`dashboard.loadVerdict.${resourceLevel(totals?.loadAvg ?? 0)}`, VERDICT_FALLBACK[resourceLevel(totals?.loadAvg ?? 0)])}
+            <span
+              className="text-sm font-semibold"
+              style={{ color: hasTotals ? statusColorVar(resourceLevel(totals.loadAvg)) : 'var(--muted-foreground)' }}
+            >
+              {hasTotals
+                ? t(`dashboard.loadVerdict.${resourceLevel(totals.loadAvg)}`, VERDICT_FALLBACK[resourceLevel(totals.loadAvg)])
+                : t('dashboard.unknownValue', '--')}
               {' · '}
-              <span className="tabular-nums">{((totals?.loadAvg ?? 0) / 100).toFixed(2)}×</span>
+              <span className="tabular-nums">{hasTotals ? (totals.loadAvg / 100).toFixed(2) : '--'}×</span>
             </span>
           }
         >
           {/* 负载是「占总核数比例」：以倍数（load÷核）呈现而非百分比，环按 1.0=满核封顶，
               不再出现 >100% 的破环。grading 仍按占比走 resourceLevel（>0.8×→红）。 */}
-          <ResourceGauge label={t('dashboard.totalLoad')} value={(totals?.loadAvg ?? 0) / 100} max={1} unit="×" decimals={2} />
+          <ResourceGauge
+            label={t('dashboard.totalLoad')}
+            value={hasTotals ? totals.loadAvg / 100 : UNKNOWN_GAUGE}
+            max={1}
+            unit="×"
+            decimals={2}
+          />
         </GaugeAttributionTooltip>
         <GaugeAttributionTooltip
           gauge="memory"
@@ -1297,48 +1383,60 @@ export function OverviewPageView({
           icon={<Server className="size-3.5" />}
           tone="success"
           label={t('dashboard.nodes')}
-          value={`${totals?.onlineNodeCount ?? 0}/${totals?.nodeCount ?? nodeTotal ?? 0}`}
+          value={`${onlineNodeDisplay}/${nodeCountDisplay}`}
           sub={t('dashboard.online')}
+          {...(metricsPendingHint ? { title: metricsPendingHint } : {})}
         />
         <StatCard
           icon={<Activity className="size-3.5" />}
           tone="success"
           label={t('dashboard.runningInstances')}
-          value={String(totals?.runningInstances ?? 0)}
+          value={hasTotals ? String(totals.runningInstances) : '--'}
           sub={t('dashboard.instances')}
+          {...(metricsPendingHint ? { title: metricsPendingHint } : {})}
         />
         <StatCard
           icon={<Users className="size-3.5" />}
           tone="primary"
           label={t('dashboard.onlinePlayers')}
-          value={String(totals?.onlinePlayers ?? 0)}
+          value={hasTotals ? String(totals.onlinePlayers) : '--'}
           sub={t('nav.players')}
+          {...(metricsPendingHint ? { title: metricsPendingHint } : {})}
         />
         <StatCard
           icon={<AlertTriangle className="size-3.5" />}
           tone="danger"
           valueTone={platformOverview?.health.crashedInstanceCount ? 'danger' : 'default'}
           label={t('dashboard.crashedInstances', '崩溃实例')}
-          value={String(platformOverview?.health.crashedInstanceCount ?? 0)}
+          value={platformOverview ? String(platformOverview.health.crashedInstanceCount ?? 0) : '--'}
           sub={t('dashboard.needAttention', '需处理')}
+          {...(platformCardHint ? { title: platformCardHint } : {})}
         />
         <StatCard
           icon={<Ban className="size-3.5" />}
           tone="neutral"
           label={t('dashboard.stoppedInstances', '停止实例')}
-          value={String(platformOverview?.health.stoppedInstanceCount ?? 0)}
+          value={platformOverview ? String(platformOverview.health.stoppedInstanceCount ?? 0) : '--'}
           sub={t('dashboard.stopped', '已停止')}
+          {...(platformCardHint ? { title: platformCardHint } : {})}
         />
         <StatCard
           icon={<Layers className="size-3.5" />}
           tone="info"
           label={t('dashboard.totalInstances', '实例总数')}
-          value={String(
-            (platformOverview?.health.runningInstanceCount ?? totals?.runningInstances ?? 0) +
-              (platformOverview?.health.crashedInstanceCount ?? 0) +
-              (platformOverview?.health.stoppedInstanceCount ?? 0),
-          )}
+          value={
+            platformOverview
+              ? String(
+                  platformOverview.health.runningInstanceCount +
+                    (platformOverview.health.crashedInstanceCount ?? 0) +
+                    (platformOverview.health.stoppedInstanceCount ?? 0),
+                )
+              : hasTotals
+                ? String(totals.runningInstances)
+                : '--'
+          }
           sub={t('dashboard.all', '全部')}
+          {...(platformCardHint && !hasTotals ? { title: platformCardHint } : {})}
         />
       </div>
       </div>

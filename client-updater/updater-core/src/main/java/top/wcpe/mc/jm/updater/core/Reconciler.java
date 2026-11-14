@@ -111,6 +111,18 @@ final class Reconciler {
             return result;
         }
 
+        // 增量阶段有失败时也不做减量。
+        //
+        // fail-static 的语义是“这次更新不生效、玩家继续玩本来的版本”，但减量若照做，
+        // 旧文件（已不在新 manifest 里）会被删掉，而新文件因为下载/校验失败并没有写成功——
+        // 最终目录比更新前更残。典型场景：v1 的 mods/foo-1.jar → v2 改成 mods/foo-2.jar，
+        // 新制品下载失败 ⇒ foo-1 被当成 stale 删除。同路径覆盖的失败不受影响（目标路径已在
+        // desiredPaths 里），所以真正危险的就是这种跨路径替换。
+        if (!result.errors.isEmpty()) {
+            log.warn("增量阶段有 " + result.errors.size() + " 项失败，跳过减量（保留旧文件）");
+            return result;
+        }
+
         // 减量：仅 managedDirs 内、sync!=once&&!=ignore（once/ignore 文件玩家可留）。
         Set<String> protectedFromRemoval = new HashSet<>();
         for (Manifest.FileEntry entry : manifest.files) {
@@ -432,6 +444,12 @@ final class Reconciler {
                 continue;
             }
             if (PathRules.isPlayerZone(rel)) {
+                continue;
+            }
+            // 更新器自身目录（jm-updater/、.jm-updater/）永不删：
+            // 它们不在 manifest 里，clean-all 一跑就会被当成“多余文件”删掉，
+            // 而它们是加载 agent 与下次启动读配置的前提。
+            if (PathRules.isUpdaterZone(rel)) {
                 continue;
             }
             // 运营自定义排除命中 → 永不删。

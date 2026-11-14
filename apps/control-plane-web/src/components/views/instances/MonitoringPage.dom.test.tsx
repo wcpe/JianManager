@@ -103,13 +103,13 @@ const processDetail: ManagedProcessDetail = {
 
 describe('MonitoringPage 视图（受控注入）', () => {
   /**
-   * 进程 TOP 的行 key 只能用 pid。
+   * 进程 TOP 行的 key 不能包含采样时间。
    *
-   * 原实现是 `key={`${row.pid}-${row.sampledAt}`}`：`sampledAt` 每轮采样（30s）都会变，
-   * 于是每次数据刷新都把整张表的每一行卸载重挂——行内焦点、悬停态与 DOM 身份全丢，
-   * 而这只是一次数据刷新，不是换了一行。
+   * 原实现曾用过 `key={`${row.pid}-${row.sampledAt}`}`：`sampledAt` 每轮采样（30s）都会变，
+   * 于是每次数据刷新都把整张表的每一行卸载重挂——行内焦点、悬停态与 DOM 身份全丢。
+   * 现在 key 是「节点 + 实例 + PID」（PID 只在单机唯一，平台榜会撞号），同样不含采样时间。
    */
-  it('进程 TOP 行在采样时间刷新后保持同一 DOM 节点（key 只用 pid）', () => {
+  it('进程 TOP 行在采样时间刷新后保持同一 DOM 节点（key 不含采样时间）', () => {
     const { rerender } = render(
       <MonitoringPageView {...baseProps({ processTop: [processRow()] })} />,
     )
@@ -169,6 +169,35 @@ describe('MonitoringPage 视图（受控注入）', () => {
     await waitFor(() => expect(screen.queryByText('强制终止进程树')).not.toBeInTheDocument())
     // 失败反馈可见。
     expect(await screen.findByTestId('process-action-error')).toBeInTheDocument()
+  })
+
+  it('跨节点同号 PID 不再复用旧行（榜单变短后不遗留幽灵进程）', () => {
+    const nodeA = processRow({ instanceUuid: 'inst-a', nodeUuid: 'node-a', pid: 4321, commandSummary: 'cmd-a' })
+    const nodeB = processRow({ instanceUuid: 'inst-b', nodeUuid: 'node-b', pid: 4321, commandSummary: 'cmd-b' })
+    const nodeC = processRow({ instanceUuid: 'inst-c', nodeUuid: 'node-c', pid: 9999, commandSummary: 'cmd-c' })
+
+    const { rerender } = render(
+      <MonitoringPageView {...baseProps({ processTop: [nodeA, nodeB, nodeC] })} />,
+    )
+    expect(screen.getAllByTestId('process-top-row')).toHaveLength(3)
+
+    // 榜单刷新：A 掉出前 N，只剩 B、C。旧实现 key 只用 pid，A 与 B 撞 key，
+    // React 会复用旧行——用户会看到一条已经不存在的进程且仍可探查。
+    rerender(<MonitoringPageView {...baseProps({ processTop: [nodeC, nodeB] })} />)
+    const rows = screen.getAllByTestId('process-top-row')
+    expect(rows).toHaveLength(2)
+    expect(screen.queryByText('cmd-a')).not.toBeInTheDocument()
+  })
+
+  it('进程详情弹窗限制高度并可内部滚动（内容多时不超出视口）', async () => {
+    render(
+      <MonitoringPageView
+        {...baseProps({ processDetail, selectedProcess: processRow(), pendingAction: null })}
+      />,
+    )
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.className).toContain('max-h-[')
+    expect(dialog.className).toContain('overflow-y-auto')
   })
 
   /**

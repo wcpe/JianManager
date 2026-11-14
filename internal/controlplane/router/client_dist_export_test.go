@@ -46,6 +46,58 @@ func TestClientDistExport_RBACAndRateLimit(t *testing.T) {
 	require.Equal(t, "60", limited.Header().Get("Retry-After"))
 }
 
+// seedRuntimeExportFixture 建两台同频道、不同平台/运行版本的机器各一条明细。
+func seedRuntimeExportFixture(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	now := time.Now().UTC().Add(-time.Minute)
+	require.NoError(t, db.Create(&model.ClientRuntimeState{ChannelID: "stable", MachineID: "win-1", Platform: "windows", LocalVersion: 15}).Error)
+	require.NoError(t, db.Create(&model.ClientRuntimeState{ChannelID: "stable", MachineID: "lin-1", Platform: "linux", LocalVersion: 3}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "stable", MachineID: "win-1", Kind: "manifest", Version: 15, Status: 200, CreatedAt: now}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "stable", MachineID: "lin-1", Kind: "manifest", Version: 3, Status: 200, CreatedAt: now}).Error)
+}
+
+// TestClientDistExport_HonorsRuntimePlatform 运行态下钻按 platform 过滤时，导出必须同一口径（R34），
+// 否则「筛 Linux 行」下载到的 CSV 里会混着 Windows。
+//
+// 每个断言一个用例而非一个用例连发三次：导出端点对每用户一分钟一次限流，
+// 同一 handler 上连发会被 429 挡住（冷却表在 handler 上，重建 router 又会重复建管理员）。
+func TestClientDistExport_HonorsRuntimePlatform(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupClientDistExportRouter(t, db, 10000)
+	token := getAdminToken(t, r)
+	seedRuntimeExportFixture(t, db)
+
+	w := makeRequest(r, http.MethodGet, "/api/v1/client-dist/export?kind=dist-events&range=7d&channelId=stable&platform=linux", nil, token)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	lines := strings.Split(strings.TrimSpace(strings.TrimPrefix(w.Body.String(), "\ufeff")), "\n")
+	require.Len(t, lines, 2, "表头 + 1 行 linux 数据：%s", w.Body.String())
+	require.NotContains(t, w.Body.String(), "win-1")
+}
+
+// TestClientDistExport_HonorsRuntimeVersion 同上，但按 runtimeVersion 过滤。
+func TestClientDistExport_HonorsRuntimeVersion(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupClientDistExportRouter(t, db, 10000)
+	token := getAdminToken(t, r)
+	seedRuntimeExportFixture(t, db)
+
+	w := makeRequest(r, http.MethodGet, "/api/v1/client-dist/export?kind=dist-events&range=7d&channelId=stable&runtimeVersion=15", nil, token)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NotContains(t, w.Body.String(), "lin-1")
+}
+
+// TestClientDistExport_RejectsInvalidRuntimeNumber 非法运行态数值必须 400，
+// 不能被静默忽略后返回比用户预期更宽的数据。
+func TestClientDistExport_RejectsInvalidRuntimeNumber(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupClientDistExportRouter(t, db, 10000)
+	token := getAdminToken(t, r)
+	seedRuntimeExportFixture(t, db)
+
+	bad := makeRequest(r, http.MethodGet, "/api/v1/client-dist/export?kind=dist-events&range=7d&runtimeVersion=NaN", nil, token)
+	require.Equal(t, http.StatusBadRequest, bad.Code, bad.Body.String())
+}
+
 func TestClientDistExport_MasksSensitiveFieldsAndAudits(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupClientDistExportRouter(t, db, 10000)

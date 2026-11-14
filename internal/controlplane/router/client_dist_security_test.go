@@ -140,6 +140,52 @@ func TestClientSecurityIPBlockAndAdminAuth(t *testing.T) {
 	}
 }
 
+func TestClientSecurityIPBlockScopedToChannel(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	keyA := createChannelAndKey(t, r, token, "s1")
+	keyB := createChannelAndKey(t, r, token, "s2")
+	_ = publishSecurityArtifact(t, r, token, "s1", []byte("AAA"))
+	shaB := publishSecurityArtifact(t, r, token, "s2", []byte("BBB"))
+
+	// 限定频道 s1 封禁测试默认客户端 IP（httptest.NewRequest 的 RemoteAddr 为 192.0.2.1）。
+	block := makeRequest(r, "POST", "/api/v1/client-dist/security/ip-blocks", map[string]any{"ip": "192.0.2.1", "channelId": "s1", "ttlSeconds": 600}, token)
+	if block.Code != http.StatusCreated {
+		t.Fatalf("封禁 IP 失败: %d %s", block.Code, block.Body.String())
+	}
+
+	// 频内仍被拦：s1 的 manifest / hello 均应 403 IP_TEMP_BLOCKED。
+	if mw := clientSecurityRequest(r, "GET", "/api/v1/client-channels/s1/manifest", keyA, nil); mw.Code != http.StatusForbidden || parseJSON(t, mw)["error"] != "IP_TEMP_BLOCKED" {
+		t.Fatalf("频内 manifest 应 403 IP_TEMP_BLOCKED，实际 %d %s", mw.Code, mw.Body.String())
+	}
+	helloA := clientSecurityRequest(r, "POST", "/api/v1/client-security/hello", keyA, []byte(`{"channel":"s1","playerName":"Steve","machineId":"m1","installId":"i1"}`))
+	if helloA.Code != http.StatusForbidden || parseJSON(t, helloA)["error"] != "IP_TEMP_BLOCKED" {
+		t.Fatalf("频内 hello 应 403 IP_TEMP_BLOCKED，实际 %d %s", helloA.Code, helloA.Body.String())
+	}
+
+	// 跨频道不得误伤：同一 IP 用 s2 密钥拉 s2 manifest/制品、发 hello 均应放行（NAT 共享出口场景）。
+	if mw := clientSecurityRequest(r, "GET", "/api/v1/client-channels/s2/manifest", keyB, nil); mw.Code != http.StatusOK {
+		t.Fatalf("跨频道 manifest 不应被 s1 封禁拦截，实际 %d %s", mw.Code, mw.Body.String())
+	}
+	if aw := clientSecurityRequest(r, "GET", "/api/v1/client-artifacts/"+shaB, keyB, nil); aw.Code != http.StatusOK {
+		t.Fatalf("跨频道制品下载不应被 s1 封禁拦截，实际 %d %s", aw.Code, aw.Body.String())
+	}
+	helloB := clientSecurityRequest(r, "POST", "/api/v1/client-security/hello", keyB, []byte(`{"channel":"s2","playerName":"Alex","machineId":"m2","installId":"i2"}`))
+	if helloB.Code != http.StatusAccepted {
+		t.Fatalf("跨频道 hello 应 202，实际 %d %s", helloB.Code, helloB.Body.String())
+	}
+
+	// 不带频道的全局封禁仍应拦截所有频道。
+	global := makeRequest(r, "POST", "/api/v1/client-dist/security/ip-blocks", map[string]any{"ip": "192.0.2.1", "ttlSeconds": 600}, token)
+	if global.Code != http.StatusCreated {
+		t.Fatalf("全局封禁失败: %d %s", global.Code, global.Body.String())
+	}
+	if mw := clientSecurityRequest(r, "GET", "/api/v1/client-channels/s2/manifest", keyB, nil); mw.Code != http.StatusForbidden || parseJSON(t, mw)["error"] != "IP_TEMP_BLOCKED" {
+		t.Fatalf("全局封禁下 s2 manifest 应 403 IP_TEMP_BLOCKED，实际 %d %s", mw.Code, mw.Body.String())
+	}
+}
+
 func TestClientSecurityGroupsCRUD(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)
@@ -157,6 +203,62 @@ func TestClientSecurityGroupsCRUD(t *testing.T) {
 	groups := parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/groups", nil, token))
 	if len(groups) != 1 || groups[0].(map[string]any)["name"] != "观察 IP" || groups[0].(map[string]any)["enabled"] != false {
 		t.Fatalf("分组更新后列表不符: %+v", groups)
+	}
+}
+
+func TestClientSecurityProfilesAndEventsHonorFilters(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	now := time.Now()
+	profiles := []model.ClientSecurityProfile{
+		{ChannelID: "s1", MachineID: "m1", InstallID: "i1", PlayerName: "Steve", PlayerNameNorm: "steve", LastIP: "192.0.2.10", FirstSeen: now, LastSeen: now},
+		{ChannelID: "s2", MachineID: "m2", InstallID: "i2", PlayerName: "Alex", PlayerNameNorm: "alex", LastIP: "198.51.100.7", FirstSeen: now, LastSeen: now},
+	}
+	for i := range profiles {
+		if err := db.Create(&profiles[i]).Error; err != nil {
+			t.Fatalf("写入安全画像失败: %v", err)
+		}
+	}
+	risks := []model.ClientSecurityRiskEvent{
+		{SubjectType: "client", SubjectValue: "i1", ChannelID: "s1", MachineID: "m1", InstallID: "i1", PlayerName: "Steve", IP: "192.0.2.10", RuleCode: "INVALID_PLAYER_NAME", Severity: "low", CreatedAt: now},
+		{SubjectType: "client", SubjectValue: "i2", ChannelID: "s2", MachineID: "m2", InstallID: "i2", PlayerName: "Alex", IP: "198.51.100.7", RuleCode: "ARTIFACT_NOT_ALLOWED", Severity: "medium", CreatedAt: now},
+	}
+	for i := range risks {
+		if err := db.Create(&risks[i]).Error; err != nil {
+			t.Fatalf("写入风险事件失败: %v", err)
+		}
+	}
+
+	// 画像：按频道筛只应拿到 s1 那一行（此前 handler 不读参数，全局最新两条都会返回）。
+	rows := parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/profiles?channelId=s1", nil, token))
+	if len(rows) != 1 || rows[0].(map[string]any)["channelId"] != "s1" {
+		t.Fatalf("画像按 channelId 筛选应只返 s1，实际 %+v", rows)
+	}
+	// 玩家名按归一化列匹配，大小写不敏感。
+	rows = parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/profiles?playerName=STEVE", nil, token))
+	if len(rows) != 1 || rows[0].(map[string]any)["playerName"] != "Steve" {
+		t.Fatalf("画像按 playerName 筛选应命中 Steve，实际 %+v", rows)
+	}
+	// IP / 机器码筛同样要生效。
+	rows = parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/profiles?ip=198.51.100.7", nil, token))
+	if len(rows) != 1 || rows[0].(map[string]any)["machineId"] != "m2" {
+		t.Fatalf("画像按 ip 筛选应命中 m2，实际 %+v", rows)
+	}
+
+	// 风险事件：按频道/规则筛，只应看到对应那一条。
+	events := parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/events?channelId=s1", nil, token))
+	if len(events) != 1 || events[0].(map[string]any)["channelId"] != "s1" {
+		t.Fatalf("风险事件按 channelId 筛选应只返 s1，实际 %+v", events)
+	}
+	events = parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/events?riskRule=ARTIFACT_NOT_ALLOWED", nil, token))
+	if len(events) != 1 || events[0].(map[string]any)["ruleCode"] != "ARTIFACT_NOT_ALLOWED" {
+		t.Fatalf("风险事件按规则筛应只命中一条，实际 %+v", events)
+	}
+	// 不存在的目标必须给空集——不能因为参数被忽略而回退成「全部」。
+	events = parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/events?ip=10.0.0.1", nil, token))
+	if len(events) != 0 {
+		t.Fatalf("风险事件按不存在的 ip 筛应为空，实际 %+v", events)
 	}
 }
 

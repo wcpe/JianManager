@@ -1893,13 +1893,15 @@ func (s *BotLoadExecutionService) finishStopSession(ctx context.Context, session
 		return fmt.Errorf("更新 Bot 停止会话状态失败: %w", err)
 	}
 	// 终态收敛时补写 V2 run-state 事件（completed/failed）。
-	if session.SchemaVersion == 2 && s.intents != nil {
-		terminalState := model.BotLoadRunCompleted
-		if updates["status"] == model.BotStressSessionError {
-			terminalState = model.BotLoadRunFailed
-		}
+	//
+	// 关键：只有**真正停完**（无 remaining）才能发 Complete。此前不分 remaining 一律发
+	// BotLoadIntentComplete，于是「停止 RPC 失败」或「还有 Bot 没停」也会被写成
+	// completed/stopped（同时写 ended_at）——对外宣告了一个没发生的终态，
+	// 而再次 Stop 又会因 status==stopped 提前返回，无法重下发失败停止。
+	// 仍有剩余时保持非终态，交给 ReconcileBotFleetRuntimeState 在可信 runtime 真停完后推进。
+	if session.SchemaVersion == 2 && s.intents != nil && remaining == 0 {
 		if _, intentErr := s.intents.ApplyIntent(ctx, sessionID, BotLoadIntentComplete, "bots_stopped"); intentErr != nil {
-			slog.Debug("V2 终态 intent 写事件失败（非致命）", "runId", sessionID, "state", terminalState, "error", intentErr)
+			slog.Debug("V2 终态 intent 写事件失败（非致命）", "runId", sessionID, "error", intentErr)
 		}
 	}
 	return nil

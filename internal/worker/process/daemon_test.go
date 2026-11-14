@@ -200,7 +200,7 @@ func TestManager_DaemonEnableRestartReArmsWrapper(t *testing.T) {
 	ready := make(chan struct{}, 1)
 	done := make(chan error, 1)
 	go func() { done <- daemon.RunWithReady(cfg, ready) }()
-	<-ready
+	waitDaemonWrapperReady(t, ready, done)
 
 	pidPath := filepath.Join(pidDir, uuid+".pid")
 	pf := daemon.NewPIDFile(pidPath)

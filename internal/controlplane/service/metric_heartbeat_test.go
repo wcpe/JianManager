@@ -297,11 +297,13 @@ func TestMetric_IngestHeartbeat_PlayersAvailableLegacyProbeSample(t *testing.T) 
 func TestMetric_IngestHeartbeat_ProcessTop(t *testing.T) {
 	svc := newMetricSvc(t)
 	require.NoError(t, svc.db.AutoMigrate(&model.Node{}, &model.Instance{}))
+	base := time.Now().UTC().Add(-30 * time.Second)
+	node := model.Node{UUID: "node-1", Name: "node-1", Status: model.NodeStatusOnline, LastHeartbeat: &base}
+	require.NoError(t, svc.db.Create(&node).Error)
 	require.NoError(t, svc.db.Create(&model.Instance{
-		UUID: "inst-1", Name: "survival", NodeID: 1, Type: model.InstanceTypeGeneric,
+		UUID: "inst-1", Name: "survival", NodeID: node.ID, Status: model.InstanceStatusRunning, Type: model.InstanceTypeGeneric,
 		ProcessType: model.ProcessTypeDirect, StartCommand: "sleep",
 	}).Error)
-	base := metricBase()
 
 	require.NoError(t, svc.ingestHeartbeatAt(&workerpb.HeartbeatRequest{
 		NodeUuid: "node-1",
@@ -333,7 +335,7 @@ func TestMetric_QueryProcessTop_UsesLatestSamplePerInstance(t *testing.T) {
 		{InstanceUuid: "inst-b", Pid: 20, Name: "java", CpuPercent: 30, SampledAtUnixMs: base.Add(10 * time.Second).UnixMilli()},
 	}, base))
 
-	got, err := svc.QueryProcessTop(ProcessTopQuery{NodeUUID: "node-1", Sort: "cpu", Limit: 10})
+	got, err := svc.QueryProcessTop(ProcessTopQuery{NodeUUID: "node-1", At: base.Add(30 * time.Second), Sort: "cpu", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	require.Equal(t, int32(20), got[0].PID)

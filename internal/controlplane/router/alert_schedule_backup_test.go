@@ -400,7 +400,9 @@ func TestBackup_CreateListDelete(t *testing.T) {
 	backups := parseJSONArray(t, w)
 	require.Len(t, backups, 1)
 
-	// 删除
+	// 删除（先把状态置为终态：无 Worker 时异步创建会失败/停在 pending，
+	// 而删除已在途是对的保护行为，详见 TestBackup_DeleteRejectsInProgress）。
+	require.NoError(t, db.Model(&model.Backup{}).Where("id = ?", backupID).Update("status", model.BackupStatusFailed).Error)
 	w = makeRequest(r, "DELETE", "/api/v1/backups/"+itoa(backupID), nil, token)
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -409,6 +411,31 @@ func TestBackup_CreateListDelete(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	backups = parseJSONArray(t, w)
 	assert.Len(t, backups, 0)
+}
+
+// TestBackup_DeleteRejectsInProgress 创建中的备份不得删除（防任务继续写已删记录的孤儿归档）。
+func TestBackup_DeleteRejectsInProgress(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	inst := &model.Instance{
+		NodeID: node.ID, Name: "in-flight-backup", Type: model.InstanceTypeGeneric,
+		Role: model.InstanceRoleUniversal, ProcessType: model.ProcessTypeDirect,
+		StartCommand: "noop", Status: model.InstanceStatusStopped, WorkDir: "/srv/f",
+	}
+	require.NoError(t, db.Create(inst).Error)
+	b := &model.Backup{InstanceID: inst.ID, Name: "running", Status: model.BackupStatusInProgress, UUID: "bk-in-flight"}
+	require.NoError(t, db.Create(b).Error)
+
+	w := makeRequest(r, "DELETE", "/api/v1/backups/"+itoa(b.ID), nil, token)
+	require.Equal(t, http.StatusConflict, w.Code)
+	assert.Equal(t, "OPERATION_IN_FLIGHT", parseJSON(t, w)["error"])
+
+	// 置为终态后可以删。
+	require.NoError(t, db.Model(&model.Backup{}).Where("id = ?", b.ID).Update("status", model.BackupStatusFailed).Error)
+	w = makeRequest(r, "DELETE", "/api/v1/backups/"+itoa(b.ID), nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
 }
 
 // TestBackup_Create_MissingName 缺少名称返回 400。

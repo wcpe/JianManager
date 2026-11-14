@@ -3,8 +3,12 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"strconv"
 	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
@@ -20,12 +24,20 @@ import (
 // ## 校验什么，不校验什么
 //
 // 只校验**执行前能被客观比对**的事实：
-//   - 实例：存在性、节点归属、`updated_at`（改配置 / 换二进制 / 改名都会推进它）；
-//   - 节点：存在性、`updated_at`。
+//   - 实例：存在性、节点归属、**审批相关配置的指纹**（名字 / 类型 / 启动命令 / JDK /
+//     二进制绑定 / 资源限额等，见 instanceApprovalFingerprint）；
+//   - 节点：存在性、节点名。
 //
 // **刻意不校验**「实例是否在运行」这类会随正常运维波动的事实：
 // 批「停止实例」时它必须是在跑的，但批准后运维手工停了它，再执行 stop 也无害——
 // 把这类波动判为漂移会让审批在真实运维节奏里频繁失败，反而促使人绕过审批。
+//
+// **也不再拿 `updated_at` 当版本**（2026-11-14 改）：心跳每拍都会
+// `Update("status", <同值>)` 以及写 status_reason，GORM 的自动时间戳因此**每拍都推进**
+// `updated_at`。用它作漂移判据意味着「凡是还在线的目标，票据跨一拍心跳后必然 failed」——
+// 审批中心在实际节奏里基本不可用（人工审批本来就常常跨过好几拍）。
+// 现在改成对「审批真正关心的那部分字段」做指纹：运行态进展不影响判定，
+// 而改名 / 换二进制 / 迁节点 / 改启动命令仍然会被识别出来。
 //
 // ## 缺失 evidence 时的语义
 //
@@ -33,12 +45,13 @@ import (
 // 也不要让存量票据全部执行失败——那会让上线瞬间堆积一批「批准了但永远失败」的票。
 // 这是有意的取舍，已在 spec 记录（见文件末注释）。
 //
-// ## 为什么 Version 用 updated_at 纳秒而非递增版本号
+// ## Version 存的是什么
 //
-// 现有实例/节点表没有乐观锁版本列。`updated_at` 已被所有写路径维护，
-// 用它作「内容是否变过」的代理是当下零迁移成本的正确选择。
-// 复查条件：若将来引入显式版本列（如 `revision`），应改用版本列——
-// 因为 `updated_at` 在同一纳秒内的两次写入无法区分（现实中不可能，但属理论缺口）。
+// 一个**内容指纹**：对审批相关字段做稳定序列化后取 FNV-1a 64 位摘要，
+// 再以十进制字符串写进 evidence（见下方“为什么存字符串”）。
+// 指纹只覆盖配置面，不覆盖 status / 指标 / 心跳时间这些每拍都会变的东西。
+// 选摘要而不是直接存字段快照：evidence 会随票据长期留存，摘要体积恒定，
+// 也不会把实例的完整配置（可能含敏感串）复制到审批表里。
 //
 // ## 为什么 version 在 evidence 里存字符串而不是数字
 //
@@ -53,6 +66,12 @@ import (
 // 毫秒级会把「同一毫秒内的两次真实写更新」误判为「没变」，
 // 等于放行一次针对已变更目标的执行——那是安全漏洞，比精度冗余更糟。
 // decode 侧仍容忍数字形式（便于手工构造与调试），但数字形式本就是有损的。
+
+// fingerprintVersionKind 标记「Version 存的是内容指纹」。
+//
+// 历史票据的 evidence 里没有这个键（Version 是 updated_at 纳秒），升级后必须能区分：
+// 两种口径的值域不相交，混比必然判不等。见 VerifyTargetDrift 的口径检查。
+const fingerprintVersionKind = "fingerprint"
 
 // TargetSnapshot 是申请时冻结的目标状态（序列化后存入 ApprovalTicket.Evidence）。
 //
@@ -69,9 +88,13 @@ type TargetSnapshot struct {
 	NodeID uint `json:"nodeId,omitempty"`
 	// Status 申请时的状态，**不参与判定**（见文件头取舍）。
 	Status string `json:"status,omitempty"`
-	// Version 申请时的 updated_at（Unix 纳秒）。漂移判定的主依据。
+	// Version 申请时的目标内容指纹（见 instanceApprovalFingerprint）。
 	// 在 evidence JSON 里以字符串承载，原因见文件头「为什么 version 存字符串」。
 	Version int64 `json:"version,omitempty"`
+	// VersionKind 标识 Version 的口径：空 = 历史票据的 updated_at 纳秒，
+	// "fingerprint" = 内容指纹。**必须区分**：两种口径的值域完全不相交，
+	// 拿指纹去比纳秒必然不等，会把上线瞬间所有待审票据判成漂移。
+	VersionKind string `json:"versionKind,omitempty"`
 	// CapturedAt 快照采集时刻（RFC3339），供审计与排查。
 	CapturedAt string `json:"capturedAt,omitempty"`
 }
@@ -98,7 +121,8 @@ func CaptureTargetSnapshot(instances *InstanceService, nodes *NodeService, targe
 		}
 		return snapshotToMap(TargetSnapshot{
 			Kind: "instance", ID: inst.ID, Name: inst.Name, NodeID: inst.NodeID,
-			Status: string(inst.Status), Version: inst.UpdatedAt.UnixNano(), CapturedAt: now,
+			Status: string(inst.Status), Version: instanceApprovalFingerprint(instances.db, inst),
+			VersionKind: fingerprintVersionKind, CapturedAt: now,
 		})
 	case "node":
 		if nodes == nil {
@@ -110,11 +134,67 @@ func CaptureTargetSnapshot(instances *InstanceService, nodes *NodeService, targe
 		}
 		return snapshotToMap(TargetSnapshot{
 			Kind: "node", ID: node.ID, Name: node.Name,
-			Status: fmt.Sprintf("%d", node.Status), Version: node.UpdatedAt.UnixNano(), CapturedAt: now,
+			Status: fmt.Sprintf("%d", node.Status), Version: nodeApprovalFingerprint(node),
+			VersionKind: fingerprintVersionKind, CapturedAt: now,
 		})
 	default:
 		return nil
 	}
+}
+
+// instanceApprovalFingerprint 计算实例「审批相关配置」的稳定指纹。
+//
+// 只纳入**批准人当时据以判断的那部分事实**：身份（名字/类型/角色）、怎么跑
+// （启动命令 / 启动规格 / JDK / 镜像）、跑在哪（节点 / 工作目录）、资源限额。
+// 刻意排除 status / status_reason / updated_at / 指标——它们由心跳每拍推进，
+// 纳入就会让「目标什么都没变」的票据在等待期间必然失败。
+//
+// 用 FNV-1a 64：稳定、无依赖、结果短（evidence 长期留存）。碰撞概率对
+// 「同一条票据内比较两个快照」这个用途而言可忽略；真正的安全边界是人工批准，
+// 指纹只负责发现「批准的目标已经不是同一个配置」。
+func instanceApprovalFingerprint(db *gorm.DB, inst *model.Instance) int64 {
+	h := fnv.New64a()
+	write := func(parts ...any) {
+		for _, part := range parts {
+			_, _ = io.WriteString(h, fmt.Sprintf("%v", part))
+			_, _ = h.Write([]byte{0}) // 分隔，避免 "ab"+"c" 与 "a"+"bc" 同值
+		}
+	}
+	write(inst.ID, inst.NodeID, inst.Name, inst.Type, inst.Kind, inst.Role, inst.ProcessType)
+	write(inst.StartCommand, inst.JDKID, inst.JavaMajorVersion, inst.LaunchSpec)
+	write(inst.WorkDir, inst.WorkDirInPlace, inst.Image)
+	write(inst.CPULimit, inst.MemLimitMB, inst.DiskLimitMB)
+	write(inst.ThrottleCPULimit, inst.ThrottleMemLimitMB)
+	write(inst.AutoStart, inst.AutoRestart, inst.EnvVars, inst.ProvisionSpec)
+	// 二进制绑定必须纳入：它存在另一张表，不在 Instance 行上。
+	// 「批准重启 → 期间把 jar 换掉 → 执行」正是审批要拦的那类目标替换；
+	// 只看 Instance 字段会完全无感（实测：换资产后指纹不变）。
+	if db != nil {
+		var b model.InstanceBinaryBinding
+		if err := db.Where("instance_id = ?", inst.ID).First(&b).Error; err == nil {
+			write(b.CurrentAssetID, b.CurrentSHA256, b.CurrentVersion,
+				b.PreviousAssetID, b.PreviousSHA256)
+		} else {
+			// 表缺失或无绑定：写入固定标记，保证「无绑定」与「有绑定」指纹不同，
+			// 但同一种状态内部稳定（不因查询失败而漂移）。
+			write("no-binding")
+		}
+	}
+	return int64(h.Sum64())
+}
+
+// nodeApprovalFingerprint 计算节点「审批相关配置」的指纹。
+//
+// 节点表上审批关心的配置面很窄（名字 + 维护标记）；状态/负载/心跳时间都在变，
+// 不能纳入。名字被改会让「批准人对哪台机器下手」的认知失效，因此保留。
+func nodeApprovalFingerprint(node *model.Node) int64 {
+	h := fnv.New64a()
+	_, _ = io.WriteString(h, fmt.Sprintf("%d", node.ID))
+	_, _ = h.Write([]byte{0})
+	_, _ = io.WriteString(h, node.Name)
+	_, _ = h.Write([]byte{0})
+	_, _ = io.WriteString(h, fmt.Sprintf("%v", node.Maintenance))
+	return int64(h.Sum64())
 }
 
 func snapshotToMap(s TargetSnapshot) map[string]any {
@@ -123,8 +203,9 @@ func snapshotToMap(s TargetSnapshot) map[string]any {
 		"status": s.Status,
 		// version 存十进制字符串：纳秒值超过 float64 精确整数上限，存数字会丢精度，
 		// 见文件头「为什么 version 在 evidence 里存字符串而不是数字」。
-		"version":    strconv.FormatInt(s.Version, 10),
-		"capturedAt": s.CapturedAt,
+		"version":     strconv.FormatInt(s.Version, 10),
+		"versionKind": s.VersionKind,
+		"capturedAt":  s.CapturedAt,
 	}
 }
 
@@ -145,6 +226,12 @@ func VerifyTargetDrift(instances *InstanceService, nodes *NodeService) func(t *m
 		if !ok {
 			return nil
 		}
+		// 口径不匹配（升级前签发的票据：version 是 updated_at 纳秒）同样不阻断。
+		// 强行比较会让存量票据 100% 判漂移——那比「这次无法校验」糟糕得多：
+		// 用户看到的是「批准了但永远失败」，且没有任何可执行的补救动作。
+		if snap.VersionKind != fingerprintVersionKind {
+			return nil
+		}
 		switch snap.Kind {
 		case "instance":
 			if instances == nil {
@@ -158,8 +245,8 @@ func VerifyTargetDrift(instances *InstanceService, nodes *NodeService) func(t *m
 				return fmt.Errorf("%w: 实例 #%d 已从节点 #%d 迁至 #%d",
 					ErrApprovalTargetDrift, snap.ID, snap.NodeID, inst.NodeID)
 			}
-			if inst.UpdatedAt.UnixNano() != snap.Version {
-				return fmt.Errorf("%w: 实例 #%d（%s）在申请后已被修改（申请于 %s）",
+			if fp := instanceApprovalFingerprint(instances.db, inst); fp != snap.Version {
+				return fmt.Errorf("%w: 实例 #%d（%s）的配置在申请后已变更（申请于 %s）",
 					ErrApprovalTargetDrift, snap.ID, snap.Name, snap.CapturedAt)
 			}
 		case "node":
@@ -170,7 +257,7 @@ func VerifyTargetDrift(instances *InstanceService, nodes *NodeService) func(t *m
 			if err != nil || node == nil {
 				return fmt.Errorf("%w: 节点 #%d（%s）已不存在", ErrApprovalTargetDrift, snap.ID, snap.Name)
 			}
-			if node.UpdatedAt.UnixNano() != snap.Version {
+			if fp := nodeApprovalFingerprint(node); fp != snap.Version {
 				return fmt.Errorf("%w: 节点 #%d（%s）在申请后已被修改（申请于 %s）",
 					ErrApprovalTargetDrift, snap.ID, snap.Name, snap.CapturedAt)
 			}
@@ -196,13 +283,16 @@ func decodeTargetSnapshot(evidence map[string]any) (TargetSnapshot, bool) {
 		return TargetSnapshot{}, false
 	}
 	snap := TargetSnapshot{
-		Kind:       kind,
-		ID:         toUintFromAny(evidence["id"]),
-		NodeID:     toUintFromAny(evidence["nodeId"]),
-		Version:    toVersionFromAny(evidence["version"]),
-		Name:       toStringFromAny(evidence["name"]),
-		Status:     toStringFromAny(evidence["status"]),
-		CapturedAt: toStringFromAny(evidence["capturedAt"]),
+		Kind:    kind,
+		ID:      toUintFromAny(evidence["id"]),
+		NodeID:  toUintFromAny(evidence["nodeId"]),
+		Version: toVersionFromAny(evidence["version"]),
+		Name:    toStringFromAny(evidence["name"]),
+		Status:  toStringFromAny(evidence["status"]),
+		// 必须解出来：漏了会让**所有新票据**都被「口径不匹配」分支放行，
+		// 漂移校验形同失效（实测：漏解时改启动命令的用例转绿变红）。
+		VersionKind: toStringFromAny(evidence["versionKind"]),
+		CapturedAt:  toStringFromAny(evidence["capturedAt"]),
 	}
 	if snap.ID == 0 {
 		return TargetSnapshot{}, false

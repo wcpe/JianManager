@@ -223,6 +223,15 @@ func (s *ClientVersionService) PublishVersion(channelID string, p PublishVersion
 	if err := validateCleanExclude(p.CleanExclude); err != nil {
 		return nil, err
 	}
+	// 校验 managedDirs：必须和 cleanExclude 同一个路径安全口径。
+	//
+	// 此前只校 cleanExclude，managedDirs 原样落库。后果是 {@code "."} / {@code "mods/.."} 这类
+	// “点段写法”能通过——它们过了柉就会在客户端被 resolveSafe 归一成 gameDir 本身，
+	// 于是**不开 clean-all、不弹全量清理确认，也能下出“清游戏根”的版本**。
+	// （客户端 resolveSafe 会拦住真正的逃逸，所以危害限于根目录内，但已足够严重。）
+	if err := validateManagedDirs(p.ManagedDirs); err != nil {
+		return nil, err
+	}
 	files, err := s.withPatchArtifacts(channelID, p.Files)
 	if err != nil {
 		return nil, err
@@ -1104,6 +1113,23 @@ func validateCleanExclude(excludes []string) error {
 	return nil
 }
 
+// validateManagedDirs 校验托管目录：与 cleanExclude 同一套路径安全口径，额外放行全量哨兵 "*"。
+//
+// 拒掉的情形都是“看着像目录、实际指向根”的点段写法：`.`、`mods/..`、`a/./b`。
+// 它们一旦落库，客户端会把目录解析为 gameDir，让一次普通发布变成根目录清理。
+func validateManagedDirs(dirs []string) error {
+	for _, d := range dirs {
+		if d == "*" {
+			// 全量清理的合法哨兵；危险确认在前端做。
+			continue
+		}
+		if !safeManifestPath(d) {
+			return fmt.Errorf("%w: 非法 managedDirs 路径 %q（不得含 . / .. 段）", ErrInvalidVersionFiles, d)
+		}
+	}
+	return nil
+}
+
 // safeManifestPath 报告 manifest 相对路径是否安全：非空、POSIX 风格、不绝对、无 `..` 段、不含反斜杠/驱动器。
 func safeManifestPath(p string) bool {
 	if p == "" || p[0] == '/' {
@@ -1119,7 +1145,9 @@ func safeManifestPath(p string) bool {
 		return false
 	}
 	for _, seg := range splitSlash(p) {
-		if seg == ".." {
+		// 同时拒绝 "." 与空段：`.` 归一后指向当前目录，在托管目录语境下等价于“清根”，
+		// 而空段（`a//b`）会让不同写法指向同一位置，造成校验与实际解析不一致。
+		if seg == ".." || seg == "." || seg == "" {
 			return false
 		}
 	}

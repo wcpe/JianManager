@@ -22,11 +22,23 @@ type ConfigFileHandler struct {
 	svc   *service.ConfigFileService
 	authz *service.AuthzService
 	audit *service.AuditService
+	// groups 用于把配置层的 group 作用域展开成成员实例（判定可见性）。
+	// nil 时 group 层一律不可见（fail-closed）。
+	groups *service.InstanceGroupService
 }
 
 // NewConfigFileHandler 创建配置分层覆盖路由处理器。
 func NewConfigFileHandler(svc *service.ConfigFileService, authz *service.AuthzService, audit *service.AuditService) *ConfigFileHandler {
 	return &ConfigFileHandler{svc: svc, authz: authz, audit: audit}
+}
+
+// WithInstanceGroups 注入组织分组服务，启用 group 层作用域的可见性判定。
+//
+// 单独一个 setter 而不是改构造签名：本仓库大量测试直接构造 handler，
+// 改签名会牵连一大片无关用例；未注入时 group 层 fail-closed（安全方向）。
+func (h *ConfigFileHandler) WithInstanceGroups(g *service.InstanceGroupService) *ConfigFileHandler {
+	h.groups = g
+	return h
 }
 
 // RegisterRoutes 注册 /config-files 全部端点。
@@ -188,7 +200,15 @@ func (h *ConfigFileHandler) ListLayers(c *gin.Context) {
 		h.respondErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"layers": heads})
+	// 只返回调用者可见作用域的 head：层列表泄露其他组的实例名与覆盖情况。
+	guard := newConfigScopeGuard(c, h.authz).withGroups(h.groups)
+	visible := make([]service.LayerHeadView, 0, len(heads))
+	for _, hd := range heads {
+		if guard.scopeVisible(hd.ScopeLevel, hd.ScopeRefID) {
+			visible = append(visible, hd)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"layers": visible})
 }
 
 // LayerHistory 返回某作用域的版本历史。
@@ -202,6 +222,10 @@ func (h *ConfigFileHandler) LayerHistory(c *gin.Context) {
 	}
 	level, scopeID, ok := h.parseScope(c)
 	if !ok {
+		return
+	}
+	// 作用域越权隔离：非管理员只能看自己可见实例/组的历史。
+	if !newConfigScopeGuard(c, h.authz).withGroups(h.groups).requireScopeAccessible(level, scopeID) {
 		return
 	}
 	versions, err := h.svc.LayerHistory(id, level, scopeID)
@@ -226,6 +250,11 @@ func (h *ConfigFileHandler) SaveLayer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
+	// 写操作按请求体里的作用域校验（body 的 scopeType/scopeId 才是真正目标）。
+	if !newConfigScopeGuard(c, h.authz).withGroups(h.groups).requireScopeAccessible(
+		model.ConfigScopeLevel(strings.ToLower(strings.TrimSpace(in.ScopeLevel))), in.ScopeID) {
+		return
+	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	authorID, _ := uid.(uint)
 	ver, err := h.svc.SaveLayer(id, in, authorID)
@@ -237,7 +266,14 @@ func (h *ConfigFileHandler) SaveLayer(c *gin.Context) {
 	h.recordAudit(c, authorID, "config_layer_save", id,
 		"scope="+string(ver.ScopeLevel)+":"+strconv.FormatUint(uint64(ver.ScopeRefID), 10)+
 			" v"+strconv.Itoa(ver.VersionNo)+" hash="+ver.ContentHash)
-	c.JSON(http.StatusOK, ver)
+	// 对外展示必须与 GET history 同口径脱敏：直接返回 model.ConfigLayerVersion
+	// 会让「保存一个含密钥的层」的响应体把明文吐回给调用方。
+	view, verr := h.svc.LayerVersionViewOf(id, ver)
+	if verr != nil {
+		h.respondErr(c, verr)
+		return
+	}
+	c.JSON(http.StatusOK, view)
 }
 
 type layerRollbackRequest struct {
@@ -258,6 +294,10 @@ func (h *ConfigFileHandler) RollbackLayer(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 作用域越权隔离：回退会覆盖当前生效层，同样要按可见范围校验。
+	if !newConfigScopeGuard(c, h.authz).withGroups(h.groups).requireScopeAccessible(level, scopeID) {
+		return
+	}
 	var req layerRollbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
@@ -274,7 +314,13 @@ func (h *ConfigFileHandler) RollbackLayer(c *gin.Context) {
 		"scope="+string(ver.ScopeLevel)+":"+strconv.FormatUint(uint64(ver.ScopeRefID), 10)+
 			" to=v"+strconv.Itoa(ver.VersionNo)+" from=#"+
 			strconv.FormatUint(uint64(derefUint(ver.BasedOnVersionID)), 10))
-	c.JSON(http.StatusOK, ver)
+	// 同 SaveLayer：响应体走脱敏视图，不回原文。
+	view, verr := h.svc.LayerVersionViewOf(id, ver)
+	if verr != nil {
+		h.respondErr(c, verr)
+		return
+	}
+	c.JSON(http.StatusOK, view)
 }
 
 // DeleteLayer 删除某作用域的全部版本（撤销该层覆盖）。
@@ -288,6 +334,10 @@ func (h *ConfigFileHandler) DeleteLayer(c *gin.Context) {
 	}
 	level, scopeID, ok := h.parseScope(c)
 	if !ok {
+		return
+	}
+	// 作用域越权隔离：删除层同样是破坏性写。
+	if !newConfigScopeGuard(c, h.authz).withGroups(h.groups).requireScopeAccessible(level, scopeID) {
 		return
 	}
 	if err := h.svc.DeleteLayer(id, level, scopeID); err != nil {
@@ -321,7 +371,12 @@ func (h *ConfigFileHandler) Effective(c *gin.Context) {
 		return
 	}
 	// 越权隔离：非管理员只能预览其可访问实例的有效值，否则 404 隐藏存在性。
-	if h.authz != nil && !canAccessInstance(c, h.authz, uint(instanceID)) {
+	//
+	// **fail-closed**：`h.authz == nil` 表示装配缺失（精简部署/裁剪装配），
+	// 此时不能当作「没有权限系统需要检查」直接放行——那会让任何一个持有
+	// file.read 的调用者预览任意实例的有效配置（含被遮罩前的溯源信息）。
+	// 装配缺失按拒绝处理，与 canAccessInstance 自身对 nil access 的语义一致。
+	if h.authz == nil || !canAccessInstance(c, h.authz, uint(instanceID)) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
 		return
 	}
@@ -388,6 +443,10 @@ func (h *ConfigFileHandler) respondErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": err.Error()})
 	case errors.Is(err, service.ErrConfigFileExists):
 		c.JSON(http.StatusConflict, gin.H{"error": "ALREADY_EXISTS", "message": err.Error()})
+	case errors.Is(err, service.ErrConfigLayerConflict):
+		// 409 + 稳定错误码：前端据此提示「已被他人更新」并重新拉历史，
+		// 而不是把这条当成可无脑重试的业务错误（重试会再撞一次）。
+		c.JSON(http.StatusConflict, gin.H{"error": "CONFIG_LAYER_CONFLICT", "message": err.Error()})
 	case errors.Is(err, service.ErrConfigFormatImmutable),
 		errors.Is(err, service.ErrConfigNameImmutable),
 		errors.Is(err, service.ErrConfigScopeInvalid):

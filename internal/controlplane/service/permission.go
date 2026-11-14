@@ -68,19 +68,45 @@ func (s *PermissionService) SeedSystemRoles() error {
 	return nil
 }
 
-func (s *PermissionService) replaceRoleNodes(roleID uint, nodes []string) error {
-	if err := s.db.Where("role_id = ?", roleID).Delete(&model.RolePermission{}).Error; err != nil {
-		return fmt.Errorf("清空角色节点: %w", err)
-	}
+// dedupePermissionNodes 过滤非法节点并按集合语义去重，保持首次出现的顺序。
+//
+// CreateRole 与 replaceRoleNodes 共用：两处都往 (role_id,node) 唯一索引里写，
+// 调用方多送一个重复项属于输入冗余，不该升级成「整个请求失败」。
+func dedupePermissionNodes(nodes []string) []string {
+	seen := make(map[string]struct{}, len(nodes))
+	cleaned := make([]string, 0, len(nodes))
 	for _, n := range nodes {
 		if !IsValidPermissionNode(n) {
 			continue
 		}
-		if err := s.db.Create(&model.RolePermission{RoleID: roleID, Node: n}).Error; err != nil {
-			return fmt.Errorf("写入角色节点 %s: %w", n, err)
+		if _, dup := seen[n]; dup {
+			continue
 		}
+		seen[n] = struct{}{}
+		cleaned = append(cleaned, n)
 	}
-	return nil
+	return cleaned
+}
+
+// replaceRoleNodes 全量替换某角色的权限节点。
+//
+// 必须整体在一个事务里：此前是「先删空 → 再逐条插」，中间任何一步失败（重复节点撞
+// (role_id,node) 唯一索引、并发写、磁盘错误）都会让模板永久停在「只剩前几条」的
+// 残缺状态，而 API 只回了一个 400——使用该模板的账号下一次请求就按残缺集合授权。
+// 入参先按 Set 语义去重：调用方多送一个重复节点属于输入冗余，不该升级成数据损坏。
+func (s *PermissionService) replaceRoleNodes(roleID uint, nodes []string) error {
+	cleaned := dedupePermissionNodes(nodes)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("role_id = ?", roleID).Delete(&model.RolePermission{}).Error; err != nil {
+			return fmt.Errorf("清空角色节点: %w", err)
+		}
+		for _, n := range cleaned {
+			if err := tx.Create(&model.RolePermission{RoleID: roleID, Node: n}).Error; err != nil {
+				return fmt.Errorf("写入角色节点 %s: %w", n, err)
+			}
+		}
+		return nil
+	})
 }
 
 // Catalog 返回静态权限目录。
@@ -147,10 +173,9 @@ func (s *PermissionService) CreateRole(name, desc string, nodes []string) (*mode
 					}
 					return err
 				}
-				for _, n := range nodes {
-					if !IsValidPermissionNode(n) {
-						continue
-					}
+				// 与 replaceRoleNodes 同口径去重：调用方多送一个重复节点属输入冗余，
+				// 不该让整个创建撞 (role_id,node) 唯一索引而失败回滚。
+				for _, n := range dedupePermissionNodes(nodes) {
 					if err := tx.Create(&model.RolePermission{RoleID: role.ID, Node: n}).Error; err != nil {
 						return err
 					}
@@ -268,7 +293,14 @@ func (s *PermissionService) ensureNotDemotingSuperAdmin(user *model.User, target
 	return ErrSuperAdminLocked
 }
 
-// BindUserRole 绑定用户主角色。禁止把平台管理员（users.role=10）绑到非超级管理员模板。
+// BindUserRole 绑定用户主角色。
+//
+// 两个方向都要守，此前只守了「降级」方向：
+//   - 超管不可绑到非 platform_admin 模板（ensureNotDemotingSuperAdmin）；
+//   - **普通用户也不可绑到 platform_admin 模板**——绑定后 userIsSuperAdmin 为真、
+//     EffectiveForUser 短路成全量权限，等于造出第二个超管。用户侧 Create/Update
+//     有唯一性约束，绑定这条路径没有的话，两条生产写路径的结论就不一致：
+//     「第二个 role=10 会被拒、但等效的模板绑定成功」。
 func (s *PermissionService) BindUserRole(userID, roleID uint) error {
 	role, err := s.GetRole(roleID)
 	if err != nil {
@@ -281,6 +313,18 @@ func (s *PermissionService) BindUserRole(userID, roleID uint) error {
 	if err := s.ensureNotDemotingSuperAdmin(&user, role.Key); err != nil {
 		return err
 	}
+	if role.Key == model.RoleKeyPlatformAdmin && user.Role != model.RolePlatformAdmin {
+		// 用一个不含唯一性约束的 UserService 判定「是否已有其他启用超管」。
+		// 不直接复用 ensureSuperAdminSlot 是为了不把 UserService 整包塞进来；
+		// 判据与它一致：排除本用户后仍存在「启用且是超管」的用户即拒绝。
+		taken, err := s.hasOtherEnabledSuperAdmin(userID)
+		if err != nil {
+			return err
+		}
+		if taken {
+			return ErrSuperAdminUnique
+		}
+	}
 	var binding model.UserRoleBinding
 	err = s.db.Where("user_id = ?", userID).First(&binding).Error
 	if err == gorm.ErrRecordNotFound {
@@ -290,6 +334,23 @@ func (s *PermissionService) BindUserRole(userID, roleID uint) error {
 		return err
 	}
 	return s.db.Model(&binding).Update("role_id", role.ID).Error
+}
+
+// hasOtherEnabledSuperAdmin 判断除 excludeID 外是否还有启用中的超管。
+//
+// 与 UserService.ensureSuperAdminSlot 同口径（role=10 或绑定 platform_admin 模板、
+// 且 status 为启用），但用一条 SQL 直接算，避免两个服务互相依赖。
+func (s *PermissionService) hasOtherEnabledSuperAdmin(excludeID uint) (bool, error) {
+	var users []model.User
+	if err := s.db.Where("id <> ? AND status = ?", excludeID, model.UserStatusActive).Find(&users).Error; err != nil {
+		return false, err
+	}
+	for i := range users {
+		if s.userIsSuperAdmin(&users[i]) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // UserOverrides 用户覆盖列表。

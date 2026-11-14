@@ -462,7 +462,6 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 
 		// 更新节点指标和心跳时间
 		updates := map[string]interface{}{
-			"cpu_usage":          req.CpuUsage,
 			"log_ingest_healthy": req.LogIngestHealthy,
 			"memory_usage":       req.MemoryUsage,
 			"disk_usage":         req.DiskUsage,
@@ -473,6 +472,12 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			"load_avg1":          req.LoadAvg1,
 			"last_heartbeat":     time.Now(),
 			"status":             model.NodeStatusOnline,
+		}
+		// CPU 构成表明当前窗口有效，允许真实空闲值 0；旧 Worker 兼容正数标量。
+		// 无效窗口全为零时保留已有当前值，不把缺测覆盖成空闲；时序入口另写 NULL 断点。
+		if req.CpuUsage > 0 || req.CpuUser > 0 || req.CpuNice > 0 || req.CpuSystem > 0 ||
+			req.CpuIdle > 0 || req.CpuIrq > 0 || req.CpuSoftirq > 0 || req.CpuSteal > 0 || req.Iowait > 0 {
+			updates["cpu_usage"] = req.CpuUsage
 		}
 		// 主机级标量列。只在**上报了**才写（用指针区分「未上报」与「读数为 0」）。
 		//
@@ -514,26 +519,39 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			slog.Warn("写入主机级观测快照失败", "nodeUUID", req.NodeUuid, "error", err)
 		}
 
-		// 同步实例状态并对账（即使 Worker 上报空也要对账：
-		// Worker 重启未恢复某实例时，DB 会永远卡在 RUNNING 致所有生命周期操作 422）。
-		h.syncInstanceStates(req.NodeUuid, req.Instances)
+		// 归属过滤（隔离边界）：认证只证明「这条流属于本节点」，不证明载荷里每个实例都属于本节点。
+		// 不加这一层，一个持有合法凭据的节点可以上报别的节点的实例 UUID，改写其状态/健康原因
+		// 并向其历史曲线注入本机数据（实例状态 UPDATE 仅按 uuid）。这里以库中的
+		// instances.node_id 为准，剔除不属于本节点的实例载荷，并记一条告警（不静默）。
+		//
+		// ownerChecked=false 表示归属校验本身失败：此时**整拍跳实例相关处理**，而不是当成
+		// 「Worker 上报空清单」——后者会让正向对账把本节点所有运行实例置为 STOPPED。
+		// 节点自身指标（上面的 nodes 表更新与主机快照）不受影响。
+		req, ownerChecked := h.filterForeignInstances(req)
+		if ownerChecked {
+			// 同步实例状态并对账（即使 Worker 上报空也要对账：
+			// Worker 重启未恢复某实例时，DB 会永远卡在 RUNNING 致所有生命周期操作 422）。
+			h.syncInstanceStates(req.NodeUuid, req.Instances)
 
-		// 运行态漂移：消费 Worker 上报的「实例工作目录下有外来活进程」，写/清 instances.runtime_drift_*。
-		// 与反向对账（无主运行时）方向不同：此处只针对**已存在实例**记录观测，命中 0 行忽略。
-		h.applyRuntimeDrift(req.Instances)
+			// 运行态漂移：消费 Worker 上报的「实例工作目录下有外来活进程」，写/清 instances.runtime_drift_*。
+			// 与反向对账（无主运行时）方向不同：此处只针对**已存在实例**记录观测，命中 0 行忽略。
+			h.applyRuntimeDrift(req.Instances)
 
-		// 实例工作目录占用：组配额存储口径的真实来源，落 instances.work_dir_bytes_*。
-		// 同样只记观测、不阻断心跳——配额数据不该让存活判定失败。
-		h.applyWorkDirUsages(req.WorkDirUsages)
+			// 实例工作目录占用：组配额存储口径的真实来源，落 instances.work_dir_bytes_*。
+			// 同样只记观测、不阻断心跳——配额数据不该让存活判定失败。
+			h.applyWorkDirUsages(req.WorkDirUsages)
+
+			// 反向对账：Worker 有、CP 无记录的无主运行时跟踪/宽限/自动处置。
+			// 在正向对账之后执行；不改写正向语义。nil 注入=关闭。
+			if h.orphans != nil {
+				h.orphans.ObserveHeartbeat(req.NodeUuid, req.Instances)
+			}
+		} else {
+			slog.Warn("心跳实例归属校验失败，本拍跳过实例状态与对账", "nodeUUID", req.NodeUuid)
+		}
 
 		// ②：心跳作为重推的自然兜底触发源（低频；由 ResyncDeduper 按节点节流吸收）。
 		h.triggerResync(req.NodeUuid)
-
-		// 反向对账：Worker 有、CP 无记录的无主运行时跟踪/宽限/自动处置。
-		// 在正向对账之后执行；不改写正向语义。nil 注入=关闭。
-		if h.orphans != nil {
-			h.orphans.ObserveHeartbeat(req.NodeUuid, req.Instances)
-		}
 
 		// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照）。
 		// 失败不影响心跳本身（节点当前值已更新），仅记录告警。
@@ -687,6 +705,158 @@ func StartOfflineDetector(db *gorm.DB) {
 	}()
 
 	slog.Info("离线检测器已启动", "threshold", "90s")
+}
+
+// filterForeignInstances 校验心跳实例载荷的节点归属。
+// Instances 还承担孤儿运行时对账：库中未知的 UUID 可保留为状态观察，
+// 但正式的指标、进程快照与工作目录用量只接受已登记且属于本节点的实例。
+// 查询失败时清空实例载荷并返回 ownerChecked=false；调用方跳过状态同步与对账，
+// 不能把校验失败当作 Worker 主动上报空清单，否则会误停本节点的运行实例。
+// 节点自身指标与心跳响应不受影响。
+func (h *ControlPlaneHandler) filterForeignInstances(req *workerpb.HeartbeatRequest) (*workerpb.HeartbeatRequest, bool) {
+	if req == nil {
+		return req, true
+	}
+	hasInstances := len(req.Instances) > 0
+	hasMetrics := len(req.InstanceMetrics) > 0
+	hasWorkDir := len(req.WorkDirUsages) > 0
+	hasProcess := len(req.ProcessMetrics) > 0
+	if !hasInstances && !hasMetrics && !hasWorkDir && !hasProcess {
+		return req, true
+	}
+
+	uuids := make([]string, 0, len(req.Instances)+len(req.InstanceMetrics)+len(req.WorkDirUsages)+len(req.ProcessMetrics))
+	seen := map[string]struct{}{}
+	add := func(uuid string) {
+		if uuid == "" {
+			return
+		}
+		if _, ok := seen[uuid]; ok {
+			return
+		}
+		seen[uuid] = struct{}{}
+		uuids = append(uuids, uuid)
+	}
+	for _, s := range req.Instances {
+		if s != nil {
+			add(s.InstanceUuid)
+		}
+	}
+	for _, im := range req.InstanceMetrics {
+		if im != nil {
+			add(im.InstanceUuid)
+		}
+	}
+	for _, w := range req.WorkDirUsages {
+		if w != nil {
+			add(w.InstanceUuid)
+		}
+	}
+	for _, pm := range req.ProcessMetrics {
+		if pm != nil {
+			add(pm.InstanceUuid)
+		}
+	}
+
+	// 同一次查询生成正式载荷的允许集合与状态观察的排除集合。
+	// 未知 UUID 只可进入 Instances，不能由孤儿对账的例外流入正式指标。
+	owned := map[string]struct{}{}
+	foreign := map[string]struct{}{}
+	if len(uuids) > 0 {
+		var node model.Node
+		if err := h.db.Select("id").Where("uuid = ?", req.NodeUuid).First(&node).Error; err != nil {
+			slog.Warn("心跳实例归属校验失败：节点不存在，跳过本拍实例处理", "nodeUUID", req.NodeUuid, "error", err)
+			return stripInstancePayload(req), false
+		}
+		var rows []struct {
+			UUID   string
+			NodeID uint
+		}
+		if err := h.db.Model(&model.Instance{}).Select("uuid", "node_id").
+			Where("uuid IN ?", uuids).Scan(&rows).Error; err != nil {
+			slog.Warn("心跳实例归属校验失败，跳过本拍实例处理", "nodeUUID", req.NodeUuid, "error", err)
+			return stripInstancePayload(req), false
+		}
+		for _, r := range rows {
+			if r.NodeID == node.ID {
+				owned[r.UUID] = struct{}{}
+			} else {
+				foreign[r.UUID] = struct{}{}
+			}
+		}
+	}
+
+	// 仅状态观察允许未知实例；其他三种正式载荷必须命中 owned。
+	filtered := 0
+	keep := func(uuid string, allowUnknown bool) bool {
+		if uuid == "" {
+			return false
+		}
+		if _, ok := owned[uuid]; ok {
+			return true
+		}
+		if _, bad := foreign[uuid]; allowUnknown && !bad {
+			return true
+		}
+		filtered++
+		return false
+	}
+
+	if hasInstances {
+		out := req.Instances[:0]
+		for _, s := range req.Instances {
+			if s != nil && keep(s.InstanceUuid, true) {
+				out = append(out, s)
+			}
+		}
+		req.Instances = out
+	}
+	if hasMetrics {
+		out := req.InstanceMetrics[:0]
+		for _, im := range req.InstanceMetrics {
+			if im != nil && keep(im.InstanceUuid, false) {
+				out = append(out, im)
+			}
+		}
+		req.InstanceMetrics = out
+	}
+	if hasWorkDir {
+		out := req.WorkDirUsages[:0]
+		for _, w := range req.WorkDirUsages {
+			if w != nil && keep(w.InstanceUuid, false) {
+				out = append(out, w)
+			}
+		}
+		req.WorkDirUsages = out
+	}
+	if hasProcess {
+		out := req.ProcessMetrics[:0]
+		for _, pm := range req.ProcessMetrics {
+			if pm != nil && keep(pm.InstanceUuid, false) {
+				out = append(out, pm)
+			}
+		}
+		req.ProcessMetrics = out
+	}
+	if filtered > 0 {
+		slog.Warn("心跳实例载荷未通过登记或节点归属校验，已丢弃", "nodeUUID", req.NodeUuid, "filtered", filtered)
+	}
+	return req, true
+}
+
+// stripInstancePayload 把请求的实例载荷就地清空（用于归属校验失败时的 fail-closed）。
+//
+// 不复用 proto 结构体（`clone := *req`）：proto 消息内含 sync.Mutex，拷贝会触发 vet，
+// 也可能在并发场景下复制锁状态。就地清空等价且安全。
+func stripInstancePayload(req *workerpb.HeartbeatRequest) *workerpb.HeartbeatRequest {
+	if req == nil {
+		return nil
+	}
+	req.Instances = nil
+	req.InstanceMetrics = nil
+	req.WorkDirUsages = nil
+	req.ProcessMetrics = nil
+	return req
 }
 
 // syncInstanceStates 从心跳数据同步实例状态到数据库。

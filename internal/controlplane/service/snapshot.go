@@ -82,6 +82,17 @@ type SnapshotService struct {
 	// 也不会把本进程正在归档的快照误判为孤儿。
 	inFlightMu sync.Mutex
 	inFlight   map[uint]struct{}
+
+	// forceSyncCreateForTest 让 Create 即使没传 Synchronous 也同步执行。
+	//
+	// 【为什么需要】测试里的 TempDir / DB 连接会在用例结束时被 t.Cleanup 关闭，
+	// 而默认路径是「后台 goroutine 打包工作目录」。两者一叠加就会出现
+	// “TempDir cleanup: directory not empty” 与 “sql: database is closed”——
+	// 不是被测逻辑错，而是测试生命周期与异步任务赛跑。
+	//
+	// 生产路径永不置位（只经 SetForceSyncCreateForTest 由测试装配设置），
+	// 所以 HTTP 仍是「立即返回 202 + 任务中心可见进度」的语义。
+	forceSyncCreateForTest bool
 }
 
 // NewSnapshotService 创建快照服务。
@@ -207,7 +218,7 @@ func (s *SnapshotService) Create(instanceID uint, name string, opts SnapshotCrea
 		return "", nil
 	}
 
-	if opts.Synchronous {
+	if opts.Synchronous || s.forceSyncCreateForTest {
 		s.markSnapshotInFlight(snap.ID)
 		defer s.clearSnapshotInFlight(snap.ID)
 		if err := s.runCreate(inst, snap, opts.Stage); err != nil {
@@ -848,6 +859,14 @@ func (s *SnapshotService) Delete(snapshotID uint) error {
 	if err != nil {
 		return err
 	}
+	// 非终态快照不得删除：pending/running 的归档协程仍在写底链备份，
+	// 删掉记录后协程还会继续写归档并回写已不存在的行，结果就是
+	// 「用户看不到、空间却被占住」的孤儿归档。
+	// 除了看 DB 里的 state，还要看本进程的 inFlight：状态回写有延迟，
+	// 刚发起的创建可能还没把 state 改成 running。
+	if !snap.Rollable() || s.snapshotInFlight(snapshotID) {
+		return fmt.Errorf("%w：快照尚未完成（%s）", ErrSnapshotOperationInFlight, snap.State)
+	}
 	if snap.RootBackupID != 0 {
 		switch shared, serr := s.backlinkSharedByOtherSnapshot(snap.RootBackupID, snapshotID); {
 		case serr != nil:
@@ -859,7 +878,7 @@ func (s *SnapshotService) Delete(snapshotID uint) error {
 				"snapshotId", snapshotID, "backupId", snap.RootBackupID)
 		default:
 			// 底层备份删除失败（被增量链引用等）不阻断快照记录清理。
-			if err := s.backups.Delete(snap.RootBackupID); err != nil {
+			if err := s.backups.DeleteForSnapshotCascade(snap.RootBackupID); err != nil {
 				slog.Warn("删除快照底层备份失败（继续清理快照记录）", "snapshotId", snapshotID, "error", err)
 			}
 		}
@@ -924,4 +943,19 @@ func (s *SnapshotService) ensureSnapshotCapacity(inst *model.Instance) error {
 		}
 	}
 	return nil
+}
+
+// SetForceSyncCreateForTest 让快照创建同步执行（仅测试装配使用）。
+//
+// 【为什么必须同步】默认路径把打包丢给后台 goroutine，而测试的 t.TempDir 与 DB 连接
+// 在用例结束时就被 t.Cleanup 拆掉。两者重叠会出现：
+//   - `TempDir cleanup: directory not empty`（后台还在写数据根）
+//   - `sql: database is closed`（后台还在回写快照状态）
+//
+// 这类失败与业务逻辑无关，纯粹是测试生命周期与异步任务赛跑。
+// 同步执行让 Create 返回时副作用已结束，测试清理不会撞车。
+//
+// 生产路径不调用它：HTTP 仍是「立即 202 + 任务中心看进度」。
+func (s *SnapshotService) SetForceSyncCreateForTest(enabled bool) {
+	s.forceSyncCreateForTest = enabled
 }

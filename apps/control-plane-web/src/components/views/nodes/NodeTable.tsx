@@ -293,6 +293,8 @@ export function NodeTable({
     onPageSizeChange?: (size: number | null) => void
     /** 当前是否处于自动模式（决定选择器显示「自动」还是具体条数）。 */
     autoSize?: boolean
+    /** URL 页码超出实际页数（渲染已收敛，分页条给提示）。 */
+    pageOutOfRange?: boolean
   }
 }) {
   const { t } = useTranslation()
@@ -439,11 +441,18 @@ export function NodeTable({
             nodes.map((node) => {
               const online = node.status === 1
               const level = nodeStatusLevel(node.status)
+              /*
+                【三态而非二态】原来只分「在线/离线」，节点正在拉起（status=2）时
+                会被写成「离线」——运维据此会去查网络，而它其实正在启动。
+                维护态优先（维护节点仍可能在线，但「维护中」是更该看到的结论）。
+              */
               const statusLabel = node.maintenance
                 ? t('nodes.maintenance')
                 : online
                   ? t('nodes.online')
-                  : t('nodes.offline')
+                  : node.status === 2
+                    ? t('nodes.starting')
+                    : t('nodes.offline')
               const dotColor = `var(--status-${level === 'neutral' ? 'info' : level})`
               const hb = relativeTime(node.lastHeartbeat, now)
               const hbStale =
@@ -524,7 +533,12 @@ export function NodeTable({
                         className="tabular-nums text-[11px] text-muted-foreground"
                         title={t('nodes.loadAvgHint', '1 分钟 load average')}
                       >
-                        {node.loadAvg1 ? node.loadAvg1.toFixed(2) : '--'}
+                        {/*
+                          不能用 `node.loadAvg1 ? ... : '--'`：0 是**合法的负载读数**（空闲机），
+                          而 falsy 判据会把它写成「无数据」，与「真没采到（NaN/undefined）」混淆。
+                          改用有限数判据：0.00 正常显示，NaN 才是 --。
+                        */}
+                        {Number.isFinite(node.loadAvg1) ? node.loadAvg1.toFixed(2) : '--'}
                       </span>
                     </>
                   ) : (
@@ -592,6 +606,21 @@ export function NodeTable({
                   onClick={() => onOpen(node.id)}
                   style={{ height: NODE_TABLE_ROW_HEIGHT }}
                   className={cn('cursor-pointer border-b border-border/60', !online && 'opacity-70')}
+                  /*
+                    【键盘可达】整行点击是鼠标用户的快捷路径；不加 tabIndex/键处理时，
+                    键盘用户只能 Tab 到名称格里的按钮（可用但发现性差），读屏也不会把整行当成入口。
+                    这里把行做成 focusable 的按钮语义：Enter/Space 打开，与卡片视图同源。
+                  */
+                  tabIndex={0}
+                  role="button"
+                  aria-label={t('nodes.openNodeDetail', { name: node.name, defaultValue: '打开节点 {{name}} 详情' })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      // 空格默认会滚动页面；阻止它，与卡片视图保持一致。
+                      e.preventDefault()
+                      onOpen(node.id)
+                    }
+                  }}
                 >
                   {orderedKeys.map((key) => (
                     <Fragment key={key}>{CELLS[key]}</Fragment>
@@ -613,6 +642,7 @@ export function NodeTable({
           onPageChange={pagination.onPageChange}
           {...(pagination.onPageSizeChange ? { onPageSizeChange: pagination.onPageSizeChange } : {})}
           {...(pagination.autoSize !== undefined ? { autoSize: pagination.autoSize } : {})}
+          {...(pagination.pageOutOfRange ? { pageOutOfRange: pagination.pageOutOfRange } : {})}
         />
       )}
     </div>
@@ -628,6 +658,7 @@ export function NodePaginationBar({
   onPageChange,
   onPageSizeChange,
   autoSize,
+  pageOutOfRange,
 }: {
   page: number
   pageSize: number
@@ -638,6 +669,14 @@ export function NodePaginationBar({
   onPageSizeChange?: (size: number | null) => void
   /** 当前是否处于「自动（按一屏行数）」模式。 */
   autoSize?: boolean
+  /**
+   * URL 里的页码超出实际页数（已渲染为最后一页）。
+   *
+   * 【为什么要告诉用户】越界时渲染已收敛到最后一页，但分页条如果照实写「第 99 / 3 页」，
+   * 会让人以为页面坏了；不提示又看不出「我看到的不是第 99 页」。
+   * 故在摘要后补一句「页码超出，已显示最后一页」。
+   */
+  pageOutOfRange?: boolean
 }) {
   const { t } = useTranslation()
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -655,6 +694,11 @@ export function NodePaginationBar({
           pages: totalPages,
           defaultValue: '已加载 {{loaded}} / 共 {{total}} 个节点，第 {{page}} / {{pages}} 页',
         })}
+        {pageOutOfRange && (
+          <span className="ml-1 text-status-warning" data-testid="nodes-page-out-of-range">
+            {t('nodes.pageOutOfRange', '（页码超出范围，已显示最后一页）')}
+          </span>
+        )}
       </span>
       <div className="flex items-center gap-2">
         {/*

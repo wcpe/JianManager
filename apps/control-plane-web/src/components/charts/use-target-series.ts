@@ -24,25 +24,30 @@ export function useTargetSeries(
   target: SeriesTarget,
   range: MetricRange,
   resolution: MetricResolution,
-): { series: RawSeries[]; isLoading: boolean } {
+): { series: RawSeries[]; isLoading: boolean; isError: boolean } {
   const isPlatform = target.kind === 'platform'
   const targetId = isPlatform ? '' : target.uuid
   const scope = target.kind === 'instance' ? 'instance' : 'node'
 
-  const overview = useMetricOverview(range, resolution)
+  // 两个查询都必须无条件调用（rules-of-hooks），但非平台 target 不该去拉平台聚合：
+  // useMetricOverview 没有 enabled 参数，故改用函数式 enabled 让它在非平台时真正停用，
+  // 使每个节点/实例页面不再每 10s 发一次完全不被消费的 /metrics/overview。
+  const overview = useMetricOverview(range, resolution, isPlatform)
   const seriesQ = useMetricSeries({ scope, targetId, range, resolution, enabled: !isPlatform && !!targetId })
 
+  // 错误必须透传：403/404/5xx 若当成空数组，界面会把“无权/不存在/后端故障”显示成“暂无数据”。
+  const isError = isPlatform ? overview.isError : seriesQ.isError
   if (isPlatform) {
     const series: RawSeries[] = (overview.data?.trends ?? []).map((tr) => ({
       metricKey: tr.metricKey,
       points: tr.points.map((p) => ({ ts: p.ts, value: p.avg })),
     }))
-    return { series, isLoading: overview.isLoading }
+    return { series, isLoading: overview.isLoading, isError }
   }
   const series: RawSeries[] = (seriesQ.data?.series ?? []).map((s) => ({
     metricKey: s.metricKey,
     world: s.world,
     points: s.points.map((p) => ({ ts: p.ts, value: p.avg })),
   }))
-  return { series, isLoading: seriesQ.isLoading }
+  return { series, isLoading: seriesQ.isLoading, isError }
 }

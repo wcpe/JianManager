@@ -317,3 +317,28 @@ func newHeartbeatHandlerWithoutSharedName(t *testing.T) (*cpgrpc.ControlPlaneHan
 	h := cpgrpc.NewControlPlaneHandler(db, cpgrpc.NewClientPool())
 	return h, db
 }
+
+func TestHeartbeat_CPUWindowPreservesUnknownAndAcceptsMeasuredZero(t *testing.T) {
+	h, db := newHeartbeatHandler(t)
+	node := seedHeartbeatNode(t, db, model.NodeStatusOnline, time.Now().UTC())
+	require.NoError(t, db.Model(&model.Node{}).Where("id = ?", node.ID).Update("cpu_usage", 0.4).Error)
+
+	// Current workers leave every CPU component empty when their sampling window
+	// is invalid. Missing CPU must not overwrite a known value with fabricated zero.
+	stream := newHeartbeatTestStream(ctxWithHeartbeatSecret(node.Secret), &workerpb.HeartbeatRequest{NodeUuid: node.UUID})
+	require.ErrorIs(t, h.Heartbeat(stream), io.EOF)
+	require.NoError(t, db.First(&node, node.ID).Error)
+	require.InDelta(t, 0.4, node.CPUUsage, 1e-6)
+
+	// A valid idle-only window is a measured zero, not missing data.
+	stream = newHeartbeatTestStream(ctxWithHeartbeatSecret(node.Secret), &workerpb.HeartbeatRequest{NodeUuid: node.UUID, CpuIdle: 1})
+	require.ErrorIs(t, h.Heartbeat(stream), io.EOF)
+	require.NoError(t, db.First(&node, node.ID).Error)
+	require.Zero(t, node.CPUUsage)
+
+	// Legacy workers can still report a positive scalar without the breakdown.
+	stream = newHeartbeatTestStream(ctxWithHeartbeatSecret(node.Secret), &workerpb.HeartbeatRequest{NodeUuid: node.UUID, CpuUsage: 0.2})
+	require.ErrorIs(t, h.Heartbeat(stream), io.EOF)
+	require.NoError(t, db.First(&node, node.ID).Error)
+	require.InDelta(t, 0.2, node.CPUUsage, 1e-6)
+}

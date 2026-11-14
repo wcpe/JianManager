@@ -58,3 +58,18 @@ export interface WhitelistResult {
   players: string[]
   error?: string
 }
+
+/**
+ * 单后端上的动作结果。
+ *
+ * 白名单增删端点返回的就是这个结构（后端 `PlayerActionItem`）。它的 `ok` 是**业务**成败：
+ * 探针不可达时 ok=false 且 error 有值。调用方必须看它，不能只看 HTTP 状态码——
+ * 否则会把「命令没下达」当成成功，顺手清空用户输入。
+ */
+export interface PlayerActionItem {
+  instanceId: number
+  instanceName: string
+  ok: boolean
+  output?: string
+  error?: string
+}

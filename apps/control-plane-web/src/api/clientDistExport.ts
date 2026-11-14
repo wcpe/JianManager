@@ -12,6 +12,14 @@ export interface ClientDistExportFilters {
   machineId?: string
   playerName?: string
   version?: number
+  /**
+   * 运行态维度（R34）：列表按这四项下钻，导出契约此前不带，
+   * 于是「筛 Linux 的表格」下载到的 CSV 里混着 Windows 行。
+   */
+  runtimeVersion?: number
+  coreVersion?: string
+  platform?: string
+  lag?: number
   type?: string
   from?: string
   to?: string

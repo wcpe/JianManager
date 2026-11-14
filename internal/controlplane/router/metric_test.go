@@ -118,9 +118,13 @@ func TestMetricProcessTop_InstanceOK(t *testing.T) {
 	r := setupTestRouter(db)
 	token := getAdminToken(t, r)
 	node := createTestNode(t, db)
+	// 无 at 的榜单只展示当前在线节点上的运行实例；夹具必须具备真实心跳。
+	if err := db.Model(node).Update("last_heartbeat", time.Now().UTC()).Error; err != nil {
+		t.Fatalf("设置节点心跳失败: %v", err)
+	}
 	inst := &model.Instance{
 		NodeID: node.ID, Name: "i1", Type: model.InstanceTypeMinecraftJava,
-		ProcessType: model.ProcessTypeDaemon, StartCommand: "java -jar s.jar",
+		ProcessType: model.ProcessTypeDaemon, StartCommand: "java -jar s.jar", Status: model.InstanceStatusRunning,
 	}
 	if err := db.Create(inst).Error; err != nil {
 		t.Fatalf("创建实例失败: %v", err)

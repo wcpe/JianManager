@@ -41,8 +41,16 @@ function ForecastRow({ item }: { item: ForecastResult }) {
       <div className="min-w-0">
         <p className="truncate text-sm font-medium">{label}</p>
         <p className="mt-0.5 text-meta text-muted-foreground">
-          {t('capacity.now')}: {fmtBytes(item.nowValue)} · {t('capacity.limit')}: {fmtBytes(item.limitValue)} ·{' '}
-          {t('capacity.slope')}: {fmtSlope(item.metricKey, item.slopePerSec)}
+          {insufficient ? (
+            // 早退分支（样本不足/缺上限/已陈旧）里后端这些字段未赋值，Go 零值无法与“真的是 0”区分。
+            // 此处直接不展示数字，只保留原因——避免把“不知道”伪装成“当前 0 ／ 上限 0”。
+            t('capacity.unknown', '数据不足以估算')
+          ) : (
+            <>
+              {t('capacity.now')}: {fmtBytes(item.nowValue)} · {t('capacity.limit')}: {fmtBytes(item.limitValue)} ·{' '}
+              {t('capacity.slope')}: {fmtSlope(item.metricKey, item.slopePerSec)}
+            </>
+          )}
         </p>
         {insufficient && item.note && <p className="mt-1 text-meta text-muted-foreground">{item.note}</p>}
       </div>

@@ -44,7 +44,18 @@ const (
 	maxPluginBatchErrors        = 100
 	maxPluginMetadataBytes      = 64 * 1024 * 1024
 	maxPluginMetadataEntryBytes = 256 * 1024
+
+	// MaxPluginUploadBytes 单个插件/模组制品上传的硬上限。
+	//
+	// 为什么必须有：上传路径会把整个文件读进控制面内存再入库与转发，
+	// 无上限时一个超大 multipart 就能把 CP 打挂（同一份内容还会在
+	// []byte → string → reader 链上多复制几次）。256 MiB 覆盖已知最大
+	// 服务端整合包/资源包，再大的一律拒绝并提示改用传输票据/制品库。
+	MaxPluginUploadBytes = 256 * 1024 * 1024
 )
+
+// ErrPluginUploadTooLarge 上传制品超过 MaxPluginUploadBytes。
+var ErrPluginUploadTooLarge = errors.New("插件文件超过大小上限")
 
 // pluginDirs 列出受控扫描目录（相对实例 workDir）。
 // Bukkit 系用 plugins/，Forge/Fabric 系用 mods/，资源包/数据包分别走 resourcepacks/ 与 datapacks/。
@@ -204,6 +215,14 @@ func (s *PluginService) List(instanceID uint) ([]PluginInfo, error) {
 // Upload 上传受控制品并部署到实例：jar 入制品库（type=plugin，sha256 去重），再经 file gRPC 写入目标目录。
 // dir 为空时默认 plugins/；overwrite=false 时拒绝覆盖同名文件。返回入库后的资产（asset 为 nil 时返回 nil 资产）。
 func (s *PluginService) Upload(instanceID uint, dir, filename string, content []byte, opts ...PluginUploadOption) (*model.Asset, error) {
+	// 服务层兜底：路由层的请求体限制可能被绕过（测试直调、其它入口、
+	// Content-Length 缺失的 chunked 请求），这里必须自己再判一次。
+	if len(content) > MaxPluginUploadBytes {
+		return nil, fmt.Errorf("%w: %d 字节（上限 %d）", ErrPluginUploadTooLarge, len(content), MaxPluginUploadBytes)
+	}
+	if len(content) == 0 {
+		return nil, fmt.Errorf("插件文件为空")
+	}
 	dir = normalizeDir(dir)
 	if err := validatePluginFileName(dir, filename); err != nil {
 		return nil, err
@@ -233,7 +252,7 @@ func (s *PluginService) Upload(instanceID uint, dir, filename string, content []
 	// jar 先入制品库：内容寻址去重，便于批量部署与追溯。
 	var asset *model.Asset
 	if s.asset != nil && pluginDirExt[dir] == ".jar" {
-		a, ierr := s.asset.Ingest(io.NopCloser(strings.NewReader(string(content))), IngestParams{
+		a, ierr := s.asset.Ingest(io.NopCloser(bytes.NewReader(content)), IngestParams{
 			Type:     model.AssetTypePlugin,
 			Name:     strings.TrimSuffix(filename, ".jar"),
 			Filename: filename,

@@ -367,6 +367,8 @@
 
 > **gRPC `Register` 与 `Heartbeat` 节点身份（ADR-081，不改 proto）**: 重注册必须同时携带 `node-uuid` + `node-secret`；节点不存在回 `NotFound`、缺失或只携带其一回 `Unauthenticated`、secret 不匹配回 `PermissionDenied`。Host 与名称不是身份凭据，同名既有节点不得降级为 Host 匹配重注册。首次注册只能携带有效 `enroll-token`；CP 原子消费后换发全新 `node_uuid`/`node_secret`。Heartbeat 必须携带 `node-secret`，首条负载按 `node_uuid` 校验后绑定整条流；未认证请求不更新任何节点状态或下发数据。
 >
+> **心跳实例载荷归属**：CP 按登记的 `instances.node_id` 校验；`instance_metrics`（含世界指标）、`process_metrics` 与 `work_dir_usages` 只接受已登记且属于已认证节点的实例。未知 UUID 的 `instances` 状态观察可保留给孤儿运行时对账，不授权写入正式指标；其他节点的实例状态与正式载荷均丢弃。归属查询失败时跳过本拍实例状态、用量、指标与对账，节点自身指标和心跳响应继续处理，不能把查询失败当作空清单而停止运行实例。
+>
 > Worker 把换发的身份持久化到 `<dataRoot>/etc/node-identity.json`（0600），重启读取并经 metadata 出示，不重复消费一次性 token。
 
 ---

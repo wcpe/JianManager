@@ -332,12 +332,19 @@ function CreateBotDialogContainer({ open, onOpenChange }: { open: boolean; onOpe
       )}
       onCreate={async (payload) => {
         try {
-          await create.mutateAsync({
+          const bot = await create.mutateAsync({
             instanceId: instanceId ?? 0,
             name: payload.name,
             config: { server: payload.server, port: payload.port, auth: payload.auth },
             behavior: payload.behavior,
           })
+          // 创建记录成功 ≠ Bot 起来了：后端可能返回 201 但 status=error（Worker 离线、
+          // bot-worker 依赖未装等）。这种情况下必须把原因留在弹窗里，否则用户只看到窗被关掉，
+          // 再去列表里也找不到「刚才那条为什么没起来」。
+          // 实例控制台的同名接线层已做此判断，总览页这条独立接线此前漏了。
+          if (bot?.status === 'error') {
+            return { ok: false, error: bot.lastError || t('bots.delegateFailed') }
+          }
           return { ok: true }
         } catch (err) {
           const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message

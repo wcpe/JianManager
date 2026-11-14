@@ -32,6 +32,11 @@ func NewBotStressSessionService(db *gorm.DB, botSvc *BotService) *BotStressSessi
 }
 
 // CreateBotStressSessionRequest 创建压测会话请求。
+//
+// 保留旧的三选一（behavior / scenario / orchestrationYaml），同时接受命令压测的新字段：
+// 前端「新建运行」向导提交的是 commandSchedule + loadProfile + thresholds，没有 behavior。
+// 旧 DTO 不认识这几个键，JSON 绑定直接丢弃，随后 validateCreateRequest 因「三个场景源皆空」
+// 判参数无效——于是不经模板的普通创建分支必 400。
 type CreateBotStressSessionRequest struct {
 	InstanceID        uint            `json:"instanceId"`
 	Count             int             `json:"count"`
@@ -40,6 +45,10 @@ type CreateBotStressSessionRequest struct {
 	Config            json.RawMessage `json:"config"`
 	Scenario          json.RawMessage `json:"scenario"`
 	OrchestrationYAML string          `json:"orchestrationYaml"`
+	// 命令压测（V2 运行向导的非模板分支）：命令计划为必填，负载曲线与阈值为可选调整。
+	CommandSchedule json.RawMessage `json:"commandSchedule"`
+	LoadProfile     json.RawMessage `json:"loadProfile"`
+	Thresholds      json.RawMessage `json:"thresholds"`
 }
 
 // BotStressSessionCounts 会话关联 Bot 聚合计数。
@@ -64,6 +73,11 @@ type BotLoadBatchSummary struct {
 }
 
 // BotStressSessionView 压测会话响应视图。
+//
+// V2 字段（schemaVersion / runState / loadProfile / thresholds / commandSchedule / templateId /
+// verdict / maxStableBots / failureSummary / reportSummary）必须原样下发：前端详情页用
+// `snapshot.schemaVersion === 2` 判是否渲染 V2 页面，缺它就整页退回旧版 JSON，六个 tab 与
+// 会话 SSE Provider 都不会挂上。此前 DTO 漏了这组字段，真实 V2 会话一律被降级。
 type BotStressSessionView struct {
 	ID                   uint                           `json:"id"`
 	UUID                 string                         `json:"uuid"`
@@ -83,6 +97,24 @@ type BotStressSessionView struct {
 	Counts               BotStressSessionCounts         `json:"counts"`
 	Allocations          []BotLoadAllocation            `json:"allocations,omitempty"`
 	Batches              []BotLoadBatchSummary          `json:"batches,omitempty"`
+
+	// ── V2 运行面（schemaVersion=1 的历史行保持零值） ──
+	SchemaVersion  int                    `json:"schemaVersion"`
+	TemplateID     *uint                  `json:"templateId,omitempty"`
+	RunState       *model.BotLoadRunState `json:"runState,omitempty"`
+	CurrentStage   *int                   `json:"currentStage,omitempty"`
+	Verdict        *model.BotLoadVerdict  `json:"verdict,omitempty"`
+	MaxStableBots  *int                   `json:"maxStableBots,omitempty"`
+	FailureSummary string                 `json:"failureSummary,omitempty"`
+	ReportSummary  string                 `json:"reportSummary,omitempty"`
+	LastError      string                 `json:"lastError,omitempty"`
+	Succeeded      int                    `json:"succeeded"`
+	Failed         int                    `json:"failed"`
+	// LoadProfile/Thresholds/CommandSchedule 以原始 JSON 下发：前端按自己的契约解，
+	// 服务端不在这里替它还原对象（也避免两处字段名漂移）。
+	LoadProfile     json.RawMessage `json:"loadProfile,omitempty"`
+	Thresholds      json.RawMessage `json:"thresholds,omitempty"`
+	CommandSchedule json.RawMessage `json:"commandSchedule,omitempty"`
 }
 
 // BotStressSessionListQuery 会话列表分页参数。
@@ -100,6 +132,11 @@ type BotStressSessionListResult struct {
 }
 
 // Create 创建持久化压测会话，不立即创建 Bot。
+//
+// 两条创建路径：
+//   - 旧路径（behavior / scenario / orchestrationYaml）；
+//   - 命令压测（commandSchedule + 可选 loadProfile / thresholds）——前端「新建运行」向导的非模板分支。
+//     这条路径直接建 V2 会话（SchemaVersion=2 + runState=pending），否则详情页拿不到 V2 身份。
 func (s *BotStressSessionService) Create(req CreateBotStressSessionRequest) (*BotStressSessionView, error) {
 	config, err := normalizeStressSessionConfig(req.Config)
 	if err != nil {
@@ -108,6 +145,7 @@ func (s *BotStressSessionService) Create(req CreateBotStressSessionRequest) (*Bo
 	if err := s.validateCreateRequest(req); err != nil {
 		return nil, err
 	}
+	commandLoad := hasScenarioSource(req.CommandSchedule)
 	behavior, summaryJSON, err := normalizeStressSessionOrchestration(req.Behavior, req.OrchestrationYAML)
 	if err != nil {
 		return nil, err
@@ -115,6 +153,10 @@ func (s *BotStressSessionService) Create(req CreateBotStressSessionRequest) (*Bo
 	behavior, scenarioSnapshot, err := normalizeStressSessionScenario(req, behavior)
 	if err != nil {
 		return nil, err
+	}
+	if commandLoad {
+		// 命令压测不以 behavior 驱动；固定标记，避免下游把它当 legacy behavior 会话。
+		behavior = "scenario_v2"
 	}
 
 	sess := &model.BotStressSession{
@@ -128,6 +170,20 @@ func (s *BotStressSessionService) Create(req CreateBotStressSessionRequest) (*Bo
 		OrchestrationSummary: summaryJSON,
 		ScenarioSnapshot:     scenarioSnapshot,
 		Status:               model.BotStressSessionPending,
+		SchemaVersion:        1,
+	}
+	if commandLoad {
+		// 命令计划是执行真源；负载曲线/阈值缺省时留空，由预检阶段用模板默认值补齐。
+		sess.SchemaVersion = 2
+		sess.CommandScheduleSnap = string(req.CommandSchedule)
+		if hasScenarioSource(req.LoadProfile) {
+			sess.LoadProfile = string(req.LoadProfile)
+		}
+		if hasScenarioSource(req.Thresholds) {
+			sess.Thresholds = string(req.Thresholds)
+		}
+		pending := model.BotLoadRunPending
+		sess.RunState = &pending
 	}
 	if err := s.db.Create(sess).Error; err != nil {
 		return nil, fmt.Errorf("创建压测会话失败: %w", err)
@@ -140,11 +196,30 @@ func (s *BotStressSessionService) validateCreateRequest(req CreateBotStressSessi
 		return ErrBotStressSessionInvalid
 	}
 	hasScenario := hasScenarioSource(req.Scenario)
+	// 命令压测的「运行意图」：有命令计划就算有场景源。
+	// 之前只认 scenario / orchestrationYaml / behavior 三者，于是命令压测向导的载荷
+	// 在这条校验上必被拒（它本来就不发 behavior）。
+	hasCommandLoad := hasScenarioSource(req.CommandSchedule)
 	if hasScenario && strings.TrimSpace(req.OrchestrationYAML) != "" {
 		return ErrBotStressSessionInvalid
 	}
-	if !hasScenario && strings.TrimSpace(req.OrchestrationYAML) == "" && strings.TrimSpace(req.Behavior) == "" {
+	if !hasScenario && !hasCommandLoad && strings.TrimSpace(req.OrchestrationYAML) == "" && strings.TrimSpace(req.Behavior) == "" {
 		return ErrBotStressSessionInvalid
+	}
+	if hasCommandLoad {
+		// 命令计划与 scenario / orchestrationYaml 是两套不相容的场景源，不允许混用。
+		if hasScenario || strings.TrimSpace(req.OrchestrationYAML) != "" {
+			return ErrBotStressSessionInvalid
+		}
+		if !json.Valid(req.CommandSchedule) {
+			return ErrBotStressSessionInvalid
+		}
+		if hasScenarioSource(req.LoadProfile) && !json.Valid(req.LoadProfile) {
+			return ErrBotStressSessionInvalid
+		}
+		if hasScenarioSource(req.Thresholds) && !json.Valid(req.Thresholds) {
+			return ErrBotStressSessionInvalid
+		}
 	}
 	var inst model.Instance
 	if err := s.db.Select("id").First(&inst, req.InstanceID).Error; err != nil {
@@ -484,7 +559,10 @@ func (s *BotStressSessionService) Stop(id uint) (*BotStressSessionView, error) {
 	}
 
 	filter := BotFilter{StressSessionID: &sess.ID}
-	if _, err := s.botSvc.Batch(BotBatchRequest{Action: BotBatchStop, Filter: &filter}, nil, false); err != nil {
+	// AllowFleetOwned：这批 Bot 的 stress_session_id 正指向**本会话**，
+	// 停止压测就是它的合法归属方在收尾。若按「手动越权」口径把它们排除掉，
+	// 会话状态会变 stopped 而 Bot 仍是 connected（此前实测：ByStatus[stopped]=0）。
+	if _, err := s.botSvc.Batch(BotBatchRequest{Action: BotBatchStop, Filter: &filter, AllowFleetOwned: true}, nil, false); err != nil {
 		return nil, err
 	}
 
@@ -531,6 +609,28 @@ func (s *BotStressSessionService) viewFromSession(sess model.BotStressSession) (
 		CreatedAt:         sess.CreatedAt,
 		UpdatedAt:         sess.UpdatedAt,
 		Counts:            counts,
+		// V2 运行面：schemaVersion 是前端判定 V2 页面的唯一依据，必须如实下发。
+		SchemaVersion:  sess.SchemaVersion,
+		TemplateID:     sess.TemplateID,
+		RunState:       sess.RunState,
+		CurrentStage:   sess.CurrentStage,
+		Verdict:        sess.Verdict,
+		MaxStableBots:  sess.MaxStableBots,
+		FailureSummary: sess.FailureSummary,
+		ReportSummary:  sess.ReportSummary,
+		LastError:      sess.LastError,
+		Succeeded:      sess.Succeeded,
+		Failed:         sess.Failed,
+	}
+	// 原始 JSON 字段：只在非空时下发，避免把 "" 当合法 JSON 传给前端。
+	if strings.TrimSpace(sess.LoadProfile) != "" {
+		view.LoadProfile = json.RawMessage(sess.LoadProfile)
+	}
+	if strings.TrimSpace(sess.Thresholds) != "" {
+		view.Thresholds = json.RawMessage(sess.Thresholds)
+	}
+	if strings.TrimSpace(sess.CommandScheduleSnap) != "" {
+		view.CommandSchedule = json.RawMessage(sess.CommandScheduleSnap)
 	}
 	if sess.Config != "" {
 		view.Config = json.RawMessage(sess.Config)

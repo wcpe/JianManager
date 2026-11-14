@@ -147,7 +147,22 @@ func (h *ClientDistRuntimeHandler) SearchEvents(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
 	}
-	f := service.ClientDistEventSearchFilter{ClientDistEventFilter: eventFilterFromQuery(c), ArtifactSHA: c.Query("artifactSha"), CoreVersion: c.Query("coreVersion"), Platform: c.Query("platform")}
+	// 时间窗（R31）：明细检索此前不吃时间参数，页头选 7 天也只给全量历史，
+	// 与同一屏的导出（按 range/from-to 过滤）不是同一集合。口径与 observability 一致。
+	//
+	// 但这里**不强制**传窗：调用方（MCP/排障脚本/旧客户端）不带时间参数时保持原有
+	// 「全量最近 N 条」语义。只有在真的给了 from/to/range 时才下推，避免把可选筛选变成必填。
+	eventFilter := eventFilterFromQuery(c)
+	if hasObsRangeParam(c) {
+		from, to, ok := parseObsRange(c)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_RANGE", "message": "range/from/to 非法"})
+			return
+		}
+		eventFilter.Since = &from
+		eventFilter.Until = &to
+	}
+	f := service.ClientDistEventSearchFilter{ClientDistEventFilter: eventFilter, ArtifactSHA: c.Query("artifactSha"), CoreVersion: c.Query("coreVersion"), Platform: c.Query("platform")}
 	f.RuntimeVersion = parseIntPtr(c.Query("runtimeVersion"))
 	f.Lag = parseIntPtr(c.Query("lag"))
 	f.Page = parseIntDefault(c.Query("page"), 1)
@@ -230,6 +245,14 @@ func (h *ClientDistRuntimeHandler) EventDetail(c *gin.Context) {
 	}
 	h.recordAudit(c, "client_dist_event.detail", map[string]any{"eventId": id})
 	c.JSON(http.StatusOK, detail)
+}
+
+// hasObsRangeParam 报告请求是否显式带了时间窗参数（from/to 任意一个，或 range）。
+//
+// 用于区分「调用方要按窗口筛」与「调用方根本没传、只想要最近若干条」：
+// 后者不该被 400 拒掉，也不该被悄悄默认成 7d（那会改变既有全量语义）。
+func hasObsRangeParam(c *gin.Context) bool {
+	return c.Query("from") != "" || c.Query("to") != "" || c.Query("range") != ""
 }
 
 func eventFilterFromQuery(c *gin.Context) service.ClientDistEventFilter {

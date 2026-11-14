@@ -124,6 +124,10 @@ func TestWebDAV_AuthFailure(t *testing.T) {
 }
 
 func TestProbe_WebDAVCleansProbeObject(t *testing.T) {
+	// httptest 监听 127.0.0.1，而探测默认拒回环（SSRF 防护）。
+	// 显式开测试例外，测完恢复——生产路径永不开这个口子。
+	SetProbeAllowLoopbackForTest(true)
+	defer SetProbeAllowLoopbackForTest(false)
 	dav := &fakeDAV{objects: map[string][]byte{}, user: "u", pass: "p"}
 	srv := httptest.NewServer(dav)
 	defer srv.Close()
@@ -134,6 +138,9 @@ func TestProbe_WebDAVCleansProbeObject(t *testing.T) {
 }
 
 func TestProbe_WebDAVAuthFailure(t *testing.T) {
+	// 同上：探测目标在回环，需显式开测试例外。
+	SetProbeAllowLoopbackForTest(true)
+	defer SetProbeAllowLoopbackForTest(false)
 	dav := &fakeDAV{objects: map[string][]byte{}, user: "u", pass: "p"}
 	srv := httptest.NewServer(dav)
 	defer srv.Close()
