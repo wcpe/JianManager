@@ -16,9 +16,25 @@ import {
 } from '@jianmanager/ui/components/scrollable-dialog'
 import type { ClientKeyWithSecret, ClientPullKey } from '@/lib/client-dist/client-channel-types'
 
-/** ISO 时间串转 `<input type="datetime-local">` 可用的本地值；空值转空串。 */
-const toDatetimeLocal = (value: string | null) =>
-  value ? new Date(value).toISOString().slice(0, 16) : ''
+/**
+ * ISO 时间串转 `<input type="datetime-local">` 可用的值；空值转空串。
+ *
+ * 【为什么不能直接 toISOString().slice(0,16)】
+ * `<input type="datetime-local">` 的值是**本地时间**（不带时区），而 toISOString 输出的是 UTC。
+ * 两者直接对接的结果是：UTC+8 用户看到框里写着 12:00（实际是 UTC 12:00 = 本地 20:00），
+ * 不改动直接保存时又按本地 12:00 重新解析 → 存成 UTC 04:00，**过期时间莫名提前 8 小时**。
+ * 负时区则相反（延长有效期），而且每编辑一次就再偏一次。
+ *
+ * 所以这里必须用本地时间分量拼字符串；保存侧（new Date(localValue)）本来就是按本地解析，
+ * 两侧口径一致后，"只改名字不动时间"才是真的不改。
+ */
+const toDatetimeLocal = (value: string | null) => {
+  if (!value) return ''
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 
 /** 创建密钥请求体。 */
 export interface CreateKeyBody {
