@@ -27,9 +27,20 @@ export default function AlertsPage() {
   // `tab` 是页面自身的枚举值（rules/events/channels），属于「用户正看着哪一块」。
   usePageContext(useMemo(() => ({ pageKey: 'alerts', tab }), [tab]))
   const { data: unread } = useUnreadAlertCount()
-  const { data: rules, isLoading: rulesLoading } = useAlertRules()
-  const { data: channels, isLoading: channelsLoading } = useAlertChannels()
-  const { data: eventPage } = useAlertEvents(filter, { enabled: tab === 'events' })
+  const { data: rules, isLoading: rulesLoading, isError: rulesError, refetch: refetchRules } = useAlertRules()
+  const {
+    data: channels,
+    isLoading: channelsLoading,
+    isError: channelsError,
+    refetch: refetchChannels,
+  } = useAlertChannels()
+  // 事件列表只在事件 Tab 激活时取数，且**只在激活时轮询**：
+  // 未读角标本来就每 30s 轮询，列表不跟进会让角标与表格长期不一致（角标涨而列表不动）。
+  const {
+    data: eventPage,
+    isError: eventsError,
+    refetch: refetchEvents,
+  } = useAlertEvents(filter, { enabled: tab === 'events', refetchInterval: tab === 'events' ? 30_000 : false })
 
   const deleteRule = useDeleteAlertRule()
   const updateRule = useUpdateAlertRule()
@@ -45,12 +56,18 @@ export default function AlertsPage() {
       unreadCount={unread}
       rules={rules}
       rulesLoading={rulesLoading}
+      rulesError={rulesError}
+      onRetryRules={() => void refetchRules()}
       ruleUpdating={updateRule.isPending}
       channels={channels}
       channelsLoading={channelsLoading}
+      channelsError={channelsError}
+      onRetryChannels={() => void refetchChannels()}
       channelTesting={testChannel.isPending}
       events={eventPage?.items}
       eventsTotal={eventPage?.total}
+      eventsError={eventsError}
+      onRetryEvents={() => void refetchEvents()}
       eventFilter={filter}
       onEventFilterChange={setFilter}
       onToggleRule={(rule) => updateRule.mutate({ id: rule.id, enabled: !rule.enabled })}
