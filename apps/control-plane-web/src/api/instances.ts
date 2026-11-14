@@ -266,6 +266,24 @@ export function useInstanceLifecyclePending(id: number): InstanceLifecyclePendin
   return useInstanceLifecyclePendingMap().get(id) ?? NO_LIFECYCLE_PENDING
 }
 
+/**
+ * 生命期动作结束后的缓存失效。
+ *
+ * 除了实例本身，还要失效**依赖运行态**的几类查询：启停会让指标、server-state、
+ * 配额实时用量全部变旧。只失效 ['instances'] 时，详情页会继续显示旧 CPU/玩家数/
+ * uptime，直到各自轮询周期（10s / 15s）才刷新，看起来像操作没生效。
+ *
+ * instanceId 未知时只失效实例列表，不扫全量指标缓存。
+ */
+function refreshInstanceQueries(qc: ReturnType<typeof useQueryClient>, instanceId: number | undefined) {
+  void qc.invalidateQueries({ queryKey: ['instances'] })
+  if (instanceId == null) return
+  void qc.invalidateQueries({ queryKey: ['instances', instanceId] })
+  void qc.invalidateQueries({ queryKey: ['instanceMetrics', instanceId] })
+  void qc.invalidateQueries({ queryKey: ['server-state', instanceId] })
+  void qc.invalidateQueries({ queryKey: ['instance-quota', instanceId] })
+}
+
 /** 启动实例。 */
 export function useStartInstance() {
   const qc = useQueryClient()
@@ -274,17 +292,17 @@ export function useStartInstance() {
     mutationKey: [...LIFECYCLE_MUTATION_KEY, 'start'],
     mutationFn: (id: number) => postLifecycleRequest(qc, id, 'start'),
     onSuccess: () => {
-      toast.success('实例启动中…')
+      toast.success(t('instances.lifecycle.toastStarting', { defaultValue: '实例启动中…' }))
     },
     onError: (err: Error) => {
       if (err instanceof LifecycleRequestBusyError) {
         toast.message(t('instances.lifecycle.requestBusy', { defaultValue: err.message }))
         return
       }
-      toast.error(apiErrorMessage(err, '启动失败'))
+      toast.error(apiErrorMessage(err, t('instances.lifecycle.toastStartFailed', { defaultValue: '启动失败' })))
     },
     // 预检失败也会写 statusReason，失败分支必须刷新，不能只靠成功或下一次心跳。
-    onSettled: () => qc.invalidateQueries({ queryKey: ['instances'] }),
+    onSettled: (_data, _err, instanceId) => refreshInstanceQueries(qc, instanceId),
   })
 }
 
@@ -296,16 +314,16 @@ export function useStopInstance() {
     mutationKey: [...LIFECYCLE_MUTATION_KEY, 'stop'],
     mutationFn: (id: number) => postLifecycleRequest(qc, id, 'stop'),
     onSuccess: () => {
-      toast.success('实例已停止')
+      toast.success(t('instances.lifecycle.toastStopped', { defaultValue: '实例已停止' }))
     },
     onError: (err: Error) => {
       if (err instanceof LifecycleRequestBusyError) {
         toast.message(t('instances.lifecycle.requestBusy', { defaultValue: err.message }))
         return
       }
-      toast.error(apiErrorMessage(err, '停止失败'))
+      toast.error(apiErrorMessage(err, t('instances.lifecycle.toastStopFailed', { defaultValue: '停止失败' })))
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['instances'] }),
+    onSettled: (_data, _err, instanceId) => refreshInstanceQueries(qc, instanceId),
   })
 }
 
@@ -317,16 +335,16 @@ export function useRestartInstance() {
     mutationKey: [...LIFECYCLE_MUTATION_KEY, 'restart'],
     mutationFn: (id: number) => postLifecycleRequest(qc, id, 'restart'),
     onSuccess: () => {
-      toast.success('实例重启中…')
+      toast.success(t('instances.lifecycle.toastRestarting', { defaultValue: '实例重启中…' }))
     },
     onError: (err: Error) => {
       if (err instanceof LifecycleRequestBusyError) {
         toast.message(t('instances.lifecycle.requestBusy', { defaultValue: err.message }))
         return
       }
-      toast.error(apiErrorMessage(err, '重启失败'))
+      toast.error(apiErrorMessage(err, t('instances.lifecycle.toastRestartFailed', { defaultValue: '重启失败' })))
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['instances'] }),
+    onSettled: (_data, _err, instanceId) => refreshInstanceQueries(qc, instanceId),
   })
 }
 
@@ -413,15 +431,19 @@ export interface UpdateInstanceBody {
 /** 更新实例配置（含标签）。 */
 export function useUpdateInstance() {
   const qc = useQueryClient()
+  const { t } = useTranslation()
   return useMutation({
     mutationFn: ({ id, body }: { id: number; body: UpdateInstanceBody }) =>
       api.put<InstanceInfo>(`/instances/${id}`, body).then((r) => r.data),
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ['instances'] })
       qc.invalidateQueries({ queryKey: ['instances', id] })
+      // CPU/内存/磁盘限额变更会改变 effective quota（限额来源与待收紧值），
+      // 不失效时详情页配额卡会继续显示旧值。
+      qc.invalidateQueries({ queryKey: ['instance-quota', id] })
     },
     onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-      toast.error(err.response?.data?.message || '更新失败')
+      toast.error(err.response?.data?.message || t('instances.updateFailed', { defaultValue: '更新失败' }))
     },
   })
 }
