@@ -1063,3 +1063,63 @@ func TestAdopt_ServiceDepsAreReadOnly(t *testing.T) {
 	assert.Contains(t, adoptBaselineRemark(adoptTask{Path: "a.yml"}, time.Unix(0, 0)),
 		"纳管自磁盘", "基线 remark 应标注纳管来源")
 }
+
+// TestAdopt_ExpectedHashMismatchRejectsFile 预演→执行绑定：文件在预演后又被改过，
+// 执行必须拒该文件（CONTENT_CHANGED），而不是默默把新内容写成不可覆盖的基线。
+func TestAdopt_ExpectedHashMismatchRejectsFile(t *testing.T) {
+	db := newAdoptTestDB(t)
+	inst := mkAdoptInstance(t, db, "adopt-hash-bind", 1)
+	src := newFakeAdoptSource()
+	src.put(inst.ID, "server.properties", "a=1\n")
+	svc := newAdoptSvc(t, db, src)
+
+	preview, err := svc.Adopt(ConfigAdoptRequest{
+		Files:          []AdoptFileItem{{InstanceID: inst.ID, Path: "server.properties"}},
+		CreateBaseline: true, DryRun: true,
+	}, 1)
+	require.NoError(t, err)
+	require.Len(t, preview.Results, 1)
+	previewHash := preview.Results[0].ContentHash
+	require.NotEmpty(t, previewHash)
+
+	// 预演之后服主改了文件。
+	src.put(inst.ID, "server.properties", "a=2\n")
+
+	real, err := svc.Adopt(ConfigAdoptRequest{
+		Files: []AdoptFileItem{{
+			InstanceID: inst.ID, Path: "server.properties", ExpectedContentHash: previewHash,
+		}},
+		CreateBaseline: true,
+	}, 1)
+	require.NoError(t, err)
+	require.Len(t, real.Results, 1)
+	assert.Equal(t, AdoptStatusFailed, real.Results[0].Status)
+	assert.Equal(t, AdoptCodeContentChanged, real.Results[0].Code)
+	assert.Zero(t, real.Results[0].VersionID, "拒绝时不应写库")
+}
+
+// TestAdopt_ExpectedHashMatchAdopts 预演后文件未变时，带 hash 的执行照常纳管。
+func TestAdopt_ExpectedHashMatchAdopts(t *testing.T) {
+	db := newAdoptTestDB(t)
+	inst := mkAdoptInstance(t, db, "adopt-hash-ok", 1)
+	src := newFakeAdoptSource()
+	src.put(inst.ID, "server.properties", "a=1\n")
+	svc := newAdoptSvc(t, db, src)
+
+	preview, err := svc.Adopt(ConfigAdoptRequest{
+		Files:          []AdoptFileItem{{InstanceID: inst.ID, Path: "server.properties"}},
+		CreateBaseline: true, DryRun: true,
+	}, 1)
+	require.NoError(t, err)
+
+	real, err := svc.Adopt(ConfigAdoptRequest{
+		Files: []AdoptFileItem{{
+			InstanceID: inst.ID, Path: "server.properties", ExpectedContentHash: preview.Results[0].ContentHash,
+		}},
+		CreateBaseline: true,
+	}, 1)
+	require.NoError(t, err)
+	require.Len(t, real.Results, 1)
+	assert.NotEqual(t, AdoptStatusFailed, real.Results[0].Status)
+	assert.NotZero(t, real.Results[0].VersionID)
+}

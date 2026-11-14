@@ -103,8 +103,15 @@ func (s *ClientUploadEfficiencyService) Precheck(entries []PrecheckEntry) ([]Pre
 		}
 	}
 
+	// 只认「可下载」的制品：StorageState=lost 表示索引还在、外置对象已经没了。
+	//
+	// 若把它当命中，前端会跳过上传、manifest 继续引用那个 sha256，而玩家下载永远 410 ——
+	// 而且用户会看到「发布成功」。真正的自愈路径在 Ingest（收到同内容字节后会复位状态），
+	// 所以这里必须让 lost 制品「不命中」，逼前端把字节重新传一遍。
 	var assets []model.Asset
-	if err := s.db.Where("type = ? AND sha256 IN ?", model.AssetTypeClientFile, uniq).Find(&assets).Error; err != nil {
+	if err := s.db.Where("type = ? AND sha256 IN ?", model.AssetTypeClientFile, uniq).
+		Where("COALESCE(storage_state, '') <> ?", string(model.AssetStorageLost)).
+		Find(&assets).Error; err != nil {
 		return nil, fmt.Errorf("查询制品失败: %w", err)
 	}
 	bySha := make(map[string]*model.Asset, len(assets))

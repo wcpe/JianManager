@@ -520,12 +520,14 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		}
 		if svcs.ConfigFile != nil {
 			NewConfigFileHandler(svcs.ConfigFile, svcs.Authz, svcs.Audit).
+				WithInstanceGroups(svcs.InstanceGroup).
 				RegisterRoutes(permRead("file.read", "instance.read", "file.write", "instance.write"))
 		}
 
 		// 配置分批灰度与生效编排（532）：独立前缀 /config-deliveries。
 		if svcs.ConfigDelivery != nil {
 			NewConfigDeliveryHandler(svcs.ConfigDelivery, svcs.Authz, svcs.Audit).
+				WithInstanceGroups(svcs.InstanceGroup).
 				RegisterRoutes(permRead("file.read", "instance.read", "file.write", "instance.write"))
 		}
 

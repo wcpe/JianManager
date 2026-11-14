@@ -140,6 +140,30 @@ type BotWorkerEvent struct {
 	Status           string                      `json:"status,omitempty"`
 	Step             string                      `json:"step,omitempty"`
 	// command-schedule-result 异步 occurrence 终态。
+	//
+	// 【两种线上形态都必须在场】
+	// Bot Worker（apps/bot-worker/src/scheduler/command-schedule.ts emitResult）是把结果字段
+	// **直接平铺在事件顶层**写出 stdout 的（runUuid/botUuid/status/actionRunId…），
+	// 没有 data、也没有 commandScheduleResult 包裹。此前 Go 只声明了 CommandResult 与 Data，
+	// 于是 TS 的实际输出解码后这些字段全部丢失，Fleet 侧收到 0 个终态事件。
+	// 下面这组扁平字段用于接住那条路径；CommandResult/Data 保留以兼容内嵌形态。
+	RunID      string `json:"runId,omitempty"`
+	RunUUID    string `json:"runUuid,omitempty"`
+	BotUUID    string `json:"botUuid,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+	StepID     string `json:"stepId,omitempty"`
+	// ScheduleRunID 已在上方（cancel 事件共用）声明，此处不重复定义。
+	ActionRunID           string                        `json:"actionRunId,omitempty"`
+	Message               string                        `json:"message,omitempty"`
+	CorrelationToken      string                        `json:"correlationToken,omitempty"`
+	CommandID             string                        `json:"commandId,omitempty"`
+	Occurrence            int                           `json:"occurrence,omitempty"`
+	Attempt               int                           `json:"attempt,omitempty"`
+	DurationMs            int64                         `json:"durationMs,omitempty"`
+	ObservedAtUnixMs      int64                         `json:"observedAtUnixMs,omitempty"`
+	PlannedAtUnixMs       int64                         `json:"plannedAtUnixMs,omitempty"`
+	SentAtUnixMs          *int64                        `json:"sentAtUnixMs,omitempty"`
+	AttemptErrors         []CommandAttemptError         `json:"attemptErrors,omitempty"`
 	CommandResult         *CommandScheduleResultPayload `json:"commandScheduleResult,omitempty"`
 	WorkerEpoch           string                        `json:"workerEpoch,omitempty"`
 	WorkerEpochGeneration int64                         `json:"workerEpochGeneration,omitempty"`

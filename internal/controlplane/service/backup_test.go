@@ -378,3 +378,50 @@ func TestPruneExpired_KeepsChainWhenChildNotExpired(t *testing.T) {
 	require.Equal(t, 0, deleted)                    // 基被拒删，子未超期不在裁剪集
 	require.Equal(t, int64(2), countBackups(t, db)) // 链完整保留
 }
+
+// TestBackup_CreateRejectsConcurrentCreate 同一实例并发创建备份必须被拒：
+// 两个任务会同时打包同一工作目录（抢 IO）并产出两份语义重复的归档。
+func TestBackup_CreateRejectsConcurrentCreate(t *testing.T) {
+	db := newBackupTestDB(t)
+	svc := NewBackupService(db, nil)
+
+	// 先占住名额（模拟第一个任务正在跑），再发起第二个。
+	release, ok := svc.beginBackup(1)
+	require.True(t, ok)
+	defer release()
+
+	_, err := svc.CreateWithOptions(1, "dup", CreateOptions{})
+	require.ErrorIs(t, err, ErrBackupInFlight)
+
+	// 释放后可以正常创建（不误伤正常路径）。
+	release()
+	backup, err := svc.CreateWithOptions(1, "ok", CreateOptions{})
+	require.NoError(t, err)
+	require.NotZero(t, backup.ID)
+}
+
+// TestBackup_RestoreAndCreateAreMutuallyExclusive 恢复与创建必须互斥：
+// 恢复在解包覆盖工作目录，备份在打包同一目录，并发会产出半新半旧的混合归档。
+func TestBackup_RestoreAndCreateAreMutuallyExclusive(t *testing.T) {
+	db := newBackupTestDB(t)
+	svc := NewBackupService(db, nil)
+
+	releaseRestore, ok := svc.beginRestore(1)
+	require.True(t, ok)
+	// 恢复在途时不能开新备份。
+	_, err := svc.CreateWithOptions(1, "blocked-by-restore", CreateOptions{})
+	require.ErrorIs(t, err, ErrBackupInFlight)
+	releaseRestore()
+
+	// 反向：备份在途时不能开恢复。
+	releaseCreate, ok := svc.beginBackup(1)
+	require.True(t, ok)
+	_, ok = svc.beginRestore(1)
+	require.False(t, ok, "备份在途时恢复应被拒")
+	releaseCreate()
+
+	// 释放后恢复可进入。
+	release, ok := svc.beginRestore(1)
+	require.True(t, ok)
+	release()
+}

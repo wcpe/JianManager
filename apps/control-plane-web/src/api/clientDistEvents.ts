@@ -19,6 +19,9 @@ export function useClientDistEventSearch(filter: ClientDistEventSearchFilter) {
     channelId,
     machineId,
     ip,
+    range,
+    from,
+    to,
     kind,
     outcome,
     errCode,
@@ -38,6 +41,9 @@ export function useClientDistEventSearch(filter: ClientDistEventSearchFilter) {
       channelId ?? 'all',
       machineId ?? '',
       ip ?? '',
+      range ?? '',
+      from ?? '',
+      to ?? '',
       kind ?? 'all',
       outcome ?? 'all',
       errCode ?? '',
@@ -56,6 +62,9 @@ export function useClientDistEventSearch(filter: ClientDistEventSearchFilter) {
           channelId,
           machineId,
           ip,
+          range,
+          from,
+          to,
           kind,
           outcome,
           errCode,
@@ -89,6 +98,15 @@ export function useClientDistEventDetail(id: number | null, enabled = true) {
   })
 }
 
+/**
+ * 近实时面板的轮询间隔（R35）。
+ *
+ * 实时监控/错误摘要此前只有 `staleTime` 到期判定，不是定时请求：
+ * 用户把这一页挂在前台不动，数字就永远停在打开那一刻——而页面上写的是「近 1h」「近 24h」。
+ * 30s 的取值与告警列表（alerts.ts）同一量级：足够看出趋势，又不会把 CP 当成采样点。
+ */
+export const CLIENT_DIST_REALTIME_REFETCH_MS = 30_000
+
 /** 查询错误码 TopN 与最近失败样例。 */
 export function useClientDistErrorSummary(params: { channelId?: string; range: string; enabled?: boolean }) {
   const { channelId, range, enabled = true } = params
@@ -101,11 +119,14 @@ export function useClientDistErrorSummary(params: { channelId?: string; range: s
       return data
     },
     enabled,
+    // 标签页在后台时不轮询：切回来由 focus 触发一次刷新即可。
+    refetchInterval: enabled ? CLIENT_DIST_REALTIME_REFETCH_MS : false,
+    refetchIntervalInBackground: false,
     retry: false,
   })
 }
 
-/** 查询近实时分发请求聚合。 */
+/** 查询近实时分发请求聚合（R35：带 30s 轮询，页面前台停留时数字会自己走）。 */
 export function useClientDistRealtime(params: { channelId?: string; enabled?: boolean }) {
   const { channelId, enabled = true } = params
   return useQuery({
@@ -117,6 +138,8 @@ export function useClientDistRealtime(params: { channelId?: string; enabled?: bo
       return data
     },
     enabled,
+    refetchInterval: enabled ? CLIENT_DIST_REALTIME_REFETCH_MS : false,
+    refetchIntervalInBackground: false,
     retry: false,
   })
 }

@@ -103,7 +103,15 @@ export function ClientIntegrationGuideView({
     null,
     2,
   )
-  const javaagentArg = '-javaagent:jm-updater\\wedge.jar'
+  // 接入指引要复制的 javaagent 参数。
+  //
+  // 楔子固定放在 gameDir/jm-updater/wedge.jar（本页步骤②就是这么写的），所以分隔符必须
+  // 与目标平台一致：Windows 启动器用反斜杠；Linux/macOS 上反斜杠不是分隔符，
+  // `jm-updater\wedge.jar` 会被 JVM 当成一个文件名 → agent 加载失败（在 premain 之前就挂，
+  // 楔子的 fail-open 完全轮不到生效）。
+  // 按浏览器 UA 判当前平台：这页就是给“正在机器上操作的那个人”看的。
+  const pathSep = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent) ? '\\' : '/'
+  const javaagentArg = `-javaagent:jm-updater${pathSep}wedge.jar`
 
   const copy = async (text: string) => {
     const ok = await copyToClipboard(text)
@@ -266,7 +274,7 @@ export function ClientIntegrationGuideView({
         <CodeBlock text={javaagentArg} onCopy={copy} t={t} />
         <p className="text-xs text-muted-foreground">
           {t('clientGuide.step4Abs', '若启动器不切到 .minecraft，改用绝对路径：')}
-          <span className="font-mono"> -javaagent:&lt;.minecraft&gt;\jm-updater\wedge.jar</span>
+          <span className="font-mono">{` -javaagent:<.minecraft>${pathSep}jm-updater${pathSep}wedge.jar`}</span>
         </p>
       </Step>
 

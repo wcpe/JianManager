@@ -153,7 +153,13 @@ export function NodeCard({
   const online = node.status === 1
   const level = nodeStatusLevel(node.status)
   const dotColor = `var(--status-${level === 'neutral' ? 'info' : level})`
-  const statusLabel = node.maintenance ? t('nodes.maintenance') : online ? t('nodes.online') : t('nodes.offline')
+  const statusLabel = node.maintenance
+    ? t('nodes.maintenance')
+    : online
+      ? t('nodes.online')
+      : node.status === 2
+        ? t('nodes.starting')
+        : t('nodes.offline')
 
   return (
     /* 整块可点击卡片 → Card 的 interactive（hover 抬升 + 焦点环）；额外 hover 涂层沿用原值。

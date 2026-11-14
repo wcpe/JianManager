@@ -39,7 +39,7 @@ export default function OverviewPage() {
    * - 底部密集表保留「可看全部」的能力，但改为滚动按需分页：首屏只取一页，滚到底再取下一页，
    *   不再一次性拉全量（`useInfiniteInstanceSearch` 就是为 1000+ 实例的滚动浏览设计的）
    */
-  const { data: overview } = useMetricOverview(range)
+  const { data: overview, isLoading: overviewLoading, isError: overviewError, refetch: refetchOverview } = useMetricOverview(range)
   /* 
     【首页不再自带实例列表】原先这里还跑着 `useInfiniteInstanceSearch`（不限量无限滚动）
     并在页底铺全量实例表——它与「服务器」页的完整版本重复，且是本页渲染量的大头
@@ -81,6 +81,9 @@ export default function OverviewPage() {
       range={range}
       onRangeChange={setRange}
       overview={deferredOverview}
+      overviewLoading={overviewLoading}
+      overviewError={overviewError}
+      onRetryOverview={() => void refetchOverview()}
       nodeTotal={nodes?.length}
       activeGauge={activeGauge}
       onActiveGaugeChange={setActiveGauge}

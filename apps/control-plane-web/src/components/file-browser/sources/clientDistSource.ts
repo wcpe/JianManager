@@ -17,9 +17,12 @@ export type { ClientDistFile, ClientDistSourceMessages }
 /** 客户端分发端点实现（与包内 `ClientDistApi` 对齐）。 */
 const clientDistApi: ClientDistApi = {
   fetchContent: (channelId, sha) => fetchClientArtifactContent(channelId, sha),
-  download: (channelId, sha, filename) => {
-    downloadClientArtifact(channelId, sha, filename)
-  },
+  // 必须 return：适配层靠这个 Promise 判断成败并弹错。
+  //
+  // 之前写成 `{ downloadClientArtifact(...) }` —— 表达式语句把 Promise 丢了，于是：
+  // 下载失败（超时/404/鉴权）时无人消费这个 rejection，既不会有“下载失败”提示，
+  // 还会在控制台冒 unhandled rejection。大文件超时恰好是最常见的失败方式。
+  download: (channelId, sha, filename) => downloadClientArtifact(channelId, sha, filename),
 }
 
 /** 

@@ -32,6 +32,10 @@ function defaultCompareMetric(kind: DrillTarget['kind']): string {
   return 'node_cpu_pct'
 }
 
+function entityKey(target: DrillTarget): string {
+  return target.kind === 'platform' ? 'platform:' : `${target.kind}:${target.uuid}`
+}
+
 function targetFromSearch(searchParams: URLSearchParams): DrillTarget {
   const instance = searchParams.get('instance')
   if (instance) return { kind: 'instance', uuid: instance }
@@ -50,9 +54,43 @@ function targetFromSearch(searchParams: URLSearchParams): DrillTarget {
  */
 export default function MonitoringPage() {
   const { t } = useTranslation()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { data: nodes } = useNodes()
   const [target, setTarget] = useState<DrillTarget>(() => targetFromSearch(searchParams))
+  // 页级范围 + 粒度（驱动概览/对比；主图网格各图另有独立范围，但共享该页级粒度）。
+  const [range, setRange] = useState<MetricRange>('24h')
+  const [resolution, setResolution] = useState<MetricResolution>('auto')
+  const [compareSel, setCompareSel] = useState<string[]>(() => [defaultCompareMetric(targetFromSearch(searchParams).kind)])
+  const [selectedProcess, setSelectedProcess] = useState<ProcessTopItem | null>(null)
+  const [pendingAction, setPendingAction] = useState<ManagedProcessAction | null>(null)
+
+  // URL 导航与选择器共享实体切换规则；同实例的 world/来源节点变化不改变进程归属。
+  const changeTarget = (next: DrillTarget) => {
+    if (entityKey(next) !== entityKey(target)) {
+      if (next.kind !== target.kind) setCompareSel([defaultCompareMetric(next.kind)])
+      setSelectedProcess(null)
+      setPendingAction(null)
+    }
+    setTarget(next)
+  }
+
+  // URL → 状态：浏览器前进/后退、或从别处再点一条 `?instance=` 深链时，页面必须跟着走。
+  //
+  // 用 React 推荐的「渲染期根据 props 变化调整 state」而不是 useEffect：后者会在提交后
+  // 再触发一轮渲染（lint 也会报 set-state-in-effect）。这里只在 URL 目标与当前目标不一致
+  // 时重置一次，普通选择器切换（已同步写 URL）不会进入这个分支。
+  const urlTargetKey = searchParams.get('instance')
+    ? `instance:${searchParams.get('instance')}`
+    : searchParams.get('node')
+      ? `node:${searchParams.get('node')}`
+      : 'platform:'
+  const targetKey = entityKey(target)
+  const [syncedUrlKey, setSyncedUrlKey] = useState(urlTargetKey)
+  if (urlTargetKey !== syncedUrlKey) {
+    setSyncedUrlKey(urlTargetKey)
+    const next = targetFromSearch(searchParams)
+    if (entityKey(next) !== targetKey) changeTarget(next)
+  }
 
   // 页面上报（§4.2）：监控页发「下钻目标 + 时间窗」，不发原始时序点全量。
   // 目标来自 URL（`?instance=<uuid>` / `?node=<uuid>`），与页面自身解析结果同源。
@@ -80,22 +118,26 @@ export default function MonitoringPage() {
     { uuid: resolvedInstanceUuid, page: 1, pageSize: 1 },
     resolvedInstanceUuid !== '',
   )
-  // 页级范围 + 粒度（驱动概览/对比；主图网格各图另有独立范围，但共享该页级粒度）。
-  const [range, setRange] = useState<MetricRange>('24h')
-  const [resolution, setResolution] = useState<MetricResolution>('auto')
-  // 多指标对比默认选中一个关键指标；随 target 切换重置。
-  const [compareSel, setCompareSel] = useState<string[]>(() => [defaultCompareMetric(targetFromSearch(searchParams).kind)])
-  const [selectedProcess, setSelectedProcess] = useState<ProcessTopItem | null>(null)
-  const [pendingAction, setPendingAction] = useState<ManagedProcessAction | null>(null)
 
-  const currentInstance = instancePage?.items[0]
+  // 只认「确实解析到当前 target」的实例。useInstanceSearch 带 keepPreviousData，
+  // 切到别的实例/平台/节点后旧结果仍会短暂留在 data 里；不看 target 就沿用它，
+  // 进程榜会继续按旧实例 ID 查询（甚至把旧进程行展示在新目标下）。
+  const currentInstance =
+    target.kind === 'instance' && instancePage?.items[0]?.uuid === target.uuid ? instancePage.items[0] : undefined
   const currentNode = target.kind === 'node' ? (nodes ?? []).find((node) => node.uuid === target.uuid) : undefined
   const currentNodeUUID = currentNode?.uuid
-  const { data: processTop = [] } = useProcessTop({
+  // 节点目标必须解析成功才查进程榜：nodes 未加载完/加载失败/uuid 不存在时，
+  // 空 nodeId 会让管理员拿到全局进程榜（与页面目标不符）。
+  const processTopEnabled = target.kind === 'instance' ? !!currentInstance : target.kind === 'node' ? !!currentNodeUUID : true
+  const { data: cachedProcessTop = [], isError: cachedProcessTopError } = useProcessTop({
     instanceId: currentInstance?.id,
     nodeId: currentNodeUUID,
-    enabled: target.kind !== 'instance' || !!currentInstance,
+    enabled: processTopEnabled,
   })
+  // disabled 查询仍会返回同 key 的平台缓存（包括错误）；目标未解析时不可交给视图或供选中。
+  const processTop = processTopEnabled ? cachedProcessTop : []
+  const processTopError = processTopEnabled && cachedProcessTopError
+
   const selectedInstanceId = selectedProcess?.instanceId
   const selectedPid = selectedProcess?.pid
   const processDetail = useManagedProcessDetail(selectedInstanceId, selectedPid, !!selectedProcess)
@@ -111,7 +153,7 @@ export default function MonitoringPage() {
   // 概览/对比/主图共享的数据源描述（MonitorSource 与 SeriesTarget 同构）。
   const source = target.kind === 'platform' ? { kind: 'platform' as const } : { kind: target.kind, uuid: target.uuid }
   // 概览/对比共享的原始序列（页级范围 + 粒度）。
-  const { series: raw, isLoading } = useTargetSeries(source, range, resolution)
+  const { series: raw, isLoading, isError: rawError } = useTargetSeries(source, range, resolution)
 
   // 当前实例的世界名列表（来自其分世界序列），供下钻到世界的下拉。
   const worlds = useMemo(() => {
@@ -126,10 +168,19 @@ export default function MonitoringPage() {
       prev.includes(metricKey) ? prev.filter((k) => k !== metricKey) : [...prev, metricKey],
     )
 
-  // target 切换时重置对比选择（不同 target 指标目录不同）。
+  // target 切换：同步重置对比选择、清空旧目标的进程选择，并把新目标写回 URL。
+  //
+  // 为什么要清 selectedProcess/pendingAction：目标已经变了，旧进程的详情弹窗/确认弹窗
+  // 再留着就是对“当前目标”的错误陈述（尤其两份数据同源时用户很难分辨）。
+  // 为什么要写 URL：深链/刷新/分享都以 URL 为准，只改 state 会让地址栏与实际视图长期不一致。
   const onChangeTarget = (next: DrillTarget) => {
-    if (next.kind !== target.kind) setCompareSel([defaultCompareMetric(next.kind)])
-    setTarget(next)
+    changeTarget(next)
+    const params = new URLSearchParams(searchParams)
+    params.delete('instance')
+    params.delete('node')
+    if (next.kind === 'instance') params.set('instance', next.uuid)
+    if (next.kind === 'node') params.set('node', next.uuid)
+    setSearchParams(params, { replace: true })
   }
 
   const actionInstanceName = processDetail.data?.instance.name || selectedProcess?.instanceUuid || '--'
@@ -150,7 +201,9 @@ export default function MonitoringPage() {
       onCompareToggle={toggleCompare}
       raw={raw}
       rawLoading={isLoading}
+      rawError={rawError}
       processTop={processTop}
+      processTopError={processTopError}
       processDetail={processDetail.data}
       processDetailError={processDetail.isError}
       processDetailRefreshing={processDetail.isFetching}

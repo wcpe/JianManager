@@ -92,12 +92,23 @@ export default function ClientPublishPage() {
     setUploading(true)
     setProgress(null)
     try {
-      // 本地去重：同 name+size 仅上传一次；键映射用于为每个草稿（含被去重者）回填复用结果。
-      const plan = dedupUnits(payload.files, (d) => ({ name: d.filename, size: d.size }))
+      // 本地去重：按**完整目标路径**去重。
+      //
+      // 不能按 basename + size：ZIP/目录摄入会把不同目录下的同名文件保留为不同 path
+      // （config/a/settings.json 与 config/b/settings.json），只要体量相等就会被判成“同一个文件”，
+      // 第二份不上传、直接复用第一份的 sha256/md5/artifact——**发布出去的内容是错的**，
+      // 而客户端校验还会通过（错字节配错哈希，自洽）。服务端无法补救：那第二份字节从未上传过。
+      // path 在 manifest 里本身就要求唯一，按它去重既安全又不会漏掉真正的重复上传
+      // （同一份文件拖两次、path 相同的，仍然只传一次）。
+      const plan = dedupUnits(payload.files, (d) => ({ name: normalizeManifestPath(d.path) || d.filename, size: d.size }))
       // 键 → 上传结果（sha256/md5/size/codec），供发布时为每个草稿（含被去重者）回填。
       const resultByKey = await uploadFilesEfficient(
         channelId,
-        plan.unique.map((d) => ({ key: localDedupKey(d.filename, d.size), file: d.file, label: d.path })),
+        plan.unique.map((d) => ({
+          key: localDedupKey(normalizeManifestPath(d.path) || d.filename, d.size),
+          file: d.file,
+          label: d.path,
+        })),
         {
           signal: payload.signal,
           onProgress: (p) =>
@@ -119,8 +130,14 @@ export default function ClientPublishPage() {
       )
 
       // 按草稿顺序回填上传结果（codec=none：file 原始内容元数据 = artifact 元数据）。
+      // 回填键必须与去重键完全一致（同上：path + size）。
       const files: ManifestFile[] = payload.files.map((d) => {
-        const res = resultByKey.get(localDedupKey(d.filename, d.size))!
+        const key = localDedupKey(normalizeManifestPath(d.path) || d.filename, d.size)
+        const res = resultByKey.get(key)
+        if (!res) {
+          // 理论上不可能：拿不到结果就不该发布一份指向空处的 manifest。
+          throw new Error(`上传结果缺失：${d.path}`)
+        }
         return {
           path: normalizeManifestPath(d.path),
           sha256: res.sha256,

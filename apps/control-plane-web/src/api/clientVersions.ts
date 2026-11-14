@@ -271,6 +271,10 @@ function triggerDownload(blob: Blob, filename: string) {
 /** 
  * 下载客户端分发制品（**管理台** JWT 端点）。
  * downloadName 取 manifest path 末段以贴近原始文件名（制品按内容寻址，URL 用 sha256）。
+ *
+ * 【为何单独放宽 timeout】全局 axios 是 10s（面向普通 JSON 接口）。制品是整合包/资源包，
+ * 几百 MB 是常态，10s 几乎必然超时；而超时是 Axios 层错误，调用方拿不到部分数据。
+ * 放宽到 10 分钟——不设 0（永不超时），因为卡死的连接也需要一个上界。
  */
 export async function downloadClientArtifact(
   channelId: string,
@@ -280,6 +284,7 @@ export async function downloadClientArtifact(
   const { data } = await api.get(`/client-channels/${channelId}/files/download`, {
     params: { sha256 },
     responseType: 'blob',
+    timeout: 600_000,
   })
   triggerDownload(data as Blob, downloadName || sha256)
 }

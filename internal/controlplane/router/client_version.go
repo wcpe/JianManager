@@ -390,6 +390,13 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 		return
 	}
 	channelID = ch
+	// 频道确定后补一次限定频道的 IP 封禁校验（R28）：A 频道的封禁不应拦截同一 IP 用 B 频道密钥下载。
+	if h.security != nil {
+		if _, blocked := h.security.ActiveIPBlockForChannel(c.ClientIP(), channelID); blocked {
+			errCode = h.respondSecurityErr(c, service.ErrIPTempBlocked)
+			return
+		}
+	}
 	asset, absPath, err := h.svc.OpenArtifact(sha)
 	if err != nil {
 		errCode = h.respondConsumerErr(c, err)
@@ -499,7 +506,7 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 // 成功返回 ("", true)。错误码供调用方记入追踪事件。
 func (h *ClientVersionHandler) authChannelKey(c *gin.Context, channelID string) (*model.ClientPullKey, string, bool) {
 	if h.security != nil {
-		if _, blocked := h.security.ActiveIPBlock(c.ClientIP()); blocked {
+		if _, blocked := h.security.ActiveIPBlockForChannel(c.ClientIP(), channelID); blocked {
 			return nil, h.respondSecurityErr(c, service.ErrIPTempBlocked), false
 		}
 	}
@@ -526,7 +533,9 @@ func (h *ClientVersionHandler) authChannelKey(c *gin.Context, channelID string) 
 // 错误码供调用方记入追踪事件（鉴权失败时频道未知，事件 ChannelID 记空可接受）。
 func (h *ClientVersionHandler) authAnyKey(c *gin.Context) (*model.ClientPullKey, string, string, bool) {
 	if h.security != nil {
-		if _, blocked := h.security.ActiveIPBlock(c.ClientIP()); blocked {
+		// 路径无频道段，此刻还不知道请求属于哪个频道；先只比全局封禁，
+		// 等 VerifyAnyKey 拿到密钥归属频道后，由 GetArtifact 再补一次按频道的校验。
+		if _, blocked := h.security.ActiveIPBlockForChannel(c.ClientIP(), ""); blocked {
 			return nil, "", h.respondSecurityErr(c, service.ErrIPTempBlocked), false
 		}
 	}

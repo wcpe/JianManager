@@ -62,6 +62,20 @@ export interface InstanceBackupSegmentProps {
   schedules: ScheduleInfo[]
   /** 定时任务加载中。 */
   schedulesLoading?: boolean
+  /**
+   * 备份列表取数失败。
+   *
+   * 【为什么必须分开】失败时 `backups` 是空数组，只判 loading 的话会渲染成
+   * 「暂无备份」——运维会以为这台服的备份全没了（或从未做过），据此事后去查备份策略。
+   * 错误态与空态必须分开，并给重试入口。
+   */
+  backupsError?: boolean
+  /** 定时任务列表取数失败（同上：不能渲染成「暂无定时任务」）。 */
+  schedulesError?: boolean
+  /** 重试取数（错误态里的刷新按钮）。 */
+  onRetryBackups?: () => void
+  /** 重试取数（定时任务）。 */
+  onRetrySchedules?: () => void
   /** 实例进程是否存活（存活时禁止恢复，与后端守卫一致）。 */
   instanceLive: boolean
   /** 创建备份。失败请抛错，视图取服务端 message 提示。 */
@@ -112,6 +126,8 @@ function RowsSkeleton({ rows = 3 }: { rows?: number }) {
 function SchedulesPanel({
   schedules,
   schedulesLoading = false,
+  schedulesError = false,
+  onRetrySchedules,
   createScheduleLink,
   onToggleSchedule,
   onDeleteSchedule,
@@ -160,7 +176,16 @@ function SchedulesPanel({
     // 内容驱动高度（spec §3.2）：定时任务通常个位数条，撑高只会在卡内留死区。
     // 6 列在 38% 栏内偏挤，用横向滚动兜住而不压缩列（列宽治理归本批不动）。
     <Panel className="flex-none" icon={<CalendarClock className="size-3.5" />} title={t('schedules.title')} actions={createScheduleLink}>
-      {schedulesLoading ? (
+      {schedulesError ? (
+        <div role="alert" data-testid="instance-schedules-error" className="flex items-center gap-2 p-3 text-xs text-destructive">
+          <span className="min-w-0 flex-1">{t('schedules.loadFailed', '定时任务加载失败')}</span>
+          {onRetrySchedules && (
+            <Button size="sm" variant="outline" onClick={onRetrySchedules}>
+              {t('common.retry')}
+            </Button>
+          )}
+        </div>
+      ) : schedulesLoading ? (
         <RowsSkeleton />
       ) : list.length === 0 ? (
         <EmptyState icon={<CalendarClock />} title={t('schedules.empty')} />
@@ -233,6 +258,8 @@ function SchedulesPanel({
 function BackupsPanel({
   backups,
   backupsLoading = false,
+  backupsError = false,
+  onRetryBackups,
   backupsActive = false,
   storages,
   instanceLive,
@@ -365,7 +392,16 @@ function BackupsPanel({
           </span>
         </div>
       )}
-      {backupsLoading && list.length === 0 ? (
+      {backupsError ? (
+        <div role="alert" data-testid="instance-backups-error" className="flex items-center gap-2 p-3 text-xs text-destructive">
+          <span className="min-w-0 flex-1">{t('backups.loadFailed', '备份列表加载失败')}</span>
+          {onRetryBackups && (
+            <Button size="sm" variant="outline" onClick={onRetryBackups}>
+              {t('common.retry')}
+            </Button>
+          )}
+        </div>
+      ) : backupsLoading && list.length === 0 ? (
         <div className="p-3">
           <RowsSkeleton />
         </div>

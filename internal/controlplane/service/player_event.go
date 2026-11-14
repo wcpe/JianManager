@@ -120,6 +120,9 @@ type PlayerEventService struct {
 
 	mu   sync.RWMutex
 	subs []playerSub
+	// closed 表示 Stop() 已把订阅表清空并关过全部 channel。
+	// 有了它，unsub 才能判断「channel 是我摘下的（我有权关）」还是「Stop 已经关了（不能再关）」。
+	closed bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -184,14 +187,21 @@ func (s *PlayerEventService) Subscribe(filter string) (<-chan PlayerEvent, func(
 
 	unsub := func() {
 		s.mu.Lock()
+		removed := false
 		for i, sub := range s.subs {
 			if sub.ch == ch {
 				s.subs = append(s.subs[:i], s.subs[i+1:]...)
+				removed = true
 				break
 			}
 		}
+		closed := s.closed
 		s.mu.Unlock()
-		close(ch)
+		// Stop() 已经把订阅表清空并关过 channel：此时不能再 close 一次（会 panic）。
+		// 只有「本次 unsub 真正把 channel 从表里摘掉」才拥有关闭权；进程已停（closed）也不关。
+		if removed && !closed {
+			close(ch)
+		}
 	}
 	return ch, unsub
 }
@@ -332,12 +342,19 @@ func (s *PlayerEventService) broadcast(evt PlayerEvent) {
 }
 
 // Stop 停止服务。
+//
+// 关闭权归这里：关闭全部 channel 并置 closed，之后仍在世上的 unsub 回调会因
+// 「removed=false 或 closed=true」而不再 close 第二次（那是 panic：close of closed channel）。
 func (s *PlayerEventService) Stop() {
 	s.cancel()
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
 	for _, sub := range s.subs {
 		close(sub.ch)
 	}
 	s.subs = nil
-	s.mu.Unlock()
 }

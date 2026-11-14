@@ -258,7 +258,7 @@ export interface MetricOverviewResponse {
 }
 
 /** 总览页跨节点聚合：当前总量 + 聚合曲线（增自定义粒度）。可见页每 10 秒轮询。 */
-export function useMetricOverview(range: MetricRange, resolution?: MetricResolution) {
+export function useMetricOverview(range: MetricRange, resolution?: MetricResolution, enabled = true) {
   return useQuery({
     queryKey: ['metricOverview', range, resolution ?? 'auto'],
     queryFn: async () => {
@@ -267,7 +267,8 @@ export function useMetricOverview(range: MetricRange, resolution?: MetricResolut
       const { data } = await api.get<MetricOverviewResponse>(`/metrics/overview?${q.toString()}`)
       return data
     },
-    refetchInterval: 10_000,
+    enabled,
+    refetchInterval: enabled ? 10_000 : false,
     refetchIntervalInBackground: false,
   })
 }

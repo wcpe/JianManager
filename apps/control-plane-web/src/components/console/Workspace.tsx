@@ -3,6 +3,8 @@ import { Suspense, lazy, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PageSkeleton } from '@jianmanager/ui/components/layout'
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
+import { isPlatformAdmin } from '@/lib/shared/roles'
 import { ROUTE_CHUNKS } from '@/lib/shared/route-chunks'
 import { parseHomeModeParam, resolveHomeMode } from '@/lib/shared/home-mode'
 import WorkspaceEmpty from '@/components/views/console/WorkspaceEmpty'
@@ -79,17 +81,43 @@ const NotificationCenterPage = lazy(ROUTE_CHUNKS['/notifications'])
 const SuperWorkbenchPage = lazy(ROUTE_CHUNKS['/super'])
 const DirectorConsolePage = lazy(ROUTE_CHUNKS['/director'])
 
-/** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
-const ROLE_PLATFORM_ADMIN = 10
-
 /** 
  * 管理页路由级角色守卫：此前仅靠侧栏按角色隐藏入口，URL 直达仍可进页。
  * 非平台管理员一律重定向首页；页内既有角色兜底（如 DatabasePage/SystemUpdatePage）保留作纵深防御，
  * 后端 RBAC 仍是最终强制。
  */
 function RequirePlatformAdmin({ children }: { children: ReactNode }) {
+  // 判据是「**有效**平台管理员」，不是 JWT 里的旧 role：后端把「role=10 或绑定
+  // platform_admin 模板」都当作超管（见 authz.go），而侧栏导航本来就是按权限节点裁剪的。
+  // 只认 role===10 会自相矛盾：侧栏出现了入口、点进去却被重定向回首页。
+  const effectiveAdmin = usePermissionsStore((s) => s.isPlatformAdmin)
+  const loaded = usePermissionsStore((s) => s.loaded)
+  // 权限尚未加载完成时不能直接判否：isPlatformAdmin 初始值是 false，
+  // 首帧就把 role=10 的管理员重定向回首页（刷新后直接开深链时必现）。
+  // 沿用 store 自己的未加载语义——只有 JWT 旧角色是平台管理员时才乐观放行。
   const role = useAuthStore((s) => s.role)
-  if (role !== ROLE_PLATFORM_ADMIN) return <Navigate to="/" replace />
+  if (!loaded && !isPlatformAdmin(role)) return <Navigate to="/" replace />
+  if (loaded && !effectiveAdmin) return <Navigate to="/" replace />
+  return <>{children}</>
+}
+
+/**
+ * 按 RBAC 节点守卫的路由包装（R29）。
+ *
+ * 分发域页面（频道 / 分发运维）的权限早已可委派给自定义角色（后端 requireNodes 认
+ * channel.read / dist.ops.read），但路由层此前硬判 role===10：委派角色从侧栏或深链进来
+ * 会被直接送回首页，而同一账号直调 API 却是 200——权限链两截不一致。
+ * 这里改为与后端同一套节点判定（平台管理员 hasPerm 恒 true，语义不变）。
+ *
+ * `nodes` 为「任一命中即放行」：与后端 requireNodes(c, ...nodes) 的 OR 语义一致。
+ */
+function RequirePermissions({ nodes, children }: { nodes: string[]; children: ReactNode }) {
+  const loaded = usePermissionsStore((s) => s.loaded)
+  const allowed = usePermissionsStore((s) => nodes.some((n) => s.hasPerm(n)))
+  // 未拉到 /auth/me 前不急着判：直接重定向会把有权限的委派角色误赶回首页，
+  // 先留在原地等一次性加载完成（失败时 store 也会置 loaded，不会永久卡住）。
+  if (!loaded) return <PageSkeleton variant="tool" />
+  if (!allowed) return <Navigate to="/" replace />
   return <>{children}</>
 }
 /** 
@@ -249,10 +277,10 @@ export default function Workspace() {
             <Route path="tasks" element={<TasksPage />} />
             {/* 通知中心：站内信 + 告警合并的统一通知流页。 */}
             <Route path="notifications" element={<NotificationCenterPage />} />
-            {/*页面 A「客户端分发」补平台管理员守卫（此前仅靠侧栏按角色隐藏）。 */}
-            <Route path="client-channels" element={<RequirePlatformAdmin><ClientChannelsPage /></RequirePlatformAdmin>} />
-            {/*页面 B「客户端分发运维」新路由（7 Tab，观测 + 研判处置合并）+ 守卫。 */}
-            <Route path="client-dist-ops" element={<RequirePlatformAdmin><ProtectionCenterPage /></RequirePlatformAdmin>} />
+            {/*页面 A「客户端分发」按 channel.read / channel.write / dist.publish 任一放行（R29：委派角色可进）。 */}
+            <Route path="client-channels" element={<RequirePermissions nodes={['channel.read', 'channel.write', 'dist.publish']}><ClientChannelsPage /></RequirePermissions>} />
+            {/*页面 B「客户端分发运维」新路由（7 Tab，观测 + 研判处置合并）；按 dist.ops.read/write 任一放行。 */}
+            <Route path="client-dist-ops" element={<RequirePermissions nodes={['dist.ops.read', 'dist.ops.write']}><ProtectionCenterPage /></RequirePermissions>} />
             {/*旧安全中心路由 → 页面 B 参数翻译重定向（透传 query，不包守卫，仅 Navigate）。 */}
             <Route path="client-dist-security" element={<ClientDistRedirect source="security" />} />
             <Route path="client-channels/:id/publish" element={<ClientPublishPage />} />

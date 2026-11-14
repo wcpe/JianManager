@@ -27,7 +27,14 @@ func NewAgentTokenHandler(svc *service.AgentTokenService, audit *service.AuditSe
 	return &AgentTokenHandler{svc: svc, audit: audit, callLog: callLog}
 }
 
-// RegisterAdminRoutes 挂到 JWT protected + 平台管理员组。
+// RegisterAdminRoutes 挂到 JWT protected 组。
+//
+// 【读写必须分开守】调用方传进来的是 any-of 的读侧节点（agent.token.read | manage），
+// 那只够「看列表」。签发与吊销是**扩大/收回他人权限**的动作：
+//   - 只持 read 的人若能签发，就可以自行指定 scopedInstanceIds 与 capabilities，
+//     拿到超出自己资源范围的能力；也能吊销别人正在用的令牌。
+//
+// 因此写动作在 handler 内另行要求 agent.token.manage，不接受 read 顶替。
 func (h *AgentTokenHandler) RegisterAdminRoutes(rg *gin.RouterGroup) {
 	g := rg.Group("/agent/tokens")
 	g.POST("", h.Issue)
@@ -35,6 +42,28 @@ func (h *AgentTokenHandler) RegisterAdminRoutes(rg *gin.RouterGroup) {
 	g.DELETE("/:id", h.Revoke)
 	// 调用流水查询
 	rg.GET("/agent/call-logs", h.ListCallLogs)
+}
+
+// requireAgentTokenWrite 签发 / 吊销的写侧门禁：必须持有 agent.token.manage。
+//
+// 不复用 requireNodes("agent.token.read","agent.token.manage")：那仍是 any-of，
+// read 会顶替 manage 放行，正是要修的问题。
+func requireAgentTokenWrite(c *gin.Context) bool {
+	access := getAccess(c)
+	if access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权限"})
+		return false
+	}
+	if access.IsPlatformAdmin {
+		return true
+	}
+	if access.HasNode("agent.token.manage") {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{
+		"error": "FORBIDDEN", "message": "权限不足", "nodes": []string{"agent.token.manage"},
+	})
+	return false
 }
 
 type issueAgentTokenRequest struct {
@@ -101,6 +130,9 @@ func projectAgentToken(tok *model.AgentToken) agentTokenView {
 
 // Issue POST /api/v1/agent/tokens
 func (h *AgentTokenHandler) Issue(c *gin.Context) {
+	if !requireAgentTokenWrite(c) {
+		return
+	}
 	var req issueAgentTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "请求体无效"})
@@ -184,6 +216,9 @@ func (h *AgentTokenHandler) List(c *gin.Context) {
 
 // Revoke DELETE /api/v1/agent/tokens/:id
 func (h *AgentTokenHandler) Revoke(c *gin.Context) {
+	if !requireAgentTokenWrite(c) {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "id 无效"})

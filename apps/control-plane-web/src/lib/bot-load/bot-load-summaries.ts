@@ -173,9 +173,13 @@ function yamlScalar(value: string): string {
 }
 
 function unquote(s: string): string {
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+  if (s.startsWith("'") && s.endsWith("'")) {
+    // YAML 单引号只用两个连续单引号表示撇号，反斜杠必须按正文原样保留。
+    return s.slice(1, -1).replace(/''/g, "'")
+  }
+  if (s.startsWith('"') && s.endsWith('"')) {
     try {
-      return JSON.parse(s.startsWith("'") ? `"${s.slice(1, -1).replace(/"/g, '\\"')}"` : s) as string
+      return JSON.parse(s) as string
     } catch {
       return s.slice(1, -1)
     }

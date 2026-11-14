@@ -272,6 +272,32 @@ func TestOrphanScan_AutoAdoptAcceptsRealWrapperShape(t *testing.T) {
 	findings := f.s.ScanOnce()
 
 	require.Len(t, findings, 1)
+	if !findings[0].Adopted {
+		wrapperAlive := daemon.IsPIDAlive(wrapperPID)
+		javaAlive := daemon.IsPIDAlive(javaPID)
+		wrapperOwned, wrapperEvidence := DefaultVerifyAdoptOwnership(wrapperPID, adoptUUID, workDir, true)
+		javaOwned, javaEvidence := DefaultVerifyAdoptOwnership(javaPID, adoptUUID, workDir, false)
+		wrapperCmdline, wrapperCwd := "<unavailable>", "<unavailable>"
+		javaCmdline, javaCwd := "<unavailable>", "<unavailable>"
+		var wrapperProcErr, wrapperCmdErr, wrapperCwdErr error
+		var javaProcErr, javaCmdErr, javaCwdErr error
+		if p, err := psproc.NewProcess(int32(wrapperPID)); err != nil {
+			wrapperProcErr = err
+		} else {
+			wrapperCmdline, wrapperCmdErr = p.Cmdline()
+			wrapperCwd, wrapperCwdErr = p.Cwd()
+		}
+		if p, err := psproc.NewProcess(int32(javaPID)); err != nil {
+			javaProcErr = err
+		} else {
+			javaCmdline, javaCmdErr = p.Cmdline()
+			javaCwd, javaCwdErr = p.Cwd()
+		}
+		t.Logf("收养失败现场 findings=%+v audits=%+v dials=%v kills=%v wrapper={pid:%d alive:%t owned:%t evidence:%s cmdline:%q cmdlineErr:%v cwd:%q cwdErr:%v processErr:%v} java={pid:%d alive:%t owned:%t evidence:%s cmdline:%q cmdlineErr:%v cwd:%q cwdErr:%v processErr:%v}",
+			findings, f.audits, f.dials, f.kills,
+			wrapperPID, wrapperAlive, wrapperOwned, wrapperEvidence, wrapperCmdline, wrapperCmdErr, wrapperCwd, wrapperCwdErr, wrapperProcErr,
+			javaPID, javaAlive, javaOwned, javaEvidence, javaCmdline, javaCmdErr, javaCwd, javaCwdErr, javaProcErr)
+	}
 	require.True(t, findings[0].Adopted, "真实 wrapper/Java 形态必须收养成功")
 	inst, ok := f.m.GetInstance(adoptUUID)
 	require.True(t, ok)

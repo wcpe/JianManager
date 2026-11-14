@@ -144,9 +144,10 @@ describe('OverviewPage（mock 假后端）', () => {
     renderWithProviders(<OverviewPage />, { route: '/' })
 
     const cpu = await screen.findByRole('button', { name: '总 CPU 资源归因' })
-    // ① 结论句与环同属一张卡：按 resourceLevel 分档，CPU 47% 落 success → 「正常」。
+    // ① 结论句与环同属一张卡：按 resourceLevel 分档，CPU 12% 落 success → 「正常」。
+    //    必须等指标到位再断言：缺数时结论句是「--」（不再用 0% 兜底成「正常」）。
     const card = cpu.closest('[data-slot="panel"]') as HTMLElement
-    expect(within(card).getByText('正常')).toBeInTheDocument()
+    await waitFor(() => expect(within(card).getByText('正常')).toBeInTheDocument())
 
     /* 
       ② 悬停反馈的形态：不用背景色，改用「环描边加粗」。
@@ -177,7 +178,32 @@ describe('OverviewPage（mock 假后端）', () => {
     expect(screen.queryByTestId('overview-player-ranking')).toBeNull()
   })
 
-  /* 
+  /*
+    【未知值不冒充 0】总览指标没拉到时（首帧 / 查询失败），仪表与 KPI 必须显示「--」，
+    不能写 0：写 0 会被读成「CPU 0% · 正常」与「0 台在线」，与事实相反。
+  */
+  it('总览指标取数失败：读数显示 -- 并给出错误态，不冒充 0', async () => {
+    server.use(
+      http.get(API('/metrics/overview'), () => HttpResponse.json({ message: 'boom' }, { status: 500 })),
+    )
+    renderWithProviders(<OverviewPage />, { route: '/' })
+
+    const banner = await screen.findByTestId('overview-metrics-error')
+    expect(banner).toBeInTheDocument()
+    // 重试入口在错误条里（查询自带 10s 轮询，但用户看到红条时不应该只能干等）。
+    expect(within(banner).getByRole('button', { name: /重试/ })).toBeInTheDocument()
+
+    // 三个仪表的结论句与读数都是未知态，不是 0%。
+    for (const name of ['总 CPU 资源归因', '总负载 资源归因', '总内存 资源归因']) {
+      const gauge = screen.getByRole('button', { name })
+      const card = gauge.closest('[data-slot="panel"]') as HTMLElement
+      expect(within(card).queryByText('正常')).toBeNull()
+    }
+    // KPI 卡里的运行实例数不再写 0。
+    expect(screen.queryByText('0', { selector: '[data-slot="stat-card"] *' })).toBeNull()
+  })
+
+  /*
     可用率 SLO 不单独占卡（用户选择「塞进现有卡片」），并入趋势卡头部。
     两条语义要守住：① 有证据时按 target 达标情况着色；② `applicable=false`
     （窗口内无可用证据、分母为 0）必须显示「不适用」，不能显示成 0% ——

@@ -5,6 +5,7 @@ import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Card } from '@jianmanager/ui/components/card'
+import { Button } from '@jianmanager/ui/components/button'
 
 import { useInstance, useKillInstance, useRebuildInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance, isRebuildingInstance } from '@/api/instances'
 import { usePermissionsStore } from '@/stores/permissions'
@@ -58,7 +59,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const resourceSegment = readResourceSegment(searchParams)
-  const { data: instance } = useInstance(instanceId)
+  const { data: instance, isLoading: instanceLoading, isError: instanceError, refetch: refetchInstance } = useInstance(instanceId)
   // 能力画像：Tab 显隐与顺序的唯一门控来源——后端下发的 capabilities 优先，
   // 缺失时按 (type, role) 本地兜底（离线/mock 兼容）。不再有零散 role === '...' 分支。
   const profile = useInstanceCapabilities(instance)
@@ -124,6 +125,9 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const canOperate = usePermissionsStore((s) => s.hasPerm('instance.operate'))
   // 强杀走统一危险操作确认，不直发请求。
   const [killConfirmOpen, setKillConfirmOpen] = useState(false)
+  // 启/停/重启也要二次确认：单次误点会直接踢掉在线玩家并停服，而列表页已有同样口径的
+  // 确认流程（见 InstancesPage 的 DangerConfirm）。详情页原先直接 mutate，安全语义不一致。
+  const [lifecycleConfirm, setLifecycleConfirm] = useState<'start' | 'stop' | 'restart' | null>(null)
 
   // 直接经路由/深链进入实例也计入「最近打开」（与选择器/侧栏常驻列同一存储）；
   // store 侧对内容未变的写入不广播，轮询刷新不会造成订阅方空转。
@@ -145,7 +149,28 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   )
 
   if (!instance) {
-    return <Card className="p-6 text-sm text-muted-foreground">{t('serverConsole.noInstance')}</Card>
+    /*
+      【错误态与空态必须分开】原先是「服务器不存在或正在加载」一句盖住两种情况：
+      后端 500 / 网络断时，运维看到的是「不存在」——会去查实例是否被删了，
+      而事实只是这次没拉到。
+    */
+    if (instanceError) {
+      return (
+        <Card className="flex flex-col items-start gap-2 p-6 text-sm">
+          <span role="alert" data-testid="instance-load-error" className="text-destructive">
+            {t('serverConsole.loadFailed', '服务器信息加载失败')}
+          </span>
+          <Button size="sm" variant="outline" onClick={() => void refetchInstance()}>
+            {t('common.retry')}
+          </Button>
+        </Card>
+      )
+    }
+    return (
+      <Card className="p-6 text-sm text-muted-foreground">
+        {instanceLoading ? t('common.loading') : t('serverConsole.noInstance')}
+      </Card>
+    )
   }
 
   // 搭建中硬性禁启：provision 未终态期间启动按钮禁用 + tooltip 引导看任务中心，
@@ -292,10 +317,10 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
       rebuilding={rebuilding}
       canOperate={canOperate}
       actions={{
-        start: () => start.mutate(instance.id),
+        start: () => setLifecycleConfirm('start'),
         rebuild: () => rebuild.mutate(instance.id),
-        restart: () => restart.mutate(instance.id),
-        stop: () => stop.mutate(instance.id),
+        restart: () => setLifecycleConfirm('restart'),
+        stop: () => setLifecycleConfirm('stop'),
         // 强杀只上报意图：二次确认由下方 DangerConfirm 承载，确认后才发请求。
         kill: () => setKillConfirmOpen(true),
       }}
@@ -311,15 +336,37 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
         />
       ) : undefined}
       killConfirmDialog={(
-        <DangerConfirm
-          open={killConfirmOpen}
-          title={t('danger.killInstanceTitle', { name: instance.name })}
-          description={t('danger.killInstanceDesc')}
-          confirmLabel={t('instances.kill')}
-          scope="group"
-          onConfirm={() => { kill.mutate(instance.id); setKillConfirmOpen(false) }}
-          onCancel={() => setKillConfirmOpen(false)}
-        />
+        <>
+          <DangerConfirm
+            open={killConfirmOpen}
+            title={t('danger.killInstanceTitle', { name: instance.name })}
+            description={t('danger.killInstanceDesc')}
+            confirmLabel={t('instances.kill')}
+            scope="group"
+            onConfirm={() => { kill.mutate(instance.id); setKillConfirmOpen(false) }}
+            onCancel={() => setKillConfirmOpen(false)}
+          />
+          {/* 启/停/重启确认：与列表页同一口径（提示服务会下线/重启、玩家会掉线）。 */}
+          <DangerConfirm
+            open={lifecycleConfirm !== null}
+            title={t('danger.instanceLifecycleTitle', {
+              name: instance.name,
+              action: lifecycleConfirm ? t(`instances.${lifecycleConfirm}`) : '',
+            })}
+            description={t('danger.instanceLifecycleDesc')}
+            confirmLabel={lifecycleConfirm ? t(`instances.${lifecycleConfirm}`) : ''}
+            scope="group"
+            pending={start.isPending || stop.isPending || restart.isPending}
+            onConfirm={() => {
+              const action = lifecycleConfirm
+              setLifecycleConfirm(null)
+              if (action === 'start') start.mutate(instance.id)
+              else if (action === 'stop') stop.mutate(instance.id)
+              else if (action === 'restart') restart.mutate(instance.id)
+            }}
+            onCancel={() => setLifecycleConfirm(null)}
+          />
+        </>
       )}
       renderTabPanel={renderTabPanel}
     />

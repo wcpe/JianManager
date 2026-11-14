@@ -20,7 +20,7 @@ export type MonitorSeriesHook = (
   source: MonitorSource,
   range: MetricRange,
   resolution: MetricResolution,
-) => { series: RawSeries[]; isLoading: boolean }
+) => { series: RawSeries[]; isLoading: boolean; isError?: boolean }
 
 /** 一张图卡：独立时间筛选 + brush + hover。 */
 function MonitorChartCard({
@@ -42,12 +42,18 @@ function MonitorChartCard({
 }) {
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>(defaultRange)
-  const { series: raw, isLoading } = useSeries(source, range, resolution)
+  const { series: raw, isLoading, isError } = useSeries(source, range, resolution)
   const plot = buildChartSeries(def, raw, (k) => t(k), worldFilter)
+  const hasSamples = plot.some((s) => s.points.some((p) => p.value != null && Number.isFinite(p.value)))
 
   return (
     <Panel title={t(def.titleKey)} hoverable actions={<RangePicker value={range} onChange={setRange} />}>
-      {isLoading && plot.length === 0 ? (
+      {isError && (
+        <div role="alert" className="flex items-center justify-center text-xs text-destructive" style={!hasSamples ? { height: height + 20 } : undefined}>
+          {t('common.error')}
+        </div>
+      )}
+      {isError && !hasSamples ? null : isLoading && plot.length === 0 ? (
         <div className="flex items-center justify-center text-xs text-muted-foreground" style={{ height: height + 20 }}>
           {t('common.loading')}
         </div>

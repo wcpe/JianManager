@@ -37,6 +37,10 @@ export interface ClientDistEventFilter {
   channelId?: string
   machineId?: string
   ip?: string
+  /** 时间窗（R31）：优先 from/to（RFC3339），否则 range 枚举；与导出同一口径。 */
+  range?: string
+  from?: string
+  to?: string
   /** manifest | artifact。 */
   kind?: string
   /** 成功/失败维度：success（0<status<400）| failure（status>=400）| 空（全部）。 */

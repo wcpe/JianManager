@@ -162,7 +162,16 @@ type whitelistActionRequest struct {
 }
 
 // WhitelistAction 单后端白名单增删。
+//
+// 白名单是**写**操作：读侧只要求 player.read/instance.read，写侧必须另行具备
+// instance.write 或 player.manage（API 契约同要求）。此前这里只调 canManageInstance，
+// 那只是「组归属」判定，不查任何写权限节点——组只读 viewer 也能改白名单。
 func (h *PlayerHandler) WhitelistAction(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil || !(access.Can("instance.write") || access.Can("player.manage")) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -185,6 +194,17 @@ func (h *PlayerHandler) WhitelistAction(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
 	}
+	// 探针不可达/超时属于「命令没下达」，不能报成功：前端按 HTTP 成功提示并在添加时清空输入。
+	// 这里把单项失败转成非 2xx，同时保留 item 让调用方看到具体原因。
+	if item != nil && !item.OK {
+		h.recordAudit(c, "player.whitelist."+req.Action+".failed", req.Player, map[string]any{"instanceId": id, "error": item.Error})
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":   "PROBE_UNAVAILABLE",
+			"message": "探针不可达，白名单未变更",
+			"item":    item,
+		})
+		return
+	}
 	h.recordAudit(c, "player.whitelist."+req.Action, req.Player, map[string]any{"instanceId": id})
 	c.JSON(http.StatusOK, item)
 }
@@ -197,6 +217,15 @@ func (h *PlayerHandler) Bans(c *gin.Context) {
 		return
 	}
 	var filter service.BanFilter
+	// 台账收敛到调用者可见范围：不传 ScopeIDs 时 ListBans 会把全平台的封禁记录
+	// （含其他组的玩家名、原因、操作人）都返回给任意持有 player.read 的用户。
+	scopeIDs, scoped, serr := h.authz.AccessibleInstanceIDs(access)
+	if serr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	filter.ScopeIDs = scopeIDs
+	filter.Scoped = scoped
 	if v := c.Query("player"); v != "" {
 		filter.PlayerName = &v
 	}
@@ -208,6 +237,15 @@ func (h *PlayerHandler) Bans(c *gin.Context) {
 			filter.Limit = n
 		}
 	}
+	// 封禁台账是「谁对哪个范围封了谁」，必须按调用者可见范围收敛：
+	// 否则只属于组 A 的用户能读到组 B 实例上的封禁、原因与操作者。
+	scopeIDs, scoped, err := h.authz.AccessibleInstanceIDs(access)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	filter.ScopeIDs = scopeIDs
+	filter.Scoped = scoped
 	bans, err := h.playerSvc.ListBans(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询封禁记录失败"})

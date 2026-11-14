@@ -116,6 +116,9 @@ export interface AlertRulesTabViewProps {
   rules?: AlertRuleInfo[]
   /** 列表加载态（渲染骨架行）。 */
   isLoading?: boolean
+  /** 查询失败：渲染错误提示与重试，而非「暂无规则」。 */
+  isError?: boolean
+  onRetry?: () => void
   /** 规则更新在途：禁用全部启停开关（防止在途重复提交）。 */
   updating?: boolean
   /** 通知通道列表：仅用于规则的渠道 id → 名称映射。 */
@@ -132,6 +135,8 @@ export interface AlertRulesTabViewProps {
 export function AlertRulesTabView({
   rules,
   isLoading = false,
+  isError = false,
+  onRetry,
   updating = false,
   channels,
   onToggle,
@@ -196,6 +201,15 @@ export function AlertRulesTabView({
             <Skeleton key={i} className="h-16 w-full rounded-lg" />
           ))}
         </div>
+      ) : isError ? (
+        // 读不到与「没有规则」必须分开：把 403/500 渲染成空态会让人以为告警没配。
+        <Panel>
+          <EmptyState
+            icon={<AlertTriangle />}
+            title={t('alerts.loadFailed')}
+            action={onRetry ? <Button size="sm" variant="outline" onClick={onRetry}>{t('common.retry')}</Button> : undefined}
+          />
+        </Panel>
       ) : visible.length === 0 ? (
         <Panel>
           <EmptyState icon={<AlertTriangle />} title={t('alerts.emptyRules')} />
@@ -329,6 +343,9 @@ export interface AlertEventsTabViewProps {
   items?: AlertEventInfo[]
   /** 事件总数（分页脚用）。 */
   total?: number
+  /** 查询失败：渲染错误与重试，而非「暂无事件」。 */
+  isError?: boolean
+  onRetry?: () => void
   /** 当前筛选（受控）。 */
   filter: AlertEventFilter
   /** 筛选变更上报：本组件已在本地完成「改筛选即回第 1 页」的合成。 */
@@ -345,6 +362,8 @@ export interface AlertEventsTabViewProps {
 export function AlertEventsTabView({
   items,
   total = 0,
+  isError = false,
+  onRetry,
   filter,
   onFilterChange,
   rules,
@@ -504,7 +523,16 @@ export function AlertEventsTabView({
             {list.length === 0 && (
               <TableRow>
                 <TableCell colSpan={8} className="p-0">
-                  <EmptyState icon={<Inbox />} title={t('alerts.emptyEvents')} />
+                  {isError ? (
+                    // 事件列表读失败不能伪装成「暂无事件」（新告警可能已被漏看）。
+                    <EmptyState
+                      icon={<Inbox />}
+                      title={t('alerts.loadFailed')}
+                      action={onRetry ? <Button size="sm" variant="outline" onClick={onRetry}>{t('common.retry')}</Button> : undefined}
+                    />
+                  ) : (
+                    <EmptyState icon={<Inbox />} title={t('alerts.emptyEvents')} />
+                  )}
                 </TableCell>
               </TableRow>
             )}
@@ -550,6 +578,9 @@ export interface AlertChannelsTabViewProps {
   channels?: AlertChannelInfo[]
   /** 列表加载态（渲染骨架行）。 */
   isLoading?: boolean
+  /** 查询失败：渲染错误与重试，而非「暂无通道」。 */
+  isError?: boolean
+  onRetry?: () => void
   /** 测试发送在途：禁用全部测试按钮。 */
   testing?: boolean
   /** 测试发送上报（容器执行发送并决定提示文案）。 */
@@ -564,6 +595,8 @@ export interface AlertChannelsTabViewProps {
 export function AlertChannelsTabView({
   channels,
   isLoading = false,
+  isError = false,
+  onRetry,
   testing = false,
   onTest,
   onDelete,
@@ -588,6 +621,14 @@ export function AlertChannelsTabView({
             <Skeleton key={i} className="h-16 w-full rounded-lg" />
           ))}
         </div>
+      ) : isError ? (
+        <Panel>
+          <EmptyState
+            icon={<Bell />}
+            title={t('alerts.loadFailed')}
+            action={onRetry ? <Button size="sm" variant="outline" onClick={onRetry}>{t('common.retry')}</Button> : undefined}
+          />
+        </Panel>
       ) : (channels ?? []).length === 0 ? (
         <Panel>
           <EmptyState icon={<Bell />} title={t('alerts.emptyChannels')} />
@@ -685,18 +726,27 @@ export interface AlertsPageViewProps {
   rules?: AlertRuleInfo[]
   /** 规则列表加载态（规则 Tab 渲染骨架行）。 */
   rulesLoading?: boolean
+  /** 规则列表查询失败（区分「无规则」与「读不到规则」，并提供重试）。 */
+  rulesError?: boolean
+  onRetryRules?: () => void
   /** 规则更新在途（禁用规则启停开关）。 */
   ruleUpdating?: boolean
   /** 通知通道列表（规则 Tab 用于渠道 id → 名映射，通道 Tab 用于列表本身）。 */
   channels?: AlertChannelInfo[]
   /** 通道列表加载态（通道 Tab 渲染骨架行）。 */
   channelsLoading?: boolean
+  /** 通道列表查询失败（区分「无通道」与「读不到通道」）。 */
+  channelsError?: boolean
+  onRetryChannels?: () => void
   /** 通道测试发送在途（禁用测试按钮）。 */
   channelTesting?: boolean
   /** 事件行（容器按 `eventFilter` 取数后注入）。 */
   events?: AlertEventInfo[]
   /** 事件总数（分页脚用）。 */
   eventsTotal?: number
+  /** 事件列表查询失败（区分「暂无事件」与「读不到」）。 */
+  eventsError?: boolean
+  onRetryEvents?: () => void
   /** 事件筛选（含页码）；容器是唯一持有者。 */
   eventFilter: AlertEventFilter
   /** 事件筛选变更上报（已含「改筛选即回第 1 页」的合成）。 */
@@ -729,12 +779,18 @@ export function AlertsPageView({
   unreadCount,
   rules,
   rulesLoading = false,
+  rulesError = false,
+  onRetryRules,
   ruleUpdating = false,
   channels,
   channelsLoading = false,
+  channelsError = false,
+  onRetryChannels,
   channelTesting = false,
   events,
   eventsTotal,
+  eventsError = false,
+  onRetryEvents,
   eventFilter,
   onEventFilterChange,
   onToggleRule,
@@ -785,6 +841,8 @@ export function AlertsPageView({
           <AlertRulesTabView
             rules={rules}
             isLoading={rulesLoading}
+            isError={rulesError}
+            onRetry={onRetryRules}
             updating={ruleUpdating}
             channels={channels}
             onToggle={onToggleRule}
@@ -796,6 +854,8 @@ export function AlertsPageView({
           <AlertEventsTabView
             items={events}
             total={eventsTotal}
+            isError={eventsError}
+            onRetry={onRetryEvents}
             filter={eventFilter}
             onFilterChange={onEventFilterChange}
             rules={rules}
@@ -807,6 +867,8 @@ export function AlertsPageView({
           <AlertChannelsTabView
             channels={channels}
             isLoading={channelsLoading}
+            isError={channelsError}
+            onRetry={onRetryChannels}
             testing={channelTesting}
             onTest={onTestChannel}
             onDelete={onDeleteChannel}

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 func TestBackupStorage_ListIncludesStats(t *testing.T) {
@@ -130,6 +131,10 @@ func TestBackupStorage_CreateNameConflict(t *testing.T) {
 }
 
 func TestBackupStorage_TestCandidateAndSaved(t *testing.T) {
+	// 测试用 httptest 监听 127.0.0.1，而生产策略默认阻断回环（SSRF 防护）；
+	// 这里显式开测试例外，用完立即恢复。
+	service.SetProbeAllowLoopbackForTest(true)
+	t.Cleanup(func() { service.SetProbeAllowLoopbackForTest(false) })
 	t.Setenv("JM_TEST_BK_AK", "ak")
 	t.Setenv("JM_TEST_BK_SK", "sk")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

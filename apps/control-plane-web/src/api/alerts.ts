@@ -87,7 +87,7 @@ export interface AlertEventPage {
  * `options.enabled` 供调用方按当前 Tab 门控：事件列表原挂在事件 Tab 组件内，Radix 未激活即不挂载，
  * 因此只有在事件 Tab 才发起请求；视图受控化后 hook 归容器，改由该开关保住同一时机。
  */
-export function useAlertEvents(params?: EventQuery, options?: { enabled?: boolean }) {
+export function useAlertEvents(params?: EventQuery, options?: { enabled?: boolean; refetchInterval?: number | false }) {
   return useQuery({
     queryKey: ['alertEvents', params],
     queryFn: async () => {
@@ -95,6 +95,9 @@ export function useAlertEvents(params?: EventQuery, options?: { enabled?: boolea
       return data
     },
     enabled: options?.enabled ?? true,
+    // 事件 Tab 激活时由容器传 30s：未读角标已在轮询，列表不跟进会让两者长期不一致。
+    refetchInterval: options?.refetchInterval ?? false,
+    refetchIntervalInBackground: false,
   })
 }
 

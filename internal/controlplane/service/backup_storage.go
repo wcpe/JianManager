@@ -338,6 +338,11 @@ func (s *BackupStorageService) ResolveSpec(id uint) (*workerpb.StorageBackendSpe
 }
 
 // TestConnection 通过在线 Worker 对远程存储后端做一次非破坏性读写探测。
+//
+// 【为什么下发前还要在 CP 校验一次】这条路径读的是**已保存**的存储配置，
+// 它可能在门禁上线前就已入库，也可能从其它写入路径进来。若只靠“保存时校验”，
+// 历史脏数据会原样下发给 Worker 去探测——而 Worker 通常在内网，探测面更宽。
+// 这里与 TestCandidate/TestSaved 用同一套校验，保证三条路径口径一致。
 func (s *BackupStorageService) TestConnection(id uint) (*StorageTestResult, error) {
 	spec, err := s.ResolveSpec(id)
 	if err != nil {
@@ -345,6 +350,10 @@ func (s *BackupStorageService) TestConnection(id uint) (*StorageTestResult, erro
 			return failedStorageTest("CREDENTIAL_ENV_MISSING", err.Error(), 0, ""), nil
 		}
 		return nil, err
+	}
+	// 探测前校验目标地址（fail-closed）：不合法直接判失败，不下发 Worker。
+	if err := validateProbeSpecTarget(spec); err != nil {
+		return failedStorageTest("ENDPOINT_BLOCKED", err.Error(), 0, ""), nil
 	}
 	client, nodeUUID := s.firstWorkerClient()
 	if client == nil || client.Worker == nil {
@@ -632,7 +641,7 @@ func probeS3Storage(ctx context.Context, st model.BackupStorage, accessKey, secr
 		}
 		signS3Probe(req, region, accessKey, secretKey)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := backupProbeHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("S3 连接失败: %w", err)
 	}
@@ -658,7 +667,7 @@ func probeWebDAVStorage(ctx context.Context, st model.BackupStorage, user, pass 
 	if user != "" || pass != "" {
 		req.SetBasicAuth(user, pass)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := backupProbeHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("WebDAV 连接失败: %w", err)
 	}
@@ -677,16 +686,48 @@ func probeSFTPStorage(ctx context.Context, st model.BackupStorage, user, pass st
 	if err != nil {
 		return err
 	}
+	// SSRF 防护：SFTP 是裸 TCP，必须在拨号前校验目标地址。
+	if err := validateProbeHost(addr); err != nil {
+		return err
+	}
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.Password(pass)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         backupStorageProbeTimeout,
 	}
-	conn, err := (&net.Dialer{Timeout: backupStorageProbeTimeout}).DialContext(ctx, "tcp", addr)
+	conn, err := probeDialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("SFTP 连接失败: %w", err)
 	}
+	/*
+		【超时必须自己守】`ssh.NewClientConn` 拿到的是已建立的 TCP 连接，**它不读 ctx**；
+		`ssh.ClientConfig.Timeout` 与 `net.Dialer.Timeout` 都只覆盖到 TCP 建连为止。
+		对端若 accept 后不发 SSH banner（防火墙黑洞、假监听），握手会永久阻塞，
+		而本函数的 ctx 是 `context.WithTimeout(15s)`——没有下面这段，超时形同虚设。
+
+		两道保险：
+		  1. conn.SetDeadline —— 让阻塞的读写自己返回；
+		  2. 监护 goroutine —— ctx 取消时立即 Close，不再等 deadline 到期。
+	*/
+	deadline := time.Now().Add(backupStorageProbeTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("SFTP 设置超时失败: %w", err)
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
 		_ = conn.Close()
@@ -715,6 +756,16 @@ func backupStorageProbeURL(endpoint string, useSSL bool) (*url.URL, error) {
 	}
 	if u.Host == "" {
 		return nil, fmt.Errorf("缺少 host")
+	}
+	// SSRF 防护：endpoint 完全由调用方提供，并由控制面主机发起出站请求。
+	// 只放行 http/https，并在解析后校验目标地址（含 DNS 解析结果的逐 IP 复核）。
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return nil, fmt.Errorf("不支持的协议 %q（仅允许 http/https）", u.Scheme)
+	}
+	if err := validateProbeHost(u.Host); err != nil {
+		return nil, err
 	}
 	return u, nil
 }

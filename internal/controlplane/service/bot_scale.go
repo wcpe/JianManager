@@ -127,6 +127,13 @@ type BotBatchRequest struct {
 	Filter   *BotFilter
 	Behavior string
 	Target   string
+	// AllowFleetOwned 表示这次批量操作由 **Fleet 场景自己**发起（如压测会话 Stop），
+	// 允许处理 load_batch_id / stress_session_id 归属的 Bot。
+	//
+	// 由运营手动触发的批量 stop/delete 一律为 false：那些是「越权动别人的 Bot」，
+	// Worker 会明确拒绝，此时账本也不能先改（见 Batch 里的排除逻辑）。
+	// 字段不对外序列化，仅服务内部调用点可设置。
+	AllowFleetOwned bool `json:"-"`
 }
 
 // BotBatchError 批量操作单条失败明细。
@@ -483,9 +490,36 @@ func (s *BotService) Batch(req BotBatchRequest, scopeIDs []uint, scope bool) (*B
 		return result, nil
 	}
 
-	// set-behavior 必须在 Worker 成功后再落库；其他动作保持既有账本语义。
-	if req.Action != BotBatchSetBehavior {
-		s.applyBatchDBChange(req, bots)
+	// 委托前先把「本地就能判定会被 Worker 拒绝」的目标剔出去（R10）。
+	//
+	// Worker 对 Fleet 归属（load_batch_id / stress_session_id 非空）的 Bot 会明确拒绝
+	// 旧 DeleteBot，而这类归属是**平台自己落的账**，不需要问 Worker 就知道。
+	// 此前 stop / delete 先把 DB 改掉再委托：Worker 一拒，运行中的 Bot 还在跑、
+	// 账本却已经「停了/删了」，后续普通查询也看不到这行——假成功。
+	//
+	// 但「委托失败不阻塞账本变更」是既有契约（Worker 失联的幽灵 Bot 必须还能从库里清掉），
+	// 所以这里只把**确定性拒绝**的剔除，网络/未连接等失败仍按原语义处理。
+	batchTargets := bots
+	if !req.AllowFleetOwned && (req.Action == BotBatchStop || req.Action == BotBatchDelete || req.Action == BotBatchSetBehavior) {
+		kept := make([]model.Bot, 0, len(bots))
+		for i := range bots {
+			if isFleetOwnedBot(&bots[i]) {
+				result.Failed++
+				if len(result.Errors) < maxBatchErrors {
+					result.Errors = append(result.Errors, BotBatchError{
+						BotID: bots[i].ID, ErrorCode: BotFleetManagedErrorCode, Error: ErrBotFleetManaged.Error(),
+					})
+				}
+				continue
+			}
+			kept = append(kept, bots[i])
+		}
+		batchTargets = kept
+	}
+
+	// set-behavior 必须在 Worker 成功后再落库；其他动作保持既有账本语义（见上）。
+	if req.Action != BotBatchSetBehavior && len(batchTargets) > 0 {
+		s.applyBatchDBChange(req, batchTargets)
 	}
 
 	// 有界并发委托，按 Bot 各自所属节点路由
@@ -495,8 +529,8 @@ func (s *BotService) Batch(req BotBatchRequest, scopeIDs []uint, scope bool) (*B
 		sem                   = make(chan struct{}, batchConcurrency)
 		successfulBehaviorIDs []uint
 	)
-	for i := range bots {
-		bot := bots[i]
+	for i := range batchTargets {
+		bot := batchTargets[i]
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
@@ -504,25 +538,27 @@ func (s *BotService) Batch(req BotBatchRequest, scopeIDs []uint, scope bool) (*B
 			defer func() { <-sem }()
 
 			derr := s.delegateBatchOne(req, &bot)
-
-			mu.Lock()
-			defer mu.Unlock()
 			if derr != nil {
+				mu.Lock()
 				result.Failed++
 				if len(result.Errors) < maxBatchErrors {
 					result.Errors = append(result.Errors, BotBatchError{
 						BotID: bot.ID, ErrorCode: botBatchErrorCode(derr), Error: derr.Error(),
 					})
 				}
-			} else {
-				result.Succeeded++
-				if req.Action == BotBatchSetBehavior {
-					successfulBehaviorIDs = append(successfulBehaviorIDs, bot.ID)
-				}
+				mu.Unlock()
+				return
 			}
+			mu.Lock()
+			result.Succeeded++
+			if req.Action == BotBatchSetBehavior {
+				successfulBehaviorIDs = append(successfulBehaviorIDs, bot.ID)
+			}
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
+
 	if req.Action == BotBatchSetBehavior && len(successfulBehaviorIDs) > 0 {
 		if err := s.db.Model(&model.Bot{}).Where("id IN ?", successfulBehaviorIDs).Update("behavior", req.Behavior).Error; err != nil {
 			result.Succeeded -= len(successfulBehaviorIDs)

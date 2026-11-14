@@ -2,6 +2,7 @@ package router
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -66,8 +67,22 @@ func (h *PluginHandler) Upload(c *gin.Context) {
 		return
 	}
 
+	// 先卡住请求体：MaxBytesReader 只有在下游读取请求体时才会生效，
+	// 必须放在 FormFile 之前——FormFile 本身就会触发 multipart 解析与落盘/入内存。
+	// 超限部分不会再被读入，避免先吞掉整个超大 multipart 再判断。
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, service.MaxPluginUploadBytes)
+
 	file, header, ferr := c.Request.FormFile("file")
 	if ferr != nil {
+		// 超限时 FormFile 会先报错（而不是 io.ReadAll），这里统一映射成 413。
+		var maxErr *http.MaxBytesError
+		if errors.As(ferr, &maxErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error":   "PAYLOAD_TOO_LARGE",
+				"message": fmt.Sprintf("插件文件超过大小上限（%d MiB）", service.MaxPluginUploadBytes/(1024*1024)),
+			})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少文件"})
 		return
 	}
@@ -75,6 +90,14 @@ func (h *PluginHandler) Upload(c *gin.Context) {
 
 	content, err := io.ReadAll(file)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error":   "PAYLOAD_TOO_LARGE",
+				"message": fmt.Sprintf("插件文件超过大小上限（%d MiB）", service.MaxPluginUploadBytes/(1024*1024)),
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "读取上传文件失败"})
 		return
 	}

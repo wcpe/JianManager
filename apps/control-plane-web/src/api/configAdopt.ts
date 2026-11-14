@@ -54,6 +54,8 @@ export type AdoptCode =
   | 'FORMAT_CONFLICT'
   | 'CONFIG_FILE_ARCHIVED'
   | 'WRITE_FAILED'
+  /** 预演后文件又被改过（hash 不一致），需重新预演。 */
+  | 'CONTENT_CHANGED'
 
 /** 单个文件的纳管结果（后端 `service.AdoptFileResult`）。 */
 export interface AdoptFileResult {
@@ -133,6 +135,14 @@ export interface AdoptFileInput {
   path: string
   /** 可选的 config_file 逻辑名；留空则用 path。 */
   asName?: string
+  /**
+   * 预演时看到的磁盘 sha256（小写 hex）。
+   *
+   * 非空时，执行阶段要求实际读到内容与它一致；不一致该文件判失败（CONTENT_CHANGED）。
+   * 作用是把「你确认过的预演」与「真正落库的内容」绑定起来——否则预演与执行之间
+   * 服主改了配置，就会落库一份没人看过的基线。
+   */
+  expectedContentHash?: string
 }
 
 /** 批量纳管目标（复用业务目标解析器：分组子树 or 显式实例列表）。 */

@@ -75,6 +75,18 @@ export function useInstanceSnapshots(instanceId: number, enabled = true) {
     queryFn: () => api.get<InstanceSnapshot[]>(`/instances/${instanceId}/snapshots`).then((r) => r.data),
     enabled: enabled && instanceId > 0,
     gcTime: INSTANCE_QUERY_GC_TIME_MS,
+    /*
+     * 存在未终态快照时轮询：创建/回滚都是异步任务，state / rootBackupId /
+     * failureReason 都由后台协程回写。只靠提交后的一次 invalidate，页面会永远停在
+     * 「进行中」——用户既看不到完成，也看不到失败原因。
+     *
+     * 只在**确有待收敛项**时开启（全部终态后自动停），不让它变成常驻请求。
+     */
+    refetchInterval: (query) => {
+      const rows = query.state.data as InstanceSnapshot[] | undefined
+      if (!rows || rows.length === 0) return false
+      return rows.some((s) => s.state === 'pending' || s.state === 'running') ? 3000 : false
+    },
   })
 }
 
@@ -143,7 +155,11 @@ export function useDeleteSnapshot(instanceId: number) {
   return useMutation({
     mutationFn: (snapshotId: number) => api.delete(`/snapshots/${snapshotId}`).then((r) => r.data),
     onSuccess: () => {
+      // 快照删除会连带删底层备份（rootBackupId），同页的备份列表必须一起失效——
+      // 否则会继续列出已不存在的备份，用户点恢复/删除才报错。
       void qc.invalidateQueries({ queryKey: ['instance-snapshots', instanceId] })
+      void qc.invalidateQueries({ queryKey: ['backups', instanceId] })
+      void qc.invalidateQueries({ queryKey: ['tasks'] })
       toast.success('快照已删除')
     },
     onError: (err: unknown) => toast.error(apiErrorMessage(err, '删除快照失败')),

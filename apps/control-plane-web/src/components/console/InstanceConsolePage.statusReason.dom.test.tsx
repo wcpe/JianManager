@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import { db } from '@jianmanager/devmock/db'
+import { useAuthStore } from '@/stores/auth'
 import type { MockInstance } from '@jianmanager/devmock/handlers/domains/instance'
 import InstanceConsolePage from './InstanceConsolePage'
 
@@ -55,12 +56,19 @@ describe('InstanceConsolePage 失败原因横幅', () => {
   })
 
   it('再次点启动后 reason 被清空，横幅随查询刷新消失', async () => {
+    // 启停现在要二次确认（与列表页同口径）。DangerConfirm 的角色门禁读 authStore.role，
+    // 而 mock token 解不出 role（为 null 时一律拒），所以这里显式给平台管理员角色。
+    useAuthStore.setState({ role: 10 })
     const user = userEvent.setup()
     renderWithProviders(<InstanceConsolePage instanceId={3} />, { route: '/instances/3' })
     await screen.findByRole('alert')
 
     await user.click(screen.getByRole('button', { name: '启动' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: '启动' }))
 
-    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    // 只断言「上次启动失败」横幅消失。不能用 queryByRole('alert')——
+    // 确认弹窗自身（以及其它提示）也带 role=alert，会把结果误判成未消失。
+    await waitFor(() => expect(screen.queryByText('上次启动失败')).not.toBeInTheDocument())
   })
 })

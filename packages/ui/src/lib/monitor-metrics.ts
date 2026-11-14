@@ -284,12 +284,71 @@ export function ratioPctSeries(
   })
 }
 
-/** 
- * 取一条原始序列的点（按 metricKey + 可选 world 匹配）。无匹配返回空数组。
+/** 实际时间优先；非日期测试/遗留键仍有确定的字典序。 */
+function compareTimestamp(a: string, b: string): number {
+  const delta = Date.parse(a) - Date.parse(b)
+  return Number.isFinite(delta) && delta !== 0 ? delta : a.localeCompare(b)
+}
+
+/** 新时点优先，同刻按数值降序打破平局；缺测排在真实值后。 */
+function comparePoint(a: RawSeries['points'][number], b: RawSeries['points'][number]): number {
+  const time = compareTimestamp(b.ts, a.ts)
+  if (time !== 0) return time
+  const av = a.value != null && Number.isFinite(a.value) ? a.value : -Infinity
+  const bv = b.value != null && Number.isFinite(b.value) ? b.value : -Infinity
+  return av === bv ? 0 : av > bv ? -1 : 1
+}
+
+/**
+ * 合并同 metricKey/world 的全部序列，保留时间并集。
+ * 迁移时优先选择最新有效时刻更近的原始序列（尾部 null 不代表活跃）。
+ * 活跃时刻相同则按完整点时间/数值确定性排序，不依赖后端枚举顺序或点的顺序。
  */
 function pointsOf(raw: RawSeries[], metricKey: string, world = ''): { ts: string; value: number | null }[] {
-  const s = raw.find((x) => x.metricKey === metricKey && (x.world ?? '') === world)
-  return s ? s.points : []
+  const ranked = raw
+    .filter((s) => s.metricKey === metricKey && (s.world ?? '') === world)
+    .map((s) => {
+      const points = [...s.points].sort(comparePoint)
+      const latest = points.find((p) => p.value != null && Number.isFinite(p.value))
+      return { points, latest }
+    })
+    .sort((a, b) => {
+      if (a.latest && b.latest) {
+        const time = compareTimestamp(b.latest.ts, a.latest.ts)
+        if (time !== 0) return time
+      } else if (a.latest || b.latest) {
+        return a.latest ? -1 : 1
+      }
+      for (let i = 0; i < Math.min(a.points.length, b.points.length); i++) {
+        const order = comparePoint(a.points[i]!, b.points[i]!)
+        if (order !== 0) return order
+      }
+      return b.points.length - a.points.length
+    })
+  const byTs = new Map<string, number | null>()
+  for (const s of ranked) {
+    for (const p of s.points) {
+      const seen = byTs.get(p.ts)
+      // 高优先级序列的真实值不可被旧值覆盖；缺测允许由其它序列补齐。
+      if (seen !== undefined && !(seen === null && p.value != null)) continue
+      byTs.set(p.ts, p.value)
+    }
+  }
+  return [...byTs.entries()].map(([ts, value]) => ({ ts, value })).sort((a, b) => compareTimestamp(a.ts, b.ts))
+}
+
+/** 每个时刻独立选择可计算占比，否则使用落库百分比；不反推 total。 */
+function resourcePctSeries(raw: RawSeries[], resource: 'mem' | 'disk'): RawSeries['points'] {
+  const used = pointsOf(raw, `node_${resource}_used`)
+  const total = pointsOf(raw, `node_${resource}_total`)
+  const fallback = pointsOf(raw, `node_${resource}_pct`)
+  const ratios = new Map(ratioPctSeries(used, total).map((p) => [p.ts, p.value]))
+  const percentages = new Map(fallback.map((p) => [p.ts, p.value]))
+  const times = new Set([...used, ...total, ...fallback].map((p) => p.ts))
+  return [...times].sort(compareTimestamp).map((ts) => ({
+    ts,
+    value: ratios.get(ts) ?? percentages.get(ts) ?? null,
+  }))
 }
 
 /** 
@@ -309,19 +368,26 @@ export function buildChartSeries(
     const out: PlotSeries[] = []
     const cpu = pointsOf(raw, 'node_cpu_pct')
     if (cpu.length) out.push({ key: 'node_cpu_pct', name: nameOf('monitor.metric.cpu'), points: cpu })
-    const mem = ratioPctSeries(pointsOf(raw, 'node_mem_used'), pointsOf(raw, 'node_mem_total'))
-    if (mem.some((p) => p.value != null)) out.push({ key: 'mem_pct', name: nameOf('monitor.metric.mem'), points: mem })
-    const disk = ratioPctSeries(pointsOf(raw, 'node_disk_used'), pointsOf(raw, 'node_disk_total'))
-    if (disk.some((p) => p.value != null)) out.push({ key: 'disk_pct', name: nameOf('monitor.metric.disk'), points: disk })
+    const memPts = resourcePctSeries(raw, 'mem')
+    if (memPts.some((p) => p.value != null)) out.push({ key: 'mem_pct', name: nameOf('monitor.metric.mem'), points: memPts })
+    const diskPts = resourcePctSeries(raw, 'disk')
+    if (diskPts.some((p) => p.value != null)) out.push({ key: 'disk_pct', name: nameOf('monitor.metric.disk'), points: diskPts })
     return out
   }
 
   if (def.id === 'chunks') {
     // 分世界：同一 metricKey 下每个 world 一条线；下钻聚焦时只保留该世界。
-    return raw
-      .filter((x) => x.metricKey === 'world_loaded_chunks' && (x.world ?? '') !== '')
-      .filter((x) => !worldFilter || x.world === worldFilter)
-      .map((s) => ({ key: s.world as string, name: s.world as string, points: s.points }))
+    // 每个世界只出一条线：实例迁移后同一 world 会有旧/新节点两条序列，直接 map 会产出
+    // 重复 key（React 重复 key + 后一条覆盖前一条）。这里按 world 合并时间线。
+    const worlds = [...new Set(
+      raw
+        .filter((x) => x.metricKey === 'world_loaded_chunks' && (x.world ?? '') !== '')
+        .filter((x) => !worldFilter || x.world === worldFilter)
+        .map((s) => s.world as string),
+    )]
+    return worlds
+      .map((world) => ({ key: world, name: world, points: pointsOf(raw, 'world_loaded_chunks', world) }))
+      .filter((s) => s.points.length > 0)
   }
 
   return def.sources

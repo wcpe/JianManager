@@ -358,19 +358,19 @@ func (s *ShardedManager) StopScript(scriptID string) error {
 
 // CommandSchedule 相关：session 级计划，广播到所有片（各片只对自己持有的 bot 生效）。
 func (s *ShardedManager) ApplyCommandSchedule(ctx context.Context, requestID string, cmd CommandScheduleCommand, deadline time.Duration) (*BotWorkerEvent, error) {
-	return s.broadcastCommandSchedule(ctx, requestID, func(sh *Manager, callCtx context.Context, reqID string) (*BotWorkerEvent, error) {
+	return s.broadcastCommandSchedule(ctx, requestID, "command-schedule-accepted", func(sh *Manager, callCtx context.Context, reqID string) (*BotWorkerEvent, error) {
 		return sh.ApplyCommandSchedule(callCtx, reqID, cmd, deadline)
 	})
 }
 
 func (s *ShardedManager) ReleaseCommandSchedule(ctx context.Context, requestID string, cmd CommandScheduleReleaseCommand, deadline time.Duration) (*BotWorkerEvent, error) {
-	return s.broadcastCommandSchedule(ctx, requestID, func(sh *Manager, callCtx context.Context, reqID string) (*BotWorkerEvent, error) {
+	return s.broadcastCommandSchedule(ctx, requestID, "command-schedule-release-result", func(sh *Manager, callCtx context.Context, reqID string) (*BotWorkerEvent, error) {
 		return sh.ReleaseCommandSchedule(callCtx, reqID, cmd, deadline)
 	})
 }
 
 func (s *ShardedManager) CancelCommandSchedule(ctx context.Context, requestID string, cmd CommandScheduleCancelCommand, deadline time.Duration) (*BotWorkerEvent, error) {
-	return s.broadcastCommandSchedule(ctx, requestID, func(sh *Manager, callCtx context.Context, reqID string) (*BotWorkerEvent, error) {
+	return s.broadcastCommandSchedule(ctx, requestID, "command-schedule-cancel-result", func(sh *Manager, callCtx context.Context, reqID string) (*BotWorkerEvent, error) {
 		return sh.CancelCommandSchedule(callCtx, reqID, cmd, deadline)
 	})
 }
@@ -379,12 +379,22 @@ func (s *ShardedManager) CancelCommandSchedule(ctx context.Context, requestID st
 //
 // 每片用脱离调用方生命周期的 ctx（见 shardCallCtx）：gRPC 请求 ctx 在响应后即取消，
 // 透传到后续片会让其被误判为 stdin 阻塞并遭 kill。
-func (s *ShardedManager) broadcastCommandSchedule(ctx context.Context, requestID string,
+//
+// merged 必须带正确的 Evt：上游（grpc 层）按 `event.Evt == "command-schedule-accepted"`
+// 判定回执类型，空 Evt 会被当成「回执类型非法」→ IPC_FAILED，即使各片都已接受。
+// 此前合并事件根本没设 Evt，于是 shards>1 时合法的多片响应一律被报成 IPC 失败。
+func (s *ShardedManager) broadcastCommandSchedule(ctx context.Context, requestID, evtType string,
 	call func(*Manager, context.Context, string) (*BotWorkerEvent, error)) (*BotWorkerEvent, error) {
 	if len(s.shards) == 1 {
 		return call(s.shards[0], ctx, requestID)
 	}
 	merged := &BotWorkerEvent{RequestID: requestID, Accepted: true}
+	// 回执类型由调用方指定（apply/release/cancel 三种事件的 Evt 各不相同）。
+	// 若不设置，上游按 `event.Evt != <期望值>` 判为「回执类型非法」→ IPC_FAILED。
+	firstEvt := ""
+	anyAccepted := false
+	// rejected / failed 计数用于「部分失败」语义（见下方合并说明）。
+	rejected, failed := 0, 0
 	for i, sh := range s.shards {
 		callCtx, cancel := s.shardCallCtx(ctx)
 		shardReqID := fmt.Sprintf("%s:s%d", requestID, i)
@@ -393,18 +403,60 @@ func (s *ShardedManager) broadcastCommandSchedule(ctx context.Context, requestID
 		if err != nil {
 			merged.Accepted = false
 			merged.Error = err.Error()
+			failed++
 			continue
 		}
-		if evt != nil {
-			merged.CommandResults = append(merged.CommandResults, evt.CommandResults...)
-			merged.ScheduleRunID = evt.ScheduleRunID
-			if evt.AlreadyReleased {
-				merged.AlreadyReleased = true
-			}
-			if evt.AlreadyCancelled {
-				merged.AlreadyCancelled = true
-			}
+		if evt == nil {
+			// 无回执 = 未确认：计入失败，不能当作接受。
+			failed++
+			continue
 		}
+		if firstEvt == "" && evt.Evt != "" {
+			firstEvt = evt.Evt
+		}
+		if evt.Accepted {
+			anyAccepted = true
+			if evt.ScheduleRunID != "" {
+				merged.ScheduleRunID = evt.ScheduleRunID
+			}
+		} else {
+			rejected++
+		}
+		merged.CommandResults = append(merged.CommandResults, evt.CommandResults...)
+		if evt.AlreadyReleased {
+			merged.AlreadyReleased = true
+		}
+		if evt.AlreadyCancelled {
+			merged.AlreadyCancelled = true
+		}
+	}
+	// 回执类型优先用各片真实回传的 Evt；全部缺失时退到调用方声明的期望类型——
+	// 上游按 `event.Evt != <期望值>` 判回执是否合法，空值会被当成 IPC_FAILED。
+	merged.Evt = firstEvt
+	if merged.Evt == "" {
+		merged.Evt = evtType
+	}
+	/*
+		【部分失败必须表现为失败】
+
+		原来的逻辑是“初始 Accepted=true，只要任一片接受就保持 true”，
+		于是 3 片里 1 片接受、2 片拒绝时对外报 accepted=true——
+		CP 会据此认为命令计划已全量下发，实际有 2/3 的 bot 收不到，
+		而且没有任何信号让运维去查。
+
+		正确语义：**全部片接受才算接受**。任一片拒绝、报错或无回执都算整体失败，
+		并在 Error 里说清是哪几片（否则运维无法定位是哪一个 bot-worker 有问题）。
+	*/
+	if rejected > 0 || failed > 0 {
+		merged.Accepted = false
+		if merged.Error == "" {
+			merged.Error = fmt.Sprintf("分片部分失败：%d 片拒绝，%d 片失败（共 %d 片）", rejected, failed, len(s.shards))
+		} else if rejected > 0 || failed > 1 {
+			merged.Error = fmt.Sprintf("%s；另有 %d 片拒绝，%d 片失败（共 %d 片）", merged.Error, rejected, failed, len(s.shards))
+		}
+	} else if !anyAccepted {
+		// 全部无回执（理论上已被 failed 覆盖，这里只是兜底）。
+		merged.Accepted = false
 	}
 	return merged, nil
 }

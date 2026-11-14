@@ -378,11 +378,14 @@ export default function ConfigDeliveryDetailPage() {
 
   const orderQ = useConfigDelivery(id)
   const order = orderQ.data
+  // 推进中（rolling / observing / rolling_back）才需要拉目标与观察窗；
+  // 终止态数据不会再变，没必要反复拉。
+  const deliveryLive = !!order && ['rolling', 'observing', 'rolling_back'].includes(order.status)
   const [targetStatus, setTargetStatus] = useState<DeliveryTargetStatus | ''>('')
   const [page, setPage] = useState(1)
-  const targetsQ = useConfigDeliveryTargets(id, { status: targetStatus || undefined, page, pageSize: 50 })
+  const targetsQ = useConfigDeliveryTargets(id, { status: targetStatus || undefined, page, pageSize: 50 }, deliveryLive)
   const impactQ = useConfigDeliveryImpact(id, !!order)
-  const observeQ = useConfigDeliveryObserve(id, !!order)
+  const observeQ = useConfigDeliveryObserve(id, !!order, deliveryLive)
 
   const submit = useSubmitConfigDelivery()
   const approve = useApproveConfigDelivery()
@@ -750,6 +753,11 @@ export default function ConfigDeliveryDetailPage() {
       >
         {targetsQ.isError ? (
           <p className="text-sm text-destructive">{t('configDeliveries.targetsFailed')}</p>
+        ) : targetsQ.isLoading ? (
+          // 首屏未返回前不能说「没有目标」：直接渲染空态会让用户以为选择器没匹配到实例。
+          <p className="text-sm text-muted-foreground" data-testid="delivery-targets-loading">
+            {t('common.loading')}
+          </p>
         ) : targets.length === 0 ? (
           <p className="text-sm text-muted-foreground" data-testid="delivery-targets-empty">
             {t('configDeliveries.targetsEmpty')}

@@ -19,6 +19,22 @@ describe('bot-load summaries / yaml 往返', () => {
     expect(back!.commands[0].command).toBe(COMMAND_ORCHESTRATION_V1.commands[0].command)
   })
 
+  it('引号标量按 YAML 规则保留命令正文', () => {
+    const cases = [
+      { name: '单引号 Windows 路径', scalar: String.raw`'say C:\temp'`, command: String.raw`say C:\temp` },
+      { name: '单引号字面量反斜杠 n', scalar: String.raw`'say hello\nworld'`, command: String.raw`say hello\nworld` },
+      { name: '单引号连续反斜杠', scalar: String.raw`'say a\\b'`, command: String.raw`say a\\b` },
+      { name: '双单引号表示正文撇号', scalar: "'say it''s ready'", command: "say it's ready" },
+      { name: '双引号继续解释转义', scalar: String.raw`"say hello\nworld"`, command: 'say hello\nworld' },
+    ]
+    for (const entry of cases) {
+      const yaml = `durationMs: 1000\njitterMs: 0\ncommands:\n  - id: cmd-literal\n    atMs: 0\n    command: ${entry.scalar}\n`
+      const parsed = yamlToCommandSchedule(yaml)
+      expect(parsed, entry.name).not.toBeNull()
+      expect.soft(parsed!.commands[0].command, entry.name).toBe(entry.command)
+    }
+  })
+
   it('接受 JSON 高级模式', () => {
     const json = JSON.stringify(COMMAND_ORCHESTRATION_V1)
     const back = yamlToCommandSchedule(json)

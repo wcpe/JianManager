@@ -109,42 +109,63 @@ func (h *AlertHandler) DeleteRule(c *gin.Context) {
 
 func (h *AlertHandler) ListEvents(c *gin.Context) {
 	f := service.EventFilter{}
+	// 严格解析：非法值必须 400。此前 `resolved=oops` 会被静默当成 false，
+	// 调用方得到的是一份「合法但含义相反」的列表（例如把非法值当成未解决）。
 	if v := c.Query("ruleId"); v != "" {
-		if id, err := strconv.ParseUint(v, 10, 64); err == nil {
-			u := uint(id)
-			f.RuleID = &u
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err != nil || id == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的 ruleId"})
+			return
 		}
+		u := uint(id)
+		f.RuleID = &u
 	}
-	if v := c.Query("resolved"); v != "" {
-		b := v == "true"
-		f.Resolved = &b
-	}
-	if v := c.Query("acknowledged"); v != "" {
-		b := v == "true"
-		f.Acknowledged = &b
+	for name, dst := range map[string]**bool{"resolved": &f.Resolved, "acknowledged": &f.Acknowledged} {
+		v := c.Query(name)
+		if v == "" {
+			continue
+		}
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的 " + name})
+			return
+		}
+		*dst = &b
 	}
 	f.Level = c.Query("level")
 	f.TriggerType = c.Query("triggerType")
 	f.Keyword = c.Query("keyword")
 	if v := c.Query("from"); v != "" {
-		if ts, err := time.Parse(time.RFC3339, v); err == nil {
-			f.From = &ts
+		ts, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的 from（需 RFC3339）"})
+			return
 		}
+		f.From = &ts
 	}
 	if v := c.Query("to"); v != "" {
-		if ts, err := time.Parse(time.RFC3339, v); err == nil {
-			f.To = &ts
+		ts, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的 to（需 RFC3339）"})
+			return
 		}
+		f.To = &ts
 	}
 	if v := c.Query("page"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			f.Page = n
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的 page"})
+			return
 		}
+		f.Page = n
 	}
 	if v := c.Query("pageSize"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			f.PageSize = n
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的 pageSize"})
+			return
 		}
+		f.PageSize = n
 	}
 	events, total, err := h.alertSvc.ListEvents(f)
 	if err != nil {
@@ -155,7 +176,14 @@ func (h *AlertHandler) ListEvents(c *gin.Context) {
 }
 
 // AcknowledgeEvent 确认/认领一条告警事件。
+//
+// 必须额外要求 alert.manage：路由组允许 alert.read|alert.manage，但确认会写入
+// 全局可变的 acknowledged/acknowledged_by/read 字段——只读角色不应改变其他
+// 运维看到的责任人与未读状态。标记已读（MarkEventsRead）仍允许 alert.read。
 func (h *AlertHandler) AcknowledgeEvent(c *gin.Context) {
+	if !requireNodes(c, "alert.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -177,10 +205,15 @@ func (h *AlertHandler) AcknowledgeEvent(c *gin.Context) {
 // MarkEventsRead 标记一条（:id）或全部（无 :id）告警事件为已读。
 func (h *AlertHandler) MarkEventsRead(c *gin.Context) {
 	var eventID uint
-	if v := c.Param("id"); v != "" {
-		if id, err := strconv.ParseUint(v, 10, 64); err == nil {
-			eventID = uint(id)
+	if raw := c.Param("id"); raw != "" {
+		// 非数字 ID 必须拒绝：此前解析失败会保留 eventID=0，而 0 的语义是
+		// 「标记全部未读为已读」——一个拼错的 URL 就能清空整个平台的未读状态。
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil || parsed == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的告警事件 ID"})
+			return
 		}
+		eventID = uint(parsed)
 	}
 	if err := h.alertSvc.MarkRead(eventID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})

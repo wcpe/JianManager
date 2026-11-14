@@ -51,6 +51,25 @@ type BackupService struct {
 
 	// tasks 任务中心：备份创建/恢复经任务异步且可见进度；nil 时回退旧 goroutine（测试）。
 	tasks *TaskService
+
+	// inFlightMu 保护下面两张表。
+	//
+	// 【为什么两张表共用一把锁】恢复与创建要互斥（两者都读写同一工作目录），
+	// 若各用一把锁，beginRestore 与 beginBackup 会形成反向获取顺序
+	// （A 持锁 1 拿锁 2、B 持锁 2 拿锁 1）——典型的死锁配方。
+	// 一把锁同时守两张表，就没有可死锁的第二把锁。
+	inFlightMu sync.Mutex
+	// restoreInFlight 实例级恢复互斥：恢复会解包覆盖实例工作目录，
+	// 同一实例并发恢复会互相覆盖文件（结果不确定且可能损坏）。
+	//
+	// 为什么不用 DB 行锁：恢复是「HTTP 立即返回 + 后台任务执行」的异步流程，
+	// 事务一提交锁就释放，挡不住后续请求。这里用进程内集合覆盖整个异步窗口；
+	// 多副本部署时需换成 DB/分布式锁（当前为单 CP 部署）。
+	restoreInFlight map[uint]struct{}
+	// createInFlight 实例级创建互斥：同一实例不得并发跑两个备份任务。
+	// 并发创建会同时打包同一目录（抢 IO），并产出两份语义重复的归档；
+	// 双击按钮即可触发。
+	createInFlight map[uint]struct{}
 }
 
 // NewBackupService 创建备份服务。
@@ -100,6 +119,25 @@ func (s *BackupService) Create(instanceID uint, name string) (*model.Backup, err
 
 // CreateWithOptions 按选项创建备份：支持增量（挂链）与远程存储位置。
 func (s *BackupService) CreateWithOptions(instanceID uint, name string, opts CreateOptions) (*model.Backup, error) {
+	/*
+		实例级创建互斥：同一实例同时跑两个备份任务会同时打包同一工作目录——
+		既互相抢 IO，也会产出两份语义重复的归档（其中一份几乎必然被用户立刻删掉），
+		而“删除中”的备份又会被增量链护栏拦住。双击按钮就能触发，不是理论风险。
+
+		用进程内集合覆盖整个异步窗口（与 restoreInFlight 同一取舍：
+		HTTP 立即返回、后台执行，DB 行锁盖不住这个窗口）。
+	*/
+	release, ok := s.beginBackup(instanceID)
+	if !ok {
+		return nil, fmt.Errorf("%w：该实例已有备份任务在创建中", ErrBackupInFlight)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			release()
+		}
+	}()
+
 	backup := &model.Backup{
 		InstanceID: instanceID,
 		Name:       name,
@@ -135,18 +173,22 @@ func (s *BackupService) CreateWithOptions(instanceID uint, name string, opts Cre
 	// （备份列表页不回归）。无任务中心（测试）回退旧后台 goroutine。
 	if s.tasks == nil {
 		go func() {
+			defer release()
 			if err := s.executeBackup(&async, nil); err != nil {
 				slog.Error("后台执行备份失败", "backupId", async.ID, "error", err)
 			}
 		}()
+		committed = true
 		return backup, nil
 	}
 	s.tasks.RunAsync(RunSpec{
 		NodeID: s.backupNodeID(instanceID), InstanceID: instanceID, Kind: model.TaskKindBackupCreate,
 		Title: fmt.Sprintf("备份 %s", name),
 	}, func(_ context.Context, stage func(int, string)) (string, error) {
+		defer release()
 		return "", s.executeBackup(&async, stage)
 	})
+	committed = true
 	return backup, nil
 }
 
@@ -289,9 +331,17 @@ func (s *BackupService) Restore(backupID uint) error {
 		return err
 	}
 
+	// 实例级互斥：必须在启动异步任务**之前**占用，否则两个并发请求
+	// 都能通过前面的状态/链校验并各自启动一个恢复，互相覆盖工作目录。
+	release, ok := s.beginRestore(backup.InstanceID)
+	if !ok {
+		return fmt.Errorf("%w：该实例已有恢复任务在途", ErrBackupInFlight)
+	}
+
 	// 纳入任务中心：恢复进度/终态可见。无任务中心（测试）回退旧后台 goroutine。
 	if s.tasks == nil {
 		go func() {
+			defer release()
 			if err := s.executeRestore(&backup, chain, nil); err != nil {
 				slog.Error("后台执行备份恢复失败", "backupId", backup.ID, "error", err)
 			}
@@ -302,6 +352,8 @@ func (s *BackupService) Restore(backupID uint) error {
 		NodeID: instance.NodeID, InstanceID: backup.InstanceID, Kind: model.TaskKindBackupRestore,
 		Title: fmt.Sprintf("恢复备份 %s", backup.Name),
 	}, func(_ context.Context, stage func(int, string)) (string, error) {
+		// 无论成败都释放名额，否则一次失败就把该实例永久卡在「恢复中」。
+		defer release()
 		return "", s.executeRestore(&backup, chain, stage)
 	})
 	return nil
@@ -452,6 +504,23 @@ func (s *BackupService) ResolveRestoreChain(backupID uint) ([]model.Backup, erro
 
 // Delete 删除备份。被增量子备份引用时拒绝，避免割裂备份链使后续增量不可恢复。
 func (s *BackupService) Delete(backupID uint) error {
+	backup, err := s.GetByID(backupID)
+	if err != nil {
+		return err
+	}
+	// 异步进行中的备份不得删除：创建任务还在写归档并会回写本行，
+	// 删了之后任务仍会继续写远端文件与更新已不存在的记录，
+	// 结果是用户看不到但空间被占用的孤儿归档。
+	// 注意：这里看的是**任务是否在途**，而不是 status 是否为 pending——
+	// 历史数据里存在从未启动任务、status 永远停在 pending 的残留行，
+	// 拿 status 当门禁会让它们永远删不掉。
+	if backup.Status == model.BackupStatusInProgress {
+		return fmt.Errorf("%w：备份正在创建", ErrBackupInFlight)
+	}
+	// 恢复中的备份同样不得删除：replay 链已解析并在执行。
+	if s.isRestoreInFlight(backup.InstanceID) {
+		return fmt.Errorf("%w：该实例正在恢复", ErrBackupInFlight)
+	}
 	var children int64
 	if err := s.db.Model(&model.Backup{}).Where("parent_id = ?", backupID).Count(&children).Error; err != nil {
 		return err
@@ -460,6 +529,95 @@ func (s *BackupService) Delete(backupID uint) error {
 		return fmt.Errorf("%w：该备份被 %d 个增量备份依赖，请先删除其子备份", ErrBackupHasIncrementalChildren, children)
 	}
 	return s.db.Delete(&model.Backup{}, backupID).Error
+}
+
+// ErrBackupInFlight 备份正在创建或恢复中，不允许删除/重复恢复。
+var ErrBackupInFlight = errors.New("备份操作正在进行中")
+
+// DeleteForSnapshotCascade 删除快照底链备份（仅限快照级联删除调用）。
+//
+// 与 Delete 的区别：**不检查备份自身的 status**。
+// 理由：快照的终态门禁已由调用方（SnapshotService.Delete）把关（非 completed/rolled_back
+// 的快照根本不会走到这里），而底链备份的 status 在历史数据里可能是 pending
+// （早期版本未回写），把它当「在途」拦下来会让快照永远删不掉。
+// 但「被增量链引用」的护栏仍然保留——那是数据完整性约束，不是任务状态。
+func (s *BackupService) DeleteForSnapshotCascade(backupID uint) error {
+	var children int64
+	if err := s.db.Model(&model.Backup{}).Where("parent_id = ?", backupID).Count(&children).Error; err != nil {
+		return err
+	}
+	if children > 0 {
+		return fmt.Errorf("%w：该备份被 %d 个增量备份依赖，请先删除其子备份", ErrBackupHasIncrementalChildren, children)
+	}
+	return s.db.Delete(&model.Backup{}, backupID).Error
+}
+
+// isRestoreInFlight 查询某实例是否正在恢复。
+func (s *BackupService) isRestoreInFlight(instanceID uint) bool {
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	_, ok := s.restoreInFlight[instanceID]
+	return ok
+}
+
+// beginRestore 尝试占用某实例的恢复名额；成功返回释放函数。
+//
+// 为什么必须在提交异步任务**之前**占用：若先返回 202 再占用，中间的窗口
+// 足够两个并发请求都通过检查并各自启动一个恢复任务。
+func (s *BackupService) beginRestore(instanceID uint) (func(), bool) {
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	if s.restoreInFlight == nil {
+		s.restoreInFlight = map[uint]struct{}{}
+	}
+	if _, ok := s.restoreInFlight[instanceID]; ok {
+		return nil, false
+	}
+	// 与备份创建也互斥：恢复在解包覆盖工作目录，而备份在打包同一个目录，
+	// 两者并发会让备份归档到一半新一半旧的混合快照（恢复出来才发现对不上）。
+	// 两张表在同一把锁下，所以直接查内存，不能再调 isCreateInFlight（会重入死锁）。
+	if _, creating := s.createInFlight[instanceID]; creating {
+		return nil, false
+	}
+	s.restoreInFlight[instanceID] = struct{}{}
+	return func() {
+		s.inFlightMu.Lock()
+		defer s.inFlightMu.Unlock()
+		delete(s.restoreInFlight, instanceID)
+	}, true
+}
+
+// isCreateInFlight 查询某实例是否已有备份任务在创建中。
+func (s *BackupService) isCreateInFlight(instanceID uint) bool {
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	_, ok := s.createInFlight[instanceID]
+	return ok
+}
+
+// beginBackup 尝试占用某实例的「创建备份」名额；成功返回释放函数。
+//
+// 与 beginRestore 同一套时序要求：必须在返回 202 / 提交异步任务**之前**占用，
+// 否则两个并发请求会都通过检查、各自打包同一工作目录。
+func (s *BackupService) beginBackup(instanceID uint) (func(), bool) {
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	if s.createInFlight == nil {
+		s.createInFlight = map[uint]struct{}{}
+	}
+	if _, ok := s.createInFlight[instanceID]; ok {
+		return nil, false
+	}
+	// 恢复在途时不允许开新备份：否则会归档到一半新一半旧的混合快照。
+	if _, restoring := s.restoreInFlight[instanceID]; restoring {
+		return nil, false
+	}
+	s.createInFlight[instanceID] = struct{}{}
+	return func() {
+		s.inFlightMu.Lock()
+		defer s.inFlightMu.Unlock()
+		delete(s.createInFlight, instanceID)
+	}, true
 }
 
 // chainManifest 合并自 parentID 回溯到全量基的整条链的文件清单，得到增量基准的「当前完整视图」。

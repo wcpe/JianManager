@@ -312,6 +312,20 @@ export function useConfigDeliveries(params: { status?: string; q?: string; page?
   })
 }
 
+/**
+ * 交付处于推进中的状态集合。
+ *
+ * 这些状态下后端仍在后台推进（逐批下发 / 观察窗计时 / 熔断评估），
+ * 单、目标与计数会持续变化；终止态则不必再轮询。
+ */
+const IN_FLIGHT_DELIVERY_STATUS: ReadonlySet<DeliveryStatus> = new Set(['rolling', 'observing', 'rolling_back'])
+
+/** 推进中时 3s 轮询一次；终止/草稿/待审状态返回 false（不轮询）。 */
+function deliveryRefetchInterval(order: ConfigDeliveryOrder | undefined): number | false {
+  if (!order) return false
+  return IN_FLIGHT_DELIVERY_STATUS.has(order.status) ? 3000 : false
+}
+
 /** 交付单详情（GET /config-deliveries/:id）。 */
 export function useConfigDelivery(id: number | null) {
   return useQuery({
@@ -321,6 +335,12 @@ export function useConfigDelivery(id: number | null) {
       return data
     },
     enabled: !!id,
+    /*
+     * 推进中必须轮询：start 返回 202 后是后台逐批执行，只靠提交时的一次 invalidate，
+     * 页面会永远停在 rolling 前的旧计数与旧状态——运维看不到进度、熔断与完成。
+     */
+    refetchInterval: (query) => deliveryRefetchInterval(query.state.data),
+    refetchIntervalInBackground: false,
   })
 }
 
@@ -328,6 +348,8 @@ export function useConfigDelivery(id: number | null) {
 export function useConfigDeliveryTargets(
   id: number | null,
   params: { status?: string; batch?: number; page?: number; pageSize?: number } = {},
+  /** 交付推进中时开启轮询（由调用方按单状态传入，避免草稿/终止单空转）。 */
+  live = false,
 ) {
   return useQuery({
     queryKey: ['config-deliveries', id, 'targets', params],
@@ -342,6 +364,8 @@ export function useConfigDeliveryTargets(
     },
     enabled: !!id,
     placeholderData: keepPreviousData,
+    refetchInterval: live ? 3000 : false,
+    refetchIntervalInBackground: false,
   })
 }
 
@@ -358,7 +382,7 @@ export function useConfigDeliveryImpact(id: number | null, enabled = true) {
 }
 
 /** 观察窗数据（GET /config-deliveries/:id/observe）。 */
-export function useConfigDeliveryObserve(id: number | null, enabled = true) {
+export function useConfigDeliveryObserve(id: number | null, enabled = true, live = false) {
   return useQuery({
     queryKey: ['config-deliveries', id, 'observe'],
     queryFn: async () => {
@@ -366,6 +390,9 @@ export function useConfigDeliveryObserve(id: number | null, enabled = true) {
       return data
     },
     enabled: !!id && enabled,
+    // 观察窗是实时计数（每批之后的健康采样），推进中需要持续刷新。
+    refetchInterval: live ? 3000 : false,
+    refetchIntervalInBackground: false,
   })
 }
 

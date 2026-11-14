@@ -57,20 +57,23 @@ func (h *TopologyHandler) Get(c *gin.Context) {
 	instances := []service.TopologyInstanceBrief{}
 	if h.inst != nil {
 		var scope []uint
-		// getAccess 在鉴权中间件未装配/顺序变化时可能返回 nil；此处显式判空（与 player.go:44 同风格），
-		// 避免 nil 传入 AccessibleInstanceIDs 触发 panic。access==nil 时退化为不收敛（scope=nil 全量）。
-		if access := getAccess(c); h.authz != nil && access != nil {
-			ids, scoped, err := h.authz.AccessibleInstanceIDs(access)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询可访问实例失败"})
-				return
-			}
-			if scoped {
-				// 已收敛：ids 可能为空切片（无可访问实例）→ 空结果，不回落全量。
-				scope = ids
-				if scope == nil {
-					scope = []uint{}
-				}
+		// getAccess 在鉴权中间件未装配/顺序变化时可能返回 nil；此处显式判空，避免 panic。
+		// **但绝不能退化为全量**：scope=nil 在本函数里表示「平台管理员，不过滤」，
+		// 于是在装配缺失时会把全部实例投影给任意调用者。装配缺失按拒绝处理（fail-closed）。
+		if h.authz == nil || getAccess(c) == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "授权组件未就绪"})
+			return
+		}
+		ids, scoped, err := h.authz.AccessibleInstanceIDs(getAccess(c))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询可访问实例失败"})
+			return
+		}
+		if scoped {
+			// 已收敛：ids 可能为空切片（无可访问实例）→ 空结果，不回落全量。
+			scope = ids
+			if scope == nil {
+				scope = []uint{}
 			}
 		}
 		if instances, err = h.inst.AllBriefs(scope); err != nil {

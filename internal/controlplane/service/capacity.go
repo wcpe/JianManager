@@ -12,6 +12,17 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
+// capacityStaleTolerance 是原始与 5m 档的停更容忍期；1h 档的点代表已完结桶起点，
+// 必须额外容忍桶宽，不能把正常的小时桶按 15 分钟判断为陈旧。
+const capacityStaleTolerance = 15 * time.Minute
+
+func capacityFreshnessTolerance(res string) time.Duration {
+	if res == "1h" {
+		return 2 * time.Hour
+	}
+	return capacityStaleTolerance
+}
+
 // capacityMinSamples 容量外推所需的最小样本数。
 const capacityMinSamples = 100
 
@@ -168,7 +179,6 @@ func (s *MetricService) ForecastCapacity(q ForecastQuery) ([]ForecastResult, err
 	}
 	res := selectResolution(span, "auto")
 	from, to := q.From.UTC(), q.To.UTC()
-	now := to
 
 	keys := q.Metrics
 	if len(keys) == 0 {
@@ -186,20 +196,28 @@ func (s *MetricService) ForecastCapacity(q ForecastQuery) ([]ForecastResult, err
 	out := make([]ForecastResult, 0, len(keys))
 	for _, usedKey := range keys {
 		fr := ForecastResult{TargetID: targetUUID, MetricKey: usedKey, Confidence: ForecastConfidenceInsufficient}
-		pts, lastVal, ok := s.forecastPoints(q, usedKey, from, to, res)
+		pts, lastVal, lastTS, ok := s.forecastPoints(q, usedKey, from, to, res)
 		fr.Samples = len(pts)
 		if !ok || len(pts) < capacityMinSamples {
 			fr.Note = "样本不足，不预测"
 			out = append(out, fr)
 			continue
 		}
+		// 陈旧保护：最新样本已经很久没有更新时，它代表的是「过去某一刻」而不是现在。
+		// 此时给出耗尽日期会随查询时刻一起后移，趋势告警也会对陈旧快照反复触发，故明确不预测。
+		if age := to.Sub(lastTS); age > capacityFreshnessTolerance(res) {
+			fr.Note = fmt.Sprintf("最新样本已过期（%s 未更新），不预测", formatStaleAge(age))
+			out = append(out, fr)
+			continue
+		}
+		// 已知量先填入：即使后续因无上限/无增长不预测，「当前值」也是可观测事实。
+		fr.NowValue = lastVal
 		limitVal, hasLimit := s.forecastLimit(q, usedKey, from, to, res)
 		if !hasLimit {
 			fr.Note = "缺少容量上限（无上限序列且无节点容量快照），不预测"
 			out = append(out, fr)
 			continue
 		}
-		fr.NowValue = lastVal
 		fr.LimitValue = limitVal
 		lf := ForecastLinear(pts)
 		fr.SlopePerSec = lf.SlopePerSec
@@ -222,11 +240,19 @@ func (s *MetricService) ForecastCapacity(q ForecastQuery) ([]ForecastResult, err
 			out = append(out, fr)
 			continue
 		}
-		tExhaust := remaining / lf.SlopePerSec // 秒
+		sampleHorizon := remaining / lf.SlopePerSec // 从实际末值采样时刻算起的秒数
+		// 置信区间以查询结束时刻为参考，但资源末值属于 lastTS。减去已过去的时间，
+		// 才不会在没有新样本时每次查询都把同一耗尽日期向后推。
+		tExhaust := sampleHorizon - to.Sub(lastTS).Seconds()
+		if tExhaust <= 0 {
+			fr.Note = "按已有趋势预计已耗尽，请更新样本确认"
+			out = append(out, fr)
+			continue
+		}
 		// T 的不确定度：由分子残差与斜率标准误合成。
 		// 平方写成自乘而非 math.Pow(x, 2)：语义等价、无 float 幂函数的额外开销（lint QF1005）。
 		residTerm := lf.ResidStd / lf.SlopePerSec
-		slopeTerm := tExhaust * lf.SlopeStdErr / lf.SlopePerSec
+		slopeTerm := sampleHorizon * lf.SlopeStdErr / lf.SlopePerSec
 		sigmaT := math.Sqrt(residTerm*residTerm + slopeTerm*slopeTerm)
 		low := tExhaust - eightyZ*sigmaT
 		high := tExhaust + eightyZ*sigmaT
@@ -254,7 +280,7 @@ func (s *MetricService) ForecastCapacity(q ForecastQuery) ([]ForecastResult, err
 		// 故 tExhaust 恒 < 100 年 ≈ 3.15e9 秒，乘 1e9 后仍在 int64 纳秒（约 292 年）之内，
 		// 不会溢出成负 Duration（负值会让 exhaustAt 呈现为过去时间）。
 		// 换言之：本行是该常量上界的**唯一消费点**，两处必须成对维护。
-		at := now.Add(time.Duration(tExhaust * float64(time.Second)))
+		at := to.Add(time.Duration(tExhaust * float64(time.Second)))
 		fr.ExhaustAt = &at
 		fr.ExhaustLowDays = &lowDays
 		fr.ExhaustHighDays = &highDays
@@ -280,7 +306,7 @@ func (s *MetricService) ForecastCapacity(q ForecastQuery) ([]ForecastResult, err
 // 每个时点只保留一条序列的值（优先「窗口内最新时点所属的活跃序列」，其余时点由更旧的序列补全），
 // 既保住完整时间线（实例迁移当口不因换序列丢历史、不跌回「样本不足」），又不重复累计。
 // NowValue 取**窗口内最新非空时点**的值，与序列枚举顺序无关（同刻冲突由 seriesKeyLess 定序）。
-func (s *MetricService) forecastPoints(q ForecastQuery, usedKey string, from, to time.Time, res string) ([]TrendPoint, float64, bool) {
+func (s *MetricService) forecastPoints(q ForecastQuery, usedKey string, from, to time.Time, res string) ([]TrendPoint, float64, time.Time, bool) {
 	sq := SeriesQuery{
 		Scope:      q.Scope,
 		MetricKeys: []string{usedKey},
@@ -295,7 +321,7 @@ func (s *MetricService) forecastPoints(q ForecastQuery, usedKey string, from, to
 	}
 	_, series, err := s.QuerySeries(sq)
 	if err != nil {
-		return nil, 0, false
+		return nil, 0, time.Time{}, false
 	}
 	// 只收实例级序列：这些「已用」指标（node_disk_used/node_mem_used/inst_heap_used）从不落
 	// world 序列（world 级是分世界分区指标），保持既有「world != "" 跳过」的过滤不变。
@@ -331,10 +357,11 @@ func (s *MetricService) forecastPoints(q ForecastQuery, usedKey string, from, to
 		pts = append(pts, TrendPoint{T: time.Unix(0, k).Sub(from).Seconds(), V: byTS[k]})
 	}
 	if len(pts) == 0 {
-		return pts, 0, false
+		return pts, 0, time.Time{}, false
 	}
-	// pts 已升序 → 末项即窗口内最新非空时点的值。
-	return pts, pts[len(pts)-1].V, true
+	// pts 已升序 → 末项即窗口内最新非空时点的值（同时返回它的时刻，供上层做陈旧判定）。
+	lastKey := keys[len(keys)-1]
+	return pts, byTS[lastKey], time.Unix(0, lastKey).UTC(), true
 }
 
 // lastValueTS 返回序列最后一个非空点的时刻（无值返回零值 + false）。
@@ -377,6 +404,18 @@ func seriesKeyLess(a, b Series) bool {
 	return false
 }
 
+// formatStaleAge 把「最新样本落后查询末点多久」渲染成人读文本（分钟/小时/天）。
+func formatStaleAge(age time.Duration) string {
+	switch {
+	case age >= 24*time.Hour:
+		return fmt.Sprintf("%.1f 天", age.Hours()/24)
+	case age >= time.Hour:
+		return fmt.Sprintf("%.1f 小时", age.Hours())
+	default:
+		return fmt.Sprintf("%d 分钟", int(age.Minutes()))
+	}
+}
+
 // forecastLimit 解析某「已用」指标的容量上限：优先上限序列，回退节点容量快照。
 func (s *MetricService) forecastLimit(q ForecastQuery, usedKey string, from, to time.Time, res string) (float64, bool) {
 	limitKey := saturationLimitKey(usedKey)
@@ -395,15 +434,30 @@ func (s *MetricService) forecastLimit(q ForecastQuery, usedKey string, from, to 
 		}
 		_, series, err := s.QuerySeries(sq)
 		if err == nil {
+			// 按「最晚采样」择一：迁移后同一指标会有旧/新 node 身份的多条上限序列，
+			// 直接取枚举第一条会把新实例的 Xmx 换成旧节点的旧值（用量按新序列、上限按旧序列）。
+			// 这里逐序列算出它的最后非空点时刻，只在时刻更晚时替换——与 forecastPoints 的
+			// 「活跃序列优先」同口径。
+			var best float64
+			var bestTS time.Time
+			found := false
 			for _, sr := range series {
 				if sr.MetricKey != limitKey || sr.World != "" {
 					continue
 				}
 				for i := len(sr.Points) - 1; i >= 0; i-- {
-					if sr.Points[i].Avg != nil && *sr.Points[i].Avg > 0 {
-						return *sr.Points[i].Avg, true
+					p := sr.Points[i]
+					if p.Avg == nil || *p.Avg <= 0 {
+						continue
 					}
+					if !found || p.TS.After(bestTS) {
+						best, bestTS, found = *p.Avg, p.TS, true
+					}
+					break
 				}
+			}
+			if found {
+				return best, true
 			}
 		}
 	}

@@ -226,7 +226,11 @@ export function InstanceConsolePageView({
   }
 
   const canStart = instance.status === 'STOPPED' || instance.status === 'CRASHED'
-  const canControl = instance.status === 'RUNNING' || instance.status === 'STARTING' || instance.status === 'STOPPING'
+  // STOPPING 不纳入 canControl：状态表只允许 STOPPING→STOPPED/CRASHED，
+  // 此时点重启/停止会被后端判 INVALID_TRANSITION 并报错。停止中只能等待（或强杀）。
+  const canControl = instance.status === 'RUNNING' || instance.status === 'STARTING'
+  // 强杀对 STOPPING 仍然可用：它走的是“直接终止进程”而非状态转移。
+  const canKill = canControl || instance.status === 'STOPPING'
   const isDamaged = instance.status === 'DAMAGED'
   // 失败原因横幅：只看 statusReason 非空、不看 status——Worker 心跳会把 CRASHED
   // 冲回 STOPPED，若以状态为前置条件横幅会随之消失；再次启动时 CP transition 清空 reason，
@@ -379,7 +383,7 @@ export function InstanceConsolePageView({
                 <Square className="size-3.5" />
                 {t('serverConsole.stop')}
               </Button>
-              <Button size="sm" variant="destructive" disabled={!canControl || !canOperate} data-testid="instance-operate-kill" title={!canOperate ? t('permissions.operateDenied') : undefined} onClick={actions.kill}>
+              <Button size="sm" variant="destructive" disabled={!canKill || !canOperate} data-testid="instance-operate-kill" title={!canOperate ? t('permissions.operateDenied') : undefined} onClick={actions.kill}>
                 <AlertTriangle className="size-3.5" />
                 {t('serverConsole.kill')}
               </Button>
@@ -403,16 +407,16 @@ export function InstanceConsolePageView({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem disabled={!canControl} onClick={actions.restart}>
+                  <DropdownMenuItem disabled={!canControl || !canOperate} onClick={actions.restart}>
                     <RotateCw className="size-3.5" />
                     {t('serverConsole.restart')}
                   </DropdownMenuItem>
-                  <DropdownMenuItem disabled={!canControl} onClick={actions.stop}>
+                  <DropdownMenuItem disabled={!canControl || !canOperate} onClick={actions.stop}>
                     <Square className="size-3.5" />
                     {t('serverConsole.stop')}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    disabled={!canControl}
+                    disabled={!canKill || !canOperate}
                     className="text-status-danger focus:text-status-danger"
                     onClick={actions.kill}
                   >

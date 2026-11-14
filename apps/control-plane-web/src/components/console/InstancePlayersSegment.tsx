@@ -41,7 +41,9 @@ export default function InstancePlayersSegment({ instanceId }: { instanceId: num
       onBan={(payload) =>
         ban.mutateAsync({ name: payload.name, scope: { instanceId, reason: payload.reason } })
       }
-      onUnban={(name) => unban.mutateAsync({ name }).then(() => undefined)}
+      // 解封必须带当前实例作用域：后端按 scope 收敛台账，不带 scope 会
+      // 把其他实例/网络中同名玩家的生效封禁一起标成已解除。
+      onUnban={(name) => unban.mutateAsync({ name, scope: { instanceId } }).then(() => undefined)}
       onWhitelistAction={(payload) => whitelistAction.mutateAsync(payload).then(() => undefined)}
       notify={(kind, message) => {
         if (kind === 'success') toast.success(message)

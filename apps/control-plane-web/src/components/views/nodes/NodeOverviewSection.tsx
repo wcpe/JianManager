@@ -242,14 +242,20 @@ export function NodeOverviewSection({ node, instances, onOpenInstances, onOpenIn
           // load 在头部球里只有环与 1m 值，5m/15m 后端未提供，这里显式标注口径。
           label: t('nodes.loadShort', '负载 1m'),
           // 关键指标：负载 + 占核比例，后者才让「1.60 算不算高」可判断。
+          // 用有限数判据而非 `?? 0`：0 是合法读数（空闲机），缺采（NaN）才显示 --。
           value: online
-            ? `${(node.loadAvg1 ?? 0).toFixed(2)}${
-                node.cpuCores > 0 ? ` · ${Math.round(((node.loadAvg1 ?? 0) / node.cpuCores) * 100)}%` : ''
-              }`
+            ? Number.isFinite(node.loadAvg1)
+              ? `${node.loadAvg1.toFixed(2)}${
+                  node.cpuCores > 0 ? ` · ${Math.round((node.loadAvg1 / node.cpuCores) * 100)}%` : ''
+                }`
+              : '--'
             : '--',
           icon: Gauge,
           // 负载的「分母」是核数：load/cores 即队列占了多少核，与头部球同一口径。
-          pct: online && node.cpuCores > 0 ? Math.min(100, ((node.loadAvg1 ?? 0) / node.cpuCores) * 100) : null,
+          pct:
+            online && node.cpuCores > 0 && Number.isFinite(node.loadAvg1)
+              ? Math.min(100, (node.loadAvg1 / node.cpuCores) * 100)
+              : null,
           prominent: true,
         },
         {

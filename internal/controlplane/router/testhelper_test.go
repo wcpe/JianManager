@@ -95,7 +95,12 @@ func setupTestDB(t *testing.T) *gorm.DB {
 
 // newTestSnapshotService 建测试用快照服务（复用测试路由的备份与实例服务）。
 func newTestSnapshotService(db *gorm.DB, pool *cpgrpc.ClientPool, instanceSvc *service.InstanceService) *service.SnapshotService {
-	return service.NewSnapshotService(db, service.NewBackupService(db, pool), instanceSvc)
+	svc := service.NewSnapshotService(db, service.NewBackupService(db, pool), instanceSvc)
+	// 测试里同步执行快照创建：否则后台 goroutine 会跨过 t.Cleanup 继续写数据根/回写状态，
+	// 表现为 `TempDir cleanup: directory not empty` 或 `sql: database is closed`。
+	// 生产不置位（HTTP 仍立即返回 202 + 任务中心看进度）。
+	svc.SetForceSyncCreateForTest(true)
+	return svc
 }
 
 // newTestBinaryVersionService 建测试用二进制版本服务（ProvisionService 供制品解析与绑定读写）。
@@ -263,26 +268,35 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 	// 「配置页建供应商/模型 → 提交一轮对话」真正走通。
 	testAssistantSvc := assistantOrDefault(assistant, db)
 	svcs := &Services{
-		Auth:              authSvc,
-		User:              userSvc,
-		Group:             groupSvc,
-		Node:              nodeSvc,
-		Instance:          instanceSvc,
-		InstanceBatch:     instanceBatchSvc,
-		InstanceGroup:     service.NewInstanceGroupService(db),
-		BeaconSync:        beaconSync,
-		NodeRuntime:       service.NewNodeRuntimeService(db, pool),
-		ProbeUpdate:       service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),
-		Terminal:          service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
-		File:              fileSvc,
-		FileVersion:       fileVersionSvc,
-		Plugin:            service.NewPluginService(db, pool, assetSvc),
-		Config:            configSvc,
-		ConfigSource:      configSourceSvc,
-		InstanceRolling:   instanceRollingSvc,
-		ConfigBaseline:    configBaselineSvc,
-		ConfigFile:        service.NewConfigFileService(db),
-		ConfigAdopt:       service.NewConfigAdoptService(db, service.NewConfigFileService(db), configSvc),
+		Auth:            authSvc,
+		User:            userSvc,
+		Group:           groupSvc,
+		Node:            nodeSvc,
+		Instance:        instanceSvc,
+		InstanceBatch:   instanceBatchSvc,
+		InstanceGroup:   service.NewInstanceGroupService(db),
+		BeaconSync:      beaconSync,
+		NodeRuntime:     service.NewNodeRuntimeService(db, pool),
+		ProbeUpdate:     service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),
+		Terminal:        service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
+		File:            fileSvc,
+		FileVersion:     fileVersionSvc,
+		Plugin:          service.NewPluginService(db, pool, assetSvc),
+		Config:          configSvc,
+		ConfigSource:    configSourceSvc,
+		InstanceRolling: instanceRollingSvc,
+		ConfigBaseline:  configBaselineSvc,
+		ConfigFile:      service.NewConfigFileService(db),
+		ConfigAdopt:     service.NewConfigAdoptService(db, service.NewConfigFileService(db), configSvc),
+		// 配置分批灰度与交付编排：生产 main.go 必装；测试此前漏装，导致
+		// /config-deliveries 全部端点 404——“越权被拒”类断言会因为 404≠201
+		// 而**假绿**（根本没走到 handler）。这里按生产同构装配。
+		ConfigDelivery: service.NewConfigDeliveryService(db, pool, service.NewConfigFileService(db),
+			service.NewConfigActivationService(db, nil), service.NewAuditService(db)),
+		// 玩家治理：生产 main.go 必装这两个服务；测试此前漏装，导致 /players、/bans、
+		// /instances/:id/whitelist、/players/matrix 一律 500，相关权限与作用域用例根本跑不起来。
+		Player:            service.NewPlayerService(db, pool),
+		PlayerEvent:       service.NewPlayerEventService(pool, db),
 		Bot:               botSvc,
 		BotStressSession:  service.NewBotStressSessionService(db, botSvc),
 		BotLoadCapacity:   botLoadCapacity,

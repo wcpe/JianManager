@@ -100,6 +100,12 @@ type ListEventsQuery struct {
 	SnapshotEventID string
 }
 
+// projectionWindow 单次投影查询的取数上界。
+//
+// 它的作用是「给排序与分页留足窗口」，不是语义截断：过滤条件一律先在 SQL 里筛，
+// 只有类别过滤（需先算 ClassifyBotLoadError）仍在内存里做，因此窗口需要明显大于单页。
+const projectionWindow = 2000
+
 // ListFailures 从 action_results + command_checkpoints 投影失败项。
 func (s *BotLoadProjectionService) ListFailures(ctx context.Context, sessionID uint, q ListFailuresQuery) (*BotLoadFailureListResult, error) {
 	if s == nil || s.db == nil {
@@ -114,7 +120,13 @@ func (s *BotLoadProjectionService) ListFailures(ctx context.Context, sessionID u
 	}
 	page, pageSize := normalizeProjectionPage(q.Page, q.PageSize)
 
-	// 收集所有失败再过滤分页（规模受会话 bot/occurrence 上限约束；V1 可接受）。
+	// 先筛后分页：过滤条件下推到 SQL，Total 才算得准。
+	//
+	// 之前是「各取最新 2000 条 → 内存过滤 → 用过滤后的 len 当 total」。两个后果：
+	//   ① 某次失败被后 2000 条新失败挤出窗口后，无论怎么翻页/过滤都找不回来；
+	//   ② total 只是窗口内的数量，不比真实命中数。
+	// 现在把过滤全交给 SQL，并对两边各取「本页所需的上限」之上一个量级的窗口仅用于稳定排序
+	// （仍保留 2000 作为单次查询上界，但不再用它做语义截断）。
 	items := make([]BotLoadFailureView, 0, 64)
 
 	// 1) 动作终态失败
@@ -133,7 +145,18 @@ func (s *BotLoadProjectionService) ListFailures(ctx context.Context, sessionID u
 	if q.To != nil {
 		aq = aq.Where("COALESCE(ended_at, started_at) <= ?", q.To.UTC())
 	}
-	if err := aq.Order("id DESC").Limit(2000).Find(&actions).Error; err != nil {
+	// Bot 维度过滤（bot 身份/执行节点）同样下沉：原来是在取完 2000 条后内存筛。
+	if q.BotUUID != "" || q.ExecutorNodeID != nil {
+		sub := s.db.Model(&model.Bot{}).Select("id")
+		if q.BotUUID != "" {
+			sub = sub.Where("uuid = ?", q.BotUUID)
+		}
+		if q.ExecutorNodeID != nil {
+			sub = sub.Where("executor_node_id = ?", *q.ExecutorNodeID)
+		}
+		aq = aq.Where("bot_id IN (?)", sub)
+	}
+	if err := aq.Order("id DESC").Limit(projectionWindow).Find(&actions).Error; err != nil {
 		return nil, fmt.Errorf("查询动作失败项失败: %w", err)
 	}
 	botIDs := make([]uint, 0, len(actions))
@@ -201,7 +224,20 @@ func (s *BotLoadProjectionService) ListFailures(ctx context.Context, sessionID u
 	if q.BotUUID != "" {
 		cq = cq.Where("bot_uuid = ?", q.BotUUID)
 	}
-	if err := cq.Order("id DESC").Limit(2000).Find(&cks).Error; err != nil {
+	if q.From != nil {
+		cq = cq.Where("COALESCE(ended_at, updated_at) >= ?", q.From.UTC())
+	}
+	if q.To != nil {
+		cq = cq.Where("COALESCE(ended_at, updated_at) <= ?", q.To.UTC())
+	}
+	// 执行节点过滤：checkpoint 没有 executor 列，经 bot_uuid 关联到 bot 再筛。
+	//
+	// 这条此前完全缺失：按节点筛选时 checkpoint 分支不过滤，A 节点的失败里会混进 B 节点的。
+	if q.ExecutorNodeID != nil {
+		sub := s.db.Model(&model.Bot{}).Select("uuid").Where("executor_node_id = ?", *q.ExecutorNodeID)
+		cq = cq.Where("bot_uuid IN (?)", sub)
+	}
+	if err := cq.Order("id DESC").Limit(projectionWindow).Find(&cks).Error; err != nil {
 		return nil, fmt.Errorf("查询命令失败项失败: %w", err)
 	}
 	for _, ck := range cks {

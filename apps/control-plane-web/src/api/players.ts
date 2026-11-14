@@ -6,8 +6,8 @@ import { useAuthStore } from '@/stores/auth'
 /** 在线玩家及其所在子服（BC 跨服感知）。 */
 // 玩家治理契约已回迁应用侧（受控视图与业务页面共用）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的查询/变更泛型使用。
-import type { BanRecord, OnlinePlayersResult, PlayerActionResult, WhitelistResult } from '@/lib/players/player'
-export type { BackendStatus, BanRecord, OnlinePlayer, OnlinePlayersResult, PlayerActionResult, WhitelistResult } from '@/lib/players/player'
+import type { BanRecord, OnlinePlayersResult, PlayerActionItem, PlayerActionResult, WhitelistResult } from '@/lib/players/player'
+export type { BackendStatus, BanRecord, OnlinePlayer, OnlinePlayersResult, PlayerActionItem, PlayerActionResult, WhitelistResult } from '@/lib/players/player'
 
 /** 踢/封/解封作用域（互斥，按 instanceId > networkId > 全部 解析）。 */
 export interface PlayerActionScope {
@@ -102,8 +102,17 @@ export function useWhitelist(instanceId: number | null) {
 export function useWhitelistAction(instanceId: number | null) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ action, player }: { action: 'add' | 'remove'; player: string }) =>
-      api.post(`/instances/${instanceId}/whitelist`, { action, player }).then((r) => r.data),
+    mutationFn: async ({ action, player }: { action: 'add' | 'remove'; player: string }) => {
+      const data = await api
+        .post<WhitelistResult | PlayerActionItem>(`/instances/${instanceId}/whitelist`, { action, player })
+        .then((r) => r.data)
+      // 服务端对探针不可达已改为非 2xx；这里再守一层：万一将来又变成 200 + ok:false，
+      // 也不能让调用方当成成功（否则 toast 报成功、添加输入被清空）。
+      if (data && typeof data === 'object' && 'ok' in data && data.ok === false) {
+        throw new Error(data.error || '探针不可达，白名单未变更')
+      }
+      return data
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['whitelist', instanceId] }),
   })
 }

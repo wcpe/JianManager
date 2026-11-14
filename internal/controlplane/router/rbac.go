@@ -290,6 +290,12 @@ func (h *RBACHandler) SetUserRole(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "SUPER_ADMIN_LOCKED", "message": rbacSafeMessage(err)})
 			return
 		}
+		// 与「不可降级」区分：这里是「已有超管，不能再生效第二个」——是状态冲突不是参数错误。
+		// 回 409 让前端能给出「请先降级现有超管」的引导，而不是笼统的 400。
+		if errors.Is(err, service.ErrSuperAdminUnique) {
+			c.JSON(http.StatusConflict, gin.H{"error": "SUPER_ADMIN_UNIQUE", "message": rbacSafeMessage(err)})
+			return
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "用户或角色不存在"})
 			return

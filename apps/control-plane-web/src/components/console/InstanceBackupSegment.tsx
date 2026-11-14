@@ -23,12 +23,17 @@ export default function InstanceBackupSegment({ instanceId }: { instanceId: numb
   const { t } = useTranslation()
   const { data: instance } = useInstance(instanceId)
   const { data: storages } = useBackupStorages()
-  const { data: schedules, isLoading: schedulesLoading } = useSchedules(instanceId)
+  const { data: schedules, isLoading: schedulesLoading, isError: schedulesError, refetch: refetchSchedules } = useSchedules(instanceId)
 
   // 先无轮询取一次判定是否有进行中备份，再据此决定轮询间隔（复用 BackupsPage 模式）。
   const probe = useBackups(instanceId)
   const active = hasActiveBackup(probe.data ?? [])
-  const { data: backups, isLoading: backupsLoading } = useBackups(instanceId, {
+  const {
+    data: backups,
+    isLoading: backupsLoading,
+    isError: backupsError,
+    refetch: refetchBackups,
+  } = useBackups(instanceId, {
     refetchInterval: active ? ACTIVE_POLL_MS : false,
   })
 
@@ -46,10 +51,14 @@ export default function InstanceBackupSegment({ instanceId }: { instanceId: numb
     <InstanceBackupSegmentView
       backups={backups ?? []}
       backupsLoading={backupsLoading}
+      backupsError={backupsError}
+      onRetryBackups={() => void refetchBackups()}
       backupsActive={active}
       storages={storages ?? []}
       schedules={schedules ?? []}
       schedulesLoading={schedulesLoading}
+      schedulesError={schedulesError}
+      onRetrySchedules={() => void refetchSchedules()}
       instanceLive={instanceLive}
       onCreateBackup={async (payload) => {
         await createBackup.mutateAsync({
