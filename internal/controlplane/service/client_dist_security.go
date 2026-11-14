@@ -225,9 +225,22 @@ func (s *ClientDistSecurityService) BlockIP(ip, channelID, reason string, ttl ti
 	return a, s.db.Create(a).Error
 }
 
-func (s *ClientDistSecurityService) ActiveIPBlock(ip string) (*model.ClientProtectionAction, bool) {
+// ActiveIPBlockForChannel 查询该 IP 在指定频道是否处于生效中的临时封禁（R28：封禁可限定频道）。
+// 语义：channelID 非空时同时匹配「本频道封禁」与「全局封禁」（channel_id 为空 = 不限频道的通用封禁），
+// 使 A 频道的封禁不再误伤同一 IP 访问 B（NAT/共享出口场景）；channelID 为空表示调用方此刻还无法确定频道
+// （如内容寻址的制品下载在鉴权前），此时只认全局封禁——宁可不拦，也不跨频道误伤。
+func (s *ClientDistSecurityService) ActiveIPBlockForChannel(ip, channelID string) (*model.ClientProtectionAction, bool) {
 	var a model.ClientProtectionAction
-	err := s.db.Where("target_type = ? AND target_value = ? AND action IN ? AND status = ? AND (expires_at IS NULL OR expires_at > ?)", "ip", ip, []string{"temp_block", "ip_temp_block"}, "active", time.Now()).Order("id DESC").First(&a).Error
+	if s == nil || ip == "" {
+		return &a, false
+	}
+	q := s.db.Where("target_type = ? AND target_value = ? AND action IN ? AND status = ? AND (expires_at IS NULL OR expires_at > ?)", "ip", ip, []string{"temp_block", "ip_temp_block"}, "active", time.Now())
+	if channelID == "" {
+		q = q.Where("channel_id = ?", "")
+	} else {
+		q = q.Where("channel_id = ? OR channel_id = ?", channelID, "")
+	}
+	err := q.Order("id DESC").First(&a).Error
 	return &a, err == nil
 }
 func (s *ClientDistSecurityService) CancelAction(id uint) error {

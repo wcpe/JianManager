@@ -140,6 +140,52 @@ func TestClientSecurityIPBlockAndAdminAuth(t *testing.T) {
 	}
 }
 
+func TestClientSecurityIPBlockScopedToChannel(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	keyA := createChannelAndKey(t, r, token, "s1")
+	keyB := createChannelAndKey(t, r, token, "s2")
+	_ = publishSecurityArtifact(t, r, token, "s1", []byte("AAA"))
+	shaB := publishSecurityArtifact(t, r, token, "s2", []byte("BBB"))
+
+	// 限定频道 s1 封禁测试默认客户端 IP（httptest.NewRequest 的 RemoteAddr 为 192.0.2.1）。
+	block := makeRequest(r, "POST", "/api/v1/client-dist/security/ip-blocks", map[string]any{"ip": "192.0.2.1", "channelId": "s1", "ttlSeconds": 600}, token)
+	if block.Code != http.StatusCreated {
+		t.Fatalf("封禁 IP 失败: %d %s", block.Code, block.Body.String())
+	}
+
+	// 频内仍被拦：s1 的 manifest / hello 均应 403 IP_TEMP_BLOCKED。
+	if mw := clientSecurityRequest(r, "GET", "/api/v1/client-channels/s1/manifest", keyA, nil); mw.Code != http.StatusForbidden || parseJSON(t, mw)["error"] != "IP_TEMP_BLOCKED" {
+		t.Fatalf("频内 manifest 应 403 IP_TEMP_BLOCKED，实际 %d %s", mw.Code, mw.Body.String())
+	}
+	helloA := clientSecurityRequest(r, "POST", "/api/v1/client-security/hello", keyA, []byte(`{"channel":"s1","playerName":"Steve","machineId":"m1","installId":"i1"}`))
+	if helloA.Code != http.StatusForbidden || parseJSON(t, helloA)["error"] != "IP_TEMP_BLOCKED" {
+		t.Fatalf("频内 hello 应 403 IP_TEMP_BLOCKED，实际 %d %s", helloA.Code, helloA.Body.String())
+	}
+
+	// 跨频道不得误伤：同一 IP 用 s2 密钥拉 s2 manifest/制品、发 hello 均应放行（NAT 共享出口场景）。
+	if mw := clientSecurityRequest(r, "GET", "/api/v1/client-channels/s2/manifest", keyB, nil); mw.Code != http.StatusOK {
+		t.Fatalf("跨频道 manifest 不应被 s1 封禁拦截，实际 %d %s", mw.Code, mw.Body.String())
+	}
+	if aw := clientSecurityRequest(r, "GET", "/api/v1/client-artifacts/"+shaB, keyB, nil); aw.Code != http.StatusOK {
+		t.Fatalf("跨频道制品下载不应被 s1 封禁拦截，实际 %d %s", aw.Code, aw.Body.String())
+	}
+	helloB := clientSecurityRequest(r, "POST", "/api/v1/client-security/hello", keyB, []byte(`{"channel":"s2","playerName":"Alex","machineId":"m2","installId":"i2"}`))
+	if helloB.Code != http.StatusAccepted {
+		t.Fatalf("跨频道 hello 应 202，实际 %d %s", helloB.Code, helloB.Body.String())
+	}
+
+	// 不带频道的全局封禁仍应拦截所有频道。
+	global := makeRequest(r, "POST", "/api/v1/client-dist/security/ip-blocks", map[string]any{"ip": "192.0.2.1", "ttlSeconds": 600}, token)
+	if global.Code != http.StatusCreated {
+		t.Fatalf("全局封禁失败: %d %s", global.Code, global.Body.String())
+	}
+	if mw := clientSecurityRequest(r, "GET", "/api/v1/client-channels/s2/manifest", keyB, nil); mw.Code != http.StatusForbidden || parseJSON(t, mw)["error"] != "IP_TEMP_BLOCKED" {
+		t.Fatalf("全局封禁下 s2 manifest 应 403 IP_TEMP_BLOCKED，实际 %d %s", mw.Code, mw.Body.String())
+	}
+}
+
 func TestClientSecurityGroupsCRUD(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)

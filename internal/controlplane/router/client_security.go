@@ -28,10 +28,6 @@ func NewClientSecurityHandler(svc *service.ClientDistSecurityService, audit ...*
 }
 
 func (h *ClientSecurityHandler) Hello(c *gin.Context) {
-	if _, blocked := h.svc.ActiveIPBlock(c.ClientIP()); blocked {
-		respondSecurityAuthErr(c, h.svc, service.ErrIPTempBlocked)
-		return
-	}
 	var body service.ClientSecurityHelloInput
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
@@ -44,9 +40,14 @@ func (h *ClientSecurityHandler) Hello(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "channel/machineId/installId 必填"})
 		return
 	}
+	// IP 封禁校验收在频道键验证之后（R28）：只认已验证的频道，按频道限定的封禁不得拦截同一 IP 访问其他频道。
 	check, err := h.svc.VerifyChannelKey(body.Channel, c.GetHeader(clientKeyHeader))
 	if err != nil {
 		respondSecurityAuthErr(c, h.svc, err)
+		return
+	}
+	if _, blocked := h.svc.ActiveIPBlockForChannel(c.ClientIP(), check.ChannelID); blocked {
+		respondSecurityAuthErr(c, h.svc, service.ErrIPTempBlocked)
 		return
 	}
 	if err := h.svc.RecordHello(body, check.Key, c.ClientIP(), c.GetHeader("User-Agent")); err != nil {
