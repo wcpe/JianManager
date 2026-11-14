@@ -1071,7 +1071,12 @@ func botWorkerEventToFleetProto(event *bot.BotWorkerEvent, sessionID string) []*
 		}
 		return []*workerpb.BotFleetEvent{{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: actionEventToProto(event.Action)}}}
 	}
-	if event.Evt == "command-schedule-result" && len(event.Data) > 0 {
+	// 终态事件的实际来源有两条（必须都认）：
+	//   1. Bot Worker（TS）把字段**扁平**写在顶层：runUuid/botUuid/status/actionRunId…；
+	//   2. 旧路径/手工构造把同一批字段塞在 data 里。
+	// 此前只认 `len(event.Data) > 0`，扁平形态直接返回 0 个事件——命令终态在 Fleet 侧彻底丢失，
+	// 而单元测试用「手工 Data fixture」把这条路径盖住了（review 实证）。
+	if event.Evt == "command-schedule-result" && isCommandScheduleResultEvent(event) {
 		payload, err := commandScheduleResultFromEvent(event)
 		if err != nil {
 			return nil
@@ -1094,14 +1099,36 @@ func botWorkerEventToFleetProto(event *bot.BotWorkerEvent, sessionID string) []*
 	return results
 }
 
-// commandScheduleResultFromEvent 把 Bot Worker command-schedule-result 映射为既有 BotActionEvent。
-func commandScheduleResultFromEvent(event *bot.BotWorkerEvent) (*workerpb.BotActionEvent, error) {
-	if len(event.Data) == 0 {
-		return nil, fmt.Errorf("command-schedule-result 缺少 data")
+// isCommandScheduleResultEvent 判定 command-schedule-result 是否携带可用的终态载荷。
+//
+// TS 侧（apps/bot-worker/src/scheduler/command-schedule.ts emitResult）把字段直接平铺在
+// 事件对象顶层，Go 的 BotWorkerEvent 没有这些同名字段，解码后 Data 为空——
+// 只按 Data 判定就等于把整类事件丢掉。
+func isCommandScheduleResultEvent(event *bot.BotWorkerEvent) bool {
+	if len(event.Data) > 0 {
+		return true
 	}
-	var payload bot.CommandScheduleResultPayload
-	if err := json.Unmarshal(event.Data, &payload); err != nil {
-		return nil, err
+	return event.CommandResult != nil || event.ActionRunID != "" || event.RunUUID != ""
+}
+
+// commandScheduleResultFromEvent 把 Bot Worker command-schedule-result 映射为既有 BotActionEvent。
+//
+// 载荷两种形态都要支持：
+//   - 扁平顶层（TS Bot Worker 实际输出）：见 bot.CommandScheduleResultPayload 的 flat 字段；
+//   - data 内嵌（历史/手工构造）：优先扁平，扁平不完整时回退 data。
+func commandScheduleResultFromEvent(event *bot.BotWorkerEvent) (*workerpb.BotActionEvent, error) {
+	payload := commandSchedulePayloadOf(event)
+	if len(event.Data) > 0 {
+		var fromData bot.CommandScheduleResultPayload
+		if err := json.Unmarshal(event.Data, &fromData); err == nil {
+			// data 里有的字段补到扁平结果上（扁平优先，空的才填）。
+			payload = mergeCommandSchedulePayload(payload, fromData)
+		} else if payload.ActionRunID == "" {
+			return nil, err
+		}
+	}
+	if payload.ActionRunID == "" && payload.RunUUID == "" && payload.Status == "" {
+		return nil, fmt.Errorf("command-schedule-result 缺少可识别载荷（扁平字段与 data 均为空）")
 	}
 	if payload.ActionRunID == "" {
 		return nil, fmt.Errorf("command-schedule-result actionRunId 缺失")
@@ -1127,6 +1154,92 @@ func commandScheduleResultFromEvent(event *bot.BotWorkerEvent) (*workerpb.BotAct
 		DurationMs:       payload.DurationMs,
 		ObservedAtUnixMs: payload.ObservedAtUnixMs,
 	}, nil
+}
+
+// commandSchedulePayloadOf 从事件顶层扁平字段（TS 实际输出形态）构造载荷。
+func commandSchedulePayloadOf(event *bot.BotWorkerEvent) bot.CommandScheduleResultPayload {
+	payload := bot.CommandScheduleResultPayload{
+		RunID:            event.RunID,
+		RunUUID:          event.RunUUID,
+		BotUUID:          event.BotUUID,
+		Generation:       event.Generation,
+		StepID:           event.StepID,
+		ScheduleRunID:    event.ScheduleRunID,
+		ActionRunID:      event.ActionRunID,
+		CorrelationToken: event.CorrelationToken,
+		CommandID:        event.CommandID,
+		Occurrence:       event.Occurrence,
+		Attempt:          event.Attempt,
+		DurationMs:       event.DurationMs,
+		ObservedAtUnixMs: event.ObservedAtUnixMs,
+		PlannedAtUnixMs:  event.PlannedAtUnixMs,
+		SentAtUnixMs:     event.SentAtUnixMs,
+		AttemptErrors:    event.AttemptErrors,
+		Status:           event.Status,
+		ErrorCode:        event.ErrorCode,
+		Message:          event.Message,
+	}
+	// 有的客户端用 commandScheduleResult 包裹一层；有就用它补空。
+	if event.CommandResult != nil {
+		payload = mergeCommandSchedulePayload(payload, *event.CommandResult)
+	}
+	return payload
+}
+
+// mergeCommandSchedulePayload 以 primary 为准，用 secondary 的空字段补齐。
+func mergeCommandSchedulePayload(primary, secondary bot.CommandScheduleResultPayload) bot.CommandScheduleResultPayload {
+	if primary.RunID == "" {
+		primary.RunID = secondary.RunID
+	}
+	if primary.RunUUID == "" {
+		primary.RunUUID = secondary.RunUUID
+	}
+	if primary.BotUUID == "" {
+		primary.BotUUID = secondary.BotUUID
+	}
+	if primary.Generation == 0 {
+		primary.Generation = secondary.Generation
+	}
+	if primary.StepID == "" {
+		primary.StepID = secondary.StepID
+	}
+	if primary.ScheduleRunID == "" {
+		primary.ScheduleRunID = secondary.ScheduleRunID
+	}
+	if primary.ActionRunID == "" {
+		primary.ActionRunID = secondary.ActionRunID
+	}
+	if primary.CorrelationToken == "" {
+		primary.CorrelationToken = secondary.CorrelationToken
+	}
+	if primary.CommandID == "" {
+		primary.CommandID = secondary.CommandID
+	}
+	if primary.Status == "" {
+		primary.Status = secondary.Status
+	}
+	if primary.ErrorCode == "" {
+		primary.ErrorCode = secondary.ErrorCode
+	}
+	if primary.Message == "" {
+		primary.Message = secondary.Message
+	}
+	if primary.DurationMs == 0 {
+		primary.DurationMs = secondary.DurationMs
+	}
+	if primary.ObservedAtUnixMs == 0 {
+		primary.ObservedAtUnixMs = secondary.ObservedAtUnixMs
+	}
+	if primary.PlannedAtUnixMs == 0 {
+		primary.PlannedAtUnixMs = secondary.PlannedAtUnixMs
+	}
+	if primary.SentAtUnixMs == nil {
+		primary.SentAtUnixMs = secondary.SentAtUnixMs
+	}
+	if len(primary.AttemptErrors) == 0 {
+		primary.AttemptErrors = secondary.AttemptErrors
+	}
+	return primary
 }
 
 func mapCommandScheduleStatus(status, errorCode, message string) (string, string, string) {
