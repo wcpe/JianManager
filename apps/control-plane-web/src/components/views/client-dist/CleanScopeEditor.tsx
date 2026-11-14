@@ -55,7 +55,7 @@ const ScopeContext = createContext<ScopeContextValue | null>(null)
 
 // ── 主组件 ────────────────────────────────────────────────────────────
 
-/** 
+/**
  * 清理目录树形右键菜单可视化编辑器（替换 ManagedDirsEditor）。
  *
  * 复用 FileExplorer 同款文件树（从草稿 files 派生目录树），改为右键菜单 + 多选 + 颜色标记
@@ -94,7 +94,6 @@ export function CleanScopeEditor({
 }: CleanScopeEditorProps) {
   const { t } = useTranslation()
   const tree = useMemo(() => buildFileTreeWithDirs(files, extraDirs), [files, extraDirs])
-  const [customDirInput, setCustomDirInput] = useState('')
   const allDirPaths = useMemo(() => {
     const fromFiles = collectAllDirPaths(files)
     // 合并草稿外自定义目录及其祖先路径
@@ -248,12 +247,27 @@ export function CleanScopeEditor({
 
   if (allDirPaths.length === 0) {
     return (
-      <p
-        className="rounded-md border border-dashed p-3 text-xs text-muted-foreground"
-        data-testid="clean-scope-empty"
-      >
-        {t('clientVersions.managedDirsTreeEmpty', '暂无目录——添加文件后，此处会列出草稿文件派生的目录供标记。')}
-      </p>
+      <div className="space-y-2">
+        <p
+          className="rounded-md border border-dashed p-3 text-xs text-muted-foreground"
+          data-testid="clean-scope-empty"
+        >
+          {t(
+            'clientVersions.managedDirsTreeEmpty',
+            '草稿里没有目录——只有根目录文件时，清理范围需要手动声明（见下方「自定义目录」）。',
+          )}
+        </p>
+        {/*
+          只有根文件（如 pack.properties）时目录树为空，但运营仍需要能声明「清理旧 mods/」这类
+          只存在于上一版本、这一版已经没有对应文件的目录。此前这里直接 return 一个提示，
+          把下面的「添加自定义目录」输入框一起挡掉了 —— 于是“没有目录可标记”变成了
+          “无法声明任何清理目录”，只能被迫开 clean-all（那是全根清理，代价大得多）。
+          这里保留空态提示，同时仍渲染同一块输入区。
+        */}
+        {!cleanAll && onExtraDirsChange && (
+          <CustomDirAdder extraDirs={extraDirs} onExtraDirsChange={onExtraDirsChange} />
+        )}
+      </div>
     )
   }
 
@@ -290,66 +304,7 @@ export function CleanScopeEditor({
 
       {/* 添加自定义目录（草稿外目录，如 mods、custom-mods） */}
       {!cleanAll && onExtraDirsChange && (
-        <div className="mt-2 space-y-1.5" data-testid="custom-dirs-section">
-          <div className="flex items-center gap-1.5">
-            <input
-              className="flex-1 rounded border bg-background px-2 py-1 text-xs font-mono"
-              value={customDirInput}
-              onChange={(e) => setCustomDirInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== 'Enter') return
-                e.preventDefault()
-                const v = customDirInput.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
-                if (!v || extraDirs.includes(v)) { setCustomDirInput(''); return }
-                onExtraDirsChange([...extraDirs, v])
-                setCustomDirInput('')
-              }}
-              placeholder={t('clientVersions.customDirPlaceholder', '输入目录路径如 mods 或 config/foo，回车添加')}
-              data-testid="custom-dir-input"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="xs"
-              // px-2 / py-1：保留原内距（xs 档默认 px-2 但无纵向内距）
-              className="shrink-0 px-2 py-1"
-              onClick={() => {
-                const v = customDirInput.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
-                if (!v || extraDirs.includes(v)) { setCustomDirInput(''); return }
-                onExtraDirsChange([...extraDirs, v])
-                setCustomDirInput('')
-              }}
-              data-testid="custom-dir-add-btn"
-            >
-              {t('clientVersions.customDirAdd', '添加')}
-            </Button>
-          </div>
-          {extraDirs.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {extraDirs.map((d) => (
-                <span
-                  key={d}
-                  className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono"
-                >
-                  {d}
-                  <Button
-                    type="button"
-                    variant="invisible"
-                    size="auto"
-                    // 标签内的小 × ：无外壳纯图标控件，颜色由下方 className 决定
-                    className="text-muted-foreground hover:text-destructive"
-                    onClick={() => onExtraDirsChange(extraDirs.filter((x) => x !== d))}
-                    aria-label={t('clientVersions.cleanExcludeTagRemove', '移除')}
-                    data-testid="custom-dir-remove"
-                    data-dir={d}
-                  >
-                    <X className="size-3" />
-                  </Button>
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
+        <CustomDirAdder extraDirs={extraDirs} onExtraDirsChange={onExtraDirsChange} />
       )}
 
       {/* 右键菜单 */}
@@ -357,6 +312,95 @@ export function CleanScopeEditor({
         <ScopeContextMenu x={contextMenu.x} y={contextMenu.y} onMark={handleMark} t={t} />
       )}
     </ScopeContext.Provider>
+  )
+}
+
+// ── 自定义目录输入区（主路径与“只有根文件”空态共用） ──────────────
+
+/**
+ * 把运营手输的目录写法归一；非法（含 `.` / `..` 段）返回空串。
+ *
+ * 【为什么在这里拦】服务端已拒（validateManagedDirs），但前端不拦的话，用户会先看到“添加成功”、
+ * 发布时才报错；而 `mods/..` 这类写法在客户端 resolveSafe 后等价于 gameDir，
+ * 属于“看着像子目录、实际指向根”的危险输入，不该等到发布才拒绝。
+ */
+function normalizeCustomDir(raw: string): string {
+  const v = raw.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+  if (!v) return ''
+  if (v.split('/').some((seg) => seg === '.' || seg === '..' || seg === '')) return ''
+  return v
+}
+
+/** 草稿外自定义目录的输入 + 已添加标签列表。 */
+function CustomDirAdder({
+  extraDirs,
+  onExtraDirsChange,
+}: {
+  extraDirs: string[]
+  onExtraDirsChange: (dirs: string[]) => void
+}) {
+  const { t } = useTranslation()
+  const [draft, setDraft] = useState('')
+  const add = () => {
+    const v = normalizeCustomDir(draft)
+    if (!v || extraDirs.includes(v)) {
+      setDraft('')
+      return
+    }
+    onExtraDirsChange([...extraDirs, v])
+    setDraft('')
+  }
+  return (
+    <div className="mt-2 space-y-1.5" data-testid="custom-dirs-section">
+      <div className="flex items-center gap-1.5">
+        <input
+          className="flex-1 rounded border bg-background px-2 py-1 text-xs font-mono"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return
+            e.preventDefault()
+            add()
+          }}
+          placeholder={t('clientVersions.customDirPlaceholder', '输入目录路径如 mods 或 config/foo，回车添加')}
+          data-testid="custom-dir-input"
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          className="shrink-0 px-2 py-1"
+          onClick={add}
+          data-testid="custom-dir-add-btn"
+        >
+          {t('clientVersions.customDirAdd', '添加')}
+        </Button>
+      </div>
+      {extraDirs.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {extraDirs.map((d) => (
+            <span
+              key={d}
+              className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono"
+            >
+              {d}
+              <Button
+                type="button"
+                variant="invisible"
+                size="auto"
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() => onExtraDirsChange(extraDirs.filter((x) => x !== d))}
+                aria-label={t('clientVersions.cleanExcludeTagRemove', '移除')}
+                data-testid="custom-dir-remove"
+                data-dir={d}
+              >
+                <X className="size-3" />
+              </Button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -523,7 +567,7 @@ function collectVisibleDirs(dir: TreeDir, collapsedPaths: Set<string>): string[]
 
 // ── 自定义排除标签输入（从 ManagedDirsEditor 迁移） ──────────────
 
-/** 
+/**
  * 自定义追加排除标签输入。
  *
  * 运营可填「额外永不清理」的目录/路径（如玩家自装 mod 目录），产出 `cleanExclude: string[]`。

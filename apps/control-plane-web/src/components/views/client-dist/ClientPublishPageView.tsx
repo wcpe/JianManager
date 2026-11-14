@@ -430,10 +430,16 @@ export function ClientPublishPageView({
 
   const wizardState = { draftCount: drafts.length, paths: drafts.map((d) => d.path), uploading: publishing }
   const publishable = canPublish(wizardState)
-  // 最终 managedDirs——clean-all 时为 ["*"] 哨兵；否则为目录树勾选（含草稿外自定义目录）。
-  const effectiveManagedDirs = cleanAll
-    ? [CLEAN_ALL_SENTINEL]
-    : Array.from(new Set([...selectedDirs, ...extraDirs.filter(d => !cleanExclude.includes(d))]))
+  // 最终 managedDirs——clean-all 时为 ["*"] 哨兵；否则以目录树的勾选结果为准。
+  //
+  // 【只用 selectedDirs，不再把 extraDirs 合回来】
+  // selectedDirs 来自 CleanScopeEditor 的 onChange = exportMarkings(cleanMap).managedDirs，
+  // 它**已经包含**被标记为清理的自定义目录（自定义目录只是让它们能出现在树里）。
+  // 之前在这里把 extraDirs 再无条件合一次，等于让“添加到列表”本身就等同于“标记为清理”：
+  //   - 添加了自定义目录却没右键标记 → 界面显示“不管理”，发布时却按托管目录清理；
+  //   - 先标记、再“取消标记” → extraDirs 还在，取消动作被这一步抵消，实际仍会清理。
+  // 两种都是「UI 说不管理、实际删文件」，删的是玩家目录，后果不可逆。
+  const effectiveManagedDirs = cleanAll ? [CLEAN_ALL_SENTINEL] : selectedDirs
   const effectiveCleanExclude = cleanExclude.length > 0 ? cleanExclude : undefined
   // 预览数据源：从本地草稿 File 读内容（零网络）。
   const previewSource = useMemo(() => localDraftSource(drafts.map(d => ({ path: d.path, file: d.file }))), [drafts])
