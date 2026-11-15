@@ -138,7 +138,7 @@ export function RuntimeReadinessStrip({ items, onAction, className }: RuntimeRea
       </div>
 
       {!collapsed && (
-        <div className="grid gap-2 border-t border-border/60 p-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-1.5 border-t border-border/60 p-2 sm:grid-cols-2 xl:grid-cols-4">
           {items.map((item) => {
             const Icon = ITEM_ICON[item.key]
             return (
@@ -146,7 +146,7 @@ export function RuntimeReadinessStrip({ items, onAction, className }: RuntimeRea
                 key={item.key}
                 data-testid={`runtime-readiness-${item.key}`}
                 data-level={item.level}
-                className={cn('flex min-w-0 flex-col gap-1 rounded-md border px-2.5 py-2', LEVEL_CARD[item.level])}
+                className={cn('flex min-w-0 flex-col gap-0.5 rounded-md border px-2 py-1.5', LEVEL_CARD[item.level])}
               >
                 <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
                   <Icon className="size-3 shrink-0" aria-hidden />
@@ -156,23 +156,29 @@ export function RuntimeReadinessStrip({ items, onAction, className }: RuntimeRea
                 <span className={cn('truncate text-sm font-semibold leading-tight', LEVEL_TEXT[item.level])} title={item.headline}>
                   {item.headline}
                 </span>
-                {item.detail && (
-                  <span className="line-clamp-2 text-[11px] leading-snug text-muted-foreground" title={item.detail}>
-                    {item.detail}
-                  </span>
-                )}
-                {item.action && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="mt-auto h-6 self-start px-2 text-[11px]"
-                    data-testid={`runtime-readiness-action-${item.key}`}
-                    onClick={() => onAction(item.action!.key)}
-                  >
-                    {item.action.label}
-                  </Button>
-                )}
+                {/*
+                  detail 单行截断 + 动作按钮同行：一行 detail 两行会各占 30px，
+                  4 张卡就吃掉 176px，把表格挤到首屏之外。完整说明留在 title 里。
+                */}
+                <div className="mt-auto flex items-center gap-1.5">
+                  {item.detail && (
+                    <span className="min-w-0 flex-1 truncate text-[11px] leading-tight text-muted-foreground" title={item.detail}>
+                      {item.detail}
+                    </span>
+                  )}
+                  {item.action && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-5 shrink-0 px-1.5 text-[10px]"
+                      data-testid={`runtime-readiness-action-${item.key}`}
+                      onClick={() => onAction(item.action!.key)}
+                    >
+                      {item.action.label}
+                    </Button>
+                  )}
+                </div>
               </div>
             )
           })}

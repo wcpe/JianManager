@@ -29,20 +29,39 @@ export interface ApprovedLogAsset {
   executableSha256: string
 }
 
+/**
+ * 日志运行时状态。
+ *
+ * 【两种生效强度】它是就绪带判定的数据源之一，但也是一次 Worker RPC + 10s 轮询：
+ *  - `active=true`（正在看日志平台）：10s 轮询，状态要跟上启停；
+ *  - `active=false`（就绪带常驻、看别的 sub）：**低频** 60s 轮询而不是关闭。
+ *
+ * 【为什么不是关掉】关掉会让就绪带的「日志平台」一条在其它 sub 下拿不到数据，
+ * 只能显示「读取中…」或误判成 blocking。改造前是「永久 10s」，另一个极端；
+ * 60s 足够让结论带保持最新，又把 RPC 量降到 1/6。
+ */
 export function useLogRuntime(nodeId: number, active: boolean) {
   return useQuery({
     queryKey: ['log-runtime', nodeId],
     queryFn: async ({ signal }) => (await api.get<LogRuntimeStatus>(`/nodes/${nodeId}/log-runtime`, { signal })).data,
-    enabled: active && nodeId > 0,
-    refetchInterval: active ? 10_000 : false,
+    enabled: nodeId > 0,
+    refetchInterval: active ? 10_000 : 60_000,
+    // 就绪带要的只是「有没有在跑」，旧数据完全可以先显示再用新数据替换。
+    staleTime: 30_000,
   })
 }
 
-export function useApprovedLogAssets(active: boolean) {
+/**
+ * 审批资产清单（按 os/arch 的缓存状态）。
+ *
+ * 不随 sub 关闭：它是静态数据（只有上传/下发才变），却决定就绪带里「审批资产是否已下发」
+ * 这一条结论。关掉它会让资产页看到一条假的「未下发」。不设轮询，靠 mutation 失效刷新。
+ */
+export function useApprovedLogAssets(_active: boolean) {
   return useQuery({
     queryKey: ['log-vl-assets'],
     queryFn: async ({ signal }) => (await api.get<{ assets: ApprovedLogAsset[] }>('/log-runtime/assets', { signal })).data.assets,
-    enabled: active,
+    enabled: true,
   })
 }
 

@@ -63,6 +63,11 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
   const pmQ = useNodePMConfig(node.id)
   const logQ = useLogRuntime(node.id, sub === 'log')
   const assetsQ = useApprovedLogAssets(sub === 'log')
+  /*
+    日志运行时与审批资产**常驻**取数（log sub 内 10s、之外 60s 低频），
+    因为就绪带要一直显示结论；关闭会让其它 sub 下这条误判成「审批资产未下发」。
+  */
+
 
   // 日志存储指标（只在日志 sub 需要；就绪带在其它 sub 用缓存值即可，故这里也只在 log 打开）。
   const metricsQ = useMetricSeries({
