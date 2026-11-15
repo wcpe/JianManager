@@ -1537,7 +1537,53 @@
     "pageSizeAuto": "Auto",
     "monitorUnavailable": "Failed to load monitoring data",
     "pageOutOfRange": "(page out of range, showing the last page)",
-    "openNodeDetail": "Open node {{name}} details"
+    "openNodeDetail": "Open node {{name}} details",
+    "runtime": {
+      "readiness": "Runtime readiness",
+      "sections": "Runtime sections",
+      "inventoryTitle": "Runtime inventory",
+      "addRuntime": "Add runtime",
+      "addRuntimeHint": "Add an executable runtime to this node. JDK serves Java instances; Node.js serves Node-dependent plugins and tooling.",
+      "addTabs": "Add method",
+      "offlineHint": "Node offline: install and scan require the node to be online.",
+      "blockedCount": "{{count}} blocked",
+      "warnCount": "{{count}} warnings",
+      "allReady": "All ready",
+      "refsNotApplicable": "This runtime type has no instance bindings",
+      "refsTitle": "{{count}} instance(s) use this JDK",
+      "edit": "Edit registration",
+      "bindingDirect": "Instance is pinned to this JDK; it cannot start after deletion",
+      "bindingMajor": "Instance resolves by major version; it may fall back to another JDK of the same major",
+      "sub": {
+        "inventory": "Runtime assets",
+        "packages": "Package manager",
+        "log": "Log platform",
+        "logAcq": "Collection rules"
+      },
+      "item": {
+        "java": "Java runtime",
+        "node": "Node.js",
+        "log": "Log platform",
+        "packages": "Package manager"
+      },
+      "col": {
+        "type": "Type",
+        "name": "Name",
+        "version": "Version",
+        "source": "Source",
+        "refs": "Referencing instances",
+        "path": "Path"
+      },
+      "binding": {
+        "direct": "direct",
+        "major": "major"
+      },
+      "add": {
+        "install": "Download JDK",
+        "register": "Register existing JDK",
+        "scan": "Scan for runtimes"
+      }
+    }
   },
   "nodeProxy": {
     "title": "Outbound proxy",
@@ -6141,7 +6187,8 @@
       "stop": "Stop",
       "restart": "Restart",
       "migrate": "Migrate partition",
-      "migrateHelp": "Move a partition from HOT to COLD to free hot storage; the partition is briefly unqueryable during migration."
+      "migrateHelp": "Move a partition from HOT to COLD to free hot storage; the partition is briefly unqueryable during migration.",
+      "pipeline": "HOT = recent hot data (fastest queries); COLD = migrated history (slower but queryable); Rehydrate = temporary layer that replays archives into the queryable surface. Layers are enabled by config; disabled ones show \"not ready\"."
     },
     "date": {
       "label": "Migration date (that day partition)",
@@ -6162,6 +6209,17 @@
     "gaps": {
       "resolve": "Resolve covered gaps",
       "help": "Collection or delivery interruptions leave \"gaps\". Once a complete projection proves that window is intact, the gap can be resolved so it stops counting as a risk."
+    },
+    "health": {
+      "ok": "Healthy",
+      "queryable": "Queryable"
+    },
+    "archive": {
+      "rehydrate": "Rehydrate",
+      "help": "Read archived objects and publish them back to the queryable surface",
+      "objects": "{{count}} archived object(s)",
+      "openLogs": "Start rehydration from Archive management on the Logs page",
+      "hint": "Archive rehydration and partition cleanup live in Archive management on the Logs page (cross-node view)."
     }
   },
   "instanceKind": {

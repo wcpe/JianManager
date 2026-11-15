@@ -1515,7 +1515,53 @@
     "pageSizeAuto": "自动",
     "monitorUnavailable": "监控数据加载失败",
     "pageOutOfRange": "（页码超出范围，已显示最后一页）",
-    "openNodeDetail": "打开节点 {{name}} 详情"
+    "openNodeDetail": "打开节点 {{name}} 详情",
+    "runtime": {
+      "readiness": "运行时就绪",
+      "sections": "运行时分段",
+      "inventoryTitle": "运行时清单",
+      "addRuntime": "新增运行时",
+      "addRuntimeHint": "给这台节点添一个可执行运行时。JDK 用于 Java 实例；Node.js 用于依赖 Node 的插件与工具链。",
+      "addTabs": "新增方式",
+      "offlineHint": "节点离线：安装与扫描需要节点在线才能执行。",
+      "blockedCount": "{{count}} 项阻塞",
+      "warnCount": "{{count}} 项注意",
+      "allReady": "全部就绪",
+      "refsNotApplicable": "该运行时类型没有实例绑定",
+      "refsTitle": "{{count}} 个实例使用本 JDK",
+      "edit": "编辑登记信息",
+      "bindingDirect": "实例写死了这个 JDK，删除后它无法启动",
+      "bindingMajor": "实例按大版本解析，删除后可能解析到同版本其它 JDK",
+      "sub": {
+        "inventory": "运行时资产",
+        "packages": "包管理",
+        "log": "日志平台",
+        "logAcq": "采集规则"
+      },
+      "item": {
+        "java": "Java 运行时",
+        "node": "Node.js",
+        "log": "日志平台",
+        "packages": "包管理"
+      },
+      "col": {
+        "type": "类型",
+        "name": "名称",
+        "version": "版本",
+        "source": "来源",
+        "refs": "引用实例",
+        "path": "路径"
+      },
+      "binding": {
+        "direct": "直接",
+        "major": "大版本"
+      },
+      "add": {
+        "install": "下载安装 JDK",
+        "register": "登记已有 JDK",
+        "scan": "扫描发现"
+      }
+    }
   },
   "artifactVersions": {
     "title": "ServerProbe 制品版本库",
@@ -6141,7 +6187,8 @@
       "stop": "停止",
       "restart": "重启",
       "migrate": "迁移分区",
-      "migrateHelp": "把某个分区从 HOT 迁到 COLD，释放热存储；迁移期间该分区暂不可查。"
+      "migrateHelp": "把某个分区从 HOT 迁到 COLD，释放热存储；迁移期间该分区暂不可查。",
+      "pipeline": "HOT=近期热数据（查询最快）；COLD=迁出的历史数据（稍慢但仍可查）；Rehydrate=把归档回灌成可查副本的临时层。三层按配置启用，未启用显示「未就绪」。"
     },
     "date": {
       "label": "迁移日期（该日分区）",
@@ -6162,6 +6209,17 @@
     "gaps": {
       "resolve": "核销已覆盖缺口",
       "help": "采集或投递中断会留下「缺口」记录。当缺口所覆盖的时间段已有完整投影可证明数据完整时，可核销该缺口，避免它一直被计为风险。"
+    },
+    "health": {
+      "ok": "进程健康",
+      "queryable": "可查询"
+    },
+    "archive": {
+      "rehydrate": "回灌",
+      "help": "把归档对象读取并发布回可查询面",
+      "objects": "{{count}} 个归档对象",
+      "openLogs": "请在「日志」页的归档管理中发起回灌",
+      "hint": "归档回灌与分区清理在「日志」页的归档管理中操作（跨节点视角）。"
     }
   },
   "instanceKind": {

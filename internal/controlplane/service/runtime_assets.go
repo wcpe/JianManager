@@ -105,15 +105,7 @@ type RuntimeNodeSync struct {
 	SyncedAt *time.Time `json:"syncedAt"`
 }
 
-// JDKRefInstance 引用某 JDK 的实例（引用关系下钻 / 删除占用方提示）。
-type JDKRefInstance struct {
-	ID     uint                 `json:"id"`
-	UUID   string               `json:"uuid"`
-	Name   string               `json:"name"`
-	Status model.InstanceStatus `json:"status"`
-	// Binding 绑定方式：direct=按具体 JDK（jdk_id）；major=按 Java 大版本（java_major_version）解析到本 JDK。
-	Binding string `json:"binding"`
-}
+// JDKRefInstance 定义在 jdk_refs.go（引用关系的唯一判定源）。
 
 // JDKMatrixItem 跨节点 JDK 矩阵的一项 = 一个节点上的一个 JDK + 其引用实例。
 type JDKMatrixItem struct {
@@ -352,37 +344,8 @@ func buildJDKMatrix(nodes []model.Node, jdks []model.NodeJDK, instances []model.
 		nodeByID[n.ID] = n
 	}
 
-	// 预解析：每个节点上「大版本 → 解析命中的 jdk_id」（同节点同大版本取 id 最大）。
-	resolvedMajor := resolveMajorBinding(jdks)
-
-	// jdkID → 引用实例。
-	refs := make(map[uint][]JDKRefInstance, len(jdks))
-	instanceRefs := 0
-	for _, inst := range instances {
-		var targetJDK uint
-		binding := ""
-		switch {
-		case inst.JDKID != 0:
-			targetJDK = inst.JDKID
-			binding = "direct"
-		case inst.JavaMajorVersion != 0:
-			if jid, ok := resolvedMajor[majorKey{nodeID: inst.NodeID, major: inst.JavaMajorVersion}]; ok {
-				targetJDK = jid
-				binding = "major"
-			}
-		}
-		if targetJDK == 0 {
-			continue
-		}
-		refs[targetJDK] = append(refs[targetJDK], JDKRefInstance{
-			ID:      inst.ID,
-			UUID:    inst.UUID,
-			Name:    inst.Name,
-			Status:  inst.Status,
-			Binding: binding,
-		})
-		instanceRefs++
-	}
+	// 引用解析走 jdk_refs.go 的唯一实现：全局矩阵与节点级清单必须同一份绑定语义。
+	refs, instanceRefs := ResolveJDKRefs(jdks, instances)
 
 	items := make([]JDKMatrixItem, 0, len(jdks))
 	referenced := 0
@@ -422,24 +385,6 @@ func buildJDKMatrix(nodes []model.Node, jdks []model.NodeJDK, instances []model.
 		InstanceRefs:  instanceRefs,
 	}
 	return items, summary
-}
-
-// majorKey 是 (节点, 大版本) 解析键。
-type majorKey struct {
-	nodeID uint
-	major  int
-}
-
-// resolveMajorBinding 计算每个 (节点, 大版本) 解析命中的 jdk_id（取 id 最大，与 ResolveForInstance 一致）。
-func resolveMajorBinding(jdks []model.NodeJDK) map[majorKey]uint {
-	out := make(map[majorKey]uint)
-	for _, j := range jdks {
-		k := majorKey{nodeID: j.NodeID, major: j.MajorVersion}
-		if cur, ok := out[k]; !ok || j.ID > cur {
-			out[k] = j.ID
-		}
-	}
-	return out
 }
 
 // groupAssetsByType 把资产按类型分组并算占用/去重/冷热统计（纯函数）。

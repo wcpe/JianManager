@@ -13,12 +13,27 @@ type JDKHandler struct{ svc *service.JDKService }
 
 func NewJDKHandler(svc *service.JDKService) *JDKHandler { return &JDKHandler{svc: svc} }
 
+
+// List 返回节点 JDK 清单。
+//
+// 默认形状不变（裸 model.NodeJDK 数组）；`?withRefs=1` 时改为携带「引用实例 + 删除可行性」
+// 的清单（JDKWithRefs），供节点页运行时清单表直接把占用和删除守卫前置到 UI。
+// 用查询参数而不是新端点：同一资源的两种视图，权限、路径、缓存键都该一致。
 func (h *JDKHandler) List(c *gin.Context) {
 	if !requireNodes(c, "node.read", "node.manage") {
 		return
 	}
 	nodeID, err := parseUintParam(c, "id")
 	if err != nil {
+		return
+	}
+	if c.Query("withRefs") == "1" {
+		jdks, err := h.svc.ListWithRefs(nodeID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询 JDK 引用关系失败"})
+			return
+		}
+		c.JSON(http.StatusOK, jdks)
 		return
 	}
 	jdks, err := h.svc.List(nodeID)

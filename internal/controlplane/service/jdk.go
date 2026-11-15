@@ -126,6 +126,62 @@ func (s *JDKService) List(nodeID uint) ([]model.NodeJDK, error) {
 	return jdks, nil
 }
 
+// JDKWithRefs 是「带引用关系」的 JDK 行：在模型字段之外补上引用实例与删除可行性。
+//
+// 【为什么字段平铺而不是包一个 jdk 子对象】前端清单表每行要同时读 id/vendor/path/refs，
+// 多一层嵌套只让取值变长；且本结构只增不改，旧调用方若将来切换到它，字段名仍一致。
+type JDKWithRefs struct {
+	model.NodeJDK
+	// Instances 引用本 JDK 的实例（直接绑定 + 大版本解析命中），按实例名排序。
+	Instances []JDKRefInstance `json:"instances"`
+	// RefCount 引用实例数（= len(Instances)），便于前端排序与删除前置判断。
+	RefCount int `json:"refCount"`
+	// DeleteBlocked 当前从界面发起删除是否会被后端拒绝（与 Delete 的守卫同源）。
+	DeleteBlocked bool `json:"deleteBlocked"`
+	// DeleteBlockedReason 拒绝原因：direct=有直接绑定；major=按大版本唯一托管项。空=可删。
+	DeleteBlockedReason string `json:"deleteBlockedReason"`
+}
+
+// ListWithRefs 返回该节点 JDK 清单并附带引用实例与删除可行性（节点页运行时清单用）。
+//
+// 一次查询算出三件事，避免前端为了显示「被谁占用」再去拉实例全量：
+//   - 每行 jdk 的引用实例（direct / major 两种绑定，口径与全局矩阵完全一致）；
+//   - 该行能否删除（把 Delete 的两段守卫前置成 UI 约束，不再「先点后报 409」）；
+//   - 引用计数。
+//
+// 大版本解析必须在**该节点全部 JDK**上做（同节点同大版本取 id 最大），所以这里查的是
+// 节点全集而不是分页子集；单节点 JDK 数量级很小（个位数到几十），不需要分页。
+func (s *JDKService) ListWithRefs(nodeID uint) ([]JDKWithRefs, error) {
+	jdks, err := s.List(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	// 只取聚合所需字段：避免把实例的启动命令/环境变量等敏感列拉进内存。
+	var instances []model.Instance
+	if err := s.db.Select("id", "uuid", "name", "status", "node_id", "jdk_id", "java_major_version").
+		Where("node_id = ?", nodeID).Find(&instances).Error; err != nil {
+		return nil, fmt.Errorf("查询实例失败: %w", err)
+	}
+	refs, _ := ResolveJDKRefs(jdks, instances)
+
+	out := make([]JDKWithRefs, 0, len(jdks))
+	for _, j := range jdks {
+		insts := refs[j.ID]
+		if insts == nil {
+			insts = []JDKRefInstance{}
+		}
+		blocked, reason := JDKEvaluateDelete(j, jdks, insts)
+		out = append(out, JDKWithRefs{
+			NodeJDK:             j,
+			Instances:           insts,
+			RefCount:            len(insts),
+			DeleteBlocked:       blocked,
+			DeleteBlockedReason: reason,
+		})
+	}
+	return out, nil
+}
+
 func (s *JDKService) Create(nodeID uint, req CreateJDKRequest) (*model.NodeJDK, error) {
 	if _, err := s.nodeByID(nodeID); err != nil {
 		return nil, err

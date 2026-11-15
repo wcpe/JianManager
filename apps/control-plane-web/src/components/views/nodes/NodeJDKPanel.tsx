@@ -74,7 +74,7 @@ export interface JDKCatalogItemView {
 }
 
 /** 面板内子视图：已登记列表 / 一键下载 / 登记已有（分段切换，容器固定不重排）。 */
-type JDKTab = 'list' | 'install' | 'register'
+export type JDKTab = 'list' | 'install' | 'register'
 
 /** 
  * 节点 JDK 管理面板（重做）：
@@ -96,6 +96,14 @@ type JDKTab = 'list' | 'install' | 'register'
 export interface NodeJDKPanelProps {
   /** 已登记 JDK 列表；外壳取数注入。 */
   jdks?: NodeJDKView[]
+  /**
+   * 初始分段（缺省 list）。
+   *
+   * 供「新增运行时」抽屉直接落到「一键下载」或「登记已有」——抽屉本身就是从这两个动作
+   * 切入的，让用户进去再点一次分段的中间步骤是多余的。
+   * 只在挂载时生效（内部 tab 仍是组件状态），故调用方要用 key 切换才能重新落位。
+   */
+  initialTab?: JDKTab
   /** 首次加载态。 */
   isLoading?: boolean
   /** 后台同步中（列表从节点回同步时显式提示，避免「卡住无反馈」）。 */
@@ -170,10 +178,11 @@ export default function NodeJDKPanel({
   onUpdate,
   onDelete,
   onCopyResult,
+  initialTab = 'list',
 }: NodeJDKPanelProps) {
   const { t } = useTranslation()
 
-  const [tab, setTab] = useState<JDKTab>('list')
+  const [tab, setTab] = useState<JDKTab>(initialTab)
 
   // 安装表单状态。
   const [vendor, setVendor] = useState('Temurin')

@@ -39,10 +39,9 @@ import {
 } from '@/lib/nodes/node-list'
 import { cn } from '@jianmanager/ui'
 
-import NodeJDKTab from '@/components/nodes/NodeJDKTab'
-import NodeLogRuntimeTab from '@/components/nodes/NodeLogRuntimeTab'
 import NodePortsTab from '@/components/nodes/NodePortsTab'
-import NodeRuntimeTab from '@/components/nodes/NodeRuntimeTab'
+import NodeRuntimeWorkspace from '@/components/nodes/NodeRuntimeWorkspace'
+import { readRuntimeSub, type RuntimeSub } from '@/lib/nodes/runtime-sub'
 import {
   NodeProcessPanel,
   NodeProcessDetailDialog,
@@ -213,6 +212,21 @@ export default function NodesPage() {
     const params = new URLSearchParams(searchParams)
     if (next === 'overview') params.delete('tab')
     else params.set('tab', next)
+    // 切走 runtime 时清掉 sub：否则下次回来会带着上一次的二级位置，
+    // 用户以为「怎么一进来就在日志页」。同页签内切 sub 才保留。
+    if (next !== 'runtime') params.delete('sub')
+    setSearchParams(params)
+  }
+  /*
+    运行时的二级位置（`?sub=`）。它是**页签内的第三层**，所以只在 tab=runtime 时有意义；
+    入 URL 是为了可深链——日志页的「发起回灌」、站内信的跳转都要能落到具体某一段。
+  */
+  const runtimeSub = readRuntimeSub(searchParams.get('sub'))
+  const setRuntimeSub = (next: RuntimeSub) => {
+    const params = new URLSearchParams(searchParams)
+    // 缺省子段（inventory）不写进 URL，保持链接简洁（与 tab 的处理一致）。
+    if (next === 'inventory') params.delete('sub')
+    else params.set('sub', next)
     setSearchParams(params)
   }
   const setMaintenance = useSetNodeMaintenance()
@@ -1067,23 +1081,10 @@ export default function NodesPage() {
                   JDK 管理 / 节点运行时（运行时库 + 包管理器 + 全局包）/ 日志平台运行时。
                   间距统一 space-y-3，与其它页签一致。
                 */}
+                {/* 运行时 = 一个工作台（就绪带 + 二级 sub：资产/包管理/日志/采集规则），
+                    不再是三块面板竖排。sub 由 URL `?sub=` 承载，可深链、可分享。 */}
                 {tabKey === 'runtime' && (
-                  <div className="space-y-3">
-                    <Panel title={t('nodes.jdkTitle')}>
-                      <NodeJDKTab nodeId={paneNode.id} active />
-                    </Panel>
-                    <Panel title={t('nodes.runtimeLib.title')}>
-                      <NodeRuntimeTab nodeId={paneNode.id} active />
-                    </Panel>
-                    <Panel title={t('logsRuntime.title')}>
-                      <NodeLogRuntimeTab
-                        nodeId={paneNode.id}
-                        os={paneNode.os}
-                        arch={paneNode.arch}
-                        online={paneNode.status === 1}
-                      />
-                    </Panel>
-                  </div>
+                  <NodeRuntimeWorkspace node={paneNode} sub={runtimeSub} onSub={setRuntimeSub} />
                 )}
                 {tabKey === 'cache' && (
                   <Panel title={t('artifactCache.title')}>

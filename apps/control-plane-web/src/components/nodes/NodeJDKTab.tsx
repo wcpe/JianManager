@@ -25,9 +25,12 @@ function errMessage(err: unknown, fallback: string): string {
 export default function NodeJDKTab({
   nodeId,
   active = true,
+  initialTab,
 }: {
   nodeId: number
   active?: boolean
+  /** 初始分段（透传给视图；「新增运行时」抽屉用它直接落到下载/登记）。 */
+  initialTab?: 'list' | 'install' | 'register'
 }) {
   const { t } = useTranslation()
   const { data: jdks, isLoading, isFetching } = useNodeJDKs(nodeId)
@@ -51,6 +54,7 @@ export default function NodeJDKTab({
 
   return (
     <NodeJDKPanel
+      initialTab={initialTab}
       jdks={jdks}
       isLoading={isLoading}
       isFetching={isFetching}
