@@ -12,7 +12,6 @@ import {
   useApprovedLogAssets,
   useControlLogRuntime,
   useInstallLogAsset,
-  useResolveLogIngestGaps,
   useUploadLogAsset,
   deriveLogDiskPct,
   lastValue,
@@ -155,7 +154,6 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
   const control = useControlLogRuntime(node.id)
   const installAsset = useInstallLogAsset(node.id)
   const uploadAsset = useUploadLogAsset()
-  const resolveGaps = useResolveLogIngestGaps(node.id)
 
   /*
     【为什么删掉了 canMigrate】迁移分区（HOT→COLD）随冷热双层废除已无业务语义：
@@ -302,7 +300,7 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
               assetSha: approvedAsset?.executableSha256,
               error: logQ.isError ? errMsg(logQ.error, t('logsRuntime.opFailed', '操作失败')) : null,
             }}
-            busy={control.isPending || resolveGaps.isPending || installAsset.isPending || uploadAsset.isPending}
+            busy={control.isPending || installAsset.isPending || uploadAsset.isPending}
             pending={{
               upload: uploadAsset.isPending,
               install: installAsset.isPending,
@@ -330,12 +328,6 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
               void control
                 .mutateAsync({ namespace: ns, action })
                 .then(() => toast.success(t(`logsRuntime.action.${action}`, '已完成')))
-                .catch((err) => toast.error(errMsg(err, t('logsRuntime.opFailed', '操作失败'))))
-            }}
-            onResolveGaps={() => {
-              void resolveGaps
-                .mutateAsync(undefined)
-                .then(() => toast.success(t('logsRuntime.gapsResolved', '已核销已被投影覆盖的缺口')))
                 .catch((err) => toast.error(errMsg(err, t('logsRuntime.opFailed', '操作失败'))))
             }}
           />

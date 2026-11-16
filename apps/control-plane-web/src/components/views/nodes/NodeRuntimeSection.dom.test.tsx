@@ -133,31 +133,39 @@ describe('NodeRuntimeSection', () => {
     await waitFor(() => expect(screen.queryByText('扫描发现运行时')).not.toBeInTheDocument())
   })
 
-  it('安装 Node.js：LTS 快选切换后上报所选主版本，成功后关闭模态', async () => {
+  it('安装 Node.js：主版本用下拉选择（不再手输），选 20 后上报', async () => {
     const user = userEvent.setup()
     const { onInstall } = renderSection()
 
     await user.click(screen.getByRole('button', { name: /安装 Node\.js/ }))
     expect(await screen.findByText('主版本')).toBeInTheDocument()
 
-    // 默认 22；切到 20 LTS 后下发。
-    await user.click(screen.getByRole('button', { name: '20 LTS' }))
-    await user.click(screen.getByRole('button', { name: /下发安装/ }))
+    /*
+      改造后的交互：主版本是 Combobox（可输入过滤的下拉），**不再有自由手输**。
+      断言两件事：
+        ① 输入框里展示的是预选好的值（默认 22），用户不必自己敲；
+        ② 展开候选能看到带 LTS/EOL 的完整描述——这正是把它做成下拉的目的。
+    */
+    // Combobox 的触发元素是 button（点开才是候选面板），可访问名来自 ariaLabel。
+    const combo = await screen.findByRole('button', { name: '主版本' })
+    expect(combo).toHaveTextContent('Node.js 22 · LTS Jod · 当前推荐 · 维护至 2027-04')
 
+    await user.click(combo)
+    const option20 = await screen.findByText(/Node\.js 20 · LTS Iron/)
+    await user.click(option20)
+
+    await user.click(screen.getByRole('button', { name: /下发安装/ }))
     await waitFor(() => expect(onInstall).toHaveBeenCalledWith(20))
     await waitFor(() => expect(screen.queryByRole('button', { name: /下发安装/ })).not.toBeInTheDocument())
   })
 
-  it('安装 Node.js：自定义主版本非法时禁用下发', async () => {
+  it('安装 Node.js：安装预览随所选版本更新（明示将装什么）', async () => {
     const user = userEvent.setup()
     renderSection()
 
     await user.click(screen.getByRole('button', { name: /安装 Node\.js/ }))
-    const input = await screen.findByRole('textbox', { name: '主版本' })
-    await user.clear(input)
-    expect(screen.getByRole('button', { name: /下发安装/ })).toBeDisabled()
-    await user.type(input, '24')
-    expect(screen.getByRole('button', { name: /下发安装/ })).toBeEnabled()
+    // 默认 22 → 预览里写明 LTS 代号，用户点确认前就知道将装什么。
+    expect(await screen.findByText(/将安装 Node\.js 22（LTS Jod）/)).toBeInTheDocument()
   })
 
   it('重扫返回已登记候选时全部禁勾，入库按钮保持禁用', async () => {

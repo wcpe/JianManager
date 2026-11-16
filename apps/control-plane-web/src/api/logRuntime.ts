@@ -123,13 +123,6 @@ export function useMigrateLogPartition(nodeId: number) {
   })
 }
 
-export function useResolveLogIngestGaps(nodeId: number) {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async () => (await api.post(`/nodes/${nodeId}/log-runtime/ingest/resolve-gaps`)).data,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['log-runtime', nodeId] }),
-  })
-}
 
 /**
  * 日志存储容量的原始指标键（后端 `model/metric.go` 落点）。

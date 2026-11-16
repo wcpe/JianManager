@@ -10,7 +10,6 @@ import {
   RotateCw,
   Square,
   Upload,
-  Wrench,
 } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -88,14 +87,6 @@ export interface LogRuntimeFlowProps {
   onUpload: (file: File) => void
   onInstall: () => void
   onControl: (namespace: string, action: 'start' | 'stop' | 'restart') => void
-  /**
-   * 人工应急：核销采集缺口。
-   *
-   * 【为什么没有「归档回灌」了】回灌的语义是「把**冷层**归档对象恢复回可查询面」——
-   * 冷热双层废除后没有 COLD 层，也就没有归档对象可取回；Worker 侧未装配 planner 时
-   * 还会直接回 "rehydrate disabled on this worker"。保留一个必然失败的按钮比没有更糟。
-   */
-  onResolveGaps: () => void
 }
 
 /** 状态 → 徽章色调。RUNNING 且健康才是绿；ERROR/FAIL 是红；其余中性。 */
@@ -297,7 +288,6 @@ export function LogRuntimeFlow({
   onUpload,
   onInstall,
   onControl,
-  onResolveGaps,
 }: LogRuntimeFlowProps) {
   const { t } = useTranslation()
   const fileInputId = `log-asset-upload-${view.os}-${view.arch}`
@@ -393,31 +383,6 @@ export function LogRuntimeFlow({
         </div>
       )}
 
-      {/*
-        人工应急区：只保留与冷热存储无关的处置动作。
-        缺口核销处理的是「采集中断留下的完整性缺口」，与存储分层无关，因此保留。
-      */}
-      <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/20 px-2.5 py-1.5">
-        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-          {t('logsRuntime.ops.title', '人工应急')}
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-6 gap-1 px-2 text-[10px]"
-          disabled={busy || !view.online}
-          title={t('logsRuntime.gaps.help', '采集中断留下的缺口，可投影证明完整后核销')}
-          data-testid="log-op-resolve-gaps"
-          onClick={onResolveGaps}
-        >
-          <Wrench className="size-3" />
-          {t('logsRuntime.gaps.resolve', '核销缺口')}
-        </Button>
-        <span className="text-[10px] text-muted-foreground/60">
-          {t('logsRuntime.ops.hint', '仅特殊故障处置时使用；依赖部署是否启用缺口后端。')}
-        </span>
-      </div>
 
       {/* 一句常驻说明：冷热双层已废除这件事对用户不显然，写清楚避免误解。 */}
       <p className="flex items-start gap-1 text-[10px] leading-snug text-muted-foreground/80">

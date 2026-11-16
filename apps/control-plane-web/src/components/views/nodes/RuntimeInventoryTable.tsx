@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Coffee, Copy, FolderOpen, Hexagon, MoreHorizontal, Pencil, Boxes, Radar, Download, Trash2 } from 'lucide-react'
+import { Coffee, Copy, FolderOpen, Hexagon, MoreHorizontal, Pencil, Boxes, Radar, Download, Trash2, FileText } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -12,6 +12,13 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@jianmanager/ui/components/popover'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@jianmanager/ui/components/context-menu'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import {
   Table,
@@ -168,7 +175,21 @@ export function RuntimeInventoryTable({
           </TableHeader>
           <TableBody>
               {shown.map((row) => (
-                <TableRow key={row.key} className="hover:bg-muted/30" data-testid={`runtime-row-${row.key}`}>
+                /*
+                  每一行都可右键操作（与「⋯」菜单同一套动作）。
+                  为什么两套入口都留：清单表是高频扫读的地方，右键是「停在某行直接动手」，
+                  而「⋯」是给不知道右键的人的可发现性兜底。两者动作必须完全同源，
+                  否则就会出现「右键能删、⋯不能删」这类分裂——所以 RowContextMenu 直接复用
+                  RowMenu 的那份 blocked 判定。
+                */
+                <RowContextMenu
+                  key={row.key}
+                  row={row}
+                  onEdit={onEdit}
+                  onDelete={onDelete}
+                  onCopyPath={onCopyPath}
+                >
+                <TableRow className="hover:bg-muted/30" data-testid={`runtime-row-${row.key}`}>
                   <TableCell className="px-2.5 py-1.5">
                     <span className="inline-flex items-center gap-1.5">
                       <TypeIcon type={row.type} className="size-3.5 text-muted-foreground" />
@@ -216,6 +237,7 @@ export function RuntimeInventoryTable({
                     <RowMenu row={row} onEdit={onEdit} onDelete={onDelete} />
                   </TableCell>
                 </TableRow>
+                </RowContextMenu>
               ))}
           </TableBody>
         </Table>
@@ -320,6 +342,82 @@ function RefsCell({ row }: { row: RuntimeInventoryRow }) {
         </ul>
       </PopoverContent>
     </Popover>
+  )
+}
+
+/**
+ * 行的右键菜单。
+ *
+ * 动作与「⋯」菜单完全同源：编辑登记信息 / 复制路径 / 打开文件位置 / 删除。
+ * 删除项的禁用与原因说明复用 `deleteBlockedText`——**不重算**删除可行性，
+ * 判定只来自服务端 `deleteBlocked`，避免两套入口给出不同答案。
+ *
+ * 快捷键提示（Enter / Delete）是装饰性的，不实际绑定键盘：
+ * 表格行本身不是焦点单元，凭空给出可用的按键会误导。
+ */
+function RowContextMenu({
+  row,
+  onEdit,
+  onDelete,
+  onCopyPath,
+  children,
+}: {
+  row: RuntimeInventoryRow
+  onEdit: (row: RuntimeInventoryRow) => void
+  onDelete: (row: RuntimeInventoryRow) => void
+  onCopyPath: (path: string) => void
+  children: React.ReactNode
+}) {
+  const { t } = useTranslation()
+  const blockedText = deleteBlockedText(row)
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-56">
+        {/* 行标识：右键后先确认「我点的是哪一行」，尤其同厂商多版本时。 */}
+        <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+          {RUNTIME_TYPE_LABEL[row.type] ?? row.type} · {row.name} {row.majorVersion}
+          {row.arch ? ` · ${row.arch}` : ''}
+        </div>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => onEdit(row)} data-testid={`runtime-ctx-edit-${row.key}`}>
+          <Pencil className="mr-2 size-3.5" />
+          {t('nodes.runtime.edit', '编辑登记信息')}
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onCopyPath(row.path)} data-testid={`runtime-ctx-copy-${row.key}`}>
+          <Copy className="mr-2 size-3.5" />
+          {t('nodes.runtime.copyPath', '复制路径')}
+        </ContextMenuItem>
+        {/*
+          架构不是快捷键——之前把 row.arch 塞进 ContextMenuShortcut 是错的：
+          那个位置按惯例渲染成右对齐的按键提示，用户会以为「amd64 是个快捷键」。
+          架构信息改挂到行标识那行（它本来就该和版本一起说明「这是哪一份」）。
+        */}
+        <ContextMenuItem onSelect={() => onCopyPath(row.path)} data-testid={`runtime-ctx-locate-${row.key}`}>
+          <FolderOpen className="mr-2 size-3.5" />
+          {t('nodes.runtime.revealPath', '复制路径并定位')}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        {/* 删除：被引用时禁用并写明原因（与 ⋯ 菜单同一判定）。 */}
+        <ContextMenuItem
+          disabled={row.deleteBlocked}
+          onSelect={() => onDelete(row)}
+          className={cn(row.deleteBlocked ? 'text-muted-foreground' : 'text-status-danger')}
+          data-testid={`runtime-ctx-delete-${row.key}`}
+          title={blockedText ?? undefined}
+        >
+          <Trash2 className="mr-2 size-3.5" />
+          {blockedText ?? t('common.delete', '删除')}
+        </ContextMenuItem>
+        {row.refCount > 0 && row.type === 'jdk' && (
+          <ContextMenuItem disabled onSelect={() => {}}>
+            <FileText className="mr-2 size-3.5" />
+            {t('nodes.runtime.refsCount', { count: row.refCount, defaultValue: '{{count}} 个实例在用' })}
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

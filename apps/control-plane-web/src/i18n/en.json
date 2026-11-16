@@ -1252,7 +1252,9 @@
       "installHint": "Downloads the latest portable archive of this major from nodejs.org dist (or the configured mirror) via the node's outbound proxy into the managed directory. Track progress in Task Center.",
       "installConfirm": "Install",
       "installDispatched": "Node.js install task dispatched; track progress in Task Center",
-      "installFailed": "Failed to dispatch install"
+      "installFailed": "Failed to dispatch install",
+      "installMajorPlaceholder": "Select the Node.js version to install",
+      "installPreview": "Will install Node.js {{major}} ({{lts}})"
     },
     "enroll": {
       "addNode": "Add Node",
@@ -1582,7 +1584,12 @@
         "install": "Download JDK",
         "register": "Register existing JDK",
         "scan": "Scan for runtimes"
-      }
+      },
+      "installMajorPlaceholder": "Select the Node.js version to install",
+      "installPreview": "Will install Node.js {{major}} ({{lts}})",
+      "copyPath": "Copy path",
+      "revealPath": "Copy path and reveal in file manager",
+      "refsCount": "{{count}} instance(s) using it"
     }
   },
   "nodeProxy": {

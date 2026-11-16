@@ -1230,7 +1230,9 @@
       "installHint": "从 nodejs.org dist（或平台设置的镜像源）下载该主版本最新便携归档，经节点出站代理安装到托管目录。下发后进度见「任务中心」。",
       "installConfirm": "下发安装",
       "installDispatched": "Node.js 安装任务已下发，进度可在「任务中心」查看",
-      "installFailed": "安装下发失败"
+      "installFailed": "安装下发失败",
+      "installMajorPlaceholder": "选择要安装的 Node.js 版本",
+      "installPreview": "将安装 Node.js {{major}}（{{lts}}）"
     },
     "enroll": {
       "addNode": "添加节点",
@@ -1560,7 +1562,12 @@
         "install": "下载安装 JDK",
         "register": "登记已有 JDK",
         "scan": "扫描发现"
-      }
+      },
+      "installMajorPlaceholder": "选择要安装的 Node.js 版本",
+      "installPreview": "将安装 Node.js {{major}}（{{lts}}）",
+      "copyPath": "复制路径",
+      "revealPath": "复制并在文件管理器中定位",
+      "refsCount": "{{count}} 个实例在用"
     }
   },
   "artifactVersions": {

@@ -1,14 +1,14 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Boxes, Coffee, Copy, Download, Hexagon, Radar, Trash2 } from 'lucide-react'
+import { Boxes, Coffee, Copy, Download, Hexagon, PackageCheck, Radar, Trash2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Card } from '@jianmanager/ui/components/card'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
-import { Input } from '@jianmanager/ui/components/input'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { cn } from '@jianmanager/ui'
 import { Spinner } from '@jianmanager/ui/components/spinner'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
@@ -17,8 +17,36 @@ import { copyToClipboard } from '@/lib/shared/clipboard'
 /** 运行时类型展示名（专有名词，不进 i18n）。 */
 const TYPE_LABEL: Record<string, string> = { jdk: 'JDK', nodejs: 'Node.js', python: 'Python' }
 
-/** 常见 Node.js LTS 主版本快选（最小做法：静态列表 + 自定义输入，不代理 index.json）。 */
-const NODE_LTS_MAJORS = [22, 20, 18]
+/**
+ * Node.js 主版本候选（静态表，不代理 nodejs.org 的 index.json）。
+ *
+ * 【为什么不手输主版本】装运行时是「挑一个现成选项」而不是「填一个数字」：
+ * 手输 23 会装到一个非 LTS 版本、输 999 会在后端才失败。这里把候选连**决策信息**
+ * 一起给出（是否 LTS、维护到什么时候），用户不需要知道 Node 的版本策略也能选对。
+ */
+const NODE_MAJORS: Array<{ major: number; lts: string | null; eol: string; note?: string }> = [
+  { major: 22, lts: 'Jod', eol: '2027-04', note: '当前推荐' },
+  { major: 20, lts: 'Iron', eol: '2026-04' },
+  { major: 18, lts: 'Hydrogen', eol: '2025-04', note: '已接近 EOL' },
+  { major: 24, lts: null, eol: '2028-04', note: 'Current（非 LTS）' },
+]
+
+/**
+ * 主版本 → 下拉选项。
+ *
+ * 【为什么 EOL 塞进 label】`ComboboxOption` 只有 value/label 两个字段（没有副标题位）。
+ * 而「维护到什么时候」是选版本的硬约束，不能只放在 tooltip 里——悬停才可见等于没有。
+ * 于是并进 label 的一行文本里：`Node.js 22 · LTS Jod · 当前推荐 · 维护至 2027-04`。
+ */
+const NODE_MAJOR_OPTIONS: ComboboxOption[] = (
+  NODE_MAJORS.map((m) => ({
+    value: String(m.major),
+    label: `Node.js ${m.major} · ${m.lts ? `LTS ${m.lts}` : 'Current'}${m.note ? ` · ${m.note}` : ''} · 维护至 ${m.eol}`,
+  }))
+)
+
+/** 兼容旧引用（默认选中项）。 */
+const NODE_LTS_MAJORS = NODE_MAJORS.filter((m) => m.lts).map((m) => m.major)
 
 /** 运行时类型图标：jdk=咖啡、nodejs=六边形、其它=通用盒。 */
 function TypeIcon({ type, className }: { type: string; className?: string }) {
@@ -250,33 +278,40 @@ export default function NodeRuntimeSection({
             <DialogTitle>{t('nodes.runtimeLib.installTitle')}</DialogTitle>
           </DialogHeader>
           <ScrollableDialogBody className="space-y-3">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium" htmlFor="node-install-major">
-                {t('nodes.runtimeLib.installMajor')}
-              </label>
-              <div className="flex items-center gap-2">
-                {NODE_LTS_MAJORS.map((m) => (
-                  <Button
-                    key={m}
-                    type="button"
-                    size="sm"
-                    variant={installMajorNum === m ? 'default' : 'outline'}
-                    onClick={() => setInstallMajor(String(m))}
-                  >
-                    {m} LTS
-                  </Button>
-                ))}
-                <Input
-                  id="node-install-major"
-                  className="w-24"
-                  inputMode="numeric"
-                  value={installMajor}
-                  onChange={(e) => setInstallMajor(e.target.value)}
-                  aria-label={t('nodes.runtimeLib.installMajor')}
-                />
+            {/*
+              主版本改用下拉（Combobox）而不是「一排按钮 + 手输框」：
+              ① 手输数字没有任何约束，输错要到后端才失败；
+              ② 按钮排一排只给了版本号，没给「是不是 LTS / 维护到什么时候」——
+                 而这才是选版本的真正依据。下拉把两者合成一行。
+              allowCustom 关闭：候选是固定集合，允许自定义等于把手输的坑又开回来。
+            */}
+            <label className="block space-y-1.5">
+              <span className="text-sm font-medium">{t('nodes.runtimeLib.installMajor', '主版本')}</span>
+              <Combobox
+                options={NODE_MAJOR_OPTIONS}
+                value={installMajor}
+                onChange={setInstallMajor}
+                allowCustom={false}
+                placeholder={t('nodes.runtimeLib.installMajorPlaceholder', '选择要安装的 Node.js 版本')}
+                ariaLabel={t('nodes.runtimeLib.installMajor', '主版本')}
+              />
+            </label>
+
+            {/* 安装预览：明示将装什么、装到哪、进度去哪看（与 JDK 安装同一套口径）。 */}
+            <div className="flex items-start gap-2 rounded-md bg-primary/5 px-3 py-2.5 text-primary">
+              <PackageCheck className="mt-0.5 size-4 shrink-0" />
+              <div className="min-w-0 text-sm">
+                <p className="font-medium">
+                  {t('nodes.runtimeLib.installPreview', '将安装 Node.js {{major}}（{{lts}}）', {
+                    major: installMajor,
+                    lts: NODE_MAJORS.find((m) => String(m.major) === installMajor)?.lts
+                      ? `LTS ${NODE_MAJORS.find((m) => String(m.major) === installMajor)!.lts}`
+                      : 'Current',
+                  })}
+                </p>
+                <p className="mt-0.5 text-xs text-primary/70">{t('nodes.runtimeLib.installHint')}</p>
               </div>
             </div>
-            <p className="text-xs text-muted-foreground">{t('nodes.runtimeLib.installHint')}</p>
           </ScrollableDialogBody>
           <DialogFooter>
             <Button variant="outline" onClick={() => setInstallOpen(false)}>

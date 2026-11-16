@@ -201,7 +201,12 @@ v2 明确「资源仪表内联右置」，那个设计比原型新且是有意�
               label={t('nodes.cpu')}
               value={online ? Math.round((node.cpuUsage ?? 0) * 100) : 0}
               display={online ? `${Math.round((node.cpuUsage ?? 0) * 100)}` : '--'}
-              unit="%"
+              /*
+                【为什么 unit 传空】用户要求「节点小球里面不要百分号」：环本身就是「满格=100%」的
+                量感表达，再塞一个 % 会让 56px 的球心显得拥挤，且与旁边的数字重复。
+                口径不丢：悬浮 tooltip 里仍写明「CPU: 42% · 8 核」。
+              */
+              unit=""
               level={online ? (node.cpuUsage ?? 0) >= 0.9 ? 'danger' : (node.cpuUsage ?? 0) >= 0.8 ? 'warning' : 'success' : 'neutral'}
               tooltip={`${node.cpuCores} ${t('nodes.cpuCores')}`}
             />
@@ -209,7 +214,7 @@ v2 明确「资源仪表内联右置」，那个设计比原型新且是有意�
               label={t('nodes.memory')}
               value={online ? Math.round((node.memoryUsage ?? 0) * 100) : 0}
               display={online ? `${Math.round((node.memoryUsage ?? 0) * 100)}` : '--'}
-              unit="%"
+              unit=""
               level={online ? (node.memoryUsage ?? 0) >= 0.9 ? 'danger' : (node.memoryUsage ?? 0) >= 0.8 ? 'warning' : 'success' : 'neutral'}
               tooltip={`${t('nodes.memoryUsed', '内存已用')} ${online ? formatFileSize((node.memoryUsage ?? 0) * node.memoryMb * 1024 * 1024) : '--'} / ${formatFileSize(node.memoryMb * 1024 * 1024)}`}
             />
@@ -217,7 +222,7 @@ v2 明确「资源仪表内联右置」，那个设计比原型新且是有意�
               label={t('nodes.disk')}
               value={online ? Math.round((node.diskUsage ?? 0) * 100) : 0}
               display={online ? `${Math.round((node.diskUsage ?? 0) * 100)}` : '--'}
-              unit="%"
+              unit=""
               level={online ? (node.diskUsage ?? 0) >= 0.9 ? 'danger' : (node.diskUsage ?? 0) >= 0.8 ? 'warning' : 'success' : 'neutral'}
               tooltip={`${t('nodes.diskUsed', '磁盘已用')} ${online ? formatFileSize((node.diskUsage ?? 0) * node.diskTotalMb * 1024 * 1024) : '--'} / ${formatFileSize(node.diskTotalMb * 1024 * 1024)}`}
             />
