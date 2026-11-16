@@ -145,6 +145,18 @@ func (h *PMConfigHandler) mapErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
 	case errors.Is(err, service.ErrNodeOffline):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "NODE_OFFLINE", "message": "节点未连接，无法配置包管理器"})
+	case errors.Is(err, service.ErrTaskExclusiveBusy):
+		// 同节点同类重型任务在跑：409 + 占用者（与运行时安装同一套语义）。
+		var busy *service.TaskExclusiveBusyError
+		if errors.As(err, &busy) && busy.Existing != nil {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":        "TASK_EXCLUSIVE_BUSY",
+				"message":      service.DescribeExclusiveBusy(err),
+				"existingTask": busy.Existing,
+			})
+			return
+		}
+		c.JSON(http.StatusConflict, gin.H{"error": "TASK_EXCLUSIVE_BUSY", "message": service.DescribeExclusiveBusy(err)})
 	default:
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 	}

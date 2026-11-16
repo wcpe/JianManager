@@ -17,6 +17,7 @@ import NodeRuntimeSection from '@/components/views/nodes/NodeRuntimeSection'
 import { useScanRuntimes, useRegisterRuntime, useInstallRuntime } from '@/api/runtimes'
 import { toast } from 'sonner'
 import type { RuntimeInventoryRow } from '@/lib/nodes/runtime-inventory'
+import { conflictText, parseTaskConflict, tasksHref } from '@/lib/nodes/task-conflict'
 import { useState } from 'react'
 
 /**
@@ -185,6 +186,19 @@ export function RuntimeAddDrawer({
                     toast.success(t('nodes.runtimeLib.installDispatched', 'Node.js 安装任务已下发'))
                     return true
                   } catch (err) {
+                    /*
+                      被 409 拦（同节点已有同类任务在跑）与"安装失败"是两回事：
+                      后者重试有意义，前者要先去处置那个在跑的任务。
+                      所以这里给一条带跳转的提示，而不是让用户对着一句后端 message 干点。
+                    */
+                    const conflict = parseTaskConflict(err)
+                    if (conflict) {
+                      toast.warning(conflictText(conflict), {
+                        action: { label: t('nodes.runtime.goTasks', '去任务中心'), onClick: () => window.location.assign(tasksHref(conflict)) },
+                        duration: 8000,
+                      })
+                      return false
+                    }
                     toast.error(
                       (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
                         t('nodes.runtimeLib.installFailed', '安装失败'),

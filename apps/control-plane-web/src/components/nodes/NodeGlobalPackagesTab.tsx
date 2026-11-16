@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useGlobalPackages, useInstallGlobalPackage, useRemoveGlobalPackage } from '@/api/pmConfig'
 import NodeGlobalPackagesSection from '@/components/views/nodes/NodeGlobalPackagesSection'
+import { conflictText, parseTaskConflict, tasksHref } from '@/lib/nodes/task-conflict'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {
@@ -49,6 +50,14 @@ export default function NodeGlobalPackagesTab({
           toast.success(t('pkg.installSubmitted', '安装任务已提交，进度见任务中心'))
           return true
         } catch (err) {
+          const conflict = parseTaskConflict(err)
+          if (conflict) {
+            toast.warning(conflictText(conflict), {
+              action: { label: t('nodes.runtime.goTasks', '去任务中心'), onClick: () => window.location.assign(tasksHref(conflict)) },
+              duration: 8000,
+            })
+            return false
+          }
           toast.error(errMessage(err, t('pkg.installFailed', '提交安装失败')))
           return false
         }

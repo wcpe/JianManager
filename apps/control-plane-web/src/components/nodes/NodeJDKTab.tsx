@@ -6,6 +6,7 @@ import { useJDKCatalog } from '@/api/nodeRuntime'
 import NodeJDKPanel from '@/components/views/nodes/NodeJDKPanel'
 import { PingNodeButton } from '@/components/nodes/PingNodeButton'
 import DirectoryPicker from '@/components/nodes/DirectoryPicker'
+import { conflictText, parseTaskConflict, tasksHref } from '@/lib/nodes/task-conflict'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {
@@ -77,6 +78,15 @@ export default function NodeJDKTab({
           toast.success(t('artifactCache.jdkInstallDispatched'))
           return true
         } catch (err) {
+          // 409：同节点已有运行时安装任务在跑 → 给出可执行的跳转，而不是重试提示。
+          const conflict = parseTaskConflict(err)
+          if (conflict) {
+            toast.warning(conflictText(conflict), {
+              action: { label: t('nodes.runtime.goTasks', '去任务中心'), onClick: () => window.location.assign(tasksHref(conflict)) },
+              duration: 8000,
+            })
+            return false
+          }
           toast.error(errMessage(err, t('nodes.jdkInstallFailed')))
           return false
         }

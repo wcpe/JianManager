@@ -100,6 +100,26 @@ func (h *JDKHandler) Install(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
 			return
 		}
+		/*
+		  同类重型任务已在跑 → 409，并把占用者一并回给前端。
+		  【为什么不是 429/423】语义上是「资源被占用、状态冲突」，409 最贴切；
+		  前端据此能区分「稍后重试的临时错误」与「需要先去任务中心处理」。
+		  `existingTask` 让界面能直接显示「是谁在占着 + 跳过去停掉」，
+		  比只给一句"任务冲突"有用得多。
+		*/
+		if errors.Is(err, service.ErrTaskExclusiveBusy) {
+			var busy *service.TaskExclusiveBusyError
+			if errors.As(err, &busy) && busy.Existing != nil {
+				c.JSON(http.StatusConflict, gin.H{
+					"error":        "TASK_EXCLUSIVE_BUSY",
+					"message":      service.DescribeExclusiveBusy(err),
+					"existingTask": busy.Existing,
+				})
+				return
+			}
+			c.JSON(http.StatusConflict, gin.H{"error": "TASK_EXCLUSIVE_BUSY", "message": service.DescribeExclusiveBusy(err)})
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "INSTALL_FAILED", "message": err.Error()})
 		return
 	}

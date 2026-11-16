@@ -75,6 +75,11 @@ func (s *PMConfigService) InstallGlobalPackageAsync(nodeID uint, name, version s
 		return nil, ErrNodeOffline
 	}
 
+	// 重型任务单在途闸门：全局包安装写 <data>/opt/runtimes/global，同组只允许一个在途。
+	if err := s.tasks.AcquireExclusive(nodeID, model.TaskKindPkgInstall, ""); err != nil {
+		return nil, err
+	}
+
 	taskID := uuid.NewString()
 	ver := version
 	if ver == "" {

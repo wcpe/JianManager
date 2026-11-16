@@ -1569,7 +1569,8 @@
       "installPreview": "将安装 Node.js {{major}}（{{lts}}）",
       "copyPath": "复制路径",
       "revealPath": "复制并在文件管理器中定位",
-      "refsCount": "{{count}} 个实例在用"
+      "refsCount": "{{count}} 个实例在用",
+      "goTasks": "去任务中心"
     },
     "jdkInstalling": "正在下发…"
   },

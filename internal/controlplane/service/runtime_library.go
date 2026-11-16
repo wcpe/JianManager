@@ -353,6 +353,11 @@ func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequ
 		return nil, ErrNodeOffline
 	}
 
+	// 重型任务单在途闸门（与 JDK 安装同一互斥组：两者都写节点级托管运行时目录）。
+	if err := s.tasks.AcquireExclusive(nodeID, model.TaskKindRuntimeInstall, ""); err != nil {
+		return nil, err
+	}
+
 	taskID := uuid.NewString()
 	title := fmt.Sprintf("安装 Node.js %d", req.Major)
 	archLabel := arch

@@ -217,6 +217,15 @@ func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy 
 		return nil, ErrNodeOffline
 	}
 
+	/*
+	  重型任务单在途闸门：必须在**建任务/下发 Worker 之前**检查。
+	  否则连点两次会各建一条任务、各下发一次安装，两个下载同时写同一个托管目录。
+	  注意闸门放在拿 client 之后：节点离线时应报"节点离线"，不该报"任务占用"。
+	*/
+	if err := s.tasks.AcquireExclusive(nodeID, model.TaskKindJDKInstall, ""); err != nil {
+		return nil, err
+	}
+
 	taskID := uuid.NewString()
 	title := fmt.Sprintf("安装 JDK %s %d", req.Vendor, req.MajorVersion)
 	detail := fmt.Sprintf("节点 %s · %s · arch=%s", node.Name, title, req.Arch)

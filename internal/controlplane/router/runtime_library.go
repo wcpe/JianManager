@@ -34,6 +34,18 @@ func (h *RuntimeLibraryHandler) writeRuntimeLibErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "运行时不存在"})
 	case errors.Is(err, service.ErrNodeOffline):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "NODE_OFFLINE", "message": "节点未连接"})
+	case errors.Is(err, service.ErrTaskExclusiveBusy):
+		// 同节点同类重型任务在跑：409 + 占用者，前端可直接展示并跳去任务中心处置。
+		var busy *service.TaskExclusiveBusyError
+		if errors.As(err, &busy) && busy.Existing != nil {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":        "TASK_EXCLUSIVE_BUSY",
+				"message":      service.DescribeExclusiveBusy(err),
+				"existingTask": busy.Existing,
+			})
+			return
+		}
+		c.JSON(http.StatusConflict, gin.H{"error": "TASK_EXCLUSIVE_BUSY", "message": service.DescribeExclusiveBusy(err)})
 	case errors.Is(err, service.ErrInvalidRuntimeType), errors.Is(err, service.ErrRuntimeDuplicated),
 		errors.Is(err, service.ErrInvalidRuntimeArch):
 		// 未知 arch 明确 422 拒绝（齐平），不直透下载源产出误导性 404。

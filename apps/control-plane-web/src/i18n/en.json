@@ -1591,7 +1591,8 @@
       "installPreview": "Will install Node.js {{major}} ({{lts}})",
       "copyPath": "Copy path",
       "revealPath": "Copy path and reveal in file manager",
-      "refsCount": "{{count}} instance(s) using it"
+      "refsCount": "{{count}} instance(s) using it",
+      "goTasks": "Open task center"
     },
     "jdkInstalling": "Dispatching…"
   },
