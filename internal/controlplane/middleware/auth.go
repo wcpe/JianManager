@@ -24,6 +24,13 @@ const (
 // JWTAuth JWT 认证中间件。
 func JWTAuth(secret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 用户令牌（jmut_）已由 UserTokenAuth 前置校验并注入上下文（ADR-104）。
+		// 此处直接放行，避免重复鉴权与「jmut_ 被当 JWT 解析」的误判。
+		if GetUserTokenPrincipal(c) != nil {
+			c.Next()
+			return
+		}
+
 		auth := c.GetHeader("Authorization")
 		if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
