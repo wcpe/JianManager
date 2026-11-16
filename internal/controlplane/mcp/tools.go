@@ -17,6 +17,9 @@ type ToolDef struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
+	// Annotations 由 catalog 的 Operation 自动派生（ADR-103），不手写。
+	// 客户端据此在调用破坏性工具前征求用户确认。
+	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
 // ToolResult tools/call 返回结构（MCP 子集）。
@@ -236,7 +239,7 @@ func init() {
 func RegisteredTools() []ToolDef {
 	out := make([]ToolDef, 0, len(allToolSpecs))
 	for _, s := range allToolSpecs {
-		out = append(out, s.Def)
+		out = append(out, withAnnotations(s))
 	}
 	return out
 }
@@ -250,6 +253,29 @@ func ToolNames() []string {
 	return out
 }
 
+// withAnnotations 按 catalog 的操作等级派生 MCP tool 标注（ADR-111）。
+//
+// 标注是 catalog 的投影，不在 ToolDef 手写，避免与 Operation 漂移。
+// 无法解析 action 时原样返回（如纯协议工具）。
+func withAnnotations(s toolSpec) ToolDef {
+	def := s.Def
+	d, ok := service.DescribeAgentAction(s.Action)
+	if !ok {
+		return def
+	}
+	ann := map[string]any{
+		"readOnlyHint":    d.IsReadOnly(),
+		"destructiveHint": d.IsDestructive(),
+		"openWorldHint":   false,
+	}
+	// 破坏性操作需要服务端精确确认参数时，把确认字段一并告知客户端。
+	if d.RequiresConfirm && s.ConfirmField != "" {
+		ann["confirmField"] = s.ConfirmField
+	}
+	def.Annotations = ann
+	return def
+}
+
 // ToolsForPrincipal 按 principal 的能力与潜在 scope 动态裁剪工具列表。
 // V1 仅显示兼容解释器确实可能允许的工具；V2 按 capability 与 scope 可用性过滤。
 func ToolsForPrincipal(p *service.AgentPrincipal) []ToolDef {
@@ -259,7 +285,7 @@ func ToolsForPrincipal(p *service.AgentPrincipal) []ToolDef {
 	out := make([]ToolDef, 0, len(allToolSpecs))
 	for _, s := range allToolSpecs {
 		if _, err := service.CanDiscover(p, s.Action); err == nil {
-			out = append(out, s.Def)
+			out = append(out, withAnnotations(s))
 		}
 	}
 	return out
