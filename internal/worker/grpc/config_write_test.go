@@ -3,6 +3,7 @@ package grpc
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -114,8 +115,12 @@ func TestAtomicWriteFile_PreservesMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
-		t.Fatalf("权限位应保持 0600，实际 %v", info.Mode().Perm())
+	// 权限位只 POSIX 有意义：Windows 的 Mode().Perm() 恒报 0666（只读 0444），
+	// 与 chmod 无关；这里要验的是「原子写不改回 0644」这一 POSIX 语义。
+	if runtime.GOOS != "windows" {
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("权限位应保持 0600，实际 %v", info.Mode().Perm())
+		}
 	}
 }
 

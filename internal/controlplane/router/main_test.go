@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -149,7 +150,16 @@ func removeTreeWithRetry(root string) {
 // 用例在 `t.TempDir()` 下造一层 `0o000` 子目录 + 文件，断言整棵树被清掉。
 // 以 root 身份运行时 `0o000` 不构成障碍（root 可无视权限位），此时跳过，
 // 以免把「用例如实跑完」误报成通过。
+//
+// Windows 上也跳过：那里没有 POSIX 权限位，`Chmod(0o000)` 只映射到只读属性，
+// 目录仍可遍历，所以「不可读目录」这个前提根本构造不出来，保留它只会得到
+// 一个永远无意义的绿。注意不能用 `os.Geteuid() == 0` 代理这一判断——
+// Windows 上 Geteuid 恒返回 -1，永远不会命中，于是该用例会在 Windows 上
+// 真实执行并且必然失败。
 func TestRemoveTreeWithRetry_CleansUnreadableDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 无 POSIX 权限位，无法构造不可读目录")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("以 root 运行时权限位不构成障碍，无法验证兜底路径")
 	}
