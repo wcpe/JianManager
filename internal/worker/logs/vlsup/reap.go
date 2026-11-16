@@ -51,7 +51,7 @@ func matchesOwnOrphan(cmdline, exe, dataRoot string) bool {
 	// 路径边界（防 "/data/A" 误配 "/data/A-evil" ✗✓）：exe 必须**等于根**或**在根之下** ✓。
 	exeClean := filepath.Clean(exe)
 	underRoot := exeClean == root || strings.HasPrefix(exeClean, root+string(os.PathSeparator))
-	// cmdline 同样按**边界**判（root 后须是分隔符/空白/行尾 ✓，避免同款伪装 ✗）。
+	// cmdline 同样按**边界**判（root 后须是分隔符/空白/行尾 ✓，兼容 Windows 的反斜杠，避免同款伪装 ✗）。
 	boundary := false
 	for i := 0; ; {
 		j := strings.Index(cmdline[i:], root)
@@ -59,7 +59,7 @@ func matchesOwnOrphan(cmdline, exe, dataRoot string) bool {
 			break
 		}
 		end := i + j + len(root)
-		if end == len(cmdline) || cmdline[end] == '/' || cmdline[end] == ' ' || cmdline[end] == '=' || cmdline[end] == '\t' {
+		if end == len(cmdline) || cmdline[end] == '/' || cmdline[end] == '\\' || cmdline[end] == ' ' || cmdline[end] == '=' || cmdline[end] == '\t' {
 			boundary = true
 			break
 		}

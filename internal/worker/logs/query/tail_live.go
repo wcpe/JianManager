@@ -90,9 +90,21 @@ func (s *Service) followLive(ctx context.Context, req QueryRequest) TailResponse
 					TimeRange: TimeRange{FromUTC: req.TimeRange.FromUTC}, Filter: req.Filter, Budget: budget, ClosedVisibleSeq: rng.ClosedVisibleSeq})
 				unpin()
 				if err != nil {
-					if ctx.Err() != nil {
+					// 必须区分「请求级超时」与「范围不可用」，不能像原先那样只用
+					// 父 ctx 判定：workCtx 由 req.Budget.TimeoutMS 派生（本轮预算窗口），
+					// 它到期时父 ctx 往往仍然存活。原实现因此走进 else 分支，
+					// 只标 ReasonRangeUnavailable 却**不设置 resp.Err**——调用方拿到
+					// 一个「成功但部分覆盖」的响应，完全看不到超时事实，与
+					// search/stats/fields/facets/tail 的行为不一致（它们都会返回 QueryError）。
+					if ctx.Err() != nil || errors.Is(err, context.Canceled) && errors.Is(readCtx.Err(), context.Canceled) {
 						resp.Err = newErr(ErrCodeCancelled, "live tail cancelled")
 						resp.Coverage.MarkIncomplete(ReasonCancelled)
+						resp.Coverage.EnumerationState = EnumCancelled
+					} else if errors.Is(readCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+						// 本轮预算窗口耗尽：语义上是「取消本次尾流」，对外统一为 Cancelled。
+						resp.Err = newErr(ErrCodeCancelled, "live tail cancelled: 本轮观测窗口已到期")
+						resp.Coverage.MarkIncomplete(ReasonCancelled)
+						resp.Coverage.EnumerationState = EnumCancelled
 					} else {
 						if errors.Is(err, ErrRangeClientUnimplemented) {
 							resp.Err = newErr(ErrCodeUnsupported, "live search unimplemented")

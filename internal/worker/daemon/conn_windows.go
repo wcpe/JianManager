@@ -27,5 +27,10 @@ func platformDialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
 	return npipe.DialTimeout(addr, timeout)
 }
 
+// platformDialProbe 用短超时探测命名管道，避免不存在的管道按默认 2 秒阻塞。
+func platformDialProbe(addr string) (net.Conn, error) {
+	return npipe.DialTimeout(addr, 50*time.Millisecond)
+}
+
 // RemoveSocket 在 Windows 上是空操作：Named Pipe 无对应文件。
 func RemoveSocket(addr string) {}

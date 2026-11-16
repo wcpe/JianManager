@@ -42,6 +42,7 @@ func TestAssistantConfirmPendingIndex_DirtyDBCollapsesDuplicates(t *testing.T) {
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
+	cleanupDB(t, db)
 
 	// 先只建表（不跑 AutoMigrate，避免索引已被建上），造出旧版本的脏数据。
 	require.NoError(t, db.AutoMigrate(&model.AssistantConfirmation{}))
@@ -88,6 +89,7 @@ func TestAssistantConfirmPendingIndex_IdempotentOnCleanDB(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "clean.db")),
 		&gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
+	cleanupDB(t, db)
 	require.NoError(t, db.AutoMigrate(&model.AssistantConfirmation{}))
 
 	require.NoError(t, migrateAssistantConfirmPendingIndex(db))

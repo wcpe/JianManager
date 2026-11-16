@@ -1,6 +1,8 @@
 package hostobs
 
 import (
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -73,7 +75,20 @@ func TestRealHostCollection(t *testing.T) {
 			t.Fatalf("挂载点 %s 使用率越界: %f", m.Mountpoint, m.UsedPct)
 		}
 	}
-	// 根分区一定存在，且不应被伪文件系统过滤掉
+	// 根分区一定存在，且不应被伪文件系统过滤掉；Windows 以盘符根表示。
+	if runtime.GOOS == "windows" {
+		var hasDriveRoot bool
+		for _, m := range snap.Mounts {
+			if filepath.VolumeName(m.Mountpoint) != "" {
+				hasDriveRoot = true
+				break
+			}
+		}
+		if !hasDriveRoot {
+			t.Fatalf("应包含至少一个盘符根挂载点，实际 %+v", snap.Mounts)
+		}
+		return
+	}
 	var hasRoot bool
 	for _, m := range snap.Mounts {
 		if m.Mountpoint == "/" {

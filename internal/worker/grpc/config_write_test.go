@@ -29,6 +29,25 @@ func TestResolveSafePath_RejectsEscape(t *testing.T) {
 	}
 }
 
+// TestResolveSafePath_RejectsForeignAbsolute 回归锁定 Windows 与 POSIX 路径方言的绝对路径。
+// 该判定必须脱离测试宿主 GOOS：Windows 不能放行 `/etc/passwd`，Linux 也不能把 `\\etc` 或
+// `C:\\Windows` 当成普通工作目录相对路径；安全校验只能收紧，不能放松既有拒绝结论。
+func TestResolveSafePath_RejectsForeignAbsolute(t *testing.T) {
+	workDir := t.TempDir()
+	for _, rel := range []string{
+		"/etc/passwd",
+		`\etc\passwd`,
+		`C:\Windows\system32\drivers\etc\hosts`,
+		`C:/Windows/system32/drivers/etc/hosts`,
+		`C:relative`,
+		`\\server\share\config.yml`,
+	} {
+		if _, err := resolveSafePath(workDir, rel); err == nil {
+			t.Errorf("跨平台绝对路径 %q 必须被拒绝", rel)
+		}
+	}
+}
+
 // TestResolveSafePath_AcceptsNested 验证合法的子目录路径被接受并落在工作目录内。
 func TestResolveSafePath_AcceptsNested(t *testing.T) {
 	workDir := t.TempDir()

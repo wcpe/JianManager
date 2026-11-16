@@ -135,6 +135,7 @@ func TestNewStrategy_Routing(t *testing.T) {
 // 注：完整的 docker 生命周期（拉镜像/创建/attach/停止）经注入 fake 客户端在 docker_test.go 覆盖。
 func TestManager_DockerStartWithoutImageFails(t *testing.T) {
 	m := NewManager(t.TempDir())
+	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	err := m.Create("inst-d", "Docker", "echo hi", "", ".", nil, false, ProcessTypeDocker, "", "", 0, 0)
 	assert.NoError(t, err)
 

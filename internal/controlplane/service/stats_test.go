@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"testing"
 	"time"
@@ -304,12 +305,12 @@ func TestStats_OverviewCounts(t *testing.T) {
 		CPUCores: 100, MemoryMB: 1024, MemoryUsedMB: 1024, CPUUsage: 99,
 	}).Error)
 
-	for _, s := range []model.InstanceStatus{
+	for i, s := range []model.InstanceStatus{
 		model.InstanceStatusRunning, model.InstanceStatusRunning,
 		model.InstanceStatusStopped, model.InstanceStatusCrashed,
 	} {
 		require.NoError(t, svc.db.Create(&model.Instance{
-			UUID: "i-" + string(s) + "-" + time.Now().Format("150405.000000000"), NodeID: 1, Name: "i",
+			UUID: fmt.Sprintf("i-%d-%s", i, s), NodeID: 1, Name: "i",
 			Type: model.InstanceTypeMinecraftJava, ProcessType: "direct",
 			StartCommand: "java", Status: s,
 		}).Error)

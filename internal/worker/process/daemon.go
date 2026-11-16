@@ -40,9 +40,11 @@ type daemonStrategy struct {
 	// wrapperCommand 为启动配置的受控 helper 测试接缝；nil 始终执行当前 Worker 的 daemon 子命令。
 	wrapperCommand func(executable string) *exec.Cmd
 	wrapperCmd     *exec.Cmd
-	conn           net.Conn
-	state          InstanceState
-	closed         bool
+	// wrapperPID 独立保存 PID 记录。Windows 上无法打开句柄时仍需保留已确认的 PID，供心跳与状态快照使用。
+	wrapperPID int
+	conn       net.Conn
+	state      InstanceState
+	closed     bool
 
 	// readWg 跟踪输出读取 goroutine
 	readWg sync.WaitGroup
@@ -177,6 +179,7 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 		return fmt.Errorf("启动 wrapper 失败: %w", err)
 	}
 	d.wrapperCmd = cmd
+	d.wrapperPID = cmd.Process.Pid
 	d.state = StateRunning
 	slog.Info("daemon wrapper 已启动", "instanceId", d.spec.UUID, "wrapperPid", cmd.Process.Pid)
 
@@ -686,25 +689,26 @@ func (d *daemonStrategy) Reconnect(addr string) error {
 func (d *daemonStrategy) SetWrapperPID(pid int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if pid > 0 {
-		proc, err := os.FindProcess(pid)
-		if err == nil {
-			d.wrapperCmd = exec.Command("") // 占位，进程已存在
-			if d.wrapperCmd.Process == nil {
-				d.wrapperCmd.Process = proc
-			}
-		}
+	if pid <= 0 {
+		return
+	}
+	// PID 已由上游存活探测与归属复核确认，句柄获取失败不应抹掉它的观测身份。
+	d.wrapperPID = pid
+	d.wrapperCmd = nil
+	if proc, err := os.FindProcess(pid); err == nil {
+		d.wrapperCmd = exec.Command("") // 占位，进程已存在
+		d.wrapperCmd.Process = proc
 	}
 }
 
-// GetPID 返回 wrapper 进程的 PID，未启动或已退出时返回 0。
+// GetPID 返回已知的 wrapper 进程 PID；未启动且未恢复 PID 时返回 0。
 func (d *daemonStrategy) GetPID() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.wrapperCmd == nil || d.wrapperCmd.Process == nil {
-		return 0
+	if d.wrapperCmd != nil && d.wrapperCmd.Process != nil {
+		return d.wrapperCmd.Process.Pid
 	}
-	return d.wrapperCmd.Process.Pid
+	return d.wrapperPID
 }
 
 // decodeGBK 将 GBK 字节解码为 UTF-8（Windows Java 输出常见）。

@@ -22,6 +22,16 @@ import (
 // 那么一次密钥配置失误就会把所有供应商凭据永久毁掉，而重录需要每个供应商的原始密钥——
 // 那是不可恢复的损失。因此失败路径断言「密文原样还在」。
 
+// cleanupFileDB 登记底层连接清理，避免 Windows 在 t.TempDir 清理前仍被 SQLite 文件句柄占用。
+func cleanupFileDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("获取数据库连接失败: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+}
+
 // newFileDB 在临时目录建一个文件型库（t.TempDir 由测试框架回收）。
 func newFileDB(t *testing.T, name string) (*gorm.DB, string) {
 	t.Helper()
@@ -32,6 +42,7 @@ func newFileDB(t *testing.T, name string) (*gorm.DB, string) {
 	if err != nil {
 		t.Fatalf("打开文件库失败: %v", err)
 	}
+	cleanupFileDB(t, db)
 	if err := db.AutoMigrate(&model.AssistantProvider{}, &model.AssistantModel{}, &model.AssistantSetting{}); err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}
@@ -47,6 +58,7 @@ func openExistingDB(t *testing.T, dsn string) *gorm.DB {
 	if err != nil {
 		t.Fatalf("重新打开库失败: %v", err)
 	}
+	cleanupFileDB(t, db)
 	return db
 }
 

@@ -1,6 +1,7 @@
 package logtail
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -99,6 +100,6 @@ func TestBindingsAddStatic_Normalize(t *testing.T) {
 	got := b.StaticSources()
 	require.Len(t, got, 1, "空 target 或空 path 的条目应被剔除")
 	assert.Equal(t, "node:1", got[0].TargetID)
-	assert.Equal(t, "/var/log/a.log", got[0].Path)
+	assert.Equal(t, filepath.FromSlash("/var/log/a.log"), got[0].Path)
 	assert.Equal(t, "file", got[0].Stream, "stream 缺省值应为 file")
 }

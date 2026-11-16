@@ -41,6 +41,7 @@ func TestDaemonStrategyStartCanceledIsRetryableAndNotCrashed(t *testing.T) {
 	require.False(t, daemon.SocketServed(pidDir, uuid), "socket 未监听（本用例只针对等待阶段）")
 
 	mgr := NewManager(pidDir)
+	mgr.SetMemGuard(MemGuardConfig{Disabled: true})
 	require.NoError(t, mgr.Create(uuid, "Daemon", keepAliveCmd(), "", pidDir, nil, false, ProcessTypeDaemon, "", "", 0, 300))
 	inst, ok := mgr.GetInstance(uuid)
 	require.True(t, ok)

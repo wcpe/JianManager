@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 )
 
@@ -180,17 +181,21 @@ func (l *leaseDeltaLog) compact(entries []LeaseDelta) error {
 		if err = os.Rename(name, l.path); err != nil {
 			return err
 		}
-		parent, err := os.Open(dir)
-		if err != nil {
-			return err
-		}
-		err = parent.Sync()
-		closeErr := parent.Close()
-		if err != nil {
-			return err
-		}
-		if closeErr != nil {
-			return closeErr
+		if runtime.GOOS != "windows" {
+			// Windows 不支持对目录句柄执行 fsync；文件本身已在替换前完成 Sync，
+			// 这里仅跳过 POSIX 专属的目录项持久化步骤。
+			parent, err := os.Open(dir)
+			if err != nil {
+				return err
+			}
+			err = parent.Sync()
+			closeErr := parent.Close()
+			if err != nil {
+				return err
+			}
+			if closeErr != nil {
+				return closeErr
+			}
 		}
 	}
 	l.entries = next

@@ -21,6 +21,7 @@ func TestAssistantChatRestartCycle(t *testing.T) {
 	open := func() *gorm.DB {
 		db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{Logger: logger.Discard})
 		require.NoError(t, err)
+		cleanupDB(t, db)
 		return db
 	}
 
