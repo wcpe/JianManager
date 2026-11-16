@@ -492,17 +492,51 @@ func (s *SettingsService) UpdateNodeScoped(nodeUUID string, values map[string]st
 	return s.writeValues(scoped, true)
 }
 
-// isWindowsAbsPath 判定 Windows 形态的绝对路径（盘符或 UNC）。
+// isWindowsAbsPath 判定 Windows 方言下不指向实例工作目录的路径形态：
+// UNC（前导 `\\`）、盘根相对（前导单 `\`）与盘符（含 `C:relative` 这种“相对当前盘”）。
 //
-// 为什么 CP 要单独判（2026-10-20 审查）：CP 跑 Linux、节点可能跑 Windows 时，
-// `filepath.IsAbs` 在 CP 上对 `C:\\logs\\a.log` / `\\server\share\x` 返回 false，
+// 注：UNC 的**正斜杠**写法（`//server/share/x`）不归本函数，它首字符是 `/`，
+// 已由 isPOSIXAbsPath 拦下（两种方言在此处结论一致，不必重复判）。
+//
+// 为何 CP 要单独判（2026-10-20 审查）：CP 跑 Linux、节点可能跑 Windows 时，
+// `filepath.IsAbs` 在 CP 上对 `C:\logs\a.log` / `\server\share\x` 返回 false，
 // 校验放行、返回 200；到了 Windows 节点上 `filepath.IsAbs` 为 true，Worker 的
 // validateInstanceRelativePath 直接拒绝登记 —— 用户看到的是「保存成功但实例日志登记失败」。
+//
+// 2026-11-16 扩充前导单 `\`（原仅双 `\`）：`\logs\a.log` 在 Windows 上是“当前盘根相对”，
+// 指向盘根而非实例工作目录；而 Go 的 filepath.IsAbs 对它返回 false（volumeNameLen 不认
+// “单分隔符开头”为卷名），漏网后会被当成工作目录内的相对路径。
 func isWindowsAbsPath(p string) bool {
-	if strings.HasPrefix(p, `\\`) {
+	if strings.HasPrefix(p, `\`) {
 		return true
 	}
-	return len(p) >= 2 && ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':'
+	return hasDrivePrefix(p)
+}
+
+// hasDrivePrefix 判定 `X:` 形态（盘符）。
+//
+// 单独拆出来是为了让绝对性判据能复用：盘符后无论跟不跟分隔符，都不指向实例工作目录内。
+func hasDrivePrefix(p string) bool {
+	return len(p) >= 2 &&
+		((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':'
+}
+
+// isPOSIXAbsPath 判定 POSIX 方言的绝对路径（前导 `/`），**不依赖宿主 GOOS**。
+//
+// 为何不能用 filepath.IsAbs（2026-11-16 修）：`path/filepath` 的语义在**编译期**
+// 按 GOOS 绑定，而 CP 的产物有 linux 与 windows 两版，同一段校验在两版上结论不同：
+//
+//   - Windows 版把 `/etc/shadow` 经 FromSlash 变成 `\etc\shadow`，再问 filepath.IsAbs——
+//     Windows 的 volumeNameLen 对「单分隔符开头」返回 0（GOROOT
+//     internal/filepathlite/path_windows.go），IsAbs 随之返回 **false**；
+//   - 于是 POSIX 绝对路径在 Windows 版 CP 上依次穿过 IsAbs(false) → isWindowsAbsPath(false)
+//     → escapesUnderWindowsSeparators(false) → Clean 得 `\etc\shadow` 不以 `..` 开头 →
+//     **落库放行**。这就是「CP 在 Linux 上拒、在 Windows 上放」的静默分叉。
+//
+// 故判据改为**纯字符串**，两版 CP 得到同一个结论。本函数**只做收紧**：它拒掉的值在
+// Linux 版上原本已被 filepath.IsAbs 拒掉，在 Windows 版上则是漏网——不放松任何既有拒绝结论。
+func isPOSIXAbsPath(p string) bool {
+	return p != "" && p[0] == '/'
 }
 
 // escapesUnderWindowsSeparators 判断路径按 Windows 分隔符（`\` 与 `/`）折叠 `.`/`..` 后
@@ -1265,10 +1299,13 @@ func validateSettingValue(key, val string) error {
 				if trimmed != p {
 					return fmt.Errorf("%w: 路径覆盖的值首尾不得有空白（%s = %q）", ErrSettingValueInvalid, target, p)
 				}
-				if filepath.IsAbs(filepath.FromSlash(trimmed)) {
+				// 绝对路径不指向实例工作目录内，一律拒。这里**不能**用 filepath.IsAbs：
+				// 它按宿主 GOOS 绑定语义，Windows 版 CP 会把 `/etc/shadow` 判成相对路径而放行
+				// （详见 isPOSIXAbsPath 注释）。POSIX 与 Windows 两种方言各用一道纯字符串判据。
+				if isPOSIXAbsPath(trimmed) {
 					return fmt.Errorf("%w: 路径覆盖须为相对实例工作目录的路径，不接受绝对路径（%s = %q）", ErrSettingValueInvalid, target, p)
 				}
-				// Windows 形态（盘符 / UNC）在 Linux 的 CP 上 IsAbs 为 false，但下发给
+				// Windows 形态（盘符 / UNC / 根相对）在 Linux 的 CP 上 IsAbs 为 false，但下发给
 				// Windows 节点时会被 Worker 判为绝对路径并拒绝登记——届时表现为
 				// 「保存成功、实例日志登记失败」。这里提前拒掉。
 				if isWindowsAbsPath(trimmed) {

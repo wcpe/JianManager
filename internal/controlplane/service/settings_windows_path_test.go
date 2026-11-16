@@ -29,9 +29,10 @@ func TestIsWindowsAbsPathSemantics(t *testing.T) {
 		{"盘符+正斜杠", `C:/logs/a.log`, true, "Windows 同时认 /，不得只认反斜杠"},
 		{"小写盘符", `d:\logs\a.log`, true, "盘符大小写不敏感"},
 		{"UNC 反斜杠", `\\server\share\x`, true, "UNC 在 Windows 上必是绝对路径"},
+		{"根相对单反斜杠", `\logs\a.log`, true, "前导单反斜杠是「当前盘根相对」，指向盘根而非工作目录；Go 的 filepath.IsAbs 反而判 false"},
 		{"盘符相对也拒", `C:relative`, true, "盘符相对（相对当前盘工作目录）同样不指向工作目录内；CP 按 `X:` 前缀整体拒绝"},
 		{"裸盘符", `C:`, true, "裸盘符无意义，一律拒"},
-		{"POSIX 绝对路径不归本判据", `/etc/shadow`, false, "由 filepath.IsAbs 那道负责（职责分离，本判据不重复）"},
+		{"POSIX 绝对路径不归本判据", `/etc/shadow`, false, "由 isPOSIXAbsPath 负责（职责分离，本判据不重复）"},
 		{"逃逸不归本判据", `..\..\etc\passwd`, false, "由 escapesUnderWindowsSeparators 负责"},
 		{"普通相对", `logs/latest.log`, false, ""},
 		{"Windows 相对", `logs\latest.log`, false, "反斜杠分隔但不越界，应放行"},
@@ -42,6 +43,58 @@ func TestIsWindowsAbsPathSemantics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.want, isWindowsAbsPath(tc.path), "%s（path=%q）", tc.why, tc.path)
 		})
+	}
+}
+
+// TestIsPOSIXAbsPathSemantics 固定「POSIX 绝对路径」判据的真值表，并锁死它**不依赖宿主 GOOS**。
+//
+// 这条判据存在的理由（2026-11-16）：原实现用 `filepath.IsAbs(filepath.FromSlash(p))` 拒绝对路径，
+// 但 `path/filepath` 的语义是**编译期**按 GOOS 绑定的，于是同一份校验在 linux 与 windows 两版
+// CP 上结论不同：Windows 版把 `/etc/shadow` 经 FromSlash 变成 `\etc\shadow`，而 Windows 的
+// volumeNameLen 不认「单分隔符开头」为卷名 → IsAbs 返回 false → 该值落库放行。
+// 而它下发给 Windows 节点后，Worker 会照读宿主机任意可读文件，CP 的 trust 边界形同虚设。
+//
+// 因此本判据必须纯粹按字符串判定，不接受任何 filepath / os 包的参与。
+// 下面的「宿主无关性」子测试用 Linux 上可算的另一种方言反证：它只应看首字符。
+func TestIsPOSIXAbsPathSemantics(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		want bool
+		why  string
+	}{
+		{"经典绝对", `/etc/shadow`, true, "首字符 `/` 即绝对，与宿主 GOOS 无关"},
+		{"根目录", `/`, true, ""},
+		{"盘符形态归 Windows 判据", `C:\logs\a.log`, false, "由 isWindowsAbsPath 负责，本判据不重复"},
+		{"盘符相对归 Windows 判据", `C:relative`, false, "同上"},
+		{"UNC 反斜杠归 Windows 判据", `\\server\share\x`, false, "由 isWindowsAbsPath 负责"},
+		{"普通相对", `logs/latest.log`, false, ""},
+		{"点开头的相对", `./logs/a.log`, false, "`./` 是相对写法，不得误拒"},
+		{"父目录逃逸不归本判据", `../etc/shadow`, false, "由 escapesUnderWindowsSeparators 与 Clean 负责"},
+		{"反斜杠相对", `logs\latest.log`, false, "运维自然写法必须放行"},
+		{"空串", ``, false, "空串由「值不能为空」单独一道拒"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isPOSIXAbsPath(tc.path), "%s（path=%q）", tc.why, tc.path)
+		})
+	}
+}
+
+// TestValidateSettingValueRejectsPOSIXAbsPathOnAnyHost 是**根因回归**：
+// 在 Windows 版 CP 上，这条值原本会因 filepath.IsAbs 的 GOOS 绑定而落库放行。
+//
+// 本用例在 Linux 上跑时新旧实现都通过，看似无用；但它是 Windows 版 `go test ./internal/controlplane/service/`
+// 的红/绿分界——没有它，判据回退到 filepath.IsAbs 不会被任何 Linux CI 拦住（因为 Linux 上 IsAbs 恰好正确）。
+// 故保留并注明：**不要把它改写成直接调 filepath.IsAbs 的形态**。
+func TestValidateSettingValueRejectsPOSIXAbsPathOnAnyHost(t *testing.T) {
+	for _, val := range []string{
+		`{"inst:1":"/etc/shadow"}`,
+		`{"inst:1":"/var/log/syslog"}`,
+		`{"inst:1":"/"}`,
+	} {
+		require.ErrorIs(t, validateSettingValue(SettingKeyLogAcqPathOverrides, val), ErrSettingValueInvalid,
+			"POSIX 绝对路径在**任何**宿主上都须被拒（否则 Windows 版 CP 会静默放行）：%s", val)
 	}
 }
 
