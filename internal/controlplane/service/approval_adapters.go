@@ -363,33 +363,49 @@ func RegisterApprovalAdapters(ex *ApprovalExecutor, d ApprovalAdapterDeps) []str
 
 	// ── 传输票据签发 ──
 	if d.Transfer != nil {
-		reg(ex, "file_issue_transfer_ticket", func(ctx context.Context, t *model.ApprovalTicket, p map[string]any) error {
-			id, err := payloadUint(p, "id")
-			if err != nil {
-				return err
-			}
-			direction, err := payloadString(p, "direction")
-			if err != nil {
-				return err
-			}
-			path, err := payloadString(p, "path")
-			if err != nil {
-				return err
-			}
-			// 必须按**原始 Token** 重建真实主体，不能塞一个空壳：
-			// Issue 内部会再跑一次 AuthorizeInstanceAction（并把 p.TokenID 写进票据声明），
-			// 空壳 principal 的 TokenID=0 且无任何 scope，必然被判越权——
-			// 表现为「批准了却执行失败：agent 操作被拒绝」，看起来像审批坏了。
-			//
-			// 从票据的 tokenId 加载：人类直接提单时该字段为空，此时无 Agent 主体可重建，
-			// 退化为拒绝并给出明确原因（而不是用一个假主体去撞授权）。
-			principal, perr := d.loadTicketPrincipal(t)
-			if perr != nil {
-				return perr
-			}
-			_, _, err = d.Transfer.Issue(principal, id, direction, path)
-			return err
-		})
+		// 走 WithResult 登记：票据明文必须回传给申请人，否则「批准了却拿不到」。
+		// 服务端只存 sha256(digest)，签发后丢弃就再也无法还原
+		// （见 agent_transfer_ticket.go 的 Issue）。
+		ex.RegisterAdapterWithResult("file_issue_transfer_ticket",
+			func(ctx context.Context, t *model.ApprovalTicket, p map[string]any) (any, error) {
+				id, err := payloadUint(p, "id")
+				if err != nil {
+					return nil, err
+				}
+				direction, err := payloadString(p, "direction")
+				if err != nil {
+					return nil, err
+				}
+				path, err := payloadString(p, "path")
+				if err != nil {
+					return nil, err
+				}
+				// 必须按**原始 Token** 重建真实主体，不能塞一个空壳：
+				// Issue 内部会再跑一次 AuthorizeInstanceAction（并把 p.TokenID 写进票据声明），
+				// 空壳 principal 的 TokenID=0 且无任何 scope，必然被判越权——
+				// 表现为「批准了却执行失败：agent 操作被拒绝」，看起来像审批坏了。
+				//
+				// 从票据的 tokenId 加载：人类直接提单时该字段为空，此时无 Agent 主体可重建，
+				// 退化为拒绝并给出明确原因（而不是用一个假主体去撞授权）。
+				principal, perr := d.loadTicketPrincipal(t)
+				if perr != nil {
+					return nil, perr
+				}
+				ticket, expiresAt, ierr := d.Transfer.Issue(principal, id, direction, path)
+				if ierr != nil {
+					return nil, ierr
+				}
+				// 字段与 MCP 直连路径（tools_file.go 的 callFileIssueTransferTicket）保持一致，
+				// 让「直连」与「审批后取回」两条路给出同一套信息，调用方无需写两套解析。
+				return map[string]any{
+					"ticket":           ticket,
+					"direction":        direction,
+					"path":             path,
+					"expiresAt":        expiresAt,
+					"uploadEndpoint":   "PUT /api/v1/agent-transfer/upload?ticket=<ticket>",
+					"downloadEndpoint": "GET /api/v1/agent-transfer/download?ticket=<ticket>",
+				}, nil
+			})
 	}
 
 	// ── 快照 / 二进制 ──
