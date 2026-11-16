@@ -548,7 +548,8 @@
     "home": "Back to home",
     "approvals": "Approvals",
     "configAdopt": "Config adoption",
-    "configDeliveries": "Config delivery"
+    "configDeliveries": "Config delivery",
+    "myTokens": "My Tokens"
   },
   "console": {
     "title": "Ops Console",
@@ -6816,5 +6817,60 @@
       "percent": "By percentage",
       "count": "By count"
     }
+  },
+  "userTokens": {
+    "title": "My Tokens",
+    "subtitle": "Tokens for CLI (jm) login. One per device, revocable at any time.",
+    "create": "New token",
+    "created": "Token created",
+    "createdTitle": "Token created",
+    "createdBody": "Copy and store it now.",
+    "onceOnly": "This plaintext is shown only once. If lost, revoke it and create a new one.",
+    "usageTitle": "Use it from the command line",
+    "cliHint": "CLI login",
+    "createTitle": "New token",
+    "createBody": "Create a login token for this device.",
+    "nameLabel": "Name",
+    "namePlaceholder": "e.g. My laptop",
+    "nameHint": "Only used by you to tell devices apart.",
+    "defaultName": "Untitled token",
+    "createFailed": "Failed to create",
+    "revokeFailed": "Failed to revoke",
+    "loadFailed": "Failed to load tokens",
+    "empty": "No tokens yet. Run jm auth login, or click \"New token\".",
+    "revoke": "Revoke",
+    "revoked": "Revoked",
+    "revokeTitle": "Revoke token",
+    "revokeBody": "Revoke \"{{name}}\"? The device using it will be signed out immediately.",
+    "copied": "Copied",
+    "copyFailed": "Copy failed",
+    "col": {
+      "name": "Name",
+      "device": "Device",
+      "prefix": "Prefix",
+      "expires": "Expires",
+      "lastUsed": "Last used",
+      "status": "Status"
+    },
+    "status": {
+      "active": "Active",
+      "revoked": "Revoked",
+      "expired": "Expired"
+    }
+  },
+  "deviceAuth": {
+    "title": "Device authorization",
+    "subtitle": "Run jm auth login in your terminal, then enter the code it shows.",
+    "codeLabel": "Device code",
+    "codeHint": "Format ABCD-1234, case-insensitive.",
+    "codeRequired": "Please enter the device code",
+    "approve": "Authorize",
+    "deny": "Deny",
+    "failed": "Authorization failed",
+    "warning": "Once authorized, this device acts as you. Only confirm logins you started yourself.",
+    "approvedTitle": "Authorized",
+    "approvedBody": "You can close this page and return to your terminal.",
+    "deniedTitle": "Denied",
+    "deniedBody": "This device will not get access."
   }
 }

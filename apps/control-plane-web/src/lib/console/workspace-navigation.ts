@@ -232,6 +232,8 @@ export const WORKSPACES: WorkspaceDef[] = [
           { to: '/users', labelKey: 'nav.users', icon: User, perm: 'user.read' },
           { to: '/groups', labelKey: 'nav.groups', icon: UsersRound, perm: 'group.read' },
           { to: '/permissions', labelKey: 'nav.permissions', icon: Shield, perm: 'rbac.read' },
+          // 我的令牌（FR-563 / ADR-112）：用户自助的人类凭证，无 perm 即所有登录用户可见。
+          { to: '/my-tokens', labelKey: 'nav.myTokens', icon: KeyRound },
         ],
       },
       {

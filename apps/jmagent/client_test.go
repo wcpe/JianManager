@@ -14,7 +14,7 @@ import (
 
 // newTestClient 指向 mock 服务器，注入 token。
 func newTestClient(ts *httptest.Server, token string) *Client {
-	c := newClient(Config{CPURL: ts.URL, Token: token})
+	c := newClient(Config{BaseURL: ts.URL, Token: token})
 	c.httpClient = ts.Client()
 	return c
 }
@@ -25,7 +25,7 @@ func TestClient_WhoamiSuccess(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/api/v1/agent/whoami", r.URL.Path)
 		assert.Equal(t, "Bearer jmat_test_token", r.Header.Get("Authorization"))
-		assert.Equal(t, "jmagent", r.Header.Get("X-JM-Agent-Client"))
+		assert.Equal(t, "jm", r.Header.Get("X-JM-Agent-Client"))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"kind":              "agent",

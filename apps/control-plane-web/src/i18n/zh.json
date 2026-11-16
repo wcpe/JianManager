@@ -548,7 +548,8 @@
     "home": "返回平台首页",
     "approvals": "审批中心",
     "configAdopt": "配置纳管",
-    "configDeliveries": "配置交付"
+    "configDeliveries": "配置交付",
+    "myTokens": "我的令牌"
   },
   "console": {
     "title": "运维控制台",
@@ -6816,5 +6817,60 @@
       "percent": "按百分比",
       "count": "按台数"
     }
+  },
+  "userTokens": {
+    "title": "我的令牌",
+    "subtitle": "用于命令行（jm）登录的令牌。每台设备一个，可随时吊销。",
+    "create": "新建令牌",
+    "created": "令牌已创建",
+    "createdTitle": "令牌已创建",
+    "createdBody": "请立即复制并妥善保存。",
+    "onceOnly": "此明文只显示一次，关闭后无法再次查看；若遗失请吊销后重新创建。",
+    "usageTitle": "在命令行中使用",
+    "cliHint": "命令行登录",
+    "createTitle": "新建令牌",
+    "createBody": "为这台设备创建一个登录令牌。",
+    "nameLabel": "名称",
+    "namePlaceholder": "例如：我的笔记本",
+    "nameHint": "仅用于你自己识别是哪个设备。",
+    "defaultName": "未命名令牌",
+    "createFailed": "创建失败",
+    "revokeFailed": "吊销失败",
+    "loadFailed": "加载令牌列表失败",
+    "empty": "还没有令牌。运行 jm auth login，或点「新建令牌」。",
+    "revoke": "吊销",
+    "revoked": "已吊销",
+    "revokeTitle": "吊销令牌",
+    "revokeBody": "确定吊销「{{name}}」吗？使用该令牌的设备会立即退出登录。",
+    "copied": "已复制",
+    "copyFailed": "复制失败",
+    "col": {
+      "name": "名称",
+      "device": "设备",
+      "prefix": "前缀",
+      "expires": "过期时间",
+      "lastUsed": "最后使用",
+      "status": "状态"
+    },
+    "status": {
+      "active": "有效",
+      "revoked": "已吊销",
+      "expired": "已过期"
+    }
+  },
+  "deviceAuth": {
+    "title": "设备授权",
+    "subtitle": "在终端运行 jm auth login 后，把终端显示的代码填到下面。",
+    "codeLabel": "设备代码",
+    "codeHint": "形如 ABCD-1234，不区分大小写。",
+    "codeRequired": "请输入设备代码",
+    "approve": "授权",
+    "deny": "拒绝",
+    "failed": "授权失败",
+    "warning": "授权后，该设备将以你的身份访问本系统。只在你本人发起的登录上确认。",
+    "approvedTitle": "已授权",
+    "approvedBody": "可以关掉本页，回到终端继续。",
+    "deniedTitle": "已拒绝",
+    "deniedBody": "该设备不会获得访问权限。"
   }
 }

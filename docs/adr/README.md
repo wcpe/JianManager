@@ -25,6 +25,8 @@
 - [ADR-104](104-danger-gate-self-judged.md) 危险操作的角色门禁由 DangerConfirm 自行判定（**修订 ADR-103** 保留的 a+b 范式中的门禁归属一环：删除 `allowed` prop，漏配即静默空转的失效模式随之消失）
 - [ADR-103](103-business-views-return-to-app.md) 业务视图与业务契约退回应用，组件库回归设计系统（收起「业务组件并入包」的归属决策；a+b 双范式作为组件写法保留，包内只留设计系统）
 - [ADR-102](102-log-partition-catalog-from-victorialogs.md) 日志分区目录以 VictoriaLogs 为事实来源（FR-477 配套；删除自维护分区映射，改为以 VL 为唯一事实源）
+- [ADR-112](112-user-token-separation.md) 用户令牌与 Agent Token 的凭证分离（`jmut_` 人类凭证 vs `jmat_` 机器凭证；权限取交集；device flow + keyring；FR-560～566）
+- [ADR-111](111-agent-knowledge-and-risk-annotation.md) Agent 运维知识双通道分发与工具风险标注（skill 走 GitHub + CP 静态路由；MCP 工具按 catalog 派生 destructiveHint；FR-566）
 - [ADR-101](101-manual-gap-abandonment-with-audit-trail.md) 永久空洞只许人工裁定放弃且必须留痕（结构化凭据 + 操作人闸 + 回收链带上界放行；FR-474 配套）
 - [ADR-100](100-archive-generation-ownership-enforcement.md) 归档代次归属必须有执行体（禁止"假设当前代次"；FR-474/475 配套）
 - [ADR-099](099-log-cost-governance-and-invariant-r.md) 日志成本治理与不变量 R（采样折叠/默认不丢/单位成本结论；FR-501 配套）

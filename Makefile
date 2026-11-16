@@ -28,10 +28,13 @@ build-worker:
 build-jmctl:
 	go build -o bin/jmctl.exe ./apps/jmctl
 
-# 构建 jmagent Agent 管理 CLI（FR-385）；jm 为推荐短别名（同一 main，两个二进制名）
+# 构建 jm 命令行客户端（FR-517，重构自 FR-385）；jmagent 作为兼容别名保留一个版本周期。
 build-jmagent:
-	go build -o bin/jmagent.exe ./apps/jmagent
 	go build -o bin/jm.exe ./apps/jmagent
+	go build -o bin/jmagent.exe ./apps/jmagent
+
+# 同一目标的可读别名。
+build-jm: build-jmagent
 
 # 构建前端（FR-283：pnpm workspace，主应用在 apps/control-plane-web）
 build-web:

@@ -49,7 +49,7 @@ func TestRunWhoami_TextAndJSON(t *testing.T) {
 	c := newTestClient(ts, "jmat_ok")
 
 	// text
-	cfg := Config{Token: "jmat_ok", CPURL: ts.URL, Output: "text"}
+	cfg := Config{Token: "jmat_ok", BaseURL: ts.URL, Output: "text"}
 	out := captureStdout(t, func() {
 		require.NoError(t, runWhoami(c, cfg, nil))
 	})
@@ -79,7 +79,7 @@ func TestRunInstanceStart_Forbidden403(t *testing.T) {
 	defer ts.Close()
 
 	c := newTestClient(ts, "jmat_ro")
-	cfg := Config{Token: "jmat_ro", CPURL: ts.URL, Output: "text"}
+	cfg := Config{Token: "jmat_ro", BaseURL: ts.URL, Output: "text"}
 	err := runInstance(c, cfg, []string{"start", "9"})
 	require.Error(t, err)
 	ae, ok := asAPIError(err)
@@ -97,7 +97,7 @@ func TestRunInstanceStart_Success(t *testing.T) {
 	defer ts.Close()
 
 	c := newTestClient(ts, "jmat_w")
-	cfg := Config{Token: "jmat_w", CPURL: ts.URL, Output: "text"}
+	cfg := Config{Token: "jmat_w", BaseURL: ts.URL, Output: "text"}
 	out := captureStdout(t, func() {
 		require.NoError(t, runInstance(c, cfg, []string{"restart", "3"}))
 	})
@@ -116,7 +116,7 @@ func TestRunListInstances_NodeFilter(t *testing.T) {
 	defer ts.Close()
 
 	c := newTestClient(ts, "jmat_ok")
-	cfg := Config{Token: "jmat_ok", CPURL: ts.URL, Output: "text"}
+	cfg := Config{Token: "jmat_ok", BaseURL: ts.URL, Output: "text"}
 	out := captureStdout(t, func() {
 		require.NoError(t, runList(c, cfg, []string{"instances", "--node", "2"}))
 	})
@@ -133,7 +133,7 @@ func TestRunListNodes_Empty(t *testing.T) {
 	defer ts.Close()
 
 	c := newTestClient(ts, "jmat_ok")
-	cfg := Config{Token: "jmat_ok", CPURL: ts.URL, Output: "text"}
+	cfg := Config{Token: "jmat_ok", BaseURL: ts.URL, Output: "text"}
 	out := captureStdout(t, func() {
 		require.NoError(t, runList(c, cfg, []string{"nodes"}))
 	})
@@ -150,7 +150,7 @@ func TestRunNodeMaintenance_EnterLeave(t *testing.T) {
 	defer ts.Close()
 
 	c := newTestClient(ts, "jmat_ok")
-	cfg := Config{Token: "jmat_ok", CPURL: ts.URL, Output: "json"}
+	cfg := Config{Token: "jmat_ok", BaseURL: ts.URL, Output: "json"}
 
 	require.NoError(t, runNode(c, cfg, []string{"maintenance", "enter", "4"}))
 	require.NoError(t, runNode(c, cfg, []string{"maintenance", "leave", "4"}))
@@ -172,7 +172,7 @@ func TestRunInstanceStatus_Success(t *testing.T) {
 	defer ts.Close()
 
 	c := newTestClient(ts, "jmat_ok")
-	cfg := Config{Token: "jmat_ok", CPURL: ts.URL, Output: "text"}
+	cfg := Config{Token: "jmat_ok", BaseURL: ts.URL, Output: "text"}
 	out := captureStdout(t, func() {
 		require.NoError(t, runInstance(c, cfg, []string{"status", "11"}))
 	})
@@ -189,17 +189,17 @@ func TestRunWhoami_MissingToken(t *testing.T) {
 	defer ts.Close()
 
 	c := newTestClient(ts, "")
-	cfg := Config{Token: "", CPURL: ts.URL, Output: "text"}
+	cfg := Config{Token: "", BaseURL: ts.URL, Output: "text"}
 	err := runWhoami(c, cfg, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), envAgentToken)
+	assert.Contains(t, err.Error(), envToken)
 	assert.False(t, called)
 }
 
 // TestRunInstance_InvalidID 非数字 id 被本地拒绝。
 func TestRunInstance_InvalidID(t *testing.T) {
-	c := newClient(Config{CPURL: "http://127.0.0.1:9", Token: "x"})
-	cfg := Config{Token: "x", CPURL: "http://127.0.0.1:9", Output: "text"}
+	c := newClient(Config{BaseURL: "http://127.0.0.1:9", Token: "x"})
+	cfg := Config{Token: "x", BaseURL: "http://127.0.0.1:9", Output: "text"}
 	err := runInstance(c, cfg, []string{"status", "abc"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "正整数")
@@ -207,7 +207,7 @@ func TestRunInstance_InvalidID(t *testing.T) {
 
 // TestRunList_UnknownTarget 未知 list 目标。
 func TestRunList_UnknownTarget(t *testing.T) {
-	c := newClient(Config{CPURL: "http://127.0.0.1:9", Token: "x"})
+	c := newClient(Config{BaseURL: "http://127.0.0.1:9", Token: "x"})
 	cfg := Config{Token: "x", Output: "text"}
 	err := runList(c, cfg, []string{"pods"})
 	require.Error(t, err)

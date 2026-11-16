@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,7 +22,7 @@ type Client struct {
 // newClient 按配置构造客户端。httpClient 可在测试中替换。
 func newClient(cfg Config) *Client {
 	return &Client{
-		baseURL: cfg.CPURL,
+		baseURL: cfg.BaseURL,
 		token:   cfg.Token,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -63,9 +64,10 @@ type apiErrorBody struct {
 	Message string `json:"message"`
 }
 
-// doJSON 发起请求，成功时返回响应体字节；非 2xx 返回 *APIError（403 保留中文 message）。
-// path 形如 /api/v1/agent/whoami；query 可为 nil。
-func (c *Client) doJSON(method, path string, query url.Values) ([]byte, error) {
+// doRequest 发起请求，成功时返回响应体字节；非 2xx 返回 *APIError（403 保留中文 message）。
+//
+// path 形如 /api/v1/agent/whoami；query 可为 nil；body 可为 nil（jm api 用）。
+func (c *Client) doRequest(method, path string, query url.Values, body []byte) ([]byte, error) {
 	if c.baseURL == "" {
 		return nil, fmt.Errorf("Control Plane 基址为空")
 	}
@@ -77,7 +79,11 @@ func (c *Client) doJSON(method, path string, query url.Values) ([]byte, error) {
 		u.RawQuery = query.Encode()
 	}
 
-	req, err := http.NewRequest(method, u.String(), nil)
+	var reader io.Reader
+	if len(body) > 0 {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, u.String(), reader)
 	if err != nil {
 		return nil, fmt.Errorf("构造请求失败: %w", err)
 	}
@@ -85,8 +91,11 @@ func (c *Client) doJSON(method, path string, query url.Values) ([]byte, error) {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	req.Header.Set("Accept", "application/json")
-	// 默认自报客户端，便于 CP 调用流水区分 jmagent / curl / mcp。
-	req.Header.Set("X-JM-Agent-Client", "jmagent")
+	if len(body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	// FR-390：默认自报客户端，便于 CP 调用流水区分 jm / curl / mcp。
+	req.Header.Set("X-JM-Agent-Client", "jm")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -94,18 +103,18 @@ func (c *Client) doJSON(method, path string, query url.Values) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8MiB 上限
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8MiB 上限
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return body, nil
+		return respBody, nil
 	}
 
 	ae := &APIError{Status: resp.StatusCode}
 	var eb apiErrorBody
-	if json.Unmarshal(body, &eb) == nil {
+	if json.Unmarshal(respBody, &eb) == nil {
 		ae.Code = eb.Error
 		ae.Message = eb.Message
 	}
@@ -113,13 +122,13 @@ func (c *Client) doJSON(method, path string, query url.Values) ([]byte, error) {
 	if ae.Message == "" {
 		switch resp.StatusCode {
 		case http.StatusForbidden:
-			ae.Message = "操作被拒绝（403）：写白名单/scope 不足或命中硬拒绝面"
+			ae.Message = "操作被拒绝（403）：权限或 scope 不足"
 		case http.StatusUnauthorized:
-			ae.Message = "未授权（401）：Agent Token 无效、已吊销或已过期"
+			ae.Message = "未授权（401）：令牌无效、已吊销或已过期"
 		case http.StatusNotFound:
 			ae.Message = "资源不存在（404）"
 		default:
-			msg := strings.TrimSpace(string(body))
+			msg := strings.TrimSpace(string(respBody))
 			if msg == "" {
 				ae.Message = fmt.Sprintf("请求失败（HTTP %d）", resp.StatusCode)
 			} else {
@@ -132,9 +141,9 @@ func (c *Client) doJSON(method, path string, query url.Values) ([]byte, error) {
 
 // get / post 便捷方法。
 func (c *Client) get(path string, query url.Values) ([]byte, error) {
-	return c.doJSON(http.MethodGet, path, query)
+	return c.doRequest(http.MethodGet, path, query, nil)
 }
 
 func (c *Client) post(path string) ([]byte, error) {
-	return c.doJSON(http.MethodPost, path, nil)
+	return c.doRequest(http.MethodPost, path, nil, nil)
 }
