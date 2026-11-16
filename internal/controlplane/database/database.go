@@ -347,6 +347,11 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := migrateApprovalPendingUniqueIndex(db); err != nil {
 		return err
 	}
+	// 任务队列语义：同节点同互斥组仅一个非终态任务 + 同参数幂等复用。
+	// 必须在 AutoMigrate 建出 tasks 的新列之后执行。
+	if err := migrateTaskExclusiveIndexes(db); err != nil {
+		return err
+	}
 	// V1 业务镜像表退役，直接删表（用户明确决策，不备份）。
 	if err := migrateRetireBusinessTables(db); err != nil {
 		return err
@@ -858,6 +863,114 @@ func migrateApprovalPendingUniqueIndex(db *gorm.DB) error {
 		approvalPendingIndexName, model.ApprovalStatusPending)
 	if err := db.Exec(stmt).Error; err != nil {
 		return fmt.Errorf("创建审批票据幂等唯一索引失败: %w", err)
+	}
+	return nil
+}
+
+// 任务队列语义的两个部分唯一索引。
+const (
+	// taskExclusiveIndexName 「同节点同互斥组仅一个非终态任务」。
+	taskExclusiveIndexName = "idx_tasks_node_exclusive_active"
+	// taskIdemIndexName 「同节点同幂等键仅一个非终态任务」。
+	taskIdemIndexName = "idx_tasks_node_idem_active"
+)
+
+// migrateTaskExclusiveIndexes 把任务队列语义固化成数据库约束。
+//
+// 【为什么必须是数据库约束，而不是应用层查一下】「同一时刻同类重型任务只能有一个」
+// 这条规则如果只写在业务代码里（先 SELECT 有没有非终态的，没有就 INSERT），
+// 两个并发请求会**双双查不到**、然后**双双插入**——检查与插入之间的窗口无法用代码消除。
+// 前端防抖只能挡住同一个浏览器标签页的连点，换个标签页、换个人、直接调 API 都绕得过去。
+// 所以真正的闸门只能是 DB 约束：插入时若与在途任务冲突，DB 直接拒绝，应用层翻译成人话。
+//
+// 【为什么是部分索引】终态的历史任务必须能大量共存（同一个 JDK 装过 5 次就该有 5 条记录），
+// 只有非终态才互斥。`WHERE ... AND exclusive_group <> ''` 让不参与互斥的任务
+// （备份、快照、克隆等）完全不受影响。
+//
+// 【为什么幂等键单独一个索引】语义不同：
+//   - 互斥组：**不同**参数也不许并发（它们抢同一块磁盘）；
+//   - 幂等键：**相同**参数直接复用已有任务（它本来就在做同一件事）。
+// 前者拒绝，后者复用。合成一个索引会丢掉「复用」这个更友好的行为。
+func migrateTaskExclusiveIndexes(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&model.Task{}) {
+		return nil
+	}
+	// 两个列都由 AutoMigrate 建出（模型上带 gorm tag）；老库缺列时先补齐，
+	// 否则建索引会失败。AutoMigrate 已处理，这里只做防御性断言。
+	for _, col := range []string{"exclusive_group", "idem_key"} {
+		if !db.Migrator().HasColumn(&model.Task{}, col) {
+			if err := db.Migrator().AddColumn(&model.Task{}, col); err != nil {
+				return fmt.Errorf("为 tasks 补列 %s 失败: %w", col, err)
+			}
+		}
+	}
+
+	// 幂等键先建：它的冲突处理是「复用」，比互斥组的「拒绝」更优先。
+	if err := createTaskPartialUniqueIndex(db, taskIdemIndexName,
+		"(node_id, idem_key)", "idem_key <> ''"); err != nil {
+		return err
+	}
+	return createTaskPartialUniqueIndex(db, taskExclusiveIndexName,
+		"(node_id, exclusive_group)", "exclusive_group <> ''")
+}
+
+// createTaskPartialUniqueIndex 建一个「仅约束非终态行」的部分唯一索引（幂等）。
+//
+// 前置的数据自愈：老库里可能存在历史遗留的**多条同组非终态**任务（此前没有约束，
+// 而且 CP 重启会丢内存态，Worker 侧任务也跟着断，这些记录会永久停在 running）。
+// 直接建唯一索引会因为这批脏数据失败、CP 起不来——那是最糟的结果。
+// 所以建索引前先「归并」：每个 (node_id, 键) 只留最新的一条非终态，
+// 其余置为 failed 并写明原因。这不是掩盖问题，而是把无法继续的任务准确收尾。
+func createTaskPartialUniqueIndex(db *gorm.DB, name, columns, predicate string) error {
+	if db.Migrator().HasIndex(&model.Task{}, name) {
+		return nil
+	}
+	if err := collapseDuplicateActiveTasks(db); err != nil {
+		return fmt.Errorf("归并历史重复在途任务失败（索引 %s）: %w", name, err)
+	}
+	stmt := fmt.Sprintf(
+		"CREATE UNIQUE INDEX IF NOT EXISTS %s ON tasks %s WHERE state IN ('%s','%s') AND %s",
+		name, columns, model.TaskStatePending, model.TaskStateRunning, predicate)
+	if err := db.Exec(stmt).Error; err != nil {
+		return fmt.Errorf("创建任务唯一索引 %s 失败: %w", name, err)
+	}
+	return nil
+}
+
+// taskCollapseKeys 需要收敛重复的键列（与两个部分唯一索引一一对应）。
+//
+// 写成白名单常量而不是参数：这些列名会直接拼进 SQL（列名无法用占位符绑定），
+// 若从外部传入就有注入面。这里只有这两个值，也不该有第三个。
+var taskCollapseKeys = []string{"exclusive_group", "idem_key"}
+
+// collapseDuplicateActiveTasks 把同一 (node_id, 键) 下的多条非终态任务收敛到一条。
+//
+// 保留 id 最大（最新）的那条；其余置 failed。保留最新的理由：用户最近一次点的
+// 那次操作才是他此刻想做的，更早的那些要么已被放弃、要么本就该被覆盖。
+//
+// 【两轮收敛的结果是确定的，但可能有先后】当一个任务同时参与两个键时，第一轮留下它、
+// 第二轮可能把它收掉（若它在另一个键上不是最新）。两种顺序都收敛到"每个键只剩一条"，
+// 只是最终留下的行可能不同。这对建索引没影响（索引只要求不重复），
+// 且这本来就是对历史脏数据的一次性修复，不追求保留哪一条的确定性。
+func collapseDuplicateActiveTasks(db *gorm.DB) error {
+	// 按两个键各自收敛；用原生 SQL 一次扫描，避免把全表拉进内存。
+	for _, key := range taskCollapseKeys {
+		stmt := fmt.Sprintf(`
+UPDATE tasks SET state = '%s',
+  error = '历史遗留的重复在途任务，创建唯一约束时自动收尾'
+WHERE state IN ('%s','%s') AND %s <> ''
+  AND id NOT IN (
+    SELECT MAX(id) FROM tasks
+    WHERE state IN ('%s','%s') AND %s <> ''
+    GROUP BY node_id, %s
+  )
+  AND %s <> ''`,
+			model.TaskStateFailed,
+			model.TaskStatePending, model.TaskStateRunning, key,
+			model.TaskStatePending, model.TaskStateRunning, key, key, key)
+		if err := db.Exec(stmt).Error; err != nil {
+			return err
+		}
 	}
 	return nil
 }

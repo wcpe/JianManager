@@ -85,7 +85,7 @@ func (h *JDKHandler) Install(c *gin.Context) {
 	if access != nil {
 		createdBy = access.UserID
 	}
-	task, err := h.svc.InstallAsync(nodeID, req, createdBy)
+	task, reused, err := h.svc.InstallAsync(nodeID, req, createdBy)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidJDKArch) {
 			// 未知 arch 明确 422 拒绝，不再直透下载源产出误导性 404。
@@ -121,6 +121,13 @@ func (h *JDKHandler) Install(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "INSTALL_FAILED", "message": err.Error()})
+		return
+	}
+	// reused=true：同参数的安装已在跑，返回的是**已存在**的任务。
+	// 用 200 而不是 202 区分「这次真的受理了新任务」与「复用了一个在跑的任务」——
+	// 前端据此显示不同文案（"已提交" vs "已有相同任务，正在跳转"），而不是再起一个下载。
+	if reused {
+		c.JSON(http.StatusOK, gin.H{"taskId": task.TaskID, "task": task, "reused": true})
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})

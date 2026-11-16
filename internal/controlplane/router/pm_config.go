@@ -101,13 +101,18 @@ func (h *PMConfigHandler) InstallPackage(c *gin.Context) {
 	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
-	task, err := h.svc.InstallGlobalPackageAsync(nodeID, in.Name, in.Version, userID)
+	task, reused, err := h.svc.InstallGlobalPackageAsync(nodeID, in.Name, in.Version, userID)
 	if err != nil {
 		h.mapErr(c, err)
 		return
 	}
 	if h.audit != nil {
 		h.audit.RecordSafe(userID, "node.pkg.install", "node", c.Param("id"), marshalAuditDetail(map[string]any{"name": in.Name, "version": in.Version}), c.ClientIP())
+	}
+	// reused=true：同参数的安装已在跑，返回的是已存在的任务（200，不是 202）。
+	if reused {
+		c.JSON(http.StatusOK, gin.H{"taskId": task.TaskID, "task": task, "reused": true})
+		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
 }

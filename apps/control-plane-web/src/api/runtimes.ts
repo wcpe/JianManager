@@ -88,6 +88,8 @@ export interface InstallRuntimeBody {
 /** 安装回执：202 + 任务中心任务（kind=runtime_install）。 */
 export interface InstallRuntimeResult {
   taskId: string
+  /** true = 同参数的安装已在跑，本次是复用（200 而非 202）。 */
+  reused?: boolean
 }
 
 /** POST /nodes/:id/runtimes/install — 异步一键安装 Node.js（202+taskId，进度在任务中心）。 */

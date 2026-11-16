@@ -196,7 +196,13 @@ type TaskListFilter struct {
 	Keyword string     // 标题/详情模糊匹配
 	Since   *time.Time // 创建时间下界
 	Until   *time.Time // 创建时间上界
-	Limit   int        // 每窗行数，缺省 100、钳制 [1,500]
+	// OnlyActive 只看非终态任务（node 页签的「当前在跑什么」用它）。
+	//
+	// 【为什么不复用 State 字段】State 是单值等值筛选，而"非终态"是三个值的集合，
+	// 且语义上属于另一种问法（"还在跑的"而不是"状态正好是 X 的"）。
+	// 挤进 State 会让调用方不得不发三次请求再合并。
+	OnlyActive bool
+	Limit      int // 每窗行数，缺省 100、钳制 [1,500]
 	Offset  int        // 偏移，负值归 0
 }
 
@@ -237,6 +243,9 @@ func (s *TaskService) List(access *UserAccess, f TaskListFilter) ([]model.Task, 
 	}
 	if f.State != "" {
 		q = q.Where("state = ?", f.State)
+	}
+	if f.OnlyActive {
+		q = q.Where("state IN ?", []model.TaskState{model.TaskStatePending, model.TaskStateRunning})
 	}
 	if f.NodeID != 0 {
 		q = q.Where("node_id = ?", f.NodeID)

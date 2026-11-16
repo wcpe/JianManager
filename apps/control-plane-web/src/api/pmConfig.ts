@@ -63,7 +63,7 @@ export function useGlobalPackages(nodeId: number, opts?: { enabled?: boolean }) 
 export function useInstallGlobalPackage(nodeId: number) {
   return useMutation({
     mutationFn: async (body: { name: string; version?: string }) =>
-      (await api.post<{ taskId: string }>(`/nodes/${nodeId}/packages`, body)).data,
+      (await api.post<{ taskId: string; reused?: boolean }>(`/nodes/${nodeId}/packages`, body)).data,
   })
 }
 

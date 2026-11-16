@@ -159,7 +159,7 @@ func (h *RuntimeLibraryHandler) Install(c *gin.Context) {
 	if access != nil {
 		createdBy = access.UserID
 	}
-	task, err := h.svc.InstallAsync(nodeID, req, createdBy)
+	task, reused, err := h.svc.InstallAsync(nodeID, req, createdBy)
 	if err != nil {
 		h.writeRuntimeLibErr(c, err)
 		return
@@ -167,6 +167,11 @@ func (h *RuntimeLibraryHandler) Install(c *gin.Context) {
 	h.recordAudit(c, "node.runtime.install", c.Param("id"), map[string]any{
 		"nodeId": nodeID, "type": req.Type, "major": req.Major, "arch": req.Arch, "taskId": task.TaskID,
 	})
+	// reused=true：同参数的安装已在跑，返回的是已存在的任务（200，不是 202）。
+	if reused {
+		c.JSON(http.StatusOK, gin.H{"taskId": task.TaskID, "task": task, "reused": true})
+		return
+	}
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
 }
 

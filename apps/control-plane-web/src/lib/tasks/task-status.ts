@@ -78,6 +78,20 @@ export function tasksRefetchInterval(tasks: readonly Pick<Task, 'state'>[] | und
   return hasActive ? ACTIVE_TASKS_REFETCH_MS : false
 }
 
+/** 任务是否占着某个重型动作的「队列位」（互斥组或幂等键非空）。 */
+export function holdsQueueSlot(t: Pick<Task, 'kind'>): boolean {
+  // 与后端 exclusiveGroupOf 保持一致的 kind 集合。这里只用于前端展示排序/提示，
+  // 真正的判定在后端；前端多标一类只会多显示一个"进行中"徽标，不会造成越权。
+  return HEAVY_TASK_KINDS.has(t.kind)
+}
+
+/** 重型任务 kind 集合（写节点级托管资源、受互斥闸门约束）。 */
+const HEAVY_TASK_KINDS: ReadonlySet<string> = new Set<string>([
+  'jdk_install',
+  'runtime_install',
+  'pkg_install',
+])
+
 /** GET /tasks 分页信封：total 与筛选（含归属隔离）同口径，limit/offset 回显服务端钳制后生效值。 */
 export interface TaskPage {
   items: Task[]

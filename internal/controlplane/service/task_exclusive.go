@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -33,6 +35,10 @@ var ErrTaskExclusiveBusy = errors.New("该节点已有同类任务在跑")
 type TaskExclusiveBusyError struct {
 	// Existing 占用中的任务（非终态）。
 	Existing *model.Task
+	// Reused 表示这次冲突其实是**幂等命中**：占用者就是同一个任务（同参数）。
+	// 此时对用户而言不是"被拦住了"，而是"你要的这件事已经在做了"，前端文案与动作都不同，
+	// 所以必须在错误里区分出来，不能让它和"不同参数被互斥"混成一个提示。
+	Reused bool
 }
 
 func (e *TaskExclusiveBusyError) Error() string {
@@ -40,6 +46,9 @@ func (e *TaskExclusiveBusyError) Error() string {
 		return ErrTaskExclusiveBusy.Error()
 	}
 	t := e.Existing
+	if e.Reused {
+		return fmt.Sprintf("相同任务已在执行中：%s（%s，进度 %d%%），已为你复用该任务", t.Title, t.State, t.Progress)
+	}
 	return fmt.Sprintf("该节点已有同类任务在跑：%s（%s，进度 %d%%）", t.Title, t.State, t.Progress)
 }
 
@@ -71,42 +80,175 @@ func exclusiveGroupOf(kind string) string {
 // ExclusiveGroupOf 导出给路由/前端做「这个动作会不会被占用」的预判展示。
 func ExclusiveGroupOf(kind string) string { return exclusiveGroupOf(kind) }
 
-// AcquireExclusive 在创建任务**之前**检查互斥占位。
+// TaskAdmitSpec 一次重型任务的「准入申请」。
 //
-// 【为什么在 CreateTask 之前调用而不是在 CreateTask 内部】调用方需要在真正下发
-// Worker RPC 之前就知道被拒（否则会先建任务、再下发、再回滚，留下一串失败任务）。
-// 所以这里只做「检查 + 返回占用者」，真正落库由随后的 CreateTask 完成。
+// 把「建任务」从单纯 INSERT 提升为「准入」的理由：一个重型任务的创建要同时满足两件事，
+// 而它们必须在**同一个原子步骤**里判定，不能由调用方各查一次：
+//  1. 幂等——同节点、同 kind、同参数的请求已在跑 → 直接复用那个任务（不是报错）；
+//  2. 互斥——同节点、同互斥组已有别的任务在跑 → 拒绝，并告知是谁在占着。
+type TaskAdmitSpec struct {
+	NodeID     uint
+	InstanceID uint
+	Kind       string
+	Title      string
+	Detail     string
+	CreatedBy  uint
+	// IdemKey 幂等键（同节点同 kind 同参数 → 复用）。空串表示不参与幂等。
+	IdemKey string
+}
+
+// AdmitTask 是重型任务创建的**唯一入口**：幂等复用 → 互斥拒绝 → 建任务。
 //
-// 【为什么不是绝对原子】检查与插入之间有极小的窗口（两个请求同时通过检查）。
-// 要做到严格原子得靠 DB 唯一索引：
+// 返回 reused=true 表示命中了幂等键，返回的是**已存在**的那个任务（调用方不该再下发 Worker）。
 //
-//	CREATE UNIQUE INDEX ... ON tasks(node_id, <group>) WHERE state IN ('pending','running')
+// 【三层防护，缺一不可】
+//  1. 这里先查一次：给出准确的人话错误（「JDK 21 正在装，进度 40%」），而不是一句 DB 约束冲突；
+//  2. 数据库部分唯一索引：兜住「查完之后、插入之前」被并发插队的那个窗口；
+//  3. 插入失败后再查一次：把 DB 约束错误翻译回同一个业务错误（见 isUniqueViolation）。
 //
-// 那是部分索引，SQLite/MySQL/PG 语法各不相同，且需要迁移脚本。当前规模下
-// （同一操作员对同一节点并发点两次的概率极低，且前端已有同步闸门）
-// 用「检查 + 已有的前端闸门」覆盖现实风险；这里的返回值也让上层能把占用者
-// 直接展示给用户，比一个光秃秃的 409 有用得多。**若将来发现真的被并发打穿，
-// 上部分唯一索引是正确解法**（注释留在此处，避免后人重复踩空）。
+// 只做第 1 层会在并发下失效；只做第 2 层则错误信息用户看不懂。两层都要，第 3 层补翻译。
+func (s *TaskService) AdmitTask(taskID string, spec TaskAdmitSpec) (*model.Task, bool, error) {
+	group := exclusiveGroupOf(spec.Kind)
+	idem := strings.TrimSpace(spec.IdemKey)
+
+	// 第 1 层：幂等复用。相同参数的任务在跑 = 你要做的事已经在做了，复用它是正确语义。
+	if idem != "" {
+		existing, err := s.findActiveBy(spec.NodeID, "idem_key", idem)
+		if err != nil {
+			return nil, false, err
+		}
+		if existing != nil {
+			return existing, true, nil
+		}
+	}
+
+	// 第 1 层续：互斥拒绝。不同参数但抢同一块资源 → 不能并发。
+	if group != "" {
+		existing, err := s.findActiveByGroup(spec.NodeID, group)
+		if err != nil {
+			return nil, false, err
+		}
+		if existing != nil {
+			return nil, false, &TaskExclusiveBusyError{Existing: existing}
+		}
+	}
+
+	// 第 2 层：落库。列上带上互斥组与幂等键，让 DB 约束生效。
+	t := &model.Task{
+		TaskID:         taskID,
+		NodeID:         spec.NodeID,
+		InstanceID:     spec.InstanceID,
+		Kind:           spec.Kind,
+		State:          model.TaskStatePending,
+		Title:          spec.Title,
+		Detail:         spec.Detail,
+		CreatedBy:      spec.CreatedBy,
+		ExclusiveGroup: group,
+		IdemKey:        idem,
+	}
+	if err := s.db.Create(t).Error; err != nil {
+		// 第 3 层：把约束冲突翻译回业务语义——否则用户只会看到一句
+		// 「UNIQUE constraint failed: tasks.node_id, tasks.idem_key」。
+		existing, reused, handled, terr := s.translateTaskConflict(spec, err)
+		if terr != nil {
+			return nil, false, terr
+		}
+		if handled {
+			return existing, reused, nil
+		}
+		return nil, false, fmt.Errorf("创建任务失败: %w", err)
+	}
+	return t, false, nil
+}
+
+// translateTaskConflict 把一个因唯一约束失败的插入，翻译回业务语义。
+//
+// 走到这里说明「检查时没有、插入时有了」——即另一个请求刚刚抢先进来了（这正是
+// 应用层检查挡不住的那个窗口）。返回四元组：
+//   - existing：命中的在途任务（handled 时非 nil）
+//   - reused：命中的是幂等键 → 调用方应把它当「复用成功」，不再下发 Worker
+//   - handled：是否已翻译（false 表示不是唯一约束冲突，调用方按原错误上抛）
+//   - err：查询本身出错
+func (s *TaskService) translateTaskConflict(spec TaskAdmitSpec, createErr error) (
+	existing *model.Task, reused, handled bool, err error) {
+	if !isUniqueViolation(createErr) {
+		return nil, false, false, nil
+	}
+	idem := strings.TrimSpace(spec.IdemKey)
+	if idem != "" {
+		found, ferr := s.findActiveBy(spec.NodeID, "idem_key", idem)
+		if ferr != nil {
+			return nil, false, false, ferr
+		}
+		if found != nil {
+			// 幂等命中不是错误：并发请求做的是同一件事，复用它即可。
+			return found, true, true, nil
+		}
+	}
+	if group := exclusiveGroupOf(spec.Kind); group != "" {
+		found, ferr := s.findActiveByGroup(spec.NodeID, group)
+		if ferr != nil {
+			return nil, false, false, ferr
+		}
+		if found != nil {
+			return nil, false, false, &TaskExclusiveBusyError{Existing: found}
+		}
+	}
+	return nil, false, false, nil
+}
+
+// findActiveBy 按某个键列查同节点下的非终态任务。
+func (s *TaskService) findActiveBy(nodeID uint, column, value string) (*model.Task, error) {
+	var rows []model.Task
+	err := s.db.
+		Where(fmt.Sprintf("node_id = ? AND %s = ? AND state IN ?", column), nodeID, value,
+			[]model.TaskState{model.TaskStatePending, model.TaskStateRunning}).
+		Order("id asc").Limit(1).Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("检查任务占用失败: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return &rows[0], nil
+}
+
+// findActiveByGroup 查同节点同互斥组的非终态任务。
+//
+// 兼容没有 exclusive_group 列的历史行（迁移前的数据该列为空）：此时退回按
+// kind IN (同组全部 kind) 判定，行为与改造前一致，不会因为漏填列而放过占用。
+func (s *TaskService) findActiveByGroup(nodeID uint, group string) (*model.Task, error) {
+	var rows []model.Task
+	err := s.db.
+		Where("node_id = ? AND state IN ? AND (exclusive_group = ? OR (exclusive_group = '' AND kind IN ?))",
+			nodeID,
+			[]model.TaskState{model.TaskStatePending, model.TaskStateRunning},
+			group, kindsInGroup(group)).
+		Order("id asc").Limit(1).Find(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("检查任务互斥失败: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return &rows[0], nil
+}
+
+// AcquireExclusive 是 AdmitTask 的**只检查不落库**版本，保留给已有调用方与测试。
+//
+// 【什么时候还用它】确实需要在「建任务之前」单独探测占用态的场景（例如预检接口）。
+// 新代码应当直接用 AdmitTask——只有它才带 DB 约束兜底，单独调这个无法防并发。
 func (s *TaskService) AcquireExclusive(nodeID uint, kind, _ string) error {
 	group := exclusiveGroupOf(kind)
 	if group == "" {
 		return nil
 	}
-	var busy []model.Task
-	// 同节点、同组、非终态即视为占用。终态判定用 NOT IN 而不是 state='pending' OR ...，
-	// 这样将来新增中间态不必再改这里。
-	if err := s.db.
-		Where("node_id = ? AND kind IN ? AND state NOT IN ?",
-			nodeID, kindsInGroup(group), []model.TaskState{
-				model.TaskStateSucceeded, model.TaskStateFailed, model.TaskStateCanceled,
-			}).
-		Order("id asc").
-		Limit(1).
-		Find(&busy).Error; err != nil {
-		return fmt.Errorf("检查任务互斥失败: %w", err)
+	existing, err := s.findActiveByGroup(nodeID, group)
+	if err != nil {
+		return err
 	}
-	if len(busy) > 0 {
-		return &TaskExclusiveBusyError{Existing: &busy[0]}
+	if existing != nil {
+		return &TaskExclusiveBusyError{Existing: existing}
 	}
 	return nil
 }
@@ -128,6 +270,25 @@ func kindsInGroup(group string) []string {
 		}
 	}
 	return out
+}
+
+// BuildIdemKey 生成幂等键：同节点 + 同 kind + 同参数的确定性摘要。
+//
+// 【为什么用摘要而不是直接拼字符串】参数里可能带路径/镜像地址等长字段，
+// 拼起来会超列宽，且不同参数拼接后可能撞车（"a"+"bc" 与 "ab"+"c"）。
+// SHA-256 前 16 字节 hex（32 字符）既固定长度又无碰撞风险。
+//
+// 【为什么参数要按调用方给定顺序参与】这些参数是「这次操作要做什么」的身份标识，
+// 顺序由调用点固定（如 vendor|major|arch），不在这里排序——排序反而会让
+// 语义不同的调用（比如 arch 未指定 vs 指定 auto）算出同一个键。
+func BuildIdemKey(nodeID uint, kind string, parts ...string) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "node=%d\x00kind=%s", nodeID, kind)
+	for _, p := range parts {
+		h.Write([]byte{0})
+		h.Write([]byte(p))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:32]
 }
 
 // DescribeExclusiveBusy 把占用者写成人读一句话（路由回给前端的 message 用）。

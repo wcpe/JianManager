@@ -46,7 +46,17 @@ export default function NodeGlobalPackagesTab({
       onRefresh={() => void refetch()}
       onInstall={async (name, version) => {
         try {
-          await install.mutateAsync({ name: name.trim(), version: version?.trim() || undefined })
+          const res = await install.mutateAsync({ name: name.trim(), version: version?.trim() || undefined })
+          if (res.reused) {
+            toast.info(t('pkg.installReused', '相同包的安装已在进行中，已复用该任务'), {
+              action: {
+                label: t('nodes.runtime.viewProgress', '查看进度'),
+                onClick: () => window.location.assign(`/tasks?task=${encodeURIComponent(res.taskId)}`),
+              },
+              duration: 8000,
+            })
+            return true
+          }
           toast.success(t('pkg.installSubmitted', '安装任务已提交，进度见任务中心'))
           return true
         } catch (err) {

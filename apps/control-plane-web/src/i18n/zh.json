@@ -1234,7 +1234,8 @@
       "installMajorPlaceholder": "选择要安装的 Node.js 版本",
       "installPreview": "将安装 Node.js {{major}}（{{lts}}）",
       "installDispatching": "正在下发…",
-      "cancelWhilePending": "下发中，请等待受理完成"
+      "cancelWhilePending": "下发中，请等待受理完成",
+      "installReused": "相同版本的安装已在进行中，已复用该任务"
     },
     "enroll": {
       "addNode": "添加节点",
@@ -1570,9 +1571,16 @@
       "copyPath": "复制路径",
       "revealPath": "复制并在文件管理器中定位",
       "refsCount": "{{count}} 个实例在用",
-      "goTasks": "去任务中心"
+      "goTasks": "去任务中心",
+      "stopRequested": "已请求停止「{{title}}」",
+      "stopFailed": "停止失败",
+      "viewProgress": "查看进度",
+      "forceStopHint": "中断正在下载/安装的任务，本节点随后可重新发起",
+      "stopping": "停止中…",
+      "waitingWorker": "等待节点确认"
     },
-    "jdkInstalling": "正在下发…"
+    "jdkInstalling": "正在下发…",
+    "jdkInstallReused": "相同版本的 JDK 安装已在进行中，已复用该任务"
   },
   "artifactVersions": {
     "title": "ServerProbe 制品版本库",
@@ -5858,7 +5866,8 @@
     "upgrade": "升级",
     "versionLabel": "版本",
     "versionPlaceholder": "版本（空=latest）",
-    "installing": "提交中…"
+    "installing": "提交中…",
+    "installReused": "相同包的安装已在进行中，已复用该任务"
   },
   "permissions": {
     "title": "权限配置",

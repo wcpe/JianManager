@@ -329,33 +329,28 @@ func normalizeNodeArch(arch string) (string, error) {
 // InstallAsync 异步发起运行时安装（复用 jdk_install 的任务模式）：建 Task →
 // 下发 Worker InstallRuntime（携带 task_id，启动即返回）→ 置 running → 返回 Task（HTTP 202 语义）。
 // 终态落 node_runtimes（managed=true）与站内信由心跳终态副作用完成（见 TaskService.finalizeTerminal）。
-func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequest, createdBy uint) (*model.Task, error) {
+func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequest, createdBy uint) (*model.Task, bool, error) {
 	if s.tasks == nil {
-		return nil, fmt.Errorf("任务中心未启用，无法异步安装")
+		return nil, false, fmt.Errorf("任务中心未启用，无法异步安装")
 	}
 	typ := strings.ToLower(strings.TrimSpace(req.Type))
 	if !installableRuntimeTypes[typ] {
-		return nil, fmt.Errorf("%w: %q（可安装类型：nodejs）", ErrInvalidRuntimeType, req.Type)
+		return nil, false, fmt.Errorf("%w: %q（可安装类型：nodejs）", ErrInvalidRuntimeType, req.Type)
 	}
 	if req.Major <= 0 {
-		return nil, fmt.Errorf("%w: major 须为正整数", ErrInvalidRuntimeArch)
+		return nil, false, fmt.Errorf("%w: major 须为正整数", ErrInvalidRuntimeArch)
 	}
 	arch, err := normalizeNodeArch(req.Arch)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	node, err := s.nodeByID(nodeID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		return nil, ErrNodeOffline
-	}
-
-	// 重型任务单在途闸门（与 JDK 安装同一互斥组：两者都写节点级托管运行时目录）。
-	if err := s.tasks.AcquireExclusive(nodeID, model.TaskKindRuntimeInstall, ""); err != nil {
-		return nil, err
+		return nil, false, ErrNodeOffline
 	}
 
 	taskID := uuid.NewString()
@@ -365,9 +360,23 @@ func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequ
 		archLabel = "auto"
 	}
 	detail := fmt.Sprintf("节点 %s · %s · arch=%s", node.Name, title, archLabel)
-	task, err := s.tasks.CreateTask(taskID, nodeID, model.TaskKindRuntimeInstall, title, detail, createdBy)
+	// 准入：与 JDK 安装同一互斥组（两者都写节点级托管运行时目录），
+	// 且同类型同大版本同架构的重复提交复用已有任务。
+	idem := BuildIdemKey(nodeID, model.TaskKindRuntimeInstall, fmt.Sprintf("%s|%d|%s", typ, req.Major, archLabel))
+	task, reused, err := s.tasks.AdmitTask(taskID, TaskAdmitSpec{
+		NodeID:    nodeID,
+		Kind:      model.TaskKindRuntimeInstall,
+		Title:     title,
+		Detail:    detail,
+		CreatedBy: createdBy,
+		IdemKey:   idem,
+	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if reused {
+		// 相同参数的任务已在跑：复用它的回执（HTTP 200 + reused），不再下发 Worker。
+		return task, true, nil
 	}
 
 	mirror := ""
@@ -387,19 +396,19 @@ func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequ
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err)); markErr != nil {
 			slog.Warn("将运行时安装任务标记为失败时出错", "taskId", taskID, "error", markErr)
 		}
-		return nil, fmt.Errorf("Worker InstallRuntime RPC 失败: %w", err)
+		return nil, false, fmt.Errorf("Worker InstallRuntime RPC 失败: %w", err)
 	}
 	if !resp.Success {
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("Worker 拒绝安装: %s", resp.Error)); markErr != nil {
 			slog.Warn("将运行时安装任务标记为失败时出错", "taskId", taskID, "error", markErr)
 		}
-		return nil, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
+		return nil, false, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
 	}
 	if err := s.tasks.MarkRunning(taskID); err != nil {
 		slog.Warn("标记任务 running 失败", "taskId", taskID, "error", err)
 	}
 	task.State = model.TaskStateRunning
-	return task, nil
+	return task, false, nil
 }
 
 // defaultRuntimeName 按类型生成默认展示名（如 "Node.js 22"）。

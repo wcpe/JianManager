@@ -28,6 +28,8 @@ export interface TaskListParams {
   keyword?: string
   /** RFC3339 创建时间下界（时间筛选）。 */
   since?: string
+  /** 只看非终态任务（节点页签的「当前在跑什么」用它，不必拉全量历史前端过滤）。 */
+  activeOnly?: boolean
 }
 
 /** 
@@ -46,6 +48,7 @@ export function useTasks(params: TaskListParams = {}) {
   if (params.nodeId) query.nodeId = params.nodeId
   if (params.keyword) query.keyword = params.keyword
   if (params.since) query.since = params.since
+  if (params.activeOnly) query.active = 1
   return useQuery({
     queryKey: ['tasks', query],
     queryFn: async () => {

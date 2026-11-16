@@ -198,23 +198,23 @@ func (s *JDKService) Create(nodeID uint, req CreateJDKRequest) (*model.NodeJDK, 
 // 落 model.NodeJDK 与完成站内信由心跳终态副作用完成（见 TaskService.IngestSnapshots）。
 // createdBy 为发起用户 ID（任务归属 + 完成站内信收件人）。
 // 要求已注入 TaskService（SetTaskService）；未注入则回退同步 Install（返回错误提示）。
-func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy uint) (*model.Task, error) {
+func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy uint) (*model.Task, bool, error) {
 	if s.tasks == nil {
-		return nil, fmt.Errorf("任务中心未启用，无法异步安装")
+		return nil, false, fmt.Errorf("任务中心未启用，无法异步安装")
 	}
 	// arch 别名归一化：先于建任务/下发，未知 arch 在此拒绝。
 	arch, err := normalizeJDKArch(req.Arch)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req.Arch = arch
 	node, err := s.nodeByID(nodeID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		return nil, ErrNodeOffline
+		return nil, false, ErrNodeOffline
 	}
 
 	/*
@@ -222,16 +222,28 @@ func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy 
 	  否则连点两次会各建一条任务、各下发一次安装，两个下载同时写同一个托管目录。
 	  注意闸门放在拿 client 之后：节点离线时应报"节点离线"，不该报"任务占用"。
 	*/
-	if err := s.tasks.AcquireExclusive(nodeID, model.TaskKindJDKInstall, ""); err != nil {
-		return nil, err
-	}
-
 	taskID := uuid.NewString()
 	title := fmt.Sprintf("安装 JDK %s %d", req.Vendor, req.MajorVersion)
 	detail := fmt.Sprintf("节点 %s · %s · arch=%s", node.Name, title, req.Arch)
-	task, err := s.tasks.CreateTask(taskID, nodeID, model.TaskKindJDKInstall, title, detail, createdBy)
+	// 幂等键参与参数：厂商 + 大版本 + 架构 + 具体版本。这四项相同 = 用户要的是同一件事，
+	// 第二次提交应当复用第一次的任务，而不是再下一个下载。
+	idem := BuildIdemKey(nodeID, model.TaskKindJDKInstall,
+		fmt.Sprintf("%s|%d|%s|%s", req.Vendor, req.MajorVersion, req.Arch, req.Version))
+	task, reused, err := s.tasks.AdmitTask(taskID, TaskAdmitSpec{
+		NodeID:    nodeID,
+		Kind:      model.TaskKindJDKInstall,
+		Title:     title,
+		Detail:    detail,
+		CreatedBy: createdBy,
+		IdemKey:   idem,
+	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if reused {
+		// 同一个任务已经在跑：直接把已有的回执给前端（HTTP 200 + reused），
+		// **绝不下发第二次 Worker 调用**——那正是「连点导致两个下载」的根源。
+		return task, true, nil
 	}
 
 	// 下发 Worker：携带 task_id，Worker 启动即返回（不再等下载完成）。
@@ -249,19 +261,19 @@ func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy 
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err)); markErr != nil {
 			slog.Warn("标记 JDK 安装任务失败状态失败", "taskId", taskID, "error", markErr)
 		}
-		return nil, fmt.Errorf("Worker InstallJDK RPC 失败: %w", err)
+		return nil, false, fmt.Errorf("Worker InstallJDK RPC 失败: %w", err)
 	}
 	if !resp.Success {
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("Worker 拒绝安装: %s", resp.Error)); markErr != nil {
 			slog.Warn("标记 JDK 安装任务失败状态失败", "taskId", taskID, "error", markErr)
 		}
-		return nil, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
+		return nil, false, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
 	}
 	if err := s.tasks.MarkRunning(taskID); err != nil {
 		slog.Warn("标记任务 running 失败", "taskId", taskID, "error", err)
 	}
 	task.State = model.TaskStateRunning
-	return task, nil
+	return task, false, nil
 }
 
 // ProbeResult JDK 探测结果，对齐 workerpb.ProbeJDKResponse。

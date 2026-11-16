@@ -74,7 +74,18 @@ export default function NodeJDKTab({
       )}
       onInstall={async (body) => {
         try {
-          await install.mutateAsync(body)
+          const res = await install.mutateAsync(body)
+          // 幂等命中：同参数的安装已在跑，回执是那个任务。提示要区别于"新下发"。
+          if (res.reused) {
+            toast.info(t('nodes.jdkInstallReused', '相同版本的 JDK 安装已在进行中，已复用该任务'), {
+              action: {
+                label: t('nodes.runtime.viewProgress', '查看进度'),
+                onClick: () => window.location.assign(`/tasks?task=${encodeURIComponent(res.taskId)}`),
+              },
+              duration: 8000,
+            })
+            return true
+          }
           toast.success(t('artifactCache.jdkInstallDispatched'))
           return true
         } catch (err) {

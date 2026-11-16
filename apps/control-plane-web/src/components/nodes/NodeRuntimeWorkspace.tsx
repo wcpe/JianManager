@@ -7,6 +7,9 @@ import { Segments, Segment } from '@jianmanager/ui/components/layout'
 import { useNodeJDKsWithRefs, useDeleteJDK, useUpdateJDK } from '@/api/jdks'
 import { useNodeRuntimes, useDeleteRuntime } from '@/api/runtimes'
 import { useNodePMConfig } from '@/api/pmConfig'
+import { useTasks, useCancelTask } from '@/api/tasks'
+import { RuntimeActiveTaskBar } from '@/components/views/nodes/RuntimeActiveTaskBar'
+import { holdsQueueSlot } from '@/lib/tasks/task-status'
 import {
   useLogRuntime,
   useApprovedLogAssets,
@@ -111,6 +114,20 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
     return (s?.points ?? []).map((pt) => pt.avg).filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
   })()
 
+  /*
+    「本节点当前在跑什么」：只拉非终态任务（后端 active=1）。
+    【为什么不再让用户去任务中心查】他刚在这个页面点了安装，进度就该在这一屏出现；
+    并且强制停止也放在这里——为了停掉自己刚点错的任务而跳走是不必要的。
+    轮询沿用任务中心同一套 2s 规则（存在非终态时才轮询）。
+  */
+  const activeTasksQ = useTasks({ nodeId: node.id, activeOnly: true, limit: 20 })
+  const cancelTask = useCancelTask()
+  const [cancelingIds, setCancelingIds] = useState<string[]>([])
+  const activeHeavyTasks = useMemo(
+    () => (activeTasksQ.data?.items ?? []).filter((t) => holdsQueueSlot(t)),
+    [activeTasksQ.data],
+  )
+
   const normalizedArch = node.arch.toLowerCase() === 'x64' ? 'amd64' : node.arch.toLowerCase()
   const approvedAsset = (assetsQ.data ?? []).find(
     (a) => a.os === node.os.toLowerCase() && a.arch === normalizedArch,
@@ -214,6 +231,22 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
     }
   }
 
+  /**
+   * 就地强制停止一个在跑的重型任务。
+   *
+   * 后端语义：running 且节点在线 → 置 CancelRequested，由心跳下发 cancel_task_ids
+   * 真中断 Worker 侧下载；pending 或节点离线 → 直接落 canceled（没有可中断的 Worker 操作）。
+   * 所以这里只是"请求停止"，按钮要显示「停止中…」直到轮询看到 cancelRequested 或终态。
+   */
+  const forceStop = (taskId: string, title: string) => {
+    setCancelingIds((prev) => (prev.includes(taskId) ? prev : [...prev, taskId]))
+    void cancelTask
+      .mutateAsync(taskId)
+      .then(() => toast.success(t('nodes.runtime.stopRequested', '已请求停止「{{title}}」', { title })))
+      .catch((err) => toast.error(errMsg(err, t('nodes.runtime.stopFailed', '停止失败'))))
+      .finally(() => setCancelingIds((prev) => prev.filter((id) => id !== taskId)))
+  }
+
   const submitDelete = async () => {
     const row = pendingDelete
     if (!row) return
@@ -230,6 +263,12 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
   return (
     <div className="space-y-3">
       <RuntimeReadinessStrip items={readiness} onAction={handleReadinessAction} />
+
+      <RuntimeActiveTaskBar
+        tasks={activeHeavyTasks}
+        cancelingIds={cancelingIds}
+        onForceStop={(task) => forceStop(task.taskId, task.title)}
+      />
 
       {/* 二级 Segments：一件事一个 sub。 */}
       <Segments aria-label={t('nodes.runtime.sections', '运行时分段')}>

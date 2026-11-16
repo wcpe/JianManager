@@ -137,3 +137,128 @@ func TestTaskService_ExclusiveBusyMessage(t *testing.T) {
 	require.Contains(t, msg, "已有同类任务在跑")
 	require.Contains(t, msg, "seed jdk_install") // 占用者标题
 }
+
+// ── 幂等复用 + 数据库约束 ──────────────────────────────────────────────
+
+// AdmitTask 命中幂等键时必须**复用**已有任务（reused=true），而不是报错或新建。
+//
+// 这是「连点两次安装按钮」的正确语义：第二次点的不是错误请求，
+// 它要做的正是第一次已经在做的事。
+func TestTaskService_AdmitTask_IdempotentReuse(t *testing.T) {
+	db := newTaskTestDB(t)
+	svc := NewTaskService(db)
+	idem := BuildIdemKey(1, model.TaskKindJDKInstall, "Temurin|21|x64|")
+
+	first, reused1, err := svc.AdmitTask("t-jdk-1", TaskAdmitSpec{
+		NodeID: 1, Kind: model.TaskKindJDKInstall, Title: "安装 JDK Temurin 21", IdemKey: idem,
+	})
+	require.NoError(t, err)
+	require.False(t, reused1, "首次提交不该被标记为复用")
+
+	second, reused2, err := svc.AdmitTask("t-jdk-2", TaskAdmitSpec{
+		NodeID: 1, Kind: model.TaskKindJDKInstall, Title: "安装 JDK Temurin 21", IdemKey: idem,
+	})
+	require.NoError(t, err, "同参数的重复提交不是错误")
+	require.True(t, reused2, "同参数的重复提交必须复用")
+	require.Equal(t, first.TaskID, second.TaskID, "复用的必须是同一个任务")
+
+	// 只能有一条记录：不能因为并发了就多出一条幽灵任务。
+	var count int64
+	require.NoError(t, db.Model(&model.Task{}).Count(&count).Error)
+	require.EqualValues(t, 1, count)
+}
+
+// 不同参数 → 不同幂等键 → 被互斥组拦住（不是复用）。
+//
+// 这两条语义必须区分开：同参数是"已经在做了"（复用），
+// 不同参数是"抢同一块盘"（拒绝）。混成一个会让用户以为改了版本号就能装。
+func TestTaskService_AdmitTask_DifferentParamsBlockedByGroup(t *testing.T) {
+	db := newTaskTestDB(t)
+	svc := NewTaskService(db)
+
+	_, _, err := svc.AdmitTask("t-jdk-21", TaskAdmitSpec{
+		NodeID: 1, Kind: model.TaskKindJDKInstall, Title: "安装 JDK Temurin 21",
+		IdemKey: BuildIdemKey(1, model.TaskKindJDKInstall, "Temurin|21|x64|"),
+	})
+	require.NoError(t, err)
+
+	_, _, err = svc.AdmitTask("t-jdk-17", TaskAdmitSpec{
+		NodeID: 1, Kind: model.TaskKindJDKInstall, Title: "安装 JDK Temurin 17",
+		IdemKey: BuildIdemKey(1, model.TaskKindJDKInstall, "Temurin|17|x64|"),
+	})
+	require.ErrorIs(t, err, ErrTaskExclusiveBusy, "不同版本也抢同一块托管目录，必须拒绝")
+}
+
+// 幂等键只在**非终态**时复用：上一次装完了，再点一次就该是新的安装。
+func TestTaskService_AdmitTask_TerminalDoesNotReuse(t *testing.T) {
+	db := newTaskTestDB(t)
+	svc := NewTaskService(db)
+	idem := BuildIdemKey(1, model.TaskKindJDKInstall, "Temurin|21|x64|")
+
+	_, reused, err := svc.AdmitTask("t-1", TaskAdmitSpec{
+		NodeID: 1, Kind: model.TaskKindJDKInstall, Title: "装 21", IdemKey: idem,
+	})
+	require.NoError(t, err)
+	require.False(t, reused)
+	require.NoError(t, db.Model(&model.Task{}).Where("task_id = ?", "t-1").
+		Update("state", model.TaskStateSucceeded).Error)
+
+	_, reused2, err := svc.AdmitTask("t-2", TaskAdmitSpec{
+		NodeID: 1, Kind: model.TaskKindJDKInstall, Title: "装 21", IdemKey: idem,
+	})
+	require.NoError(t, err)
+	require.False(t, reused2, "上一次已结束，本次是重新安装，不该复用")
+}
+
+// 数据库层必须真的挡住并发——这是应用层检查挡不住的那个窗口。
+//
+// 【这条测试为什么必须绕过 AdmitTask 直接写库】AdmitTask 的第一层检查会先返回
+// 业务错误，走不到约束那里。要验证约束本身存在，只能直接 INSERT 两条同组非终态任务：
+// 第二条必须被 DB 拒绝。如果把这个索引删掉，这条用例立刻红。
+func TestTaskExclusiveIndex_BlocksConcurrentInsert(t *testing.T) {
+	db := newTaskTestDB(t)
+	require.NoError(t, db.Exec(
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_test_excl ON tasks (node_id, exclusive_group) "+
+			"WHERE state IN ('pending','running') AND exclusive_group <> ''").Error)
+
+	require.NoError(t, db.Create(&model.Task{
+		TaskID: "a", NodeID: 1, Kind: model.TaskKindJDKInstall,
+		State: model.TaskStateRunning, ExclusiveGroup: "runtime_install", Title: "first",
+	}).Error)
+
+	err := db.Create(&model.Task{
+		TaskID: "b", NodeID: 1, Kind: model.TaskKindRuntimeInstall,
+		State: model.TaskStatePending, ExclusiveGroup: "runtime_install", Title: "second",
+	}).Error
+	require.Error(t, err, "同节点同组两条非终态任务必须被数据库拒绝")
+	require.True(t, isUniqueViolation(err), "错误要能被识别成唯一约束冲突，才能翻译成人话")
+
+	// 终态共存不受约束：历史记录必须能大量堆。
+	require.NoError(t, db.Model(&model.Task{}).Where("task_id = ?", "a").
+		Update("state", model.TaskStateSucceeded).Error)
+	require.NoError(t, db.Create(&model.Task{
+		TaskID: "c", NodeID: 1, Kind: model.TaskKindJDKInstall,
+		State: model.TaskStateRunning, ExclusiveGroup: "runtime_install", Title: "third",
+	}).Error, "上一个已终态时必须能再起一个")
+
+	// 不同节点不受约束。
+	require.NoError(t, db.Create(&model.Task{
+		TaskID: "d", NodeID: 2, Kind: model.TaskKindJDKInstall,
+		State: model.TaskStateRunning, ExclusiveGroup: "runtime_install", Title: "other node",
+	}).Error)
+}
+
+// 不参与互斥的任务（备份/快照/克隆…）必须完全不受影响。
+func TestTaskExclusiveIndex_NonExclusiveKindsUnaffected(t *testing.T) {
+	db := newTaskTestDB(t)
+	require.NoError(t, db.Exec(
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_test_excl2 ON tasks (node_id, exclusive_group) "+
+			"WHERE state IN ('pending','running') AND exclusive_group <> ''").Error)
+
+	for i, taskID := range []string{"b1", "b2", "b3"} {
+		require.NoError(t, db.Create(&model.Task{
+			TaskID: taskID, NodeID: 1, Kind: model.TaskKindBackupCreate,
+			State: model.TaskStateRunning, Title: "备份",
+		}).Error, "第 %d 条备份任务不该被拦", i+1)
+	}
+}

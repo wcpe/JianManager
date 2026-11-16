@@ -182,7 +182,22 @@ export function RuntimeAddDrawer({
                 onDelete={async () => false}
                 onInstall={async (major) => {
                   try {
-                    await install.mutateAsync({ type: 'nodejs', major })
+                    const res = await install.mutateAsync({ type: 'nodejs', major })
+                    /*
+                      幂等命中（reused）不是"又下发了一个"，而是"你要的这个已经在跑"。
+                      两种回执都算成功，但提示必须不同：否则用户以为点了两次装了两个，
+                      或者反过来以为第一次没成功。
+                    */
+                    if (res.reused) {
+                      toast.info(t('nodes.runtimeLib.installReused', '相同版本的安装已在进行中，已复用该任务'), {
+                        action: {
+                          label: t('nodes.runtime.viewProgress', '查看进度'),
+                          onClick: () => window.location.assign(`/tasks?task=${encodeURIComponent(res.taskId)}`),
+                        },
+                        duration: 8000,
+                      })
+                      return true
+                    }
                     toast.success(t('nodes.runtimeLib.installDispatched', 'Node.js 安装任务已下发'))
                     return true
                   } catch (err) {

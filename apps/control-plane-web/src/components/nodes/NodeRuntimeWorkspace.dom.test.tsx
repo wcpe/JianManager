@@ -23,6 +23,8 @@ const state = {
   logEnabled: false,
   pm: null as string | null,
   /** 日志运行时状态：默认「未启用」（无实例），用例可覆盖。 */
+  /** 本节点在跑的重型任务（顶部活跃任务条的数据源），默认空。 */
+  activeTasks: [] as Array<Record<string, unknown>>,
   logRuntime: { instances: [] as Array<Record<string, unknown>> } as
     | { instances: Array<Record<string, unknown>> }
     | undefined,
@@ -39,6 +41,17 @@ vi.mock('@/api/runtimes', () => ({
   useRegisterRuntime: () => ({ mutateAsync: vi.fn() }),
   useInstallRuntime: () => ({ mutateAsync: vi.fn() }),
   useDeleteRuntime: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}))
+/*
+  任务域整模块 mock：工作台顶部现在会展示「本节点当前在跑什么」（进度 + 就地强停）。
+  这条查询本身的行为由 RuntimeActiveTaskBar / node-active-tasks 的用例覆盖，
+  本文件只关心「它在页面里是否出现、切 sub 时是否干扰其它断言」，因此给默认空列表。
+  【不 mock 会怎样】useTasks 落到真实实现 → 真实 react-query 取数 → jsdom 里没网，
+  查询状态抖动会把别的断言一起带乱（最初就是这么红了一次）。
+*/
+vi.mock('@/api/tasks', () => ({
+  useTasks: () => ({ data: { items: state.activeTasks, total: state.activeTasks.length }, isLoading: false }),
+  useCancelTask: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }))
 vi.mock('@/api/pmConfig', () => ({
   useNodePMConfig: () => ({ data: state.pm ? { pm: state.pm } : undefined, isLoading: false }),
@@ -203,6 +216,28 @@ describe('NodeRuntimeWorkspace', () => {
     await user.click(await screen.findByTestId('runtime-menu-jdk-12'))
     const item = await screen.findByTestId('runtime-menu-delete-jdk-12')
     expect(item).not.toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('本节点有在跑的安装任务时，顶部显示进度并可就地强制停止', async () => {
+    state.activeTasks = [
+      {
+        id: 1, taskId: 't-jdk', nodeId: 1, kind: 'jdk_install', state: 'running', progress: 42,
+        title: '安装 JDK Temurin 21', detail: '节点 n1 · arch=x64', error: '', result: '',
+        cancelRequested: false, createdBy: 1, createdAt: '', updatedAt: '',
+      },
+    ]
+    renderWithProviders(<NodeRuntimeWorkspace node={node()} sub="inventory" onSub={vi.fn()} />)
+
+    // 进度直接出现在发起安装的同一屏，不必跳去任务中心。
+    expect(await screen.findByTestId('runtime-active-task-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('runtime-active-pct-t-jdk')).toHaveTextContent('42%')
+    expect(screen.getByTestId('runtime-active-stop-t-jdk')).toBeInTheDocument()
+  })
+
+  it('没有在跑的任务时，顶部不渲染空闲的任务条（不白占高度）', () => {
+    state.activeTasks = []
+    renderWithProviders(<NodeRuntimeWorkspace node={node()} sub="inventory" onSub={vi.fn()} />)
+    expect(screen.queryByTestId('runtime-active-task-bar')).not.toBeInTheDocument()
   })
 
   it('点击二级 sub 上报切换；切到 log 时才开始取日志运行时', async () => {

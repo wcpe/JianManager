@@ -985,7 +985,17 @@ export const handlers = [
       managed: true,
       createdAt: NOW,
     })
-    return HttpResponse.json({ taskId: `task-jdk-${Date.now()}` }, { status: 202 })
+    /*
+      幂等复用演示：真后端同参数的重复提交返回 200 + reused（复用那个在跑的任务）。
+      这里用「本节点已有同厂商同大版本 JDK」近似——够用来看前端文案分支，
+      不要把它当成真实的后端语义（真实的判定在 CP 的幂等键上）。
+    */
+    const dup = jdks.list((j) => j.nodeId === nodeId && j.vendor === body.vendor && j.majorVersion === body.majorVersion)[0]
+    const taskId = `task-jdk-${body.vendor}-${body.majorVersion}`
+    if (dup) {
+      return HttpResponse.json({ taskId, reused: true, task: { taskId, kind: 'jdk_install', state: 'running' } })
+    }
+    return HttpResponse.json({ taskId }, { status: 202 })
   }),
 
   // JDK 探测：mock 据路径返厂商/版本/架构；含 "invalid" 或不含 jdk/java 关键字 → valid=false 演示错误态。
@@ -1193,7 +1203,11 @@ export const handlers = [
       })
     }
     const taskId = `task-runtime-install-${body.major}`
-    return HttpResponse.json({ taskId, task: { taskId, kind: 'runtime_install', state: 'running' } }, { status: 202 })
+    // 幂等复用演示（同大版本已存在 → 200 + reused），对齐真后端的幂等键语义。
+    const already = nodeRuntimes.list((r) => r.nodeId === nodeId && r.type === 'nodejs' && r.majorVersion === body.major)[0]
+    const payload = { taskId, task: { taskId, kind: 'runtime_install', state: 'running' } }
+    if (already) return HttpResponse.json({ ...payload, reused: true })
+    return HttpResponse.json(payload, { status: 202 })
   }),
 
   // 删除：type 定位承载表（jdk → node-jdks，其它 → node-runtimes；托管 nodejs 语义=连文件，mock 仅删记录）。
@@ -1262,7 +1276,12 @@ export const handlers = [
     } else {
       globalPkgs.insert({ name: body.name, version: ver } as Omit<MockGlobalPackage, 'id'>)
     }
-    return HttpResponse.json({ taskId: `t-pkg-${globalPkgs.list().length}` }, { status: 202 })
+    const taskId = `t-pkg-${body.name}`
+    // 幂等复用演示：同包同版本已在列表里 → 200 + reused。
+    if (existing && existing.version === ver) {
+      return HttpResponse.json({ taskId, reused: true })
+    }
+    return HttpResponse.json({ taskId }, { status: 202 })
   }),
   domainRoute('delete', '/nodes/:id/packages', (info) => {
     const denied = requireAuth(info)

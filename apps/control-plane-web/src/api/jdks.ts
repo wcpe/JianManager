@@ -113,6 +113,13 @@ export function useDeleteJDK(nodeId: number) {
 /** POST /nodes/:id/jdks/install 的 202 响应：异步任务受理，回执 taskId。 */
 export interface InstallJDKAccepted {
   taskId: string
+  /**
+   * true = 这次提交命中了**幂等复用**：同参数的安装已经在跑了，返回的是那个任务。
+   *
+   * 与「被互斥拒绝」（409）是两回事：复用是成功，界面该说"已有相同任务，正在跟踪它"，
+   * 而不是报错让用户以为没下发成功、于是再点一次。
+   */
+  reused?: boolean
 }
 
 /** 

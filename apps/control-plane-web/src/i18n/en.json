@@ -1256,7 +1256,8 @@
       "installMajorPlaceholder": "Select the Node.js version to install",
       "installPreview": "Will install Node.js {{major}} ({{lts}})",
       "installDispatching": "Dispatching…",
-      "cancelWhilePending": "Dispatching — wait for acceptance"
+      "cancelWhilePending": "Dispatching — wait for acceptance",
+      "installReused": "The same install is already running; reused that task"
     },
     "enroll": {
       "addNode": "Add Node",
@@ -1592,9 +1593,16 @@
       "copyPath": "Copy path",
       "revealPath": "Copy path and reveal in file manager",
       "refsCount": "{{count}} instance(s) using it",
-      "goTasks": "Open task center"
+      "goTasks": "Open task center",
+      "stopRequested": "Stop requested for \"{{title}}\"",
+      "stopFailed": "Failed to stop",
+      "viewProgress": "View progress",
+      "forceStopHint": "Interrupt the running download/install; you can retry afterwards",
+      "stopping": "Stopping…",
+      "waitingWorker": "Waiting for node"
     },
-    "jdkInstalling": "Dispatching…"
+    "jdkInstalling": "Dispatching…",
+    "jdkInstallReused": "The same JDK install is already running; reused that task"
   },
   "nodeProxy": {
     "title": "Outbound proxy",
@@ -5858,7 +5866,8 @@
     "upgrade": "Upgrade",
     "versionLabel": "Version",
     "versionPlaceholder": "Version (empty = latest)",
-    "installing": "Submitting…"
+    "installing": "Submitting…",
+    "installReused": "The same package install is already running; reused that task"
   },
   "permissions": {
     "title": "Permissions",

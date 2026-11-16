@@ -2450,6 +2450,11 @@ export const handlers = [
       if (state === t.state) return t
       return { ...t, state, progress: state === 'succeeded' ? 100 : t.progress, updatedAt: new Date(now).toISOString() }
     })
+    // active=1：只看非终态任务（节点页签的「当前在跑什么」用它）。
+    // 必须在 advanceTaskState 之后过滤，否则会漏掉"刚被推进成 succeeded"的那些。
+    if (url.searchParams.get('active') === '1' || url.searchParams.get('active') === 'true') {
+      items = items.filter((t) => t.state !== 'succeeded' && t.state !== 'failed' && t.state !== 'canceled')
+    }
     if (kind) items = items.filter((t) => t.kind === kind)
     if (state) items = items.filter((t) => t.state === state)
     if (nodeId) items = items.filter((t) => t.nodeId === Number(nodeId))
