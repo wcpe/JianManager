@@ -12,6 +12,7 @@ import (
 // 停止已经提交后再取消重启，旧实例正常收尾但绝不提交新启动。
 func TestRV016RestartCanceledAfterStop(t *testing.T) {
 	m := NewManager(t.TempDir())
+	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	const uuid = "rv016-stop-phase"
 	require.NoError(t, createDirect(m, uuid, "实例", keepAliveCmd(), t.TempDir()))
 	s := installRunningStrategy(t, m, uuid)

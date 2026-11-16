@@ -167,7 +167,8 @@ func (r *Registry) Put(st FileState) {
 	//
 	// 路径会被轮转复用（latest.log → 2026-11-07-1.log，新 latest.log 出现）。
 	// 按路径清会误删轮转目标的位点。dev+inode 是"同一个物理文件"的准确判据；
-	// inode 为 0（拿不到物理身份）时不做清理，宁可留一条多余记录也不误删。
+	// inode 为 0（Windows 等平台拿不到物理身份）时，Collector 会先把已轮转文件的
+	// 当前路径写回，再用同路径清理陈旧指纹，避免截断重写后旧 offset 重新命中。
 	if st.Identity.Inode != 0 {
 		for k, old := range r.m {
 			if k == st.Identity.Key() {
@@ -176,6 +177,14 @@ func (r *Registry) Put(st FileState) {
 			if old.Identity.Inode == st.Identity.Inode && old.Identity.Dev == st.Identity.Dev {
 				delete(r.m, k)
 			}
+		}
+	} else if st.Path != "" {
+		cleanPath := filepath.Clean(st.Path)
+		for k, old := range r.m {
+			if k == st.Identity.Key() || old.Path == "" || filepath.Clean(old.Path) != cleanPath {
+				continue
+			}
+			delete(r.m, k)
 		}
 	}
 	// 同一个文件内容未变就不标脏：这是**写放大的根源**。

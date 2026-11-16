@@ -36,6 +36,7 @@ func TestApprovalPendingIndex_BlocksSecondPending(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "a.db")),
 		&gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
+	cleanupDB(t, db)
 	require.NoError(t, db.AutoMigrate(&model.ApprovalTicket{}))
 	require.NoError(t, migrateApprovalPendingUniqueIndex(db))
 
@@ -59,6 +60,7 @@ func TestApprovalPendingIndex_IdempotentMigration(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "b.db")),
 		&gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
+	cleanupDB(t, db)
 	require.NoError(t, db.AutoMigrate(&model.ApprovalTicket{}))
 
 	require.NoError(t, migrateApprovalPendingUniqueIndex(db))
@@ -74,5 +76,6 @@ func TestApprovalPendingIndex_SkipsWhenTableMissing(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "c.db")),
 		&gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
+	cleanupDB(t, db)
 	require.NoError(t, migrateApprovalPendingUniqueIndex(db))
 }

@@ -53,7 +53,7 @@ func (p *PIDFile) WriteRecord(rec PIDRecord) error {
 
 // ReadRecord 读取完整恢复记录。
 func (p *PIDFile) ReadRecord() (*PIDRecord, error) {
-	data, err := os.ReadFile(p.path)
+	data, err := readPIDFile(p.path)
 	if err != nil {
 		return nil, fmt.Errorf("读取 PID 文件失败: %w", err)
 	}
@@ -109,7 +109,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := os.Chmod(tmpName, perm); err != nil {
 		return fmt.Errorf("设置 PID 文件权限失败: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := renamePIDFile(tmpName, path); err != nil {
 		return fmt.Errorf("替换 PID 文件失败: %w", err)
 	}
 	tmpName = "" // 已成功 rename，勿再删除

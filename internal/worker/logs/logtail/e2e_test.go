@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -130,10 +131,9 @@ func writeLines(t *testing.T, path string, lines ...string) {
 	}
 }
 
-// newRunner 启动一个测试用 Runner（短周期，便于测试快速收敛）。
-func newRunner(t *testing.T, root string, paths []string, exclude []string, readFromHead bool, bindings *logtail.Bindings) (*logtail.Runner, *fakeVL) {
+// startRunnerWithClient 启动一个测试用 Runner（短周期，便于测试快速收敛）。
+func startRunnerWithClient(t *testing.T, root string, paths []string, exclude []string, readFromHead bool, bindings *logtail.Bindings, client *vlsup.Client) *logtail.Runner {
 	t.Helper()
-	fake := newFakeVL(t)
 	runner, err := logtail.Start(context.Background(), logtail.Config{
 		Enabled:          true,
 		Paths:            paths,
@@ -144,7 +144,7 @@ func newRunner(t *testing.T, root string, paths []string, exclude []string, read
 		ProgressInterval: 30 * time.Millisecond,
 		TimeZone:         time.UTC,
 		Bindings:         bindings,
-	}, fake.client(t), nil)
+	}, client, nil)
 	if err != nil {
 		t.Fatalf("启动采集器: %v", err)
 	}
@@ -152,7 +152,14 @@ func newRunner(t *testing.T, root string, paths []string, exclude []string, read
 		t.Fatal("Enabled=true 时必须返回 Runner")
 	}
 	t.Cleanup(runner.Stop)
-	return runner, fake
+	return runner
+}
+
+// newRunner 启动一个测试用 Runner，并返回可复用的假 VL。
+func newRunner(t *testing.T, root string, paths []string, exclude []string, readFromHead bool, bindings *logtail.Bindings) (*logtail.Runner, *fakeVL) {
+	t.Helper()
+	fake := newFakeVL(t)
+	return startRunnerWithClient(t, root, paths, exclude, readFromHead, bindings, fake.client(t)), fake
 }
 
 // newBindings 造一份内存绑定表（把 workDir 映成 inst:1）。
@@ -307,17 +314,26 @@ func TestCollectorFollowsRotation(t *testing.T) {
 	live := filepath.Join(logsDir, "latest.log")
 	writeLines(t, live, `[18:00:01] [Server thread/INFO]: before-rotation`)
 
-	_, fake := newRunner(t, root, []string{filepath.Join(logsDir, "*.log")}, nil, true, newBindings(t, workDir))
+	bindings := newBindings(t, workDir)
+	runner, fake := newRunner(t, root, []string{filepath.Join(logsDir, "*.log")}, nil, true, bindings)
 	if !waitFor(t, 5*time.Second, func() bool { return fake.count() >= 1 }) {
 		t.Fatalf("首行未采到，实际 %d", fake.count())
 	}
 
 	// 轮转：改名 + 新建（MC/log4j 的等价形态；不是 copytruncate）。
+	// Windows 不允许改名仍被 harvester 打开的文件，因此在改名窗口重启采集器；
+	// registry 会让旧文件从原 offset 继续，语义与 POSIX 路径保持一致。
+	if runtime.GOOS == "windows" {
+		runner.Stop()
+	}
 	rotated := filepath.Join(logsDir, "2026-11-05-1.log")
 	if err := os.Rename(live, rotated); err != nil {
 		t.Fatalf("轮转改名: %v", err)
 	}
 	writeLines(t, live, `[18:00:02] [Server thread/INFO]: after-rotation`)
+	if runtime.GOOS == "windows" {
+		runner = startRunnerWithClient(t, root, []string{filepath.Join(logsDir, "*.log")}, nil, true, bindings, fake.client(t))
+	}
 
 	if !waitFor(t, 8*time.Second, func() bool {
 		n := 0

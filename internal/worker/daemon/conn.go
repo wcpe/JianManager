@@ -64,10 +64,19 @@ func DialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
 	return platformDialTimeout(addr, timeout)
 }
 
+// dialProbe 为 SocketServed 提供短超时探活拨号。
+// Windows 命名管道在地址尚未创建时会按 npipe 的默认超时等待，探活不能因此阻塞数秒。
+func dialProbe(addr string) (net.Conn, error) {
+	if addr == "" {
+		return nil, fmt.Errorf("拨号地址为空")
+	}
+	return platformDialProbe(addr)
+}
+
 // platformDialDefaultTimeout 无显式超时拨号的默认上限（F9）：
 // 地址存在但对端未 accept 时避免无限阻塞，调用方据失败重试。
 const platformDialDefaultTimeout = 2 * time.Second
 
-// platformListen / platformDial / platformDialTimeout / RemoveSocket 由平台文件实现：
+// platformListen / platformDial / platformDialTimeout / platformDialProbe / RemoveSocket 由平台文件实现：
 //   - conn_unix.go    （Linux/macOS: Unix Socket）
 //   - conn_windows.go （Windows: Named Pipe，基于 npipe）

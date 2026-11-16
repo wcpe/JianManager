@@ -97,6 +97,7 @@ func (s *blockingLifecycleStrategy) startedCount() int {
 
 func TestManager_RestartWaitsForStopAndKeepsNewProcessRunning(t *testing.T) {
 	m := NewManager(t.TempDir())
+	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	const uuid = "restart-serialized"
 	require.NoError(t, createDirect(m, uuid, "并发重启实例", keepAliveCmd(), t.TempDir()))
 

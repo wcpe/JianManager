@@ -162,7 +162,7 @@ func SocketServedContext(ctx context.Context, pidDir, uuid string) (bool, error)
 
 // socketDialable 尝试拨号一次并立刻关闭，仅用于判断该地址是否有人在监听。
 func socketDialable(addr string) bool {
-	conn, err := Dial(addr)
+	conn, err := dialProbe(addr)
 	if err != nil {
 		return false
 	}

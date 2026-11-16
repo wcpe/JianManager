@@ -45,6 +45,11 @@ func platformDialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
 	return net.DialTimeout("unix", addr, timeout)
 }
 
+// platformDialProbe 在 Unix 上沿用标准拨号语义；不存在的 socket 本身会立即返回。
+func platformDialProbe(addr string) (net.Conn, error) {
+	return platformDial(addr)
+}
+
 // RemoveSocket 删除 Unix Socket 文件，忽略不存在错误。
 func RemoveSocket(addr string) {
 	_ = os.Remove(addr)

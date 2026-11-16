@@ -17,18 +17,18 @@ import (
 
 // TestMatchesOwnOrphanJudgement 判据本体表驱动（纯函数 ⇒ 稳定 ✓）。
 func TestMatchesOwnOrphanJudgement(t *testing.T) {
-	root := "/data/worker-A"
+	root := filepath.FromSlash("/data/worker-A")
 	cases := []struct {
 		name    string
 		cmdline string
 		exe     string
 		want    bool
 	}{
-		{"两道都过 ✓", "/data/worker-A/opt/vlsup/bin/vlsup --storageDataPath /data/worker-A/var/vl/hot", "/data/worker-A/opt/vlsup/bin/vlsup", true},
-		{"cmdline 不含根 ✗", "vlsup --storageDataPath /tmp/other", "/data/worker-A/opt/vlsup/bin/vlsup", false},
-		{"exe 不在根下 ✗", "/data/worker-A/opt/vlsup/bin/vlsup --x /data/worker-A", "/usr/bin/vlsup", false},
-		{"前缀伪装 ✗", "/data/worker-A/opt/vlsup/bin/vlsup --x /data/worker-A", "/data/worker-A-evil/vlsup", false},
-		{"空根 ✗", "vlsup --x /data/worker-A", "/data/worker-A/vlsup", false},
+		{"两道都过 ✓", filepath.FromSlash("/data/worker-A/opt/vlsup/bin/vlsup --storageDataPath /data/worker-A/var/vl/hot"), filepath.FromSlash("/data/worker-A/opt/vlsup/bin/vlsup"), true},
+		{"cmdline 不含根 ✗", filepath.FromSlash("vlsup --storageDataPath /tmp/other"), filepath.FromSlash("/data/worker-A/opt/vlsup/bin/vlsup"), false},
+		{"exe 不在根下 ✗", filepath.FromSlash("/data/worker-A/opt/vlsup/bin/vlsup --x /data/worker-A"), filepath.FromSlash("/usr/bin/vlsup"), false},
+		{"前缀伪装 ✗", filepath.FromSlash("/data/worker-A/opt/vlsup/bin/vlsup --x /data/worker-A"), filepath.FromSlash("/data/worker-A-evil/vlsup"), false},
+		{"空根 ✗", filepath.FromSlash("vlsup --x /data/worker-A"), filepath.FromSlash("/data/worker-A/vlsup"), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
