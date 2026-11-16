@@ -78,7 +78,7 @@ describe('evaluateReadiness：日志平台', () => {
     expect(item.action?.key).toBe('dispatchLogAsset')
   })
 
-  it('资产已缓存但 HOT 未启动 → blocked，动作是启动 HOT', () => {
+  it('资产已缓存但实例未启动 → blocked，动作是启动运行时', () => {
     const item = byKey(
       evaluateReadiness(
         base({ logRuntime: { instances: [{ namespace: 'hot', state: 'STOPPED' }] } }),
@@ -89,13 +89,13 @@ describe('evaluateReadiness：日志平台', () => {
     expect(item.action?.key).toBe('startLogRuntime')
   })
 
-  it('HOT 运行中 + 磁盘 85% → warn（能跑但要迁移）', () => {
+  it('实例运行中 + 磁盘 85% → warn（能跑但要调上限/缩保留期）', () => {
     const item = byKey(evaluateReadiness(base({ logDiskPct: 85 })), 'log')
     expect(item.level).toBe('warn')
     expect(item.action?.key).toBe('openLogStorage')
   })
 
-  it('HOT 运行中 + 磁盘 95% → blocked（超危险水位会丢日志）', () => {
+  it('实例运行中 + 磁盘 95% → blocked（超危险水位会丢日志）', () => {
     const item = byKey(evaluateReadiness(base({ logDiskPct: 95 })), 'log')
     expect(item.level).toBe('blocked')
   })

@@ -2,7 +2,7 @@
  * 运行时就绪判定（节点详情「运行时」页签的结论层）。
  *
  * 【为什么需要它】改造前那个页签是三块独立面板竖排：JDK 面板说「有 3 个 JDK」、
- * 运行时面板说「Node.js 22 已登记」、日志面板说「HOT 未就绪」——每句都是原子事实，
+ * 运行时面板说「Node.js 22 已登记」、日志面板说「实例未就绪」——每句都是原子事实，
  * 但没有一句回答「**这台节点现在能不能干活、缺什么**」。用户实际问的是后者。
  *
  * 本模块把那三份原子事实折算成 4 条**带结论的判定**，页面顶部只需渲染它：
@@ -34,7 +34,7 @@ export interface ReadinessItem {
   /** 稳定 key（React 列表与测试定位）。 */
   key: 'java' | 'node' | 'log' | 'packages'
   level: ReadinessLevel
-  /** 主数字/主结论（如「3 个可用」「HOT 未启动」）。 */
+  /** 主数字/主结论（如「3 个可用」「运行时未启动」）。 */
   headline: string
   /** 一句话解释（为什么是这个档位）。 */
   detail?: string
@@ -51,7 +51,12 @@ export interface ReadinessInput {
   runtimes?: Array<{ type: string; majorVersion: number }>
   /** 包管理器配置（pm 名即可；未配置为 undefined）。 */
   packages?: { pm: string | null; globalPackageCount?: number }
-  /** 日志运行时状态。 */
+  /**
+   * 日志运行时状态。
+   *
+   * 冷热双层已于 2026-10-29 废除，后端只返回唯一的受管实例（namespace='hot'）。
+   * 所以这里按「有没有实例在运行」判定，而不是「HOT 那一层在不在跑」。
+   */
   logRuntime?: { instances: Array<{ namespace: string; state: string; health_ok?: boolean }> } | null
   /** 日志平台是否已下发审批资产。 */
   logAssetCached?: boolean
@@ -148,8 +153,8 @@ function judgeNode(input: ReadinessInput): ReadinessItem {
 /**
  * 日志平台就绪：三态判定——资产未下发 → 未启动 → 运行中（再看磁盘水位）。
  *
- * 【为什么资产缺失是 blocked 而不是 warn】没有审批资产时，HOT/COLD/Rehydrate
- * 三个分区一个都启动不了（后端会以 LOG_ARCHIVE_MISSING / supervised 未配置拒绝），
+ * 【为什么资产缺失是 blocked 而不是 warn】没有审批资产时受管 VL 实例根本起不来
+ * （后端会以 supervised 未配置 / LOG_ARCHIVE_MISSING 拒绝），
  * 那不是「有隐患」，是「整块能力不可用」。
  */
 function judgeLog(input: ReadinessInput): ReadinessItem {
@@ -158,34 +163,35 @@ function judgeLog(input: ReadinessInput): ReadinessItem {
   }
   const instances = input.logRuntime?.instances ?? []
   const running = instances.filter((i) => i.state === 'RUNNING')
-  const hot = instances.find((i) => i.namespace === 'hot')
+  // 唯一的受管实例（冷热双层已废除；此处不按 hot/cold 分层，见 ReadinessInput.logRuntime 注释）。
+  const primary = instances[0]
 
   if (!input.logAssetCached && instances.length === 0) {
     return {
       key: 'log',
       level: 'blocked',
       headline: '审批资产未下发',
-      detail: '需先上传 VictoriaLogs 审批包并下发到本节点，之后才能启动分区',
+      detail: '需先上传 VictoriaLogs 审批包并下发到本节点，之后才能启动运行时',
       action: { key: 'dispatchLogAsset', label: '下发资产' },
     }
   }
-  if (!hot || hot.state !== 'RUNNING') {
+  if (!primary || primary.state !== 'RUNNING') {
     return {
       key: 'log',
       level: 'blocked',
-      headline: hot ? `HOT ${hot.state}` : 'HOT 未启动',
-      detail: 'HOT 分区未运行时无法写入与查询在线日志',
-      action: { key: 'startLogRuntime', label: '启动 HOT' },
+      headline: primary ? `实例 ${primary.state}` : '运行时未启动',
+      detail: '日志运行时未运行时无法写入与查询在线日志',
+      action: { key: 'startLogRuntime', label: '启动运行时' },
     }
   }
-  // HOT 已运行：再看存储水位。pct 算不出来时用已用字节说明，不编造百分比。
+  // 实例在运行：再看存储水位。pct 算不出来时用已用字节说明，不编造百分比。
   const pct = input.logDiskPct
   if (typeof pct === 'number' && pct >= DISK_DANGER) {
     return {
       key: 'log',
       level: 'blocked',
       headline: `磁盘 ${Math.round(pct)}%`,
-      detail: '已超危险水位，超保留期的日志将被丢弃，需清理或迁移分区',
+      detail: '已超危险水位，超保留期的日志将被丢弃；需调大上限或缩短保留期',
       action: { key: 'openLogStorage', label: '查看存储' },
     }
   }
@@ -194,20 +200,20 @@ function judgeLog(input: ReadinessInput): ReadinessItem {
       key: 'log',
       level: 'warn',
       headline: `磁盘 ${Math.round(pct)}%`,
-      detail: '接近上限，建议迁移旧分区到 COLD',
+      detail: '接近上限，建议调大存储上限或缩短保留期',
       action: { key: 'openLogStorage', label: '查看存储' },
     }
   }
   return {
     key: 'log',
     level: 'ok',
-    headline: `${running.length} 个分区运行中`,
+    headline: running.length > 0 ? '运行时已启动' : '未启动',
     detail:
       typeof pct === 'number'
-        ? `HOT 磁盘 ${Math.round(pct)}%`
+        ? `数据目录 ${Math.round(pct)}%`
         : input.logDiskUsedBytes
-          ? `HOT 占用 ${formatBytes(input.logDiskUsedBytes)}`
-          : 'HOT 运行中',
+          ? `占用 ${formatBytes(input.logDiskUsedBytes)}`
+          : '运行中',
   }
 }
 

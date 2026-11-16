@@ -1,15 +1,28 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Archive, Coffee, Package, ScrollText, Settings2 } from 'lucide-react'
+import { Coffee, Package, ScrollText, Settings2 } from 'lucide-react'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Segments, Segment } from '@jianmanager/ui/components/layout'
-import { useAuthStore } from '@/stores/auth'
-import { usePermissionsStore } from '@/stores/permissions'
 import { useNodeJDKsWithRefs, useDeleteJDK, useUpdateJDK } from '@/api/jdks'
 import { useNodeRuntimes, useDeleteRuntime } from '@/api/runtimes'
 import { useNodePMConfig } from '@/api/pmConfig'
-import { useLogRuntime, useApprovedLogAssets, useControlLogRuntime, useInstallLogAsset, useMigrateLogPartition, useResolveLogIngestGaps, useUploadLogAsset, deriveLogDiskPct, lastValue, LOG_VL_DISK_USED, type LogVLMetricSeries } from '@/api/logRuntime'
+import {
+  useLogRuntime,
+  useApprovedLogAssets,
+  useControlLogRuntime,
+  useInstallLogAsset,
+  useResolveLogIngestGaps,
+  useUploadLogAsset,
+  deriveLogDiskPct,
+  lastValue,
+  LOG_VL_DISK_USED,
+  LOG_VL_DISK_LIMIT,
+  LOG_VL_DISK_PCT,
+  LOG_VL_PARTITIONS,
+  LOG_VL_ROWS_DROPPED,
+  type LogVLMetricSeries,
+} from '@/api/logRuntime'
 import { useMetricSeries } from '@/api/metrics'
 import { buildRuntimeInventory, type RuntimeInventoryRow } from '@/lib/nodes/runtime-inventory'
 import { evaluateReadiness, type ReadinessActionKey } from '@/lib/nodes/runtime-readiness'
@@ -17,11 +30,10 @@ import type { RuntimeSub } from '@/lib/nodes/runtime-sub'
 import { RuntimeReadinessStrip } from '@/components/views/nodes/RuntimeReadinessStrip'
 import { RuntimeInventoryTable } from '@/components/views/nodes/RuntimeInventoryTable'
 import { RuntimeAddDrawer } from '@/components/nodes/RuntimeAddDrawer'
-import { LogRuntimeFlow, type LogNamespace, type LogRuntimeLayerView } from '@/components/views/nodes/LogRuntimeFlow'
+import { LogRuntimeFlow, type LogRuntimeInstanceView } from '@/components/views/nodes/LogRuntimeFlow'
 import NodePMConfigSection from '@/components/nodes/NodePMConfigSection'
 import NodeGlobalPackagesTab from '@/components/nodes/NodeGlobalPackagesTab'
 import NodeLogAcqPanel from '@/components/logs/NodeLogAcqPanel'
-import LogMigrateDialog from '@/components/nodes/LogMigrateDialog'
 import type { NodeInfo } from '@/lib/nodes/node-types'
 
 /**
@@ -74,13 +86,31 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
     scope: 'node',
     targetId: node.uuid,
     range: READINESS_RANGE,
-    metrics: [LOG_VL_DISK_USED, 'log_vl_disk_limit', 'log_vl_disk_pct', 'log_vl_partitions'],
+    metrics: [
+      LOG_VL_DISK_USED,
+      LOG_VL_DISK_LIMIT,
+      LOG_VL_DISK_PCT,
+      LOG_VL_PARTITIONS,
+      LOG_VL_ROWS_DROPPED,
+    ],
     enabled: sub === 'log',
   })
 
   const logSeries = (metricsQ.data?.series ?? []) as LogVLMetricSeries[]
   const logDiskPct = sub === 'log' ? deriveLogDiskPct(logSeries) : null
   const logDiskUsed = sub === 'log' ? lastValue(logSeries, LOG_VL_DISK_USED) : null
+  // 上限只在「字节口径」下有意义：百分比部署时 limit 的 unit 是 pct（值如 95），
+  // 当成字节显示会印出「95 B」这种荒谬数字，故用「比已用大一个量级」来甄别。
+  const rawLimit = sub === 'log' ? lastValue(logSeries, LOG_VL_DISK_LIMIT) : null
+  const logDiskLimit = rawLimit != null && logDiskUsed != null && rawLimit > logDiskUsed ? rawLimit : null
+  const logPartitions = sub === 'log' ? lastValue(logSeries, LOG_VL_PARTITIONS) : null
+  const logRowsDropped = sub === 'log' ? lastValue(logSeries, LOG_VL_ROWS_DROPPED) : null
+  // 趋势：把 pct 序列点摊成数组给 Sparkline（无 pct 时用 used 字节，曲线形状仍有意义）。
+  const logTrend = (() => {
+    const key = logDiskPct != null ? LOG_VL_DISK_PCT : LOG_VL_DISK_USED
+    const s = logSeries.find((x) => x.metricKey === key)
+    return (s?.points ?? []).map((pt) => pt.avg).filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+  })()
 
   const normalizedArch = node.arch.toLowerCase() === 'x64' ? 'amd64' : node.arch.toLowerCase()
   const approvedAsset = (assetsQ.data ?? []).find(
@@ -125,32 +155,36 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
   const control = useControlLogRuntime(node.id)
   const installAsset = useInstallLogAsset(node.id)
   const uploadAsset = useUploadLogAsset()
-  const migrate = useMigrateLogPartition(node.id)
   const resolveGaps = useResolveLogIngestGaps(node.id)
-  const [migrateOpen, setMigrateOpen] = useState(false)
 
-  const jwtRole = useAuthStore((s) => s.role)
-  const permLoaded = usePermissionsStore((s) => s.loaded)
-  const permIsAdmin = usePermissionsStore((s) => s.isPlatformAdmin)
-  // 判定留在外壳：依赖 auth/me + JWT 双源，属应用侧知识（与改造前同口径，未搬动判据）。
-  const canMigrate = permLoaded ? permIsAdmin : jwtRole === 10
+  /*
+    【为什么删掉了 canMigrate】迁移分区（HOT→COLD）随冷热双层废除已无业务语义：
+    后端 migrator 要求 target_tier=cold，而 cold 层不再存在。原先的平台管理员门禁
+    只为这一个动作存在，动作移除后门禁一并移除。归档回灌仍保留在应急区，
+    它有自己的 worker 侧 capability 判定（未装配时后端明确拒绝）。
+  */
 
-  const logLayers: LogRuntimeLayerView[] = (['hot', 'cold', 'rehydrate'] as LogNamespace[]).map((ns) => {
-    const inst = logQ.data?.instances.find((i) => i.namespace === ns)
-    return {
-      namespace: ns,
-      state: inst?.state,
-      health_ok: inst?.health_ok,
-      query_ready: inst?.query_ready,
-      listen_addr: inst?.listen_addr,
-      asset_tag: inst?.asset_tag,
-      last_error: inst?.last_error,
-      // 容量指标是节点级的（VL 数据目录整体），不对单层拆分——所以只在 HOT 上展示，
-      // 其余层留空。给每层都填同一个数会让人以为是三层各自的用量。
-      diskUsedBytes: ns === 'hot' ? logDiskUsed : null,
-      diskPct: ns === 'hot' ? logDiskPct : null,
-    }
-  })
+  /*
+    后端只返回唯一的受管实例（冷热双层 2026-10-29 已废除），所以直接映射全部实例，
+    不做 hot/cold/rehydrate 的分层展开。容量指标是**节点级**的（整个 VL 数据目录），
+    与实例一一对应，正好可以挂在这一张卡上。
+  */
+  const logInstances: LogRuntimeInstanceView[] = (logQ.data?.instances ?? []).map((inst) => ({
+    namespace: inst.namespace,
+    state: inst.state,
+    health_ok: inst.health_ok,
+    query_ready: inst.query_ready,
+    partition_recovery_complete: inst.partition_recovery_complete,
+    listen_addr: inst.listen_addr,
+    asset_tag: inst.asset_tag,
+    last_error: inst.last_error,
+    diskUsedBytes: logDiskUsed,
+    diskPct: logDiskPct,
+    diskLimitBytes: logDiskLimit,
+    diskTrend: logTrend,
+    partitions: logPartitions,
+    rowsDropped: logRowsDropped,
+  }))
 
   const errMsg = (err: unknown, fallback: string) =>
     (err as { response?: { data?: { message?: string } } })?.response?.data?.message || fallback
@@ -262,22 +296,19 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
               os: node.os,
               arch: normalizedArch,
               online,
-              layers: logLayers,
+              instances: logInstances,
               assetCached: !!approvedAsset?.cached,
               assetTag: approvedAsset?.tag,
               assetSha: approvedAsset?.executableSha256,
               error: logQ.isError ? errMsg(logQ.error, t('logsRuntime.opFailed', '操作失败')) : null,
             }}
-            busy={control.isPending || migrate.isPending || resolveGaps.isPending || installAsset.isPending || uploadAsset.isPending}
+            busy={control.isPending || resolveGaps.isPending || installAsset.isPending || uploadAsset.isPending}
             pending={{
               upload: uploadAsset.isPending,
               install: installAsset.isPending,
               control: control.isPending,
-              migrate: migrate.isPending,
-              gaps: resolveGaps.isPending,
             }}
             fetching={logQ.isFetching}
-            canMigrate={canMigrate}
             onRefresh={() => {
               void logQ.refetch()
               void assetsQ.refetch()
@@ -301,16 +332,11 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
                 .then(() => toast.success(t(`logsRuntime.action.${action}`, '已完成')))
                 .catch((err) => toast.error(errMsg(err, t('logsRuntime.opFailed', '操作失败'))))
             }}
-            onOpenMigrate={() => setMigrateOpen(true)}
             onResolveGaps={() => {
               void resolveGaps
                 .mutateAsync(undefined)
                 .then(() => toast.success(t('logsRuntime.gapsResolved', '已核销已被投影覆盖的缺口')))
                 .catch((err) => toast.error(errMsg(err, t('logsRuntime.opFailed', '操作失败'))))
-            }}
-            onRehydrate={() => {
-              // 回灌入口落在日志页的归档管理（跨节点视角），这里给出直接跳转而不是重复实现一遍。
-              toast.info(t('logsRuntime.archive.openLogs', '请在「日志」页的归档管理中发起回灌'))
             }}
           />
         </Panel>
@@ -348,30 +374,6 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
         }}
         deleting={delJDK.isPending || delRuntime.isPending}
       />
-
-      <LogMigrateDialog
-        /* key 随开关变化：每次打开都是全新实例（日期与错误归零），不靠 effect 清 state。 */
-        key={migrateOpen ? 'migrate-open' : 'migrate-closed'}
-        open={migrateOpen}
-        onOpenChange={setMigrateOpen}
-        nodeId={node.id}
-        pending={migrate.isPending}
-        canMigrate={canMigrate}
-        onConfirm={async (utcDay) => {
-          try {
-            await migrate.mutateAsync({ storageNamespace: `node:${node.id}`, utcDay })
-            toast.success(t('logsRuntime.migrateDone', '分区已迁移到 COLD'))
-            return null
-          } catch (err) {
-            return errMsg(err, t('logsRuntime.opFailed', '操作失败'))
-          }
-        }}
-      />
-      {/* 归档管理入口（回灌）在日志页；这里给一个直达提示，避免用户以为「没有这个功能」。 */}
-      <p className="flex items-center gap-1 text-[10px] text-muted-foreground/70">
-        <Archive className="size-3" aria-hidden />
-        {t('logsRuntime.archive.hint', '归档回灌与分区清理在「日志」页的归档管理中操作（跨节点视角）。')}
-      </p>
     </div>
   )
 }

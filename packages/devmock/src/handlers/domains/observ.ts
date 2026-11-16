@@ -2493,10 +2493,23 @@ export const handlers = [
   domainRoute('get', '/nodes/:id/log-runtime', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    return HttpResponse.json({ supported: true, instances: [
-      { namespace: 'hot', state: 'RUNNING', health_ok: true, query_ready: true },
-      { namespace: 'cold', state: 'RUNNING', health_ok: true, query_ready: true },
-    ] })
+    // 冷热双层已于 2026-10-29 废除：真实后端只返回唯一受管实例（NamespaceHot）。
+    // 这里跟着只返回一个，否则 mock 会掩盖「界面上不该再有 hot/cold 分层」这条事实。
+    return HttpResponse.json({
+      supported: true,
+      instances: [
+        {
+          namespace: 'hot',
+          state: 'RUNNING',
+          port: 9428,
+          listen_addr: '127.0.0.1:9428',
+          asset_tag: 'v1.52.0',
+          health_ok: true,
+          partition_recovery_complete: true,
+          query_ready: true,
+        },
+      ],
+    })
   }),
   domainRoute('post', '/nodes/:id/log-runtime/migrate', async (info) => {
     const denied = requirePlatformAdmin(info)

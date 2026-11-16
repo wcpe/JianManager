@@ -6151,14 +6151,6 @@
   },
   "logsRuntime": {
     "title": "日志平台运行时",
-    "migration": {
-      "title": "确认迁移日志分区",
-      "description": "节点 {{node}} · 存储命名空间 {{namespace}} · UTC 日 {{day}}。操作范围是此节点整个物理 UTC 日，可能包含多个存储命名空间；上述命名空间仅用于定位，不是搬运边界。将把该物理日的 HOT 日志迁至 COLD，过程可能影响查询，请核对目标。",
-      "confirm": "确认迁移",
-      "denied": "整日跨命名空间迁移仅平台管理员可用",
-      "success": "分区已迁移到 COLD",
-      "unknown": "请求未取得明确回执，迁移结果未知；不会自动重发。请先复核运行时与该分区状态，再决定是否重新确认。"
-    },
     "error": {
       "unsupported": "本节点尚未启用日志平台（需先下发 VictoriaLogs 资产并配置）",
       "notReady": "日志平台正在启动，请稍后重试",
@@ -6178,25 +6170,14 @@
     },
     "namespace": {
       "hot": "HOT",
-      "cold": "COLD",
-      "rehydrate": "Rehydrate",
-      "help": "日志平台按三层存储：HOT=近期热数据（查询最快）；COLD=迁出的历史数据（查询稍慢，仍可查）；Rehydrate=把归档回灌成可查副本的临时层。三层按配置启用，未启用显示「未就绪」。",
       "notReady": "未就绪",
       "offline": "离线",
       "start": "启动",
       "stop": "停止",
-      "restart": "重启",
-      "migrate": "迁移分区",
-      "migrateHelp": "把某个分区从 HOT 迁到 COLD，释放热存储；迁移期间该分区暂不可查。",
-      "pipeline": "HOT=近期热数据（查询最快）；COLD=迁出的历史数据（稍慢但仍可查）；Rehydrate=把归档回灌成可查副本的临时层。三层按配置启用，未启用显示「未就绪」。"
-    },
-    "date": {
-      "label": "迁移日期（该日分区）",
-      "help": "要迁移的分区归属日（UTC）。日志按 UTC 日期分区存储，迁移与查询都以该分区为单位。"
+      "restart": "重启"
     },
     "assetCached": "审批包已缓存",
     "assetInstalled": "受管资产已安装",
-    "migrateDone": "分区已迁移到 COLD",
     "gapsResolved": "已核销已被投影覆盖的缺口",
     "opFailed": "操作失败",
     "action": {
@@ -6212,14 +6193,32 @@
     },
     "health": {
       "ok": "进程健康",
-      "queryable": "可查询"
+      "queryable": "可查询",
+      "recovering": "查询面就绪中"
     },
-    "archive": {
-      "rehydrate": "回灌",
-      "help": "把归档对象读取并发布回可查询面",
-      "objects": "{{count}} 个归档对象",
-      "openLogs": "请在「日志」页的归档管理中发起回灌",
-      "hint": "归档回灌与分区清理在「日志」页的归档管理中操作（跨节点视角）。"
+    "instance": {
+      "title": "VictoriaLogs 实例",
+      "notEnabled": "本节点尚未启用日志平台运行时",
+      "dispatchFirst": "审批资产已缓存，可点上方「下发资产」后再启动实例",
+      "uploadFirst": "需先上传审批包并下发资产，之后才能启动运行时",
+      "hint": "日志平台只运行一个 VictoriaLogs 实例，按 UTC 日分区保存近期日志并按保留期自动淘汰；不再区分冷热双层存储。"
+    },
+    "storage": {
+      "title": "数据目录",
+      "noLimit": "未配置上限，仅显示占用绝对值",
+      "noData": "暂无容量读数",
+      "trend": "数据目录占用趋势"
+    },
+    "risk": {
+      "title": "数据完整性",
+      "partitions": "日分区数",
+      "dropped": "超保留期丢弃",
+      "droppedHint": "因超保留期被 VictoriaLogs 丢弃的行速率（rows/sec）",
+      "listen": "监听"
+    },
+    "ops": {
+      "title": "人工应急",
+      "hint": "仅特殊故障处置时使用；依赖部署是否启用归档/缺口后端。"
     }
   },
   "instanceKind": {

@@ -6151,14 +6151,6 @@
   },
   "logsRuntime": {
     "title": "Log platform runtime",
-    "migration": {
-      "title": "Confirm log partition migration",
-      "description": "Node {{node}} · storage namespace {{namespace}} · UTC day {{day}}. This affects the entire physical UTC day on this node, potentially across multiple storage namespaces. The namespace above is only a locator, not the migration boundary. HOT logs for the day will move to COLD. Queries may be affected; verify the target first.",
-      "confirm": "Confirm migration",
-      "denied": "Whole-day cross-namespace migration requires a platform administrator",
-      "success": "Partition migrated to COLD",
-      "unknown": "No definitive response was received; migration outcome is unknown. It will not be retried automatically. Review the runtime and partition before confirming again."
-    },
     "error": {
       "unsupported": "Log platform is not enabled on this node (install the VictoriaLogs asset first)",
       "notReady": "Log platform is starting, please retry shortly",
@@ -6178,25 +6170,14 @@
     },
     "namespace": {
       "hot": "HOT",
-      "cold": "COLD",
-      "rehydrate": "Rehydrate",
-      "help": "Logs are stored in three tiers: HOT = recent data (fastest queries); COLD = migrated historical data (slower but queryable); Rehydrate = a temporary queryable copy rebuilt from archive. Tiers are enabled per config; disabled ones show \"not ready\".",
       "notReady": "not ready",
       "offline": "offline",
       "start": "Start",
       "stop": "Stop",
-      "restart": "Restart",
-      "migrate": "Migrate partition",
-      "migrateHelp": "Move a partition from HOT to COLD to free hot storage; the partition is briefly unqueryable during migration.",
-      "pipeline": "HOT = recent hot data (fastest queries); COLD = migrated history (slower but queryable); Rehydrate = temporary layer that replays archives into the queryable surface. Layers are enabled by config; disabled ones show \"not ready\"."
-    },
-    "date": {
-      "label": "Migration date (that day partition)",
-      "help": "The UTC day of the partition to migrate. Partitions are stored per UTC day, and both migration and queries operate on that unit."
+      "restart": "Restart"
     },
     "assetCached": "Approved package cached",
     "assetInstalled": "Managed asset installed",
-    "migrateDone": "Partition migrated to COLD",
     "gapsResolved": "Gaps covered by projections have been resolved",
     "opFailed": "Operation failed",
     "action": {
@@ -6212,14 +6193,32 @@
     },
     "health": {
       "ok": "Healthy",
-      "queryable": "Queryable"
+      "queryable": "Queryable",
+      "recovering": "Query surface warming up"
     },
-    "archive": {
-      "rehydrate": "Rehydrate",
-      "help": "Read archived objects and publish them back to the queryable surface",
-      "objects": "{{count}} archived object(s)",
-      "openLogs": "Start rehydration from Archive management on the Logs page",
-      "hint": "Archive rehydration and partition cleanup live in Archive management on the Logs page (cross-node view)."
+    "instance": {
+      "title": "VictoriaLogs instance",
+      "notEnabled": "Log platform runtime is not enabled on this node",
+      "dispatchFirst": "Approval asset is cached — dispatch it above, then start the instance",
+      "uploadFirst": "Upload an approval package and dispatch the asset before starting the runtime",
+      "hint": "The log platform runs a single VictoriaLogs instance, keeping recent logs in UTC-day partitions and evicting by retention. Hot/cold tiers no longer exist."
+    },
+    "storage": {
+      "title": "Data directory",
+      "noLimit": "No limit configured — showing absolute usage only",
+      "noData": "No capacity reading yet",
+      "trend": "Data directory usage trend"
+    },
+    "risk": {
+      "title": "Data integrity",
+      "partitions": "Day partitions",
+      "dropped": "Dropped past retention",
+      "droppedHint": "Rows/sec dropped by VictoriaLogs because they exceeded retention",
+      "listen": "Listening"
+    },
+    "ops": {
+      "title": "Manual recovery",
+      "hint": "For fault handling only; depends on whether the deployment has archive/gap backends."
     }
   },
   "instanceKind": {

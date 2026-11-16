@@ -22,6 +22,10 @@ const state = {
   runtimes: [] as Array<Record<string, unknown>>,
   logEnabled: false,
   pm: null as string | null,
+  /** 日志运行时状态：默认「未启用」（无实例），用例可覆盖。 */
+  logRuntime: { instances: [] as Array<Record<string, unknown>> } as
+    | { instances: Array<Record<string, unknown>> }
+    | undefined,
 }
 
 vi.mock('@/api/jdks', () => ({
@@ -50,7 +54,7 @@ vi.mock('@/api/logRuntime', async (importOriginal) => {
     useLogRuntime: (_id: number, active: boolean) => {
       // 记录调用时的 active，用来断言「未进入 log sub 时不发日志请求」。
       state.logEnabled = active
-      return { data: undefined, isLoading: false, isFetching: false, isError: false, refetch: vi.fn() }
+      return { data: state.logRuntime, isLoading: false, isFetching: false, isError: false, refetch: vi.fn() }
     },
     useApprovedLogAssets: () => ({ data: [], refetch: vi.fn() }),
     useControlLogRuntime: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -104,6 +108,7 @@ beforeEach(() => {
   state.runtimes = []
   state.logEnabled = false
   state.pm = null
+  state.logRuntime = { instances: [] }
 })
 
 describe('readRuntimeSub', () => {
@@ -214,11 +219,39 @@ describe('NodeRuntimeWorkspace', () => {
 
     rerender(<NodeRuntimeWorkspace node={node()} sub="log" onSub={onSub} />)
     await waitFor(() => expect(state.logEnabled).toBe(true))
-    // 日志 sub 渲染的是数据流（三层），不是三行列表。
+    // 日志 sub 渲染单实例卡片；冷热双层（HOT/COLD/Rehydrate）已废除，不应再出现分层节点。
     expect(await screen.findByTestId('log-runtime-flow')).toBeInTheDocument()
-    expect(screen.getByTestId('log-layer-hot')).toBeInTheDocument()
-    expect(screen.getByTestId('log-layer-cold')).toBeInTheDocument()
-    expect(screen.getByTestId('log-layer-rehydrate')).toBeInTheDocument()
+    expect(screen.queryByTestId('log-layer-hot')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('log-layer-cold')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('log-layer-rehydrate')).not.toBeInTheDocument()
+  })
+
+  it('有受管实例时渲染单实例卡片（含启停与容量），不出现分层', async () => {
+    state.logRuntime = {
+      instances: [
+        {
+          namespace: 'hot',
+          state: 'RUNNING',
+          health_ok: true,
+          query_ready: true,
+          listen_addr: '127.0.0.1:9428',
+          asset_tag: 'v1.52.0',
+        },
+      ],
+    }
+    renderWithProviders(<NodeRuntimeWorkspace node={node()} sub="log" onSub={() => {}} />)
+    const card = await screen.findByTestId('log-runtime-instance')
+    expect(within(card).getByTestId('log-runtime-state')).toHaveTextContent('RUNNING')
+    expect(within(card).getByTestId('log-runtime-health')).toBeInTheDocument()
+    expect(within(card).getByTestId('log-runtime-queryready')).toBeInTheDocument()
+    expect(within(card).getByTestId('log-runtime-start')).toBeDisabled() // 已在运行
+    expect(within(card).getByTestId('log-runtime-stop')).toBeEnabled()
+  })
+
+  it('无实例时给出可执行的下一步，而不是空表格', async () => {
+    state.logRuntime = { instances: [] }
+    renderWithProviders(<NodeRuntimeWorkspace node={node()} sub="log" onSub={() => {}} />)
+    expect(await screen.findByText('本节点尚未启用日志平台运行时')).toBeInTheDocument()
   })
 
   it('采集规则 sub 挂上原本零引用的 NodeLogAcqPanel', async () => {

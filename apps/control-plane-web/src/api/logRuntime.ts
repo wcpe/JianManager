@@ -2,7 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 export interface LogRuntimeInstance {
-  namespace: 'hot' | 'cold' | 'rehydrate'
+  /**
+   * 受管实例命名空间。
+   *
+   * 冷热双层已于 2026-10-29 废除，后端只存在 'hot'（vlsup.ValidNamespace 仅接受它）。
+   * 类型保留为 string 而不是字面量 'hot'：命名空间是**后端契约**的一部分，
+   * 前端写死会让后端将来新增实例类别时静默失败，而 string 会如实透传。
+   */
+  namespace: string
   state: string
   port: number
   listen_addr: string
@@ -57,6 +64,12 @@ export function useLogRuntime(nodeId: number, active: boolean) {
  * 不随 sub 关闭：它是静态数据（只有上传/下发才变），却决定就绪带里「审批资产是否已下发」
  * 这一条结论。关掉它会让资产页看到一条假的「未下发」。不设轮询，靠 mutation 失效刷新。
  */
+/*
+  参数 `_active` 保留但不再参与 enabled：既有调用点（NodeLogRuntimeTab 等）都传它，
+  改成无参会牵动一批调用方；而语义已变——审批资产是静态数据，何时都该能读到。
+  下划线前缀 + 本注释说明它是有意保留的占位，不是漏用。
+*/
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 保留形参以兼容既有调用签名（语义见上）
 export function useApprovedLogAssets(_active: boolean) {
   return useQuery({
     queryKey: ['log-vl-assets'],
