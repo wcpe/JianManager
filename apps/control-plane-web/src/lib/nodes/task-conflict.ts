@@ -60,6 +60,22 @@ export function tasksHref(conflict: TaskConflict): string {
 }
 
 /**
+ * 任务中心路径（带节点筛选）。
+ *
+ * 【为什么安装成功后要落到任务中心】进度、强制停止、滚动日志与历史都在那里。
+ * 在节点页再长出一套并行的任务展示，等于把同一份状态讲两遍——两处必然渐渐不一致，
+ * 用户还得判断"以哪个为准"。节点页只负责**发起**，进度一律去任务中心看。
+ *
+ * 带上 nodeId 让用户直接落在"这台节点的任务"上，不必进去再手选一次节点；
+ * 带上 task 参数则进一步展开刚提交的那一条（任务中心已支持 ?task= 深链）。
+ */
+export function tasksHrefForNode(nodeId: number, taskId?: string): string {
+  const params = new URLSearchParams({ nodeId: String(nodeId) })
+  if (taskId) params.set('task', taskId)
+  return `/tasks?${params.toString()}`
+}
+
+/**
  * 面向用户的完整提示文案（toast 正文）。
  *
  * 有占用者信息时把「谁在占着 + 进度」写进去——比"任务冲突"有用得多；

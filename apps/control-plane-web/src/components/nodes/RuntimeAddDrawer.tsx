@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { Coffee, Pencil, Radar } from 'lucide-react'
+import { Coffee, Hexagon, Pencil, Radar } from 'lucide-react'
 import {
   Sheet,
   SheetContent,
@@ -14,10 +14,11 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import NodeJDKTab from '@/components/nodes/NodeJDKTab'
 import NodeRuntimeSection from '@/components/views/nodes/NodeRuntimeSection'
+import { NodeInstallSection } from '@/components/nodes/NodeInstallSection'
 import { useScanRuntimes, useRegisterRuntime, useInstallRuntime } from '@/api/runtimes'
 import { toast } from 'sonner'
 import type { RuntimeInventoryRow } from '@/lib/nodes/runtime-inventory'
-import { conflictText, parseTaskConflict, tasksHref } from '@/lib/nodes/task-conflict'
+import { conflictText, parseTaskConflict, tasksHref, tasksHrefForNode } from '@/lib/nodes/task-conflict'
 import { useState } from 'react'
 
 /**
@@ -31,7 +32,16 @@ import { useState } from 'react'
  *   JDK 下载安装 | JDK 登记已有 | 扫描发现（JDK + Node 一次扫）
  * 动作实现全部复用既有受控视图与 mutation，语义不变——变的只是「从哪进去」。
  */
-export type RuntimeAddTab = 'install' | 'register' | 'scan'
+/**
+ * 抽屉的分段。
+ *
+ * 【为什么 JDK 与 Node 各自独立一段】原先只有 install/register/scan 三段，
+ * 「安装」段无条件渲染 JDK 面板——于是点「新增运行时 → 安装」看到的是装 JDK，
+ * Node.js 的安装入口被塞在「扫描发现」里面。用户看到的确实是「点安装 Node.js 打开的是 JDK」。
+ * 运行时类型是两种完全不同的东西（用途、版本策略、产物路径都不同），
+ * 让用户先选类型再选动作，比把两种动作混在一个页签里更省一次试错。
+ */
+export type RuntimeAddTab = 'jdk' | 'node' | 'register' | 'scan'
 
 export interface RuntimeAddDrawerProps {
   open: boolean
@@ -117,8 +127,13 @@ export function RuntimeAddDrawer({
 
           <div className="border-b px-4 py-2">
             <Segments aria-label={t('nodes.runtime.addTabs', '新增方式')}>
-              <Segment active={tab === 'install'} onClick={() => onTab('install')} data-testid="runtime-add-install">
-                {t('nodes.runtime.add.install', '下载安装 JDK')}
+              <Segment active={tab === 'jdk'} onClick={() => onTab('jdk')} data-testid="runtime-add-jdk">
+                <Coffee className="mr-1 inline size-3.5" aria-hidden />
+                {t('nodes.runtime.add.jdk', '安装 JDK')}
+              </Segment>
+              <Segment active={tab === 'node'} onClick={() => onTab('node')} data-testid="runtime-add-node">
+                <Hexagon className="mr-1 inline size-3.5" aria-hidden />
+                {t('nodes.runtime.add.node', '安装 Node.js')}
               </Segment>
               <Segment active={tab === 'register'} onClick={() => onTab('register')} data-testid="runtime-add-register">
                 {t('nodes.runtime.add.register', '登记已有 JDK')}
@@ -137,7 +152,49 @@ export function RuntimeAddDrawer({
               </p>
             )}
 
-            {tab === 'install' || tab === 'register' ? (
+            {tab === 'node' ? (
+              /* Node.js 安装：独立一段，只管"选版本 → 装"。不掺列表与扫描。 */
+              <NodeInstallSection
+                installing={install.isPending}
+                onInstall={async (major) => {
+                  try {
+                    const res = await install.mutateAsync({ type: 'nodejs', major })
+                    if (res.reused) {
+                      toast.info(t('nodes.runtimeLib.installReused', '相同版本的安装已在进行中，已复用该任务'), {
+                        action: {
+                          label: t('nodes.runtime.viewProgress', '查看进度'),
+                          onClick: () => window.location.assign(`/tasks?task=${encodeURIComponent(res.taskId)}`),
+                        },
+                        duration: 8000,
+                      })
+                      return true
+                    }
+                    toast.success(t('nodes.runtimeLib.installDispatched', 'Node.js 安装任务已下发'), {
+                      action: {
+                        label: t('tasks.openCenter', '去任务中心'),
+                        onClick: () => window.location.assign(tasksHrefForNode(nodeId, res.taskId)),
+                      },
+                      duration: 6000,
+                    })
+                    return true
+                  } catch (err) {
+                    const conflict = parseTaskConflict(err)
+                    if (conflict) {
+                      toast.warning(conflictText(conflict), {
+                        action: { label: t('nodes.runtime.goTasks', '去任务中心'), onClick: () => window.location.assign(tasksHref(conflict)) },
+                        duration: 8000,
+                      })
+                      return false
+                    }
+                    toast.error(
+                      (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+                        t('nodes.runtimeLib.installFailed', '安装失败'),
+                    )
+                    return false
+                  }
+                }}
+              />
+            ) : tab === 'jdk' || tab === 'register' ? (
               jdkSection
             ) : (
               /* 扫描发现：复用既有的受控视图（候选勾选入库 + Node.js 一键安装）。 */

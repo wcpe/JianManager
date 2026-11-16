@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useGlobalPackages, useInstallGlobalPackage, useRemoveGlobalPackage } from '@/api/pmConfig'
 import NodeGlobalPackagesSection from '@/components/views/nodes/NodeGlobalPackagesSection'
-import { conflictText, parseTaskConflict, tasksHref } from '@/lib/nodes/task-conflict'
+import { conflictText, parseTaskConflict, tasksHref, tasksHrefForNode } from '@/lib/nodes/task-conflict'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {
@@ -57,7 +57,13 @@ export default function NodeGlobalPackagesTab({
             })
             return true
           }
-          toast.success(t('pkg.installSubmitted', '安装任务已提交，进度见任务中心'))
+          toast.success(t('pkg.installSubmitted', '安装任务已提交，进度见任务中心'), {
+            action: {
+              label: t('tasks.openCenter', '去任务中心'),
+              onClick: () => window.location.assign(tasksHrefForNode(nodeId, res.taskId)),
+            },
+            duration: 6000,
+          })
           return true
         } catch (err) {
           const conflict = parseTaskConflict(err)

@@ -8,12 +8,13 @@ import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { Combobox } from '@jianmanager/ui/components/combobox'
 import { useSubmitGuard } from '@/lib/hooks/use-submit-guard'
 import { cn } from '@jianmanager/ui'
 import { Spinner } from '@jianmanager/ui/components/spinner'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { copyToClipboard } from '@/lib/shared/clipboard'
+import { NODE_MAJORS, NODE_MAJOR_OPTIONS, NODE_LTS_MAJORS } from '@/lib/nodes/node-majors'
 
 /** 运行时类型展示名（专有名词，不进 i18n）。 */
 const TYPE_LABEL: Record<string, string> = { jdk: 'JDK', nodejs: 'Node.js', python: 'Python' }
@@ -25,30 +26,6 @@ const TYPE_LABEL: Record<string, string> = { jdk: 'JDK', nodejs: 'Node.js', pyth
  * 手输 23 会装到一个非 LTS 版本、输 999 会在后端才失败。这里把候选连**决策信息**
  * 一起给出（是否 LTS、维护到什么时候），用户不需要知道 Node 的版本策略也能选对。
  */
-const NODE_MAJORS: Array<{ major: number; lts: string | null; eol: string; note?: string }> = [
-  { major: 22, lts: 'Jod', eol: '2027-04', note: '当前推荐' },
-  { major: 20, lts: 'Iron', eol: '2026-04' },
-  { major: 18, lts: 'Hydrogen', eol: '2025-04', note: '已接近 EOL' },
-  { major: 24, lts: null, eol: '2028-04', note: 'Current（非 LTS）' },
-]
-
-/**
- * 主版本 → 下拉选项。
- *
- * 【为什么 EOL 塞进 label】`ComboboxOption` 只有 value/label 两个字段（没有副标题位）。
- * 而「维护到什么时候」是选版本的硬约束，不能只放在 tooltip 里——悬停才可见等于没有。
- * 于是并进 label 的一行文本里：`Node.js 22 · LTS Jod · 当前推荐 · 维护至 2027-04`。
- */
-const NODE_MAJOR_OPTIONS: ComboboxOption[] = (
-  NODE_MAJORS.map((m) => ({
-    value: String(m.major),
-    label: `Node.js ${m.major} · ${m.lts ? `LTS ${m.lts}` : 'Current'}${m.note ? ` · ${m.note}` : ''} · 维护至 ${m.eol}`,
-  }))
-)
-
-/** 兼容旧引用（默认选中项）。 */
-const NODE_LTS_MAJORS = NODE_MAJORS.filter((m) => m.lts).map((m) => m.major)
-
 /** 运行时类型图标：jdk=咖啡、nodejs=六边形、其它=通用盒。 */
 function TypeIcon({ type, className }: { type: string; className?: string }) {
   if (type === 'jdk') return <Coffee className={className} />
@@ -309,7 +286,7 @@ export default function NodeRuntimeSection({
             <label className="block space-y-1.5">
               <span className="text-sm font-medium">{t('nodes.runtimeLib.installMajor', '主版本')}</span>
               <Combobox
-                options={NODE_MAJOR_OPTIONS}
+                options={[...NODE_MAJOR_OPTIONS]}
                 value={installMajor}
                 onChange={setInstallMajor}
                 allowCustom={false}

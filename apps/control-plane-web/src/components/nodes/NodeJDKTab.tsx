@@ -6,7 +6,7 @@ import { useJDKCatalog } from '@/api/nodeRuntime'
 import NodeJDKPanel from '@/components/views/nodes/NodeJDKPanel'
 import { PingNodeButton } from '@/components/nodes/PingNodeButton'
 import DirectoryPicker from '@/components/nodes/DirectoryPicker'
-import { conflictText, parseTaskConflict, tasksHref } from '@/lib/nodes/task-conflict'
+import { conflictText, parseTaskConflict, tasksHref, tasksHrefForNode } from '@/lib/nodes/task-conflict'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {
@@ -86,7 +86,13 @@ export default function NodeJDKTab({
             })
             return true
           }
-          toast.success(t('artifactCache.jdkInstallDispatched'))
+          toast.success(t('artifactCache.jdkInstallDispatched'), {
+            action: {
+              label: t('tasks.openCenter', '去任务中心'),
+              onClick: () => window.location.assign(tasksHrefForNode(nodeId, res.taskId)),
+            },
+            duration: 6000,
+          })
           return true
         } catch (err) {
           // 409：同节点已有运行时安装任务在跑 → 给出可执行的跳转，而不是重试提示。

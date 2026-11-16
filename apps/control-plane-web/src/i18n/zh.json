@@ -1235,7 +1235,8 @@
       "installPreview": "将安装 Node.js {{major}}（{{lts}}）",
       "installDispatching": "正在下发…",
       "cancelWhilePending": "下发中，请等待受理完成",
-      "installReused": "相同版本的安装已在进行中，已复用该任务"
+      "installReused": "相同版本的安装已在进行中，已复用该任务",
+      "dispatching": "正在下发…"
     },
     "enroll": {
       "addNode": "添加节点",
@@ -1564,7 +1565,9 @@
       "add": {
         "install": "下载安装 JDK",
         "register": "登记已有 JDK",
-        "scan": "扫描发现"
+        "scan": "扫描发现",
+        "jdk": "安装 JDK",
+        "node": "安装 Node.js"
       },
       "installMajorPlaceholder": "选择要安装的 Node.js 版本",
       "installPreview": "将安装 Node.js {{major}}（{{lts}}）",
@@ -1577,7 +1580,12 @@
       "viewProgress": "查看进度",
       "forceStopHint": "中断正在下载/安装的任务，本节点随后可重新发起",
       "stopping": "停止中…",
-      "waitingWorker": "等待节点确认"
+      "waitingWorker": "等待节点确认",
+      "nodeInstallHint": "给这台节点装一份受管 Node.js。依赖 Node 的插件与 Bot 工具链需要它；Java 服不受影响。",
+      "nodeVersion": "Node.js 版本",
+      "nodeVersionPlaceholder": "选择版本",
+      "nodeInstallPreview": "将安装 Node.js {{major}}（{{channel}}）",
+      "nodeInstallPreviewEmpty": "请选择要安装的版本"
     },
     "jdkInstalling": "正在下发…",
     "jdkInstallReused": "相同版本的 JDK 安装已在进行中，已复用该任务"
@@ -5492,7 +5500,8 @@
     "helpStateTitle": "状态与进度",
     "helpStateBody": "进度由执行方上报，长时间停在同一百分比通常表示该步骤在等远端（如下载、解压），不必重试。",
     "helpStopTitle": "强制停止",
-    "helpStopBody": "停止只是请求，执行方可能已经卡死而无法响应。确认失败时用「强制停止」终止任务记录，但它不会回滚已经产生的副作用。"
+    "helpStopBody": "停止只是请求，执行方可能已经卡死而无法响应。确认失败时用「强制停止」终止任务记录，但它不会回滚已经产生的副作用。",
+    "openCenter": "去任务中心"
   },
   "notifications": {
     "title": "站内信",

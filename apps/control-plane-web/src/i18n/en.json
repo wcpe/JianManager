@@ -1257,7 +1257,8 @@
       "installPreview": "Will install Node.js {{major}} ({{lts}})",
       "installDispatching": "Dispatching…",
       "cancelWhilePending": "Dispatching — wait for acceptance",
-      "installReused": "The same install is already running; reused that task"
+      "installReused": "The same install is already running; reused that task",
+      "dispatching": "Dispatching…"
     },
     "enroll": {
       "addNode": "Add Node",
@@ -1586,7 +1587,9 @@
       "add": {
         "install": "Download JDK",
         "register": "Register existing JDK",
-        "scan": "Scan for runtimes"
+        "scan": "Scan for runtimes",
+        "jdk": "Install JDK",
+        "node": "Install Node.js"
       },
       "installMajorPlaceholder": "Select the Node.js version to install",
       "installPreview": "Will install Node.js {{major}} ({{lts}})",
@@ -1599,7 +1602,12 @@
       "viewProgress": "View progress",
       "forceStopHint": "Interrupt the running download/install; you can retry afterwards",
       "stopping": "Stopping…",
-      "waitingWorker": "Waiting for node"
+      "waitingWorker": "Waiting for node",
+      "nodeInstallHint": "Install a managed Node.js on this node. Plugins and bot toolchains that depend on Node need it; Java servers are unaffected.",
+      "nodeVersion": "Node.js version",
+      "nodeVersionPlaceholder": "Select a version",
+      "nodeInstallPreview": "Will install Node.js {{major}} ({{channel}})",
+      "nodeInstallPreviewEmpty": "Select a version to install"
     },
     "jdkInstalling": "Dispatching…",
     "jdkInstallReused": "The same JDK install is already running; reused that task"
@@ -5492,7 +5500,8 @@
     "helpStateTitle": "State and progress",
     "helpStateBody": "Progress is reported by the executor. A percentage that stays put usually means that step is waiting on something remote (download, extraction) — retrying will not help.",
     "helpStopTitle": "Force stop",
-    "helpStopBody": "Stop is only a request; a wedged executor may never answer. Force stop ends the task record, but it does not undo side effects already produced."
+    "helpStopBody": "Stop is only a request; a wedged executor may never answer. Force stop ends the task record, but it does not undo side effects already produced.",
+    "openCenter": "Open task center"
   },
   "notifications": {
     "title": "Notifications",
