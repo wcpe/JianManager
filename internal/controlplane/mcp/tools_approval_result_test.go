@@ -194,9 +194,9 @@ func TestApprovalGet_ReissueFailsAfterScopeRevoked(t *testing.T) {
 
 	// 调用方主体被收窄到另一个实例：重签的授权判定必然失败。
 	revoked := &service.AgentPrincipal{
-		TokenID:          principal.TokenID,
-		PolicyVersion:    service.AgentPolicyVersionV2,
-		Capabilities:     []string{service.AgentCapabilityInstanceContent},
+		TokenID:           principal.TokenID,
+		PolicyVersion:     service.AgentPolicyVersionV2,
+		Capabilities:      []string{service.AgentCapabilityInstanceContent},
 		ScopedInstanceIDs: []uint{inst.ID + 999},
 	}
 	deps := ToolDeps{Approval: svc, Transfer: tickets, Agent: agentSvc}

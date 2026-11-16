@@ -18,16 +18,16 @@ import (
 // interceptParams 构造一次针对传输票据的拦截请求。
 func interceptParams(tokenID string, applicantKind string) ApprovalInterceptParams {
 	return ApprovalInterceptParams{
-		ToolName:        "file_issue_transfer_ticket",
-		Action:          AgentActionFileIssueTransferTicket,
-		Operation:       AgentOperationWrite,
-		TargetType:      "instance",
-		TargetID:        "7",
-		Payload:         map[string]any{"id": 7, "direction": "upload", "path": "plugins/folia.jar"},
-		Evidence:        map[string]any{"status": model.InstanceStatusStopped},
-		ApplicantUserID: 3,
-		ApplicantKind:   applicantKind,
-		TokenID:         tokenID,
+		ToolName:         "file_issue_transfer_ticket",
+		Action:           AgentActionFileIssueTransferTicket,
+		Operation:        AgentOperationWrite,
+		TargetType:       "instance",
+		TargetID:         "7",
+		Payload:          map[string]any{"id": 7, "direction": "upload", "path": "plugins/folia.jar"},
+		Evidence:         map[string]any{"status": model.InstanceStatusStopped},
+		ApplicantUserID:  3,
+		ApplicantKind:    applicantKind,
+		TokenID:          tokenID,
 		RequireApplicant: true,
 	}
 }
