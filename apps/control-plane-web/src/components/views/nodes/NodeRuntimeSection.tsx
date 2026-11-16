@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { useSubmitGuard } from '@/lib/hooks/use-submit-guard'
 import { cn } from '@jianmanager/ui'
 import { Spinner } from '@jianmanager/ui/components/spinner'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
@@ -105,8 +106,18 @@ export interface NodeRuntimeSectionProps {
   onRegister: (picked: RuntimeCandidateView[]) => Promise<number>
   /** 删除一条运行时。返回是否成功。 */
   onDelete: (item: RuntimeRowView) => Promise<boolean>
-  /** 一键安装 Node.js 指定 LTS 主版本。返回是否成功。 */
+  /** 一键安装 Node.js 指定主版本。返回是否成功。 */
   onInstall: (major: number) => Promise<boolean>
+  /**
+   * 安装是否在途（外壳 mutation 的 isPending 注入）。
+   *
+   * 【为什么由外壳注入而不是组件内 state】两个理由：
+   *  ① 在途态的事实来源是 mutation（mutateAsync 期间为 true），
+   *     组件自己再维护一份 state 就有两个真相；
+   *  ② 同一动作可能从别处触发（抽屉 / 右键菜单），只有外壳知道全局是否在途。
+   *     组件内部的 useSubmitGuard 只负责挡「本组件内的同 tick 连点」。
+   */
+  installing?: boolean
   /** 复制路径的结果上报（由外壳决定提示文案）。 */
   onCopyResult?: (ok: boolean) => void
 }
@@ -119,6 +130,7 @@ export default function NodeRuntimeSection({
   onRegister,
   onDelete,
   onInstall,
+  installing = false,
   onCopyResult,
 }: NodeRuntimeSectionProps) {
   const { t } = useTranslation()
@@ -131,20 +143,29 @@ export default function NodeRuntimeSection({
   const [deleting, setDeleting] = useState(false)
   const [registering, setRegistering] = useState(false)
   const [installOpen, setInstallOpen] = useState(false)
-  const [installing, setInstalling] = useState(false)
   const [installMajor, setInstallMajor] = useState(String(NODE_LTS_MAJORS[0]))
 
   const installMajorNum = Number.parseInt(installMajor, 10)
   const installMajorValid = Number.isInteger(installMajorNum) && installMajorNum > 0
 
-  // 一键安装 Node.js：202 受理即提示跳任务中心，终态由心跳落库后列表自然出现。
-  const submitInstall = async () => {
-    if (!installMajorValid) return
-    setInstalling(true)
+  /*
+    一键安装 Node.js：202 受理即提示跳任务中心，终态由心跳落库后列表自然出现。
+
+    【为什么用 useSubmitGuard 而不是 setInstalling(true)】
+    这是**异步任务**而不是幂等查询：连点两下真的会起两个下载任务、占两份磁盘。
+    而 setState 是异步的，同一次渲染周期里连点，两次事件处理读到的 installing 都还是
+    false，两道请求都会发出去。useSubmitGuard 用 ref 做同步闸门，第二次进来时闸门已关。
+    `pending` 是本组件自己的在途态（与外壳 mutation 的 isPending 互为补充：
+    外壳 in-flight 时也禁用，避免从别的入口重复提交）。
+  */
+  const installGuard = useSubmitGuard(async () => {
+    if (!installMajorValid) return false
     const ok = await onInstall(installMajorNum)
-    setInstalling(false)
     if (ok) setInstallOpen(false)
-  }
+    return ok
+  })
+
+  const submitInstall = () => installGuard.run()
 
   // 列表只承载非 JDK 类型（v0.15.0 验收 e2e 抓出的双列重复修复）：JDK 已由上方 JDK 面板
   // 富列表（行卡片/筛选/复制/删除守卫）唯一呈现，此处再列 type=jdk 即整页重复；
@@ -314,12 +335,29 @@ export default function NodeRuntimeSection({
             </div>
           </ScrollableDialogBody>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setInstallOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setInstallOpen(false)}
+              disabled={installGuard.pending}
+              title={installGuard.pending ? t('nodes.runtimeLib.cancelWhilePending', '下发中，请等待受理完成') : undefined}
+            >
               {t('common.cancel')}
             </Button>
-            <Button onClick={() => void submitInstall()} disabled={!installMajorValid || installing}>
-              {installing && <Spinner />}
-              {t('nodes.runtimeLib.installConfirm')}
+            {/*
+              disabled 同时看两条在途态：
+                · installGuard.pending —— 本次点击已在途（同步闸门的渲染镜像）；
+                · installing        —— 外壳 mutation 在途（从别的入口触发时也要挡住）。
+              两者都不可省：只挡前者会漏掉外壳侧的在途，只挡后者会漏掉同 tick 连点。
+            */}
+            <Button
+              onClick={() => void submitInstall()}
+              disabled={!installMajorValid || installing || installGuard.pending}
+              data-testid="node-install-submit"
+            >
+              {(installing || installGuard.pending) && <Spinner />}
+              {installGuard.pending
+                ? t('nodes.runtimeLib.installDispatching', '正在下发…')
+                : t('nodes.runtimeLib.installConfirm')}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -336,7 +336,9 @@ export function LogRuntimeFlow({
             onClick={() => document.getElementById(fileInputId)?.click()}
           >
             {pending?.upload ? <LoaderCircle className="mr-1 size-3 animate-spin" /> : <Upload className="mr-1 size-3" />}
-            {t('logsRuntime.asset.chooseFile', '上传审批包')}
+            {pending?.upload
+              ? t('logsRuntime.asset.uploading', '上传中…')
+              : t('logsRuntime.asset.chooseFile', '上传审批包')}
           </Button>
           <Button
             type="button"
@@ -349,7 +351,9 @@ export function LogRuntimeFlow({
             onClick={onInstall}
           >
             {pending?.install ? <LoaderCircle className="mr-1 size-3 animate-spin" /> : <Download className="mr-1 size-3" />}
-            {t('logsRuntime.asset.dispatch', '下发资产')}
+            {pending?.install
+              ? t('logsRuntime.asset.dispatching', '下发中…')
+              : t('logsRuntime.asset.dispatch', '下发资产')}
           </Button>
           <RefreshButton variant="outline" size="sm" pending={fetching} onClick={onRefresh} title={t('common.refresh', '刷新')} />
         </div>

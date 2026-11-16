@@ -7,6 +7,7 @@ import { Card } from '@jianmanager/ui/components/card'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { useSubmitGuard } from '@/lib/hooks/use-submit-guard'
 import { Spinner } from '@jianmanager/ui/components/spinner'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 
@@ -76,14 +77,23 @@ export default function NodeGlobalPackagesSection({
 
   const pkgs = (data?.packages ?? []).filter((p) => !query.trim() || p.name.toLowerCase().includes(query.trim().toLowerCase()))
 
-  const submitInstall = async (pkgName: string, ver?: string) => {
+  /*
+    全局包安装/升级同样是**异步任务**（202 + taskId，进度在任务中心）。
+    连点会重复提交同一个包安装——npm 层可能并发写同一个 node_modules 目录。
+    用 useSubmitGuard 的同步闸门挡住同 tick 连点；`installing`（外壳 mutation 的
+    isPending）继续作渲染期的禁用依据，两者一起才是完整的防重。
+  */
+  const installGuard = useSubmitGuard(async (pkgName: string, ver?: string) => {
     const ok = await onInstall(pkgName, ver)
     // 成功才清空表单（失败保留输入，便于用户修正后重试）。
     if (ok) {
       setName('')
       setVersion('')
     }
-  }
+    return ok
+  })
+
+  const submitInstall = (pkgName: string, ver?: string) => installGuard.run(pkgName, ver)
 
   return (
     <div className="space-y-3 rounded-lg border p-3">
@@ -121,8 +131,14 @@ export default function NodeGlobalPackagesSection({
           aria-label={t('pkg.versionLabel', '版本')}
           className="h-8 w-36 text-xs"
         />
-        <Button size="sm" disabled={installing || !name.trim()} onClick={() => void submitInstall(name, version)}>
-          {installing ? <Spinner /> : t('pkg.install', '安装')}
+        <Button
+          size="sm"
+          disabled={installing || installGuard.pending || !name.trim()}
+          onClick={() => void submitInstall(name, version)}
+          data-testid="pkg-install-submit"
+        >
+          {installing || installGuard.pending ? <Spinner /> : null}
+          {installGuard.pending ? t('pkg.installing', '提交中…') : t('pkg.install', '安装')}
         </Button>
       </div>
 

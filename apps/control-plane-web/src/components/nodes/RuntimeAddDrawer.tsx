@@ -142,6 +142,8 @@ export function RuntimeAddDrawer({
               /* 扫描发现：复用既有的受控视图（候选勾选入库 + Node.js 一键安装）。 */
               <NodeRuntimeSection
                 runtimes={[]}
+                /* 在途态来自 mutation（唯一真相），组件内部只做本组件内的连点闸门。 */
+                installing={install.isPending}
                 onScan={async () => {
                   try {
                     return await scan.mutateAsync(undefined)

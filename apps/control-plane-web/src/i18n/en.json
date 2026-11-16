@@ -1254,7 +1254,9 @@
       "installDispatched": "Node.js install task dispatched; track progress in Task Center",
       "installFailed": "Failed to dispatch install",
       "installMajorPlaceholder": "Select the Node.js version to install",
-      "installPreview": "Will install Node.js {{major}} ({{lts}})"
+      "installPreview": "Will install Node.js {{major}} ({{lts}})",
+      "installDispatching": "Dispatching…",
+      "cancelWhilePending": "Dispatching — wait for acceptance"
     },
     "enroll": {
       "addNode": "Add Node",
@@ -1590,7 +1592,8 @@
       "copyPath": "Copy path",
       "revealPath": "Copy path and reveal in file manager",
       "refsCount": "{{count}} instance(s) using it"
-    }
+    },
+    "jdkInstalling": "Dispatching…"
   },
   "nodeProxy": {
     "title": "Outbound proxy",
@@ -5853,7 +5856,8 @@
     "updatableTo": "Upgradable to {{version}}",
     "upgrade": "Upgrade",
     "versionLabel": "Version",
-    "versionPlaceholder": "Version (empty = latest)"
+    "versionPlaceholder": "Version (empty = latest)",
+    "installing": "Submitting…"
   },
   "permissions": {
     "title": "Permissions",
@@ -6173,7 +6177,9 @@
       "cached": "cached",
       "chooseFile": "no file selected",
       "dispatch": "Dispatch asset",
-      "dispatchHelp": "Push the approved VictoriaLogs asset to this node with hash verification; the runtime can start once it succeeds."
+      "dispatchHelp": "Push the approved VictoriaLogs asset to this node with hash verification; the runtime can start once it succeeds.",
+      "uploading": "Uploading…",
+      "dispatching": "Dispatching…"
     },
     "namespace": {
       "hot": "HOT",

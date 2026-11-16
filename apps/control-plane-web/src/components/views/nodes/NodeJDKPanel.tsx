@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Copy, Download, FolderOpen, Package, PackageCheck, Pencil, Coffee, Search, Trash2 } from 'lucide-react'
 import { Card } from '@jianmanager/ui/components/card'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { useSubmitGuard } from '@/lib/hooks/use-submit-guard'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
@@ -254,11 +255,18 @@ export default function NodeJDKPanel({
       </span>
     )
 
-  const submitInstall = async () => {
-    // 异步任务，回执 taskId；进度/完成在「任务中心」与站内信查看。
+  /*
+    一键下载 JDK：异步任务（回执 taskId，进度在任务中心）。
+    【为什么加同步闸门】`installing` 来自外壳 mutation 的 isPending，而它在渲染层是异步
+    生效的——同 tick 连点两次，两处都读到 false，就会下发**两个** JDK 下载任务
+    （耗时最长 20 分钟、各占一份磁盘）。useSubmitGuard 的 ref 闸门在同一事件内立刻生效。
+  */
+  const installGuard = useSubmitGuard(async () => {
     const ok = await onInstall({ vendor, majorVersion: majorNum, arch, version: version.trim() || undefined })
     if (ok) setTab('list')
-  }
+    return ok
+  })
+  const submitInstall = () => installGuard.run()
 
   const submitRegister = async (e: FormEvent) => {
     e.preventDefault()
@@ -577,9 +585,13 @@ export default function NodeJDKPanel({
           {/* 下载前先测节点存活：避免对离线/卡顿节点发起会卡死的下载 */}
           <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
             {pingSlot}
-            <Button onClick={() => void submitInstall()} disabled={installing || majorNum <= 0}>
-              <Download className="size-4" />
-              {t('nodes.jdkInstall')}
+            <Button
+              onClick={() => void submitInstall()}
+              disabled={installing || installGuard.pending || majorNum <= 0}
+              data-testid="jdk-install-submit"
+            >
+              {installing || installGuard.pending ? <Spinner className="size-4 animate-spin" /> : <Download className="size-4" />}
+              {installGuard.pending ? t('nodes.jdkInstalling', '正在下发…') : t('nodes.jdkInstall')}
             </Button>
           </div>
         </div>
