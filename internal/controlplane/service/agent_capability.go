@@ -55,6 +55,22 @@ type AgentActionDescriptor struct {
 	HTTPPath        string
 	HTTPInContract  bool
 	RequiresConfirm bool // destructive 操作须服务端精确确认参数
+
+	// AgentSubjectOnly 该 action **只能由 Agent 主体发起**，人类不可申请、不可代签。
+	//
+	// 【为什么需要这个字段，而不是「没有 HTTP 端点就等于人类申请不了」】
+	// 后者是**隐含**约束：今天人类没有入口，靠的是没人去加；一旦有人给人类侧
+	// 加一个「顺便也能申请」的端点，约束就无声消失了，而代码里没有任何地方
+	// 表达过「这不该给人类」。把边界写成数据后：
+	//   - 出票阶段就拒绝人类主体（见 approval_intercept.go），不是等批准后才炸；
+	//   - 执行期另有兜底（见 approval_adapters.go 的 loadTicketPrincipal）；
+	//   - 目录本身可被测试断言，新增入口若绕过会被用例抓到。
+	//
+	// 【判据】该动作的产出物是否为「一把只能由 Token 消费的凭据」。
+	// 传输票据是典型：Consume 时会按 claims.TokenID 重建主体重跑授权
+	// （见 agent_transfer_ticket.go），人类没有 TokenID，硬造一个假身份
+	// 恰恰是被明令禁止的事。
+	AgentSubjectOnly bool
 }
 
 // AgentAuthorization 授权结果；Capability 供调用流水记录。
@@ -385,6 +401,14 @@ func init() {
 	registerAgentInstanceActions(AgentCapabilityObservabilityRead, AgentOperationRead,
 		AgentActionProbeDiagnose,
 	)
+
+	// 只能由 Agent 主体发起的 action。
+	//
+	// 判据是「产出物为一把只能由 Token 消费的凭据」：传输票据在 Consume 时
+	// 会按 claims.TokenID 重建主体并重跑授权，人类没有 TokenID，因此这张票
+	// 对人类天然不可用——允许人类申请只会产出一张谁也消费不了的废票。
+	// 人类要传大文件走 POST /instances/:id/files/upload（流式、无大小上限）。
+	markAgentSubjectOnly(AgentActionFileIssueTransferTicket)
 }
 
 // registerAgentInstanceActions 批量登记同能力同操作等级的实例类 action。
@@ -396,6 +420,24 @@ func registerAgentInstanceActions(capability, operation string, actions ...strin
 			ResourceType: AgentResourceInstance,
 			Operation:    operation,
 		}
+	}
+}
+
+// markAgentSubjectOnly 把若干 action 标记为「只能由 Agent 主体发起」。
+//
+// 单独成函数而不用描述符字面量直接写：这些 action 大多由
+// registerAgentInstanceActions 批量登记，逐条改写成字面量会丢掉
+// 「同能力同等级」这个分组信息，也让后续新增同类 action 容易漏标。
+func markAgentSubjectOnly(actions ...string) {
+	for _, action := range actions {
+		d, ok := agentActionCatalog[action]
+		if !ok {
+			// 登记顺序错了（在注册之前调用）会让标记静默失效——直接 panic，
+			// 这种装配错误必须在启动时暴露，而不是留到运行期变成一条越权路径。
+			panic("markAgentSubjectOnly: action 未在目录中登记: " + action)
+		}
+		d.AgentSubjectOnly = true
+		agentActionCatalog[action] = d
 	}
 }
 

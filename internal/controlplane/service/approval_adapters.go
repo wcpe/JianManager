@@ -54,11 +54,21 @@ type ApprovalAdapterDeps struct {
 // 为什么需要重建：executor 拿到的只有票据（含 tokenId 字符串），而有些领域方法
 // （如传输票据签发）会**再次做授权判定**。缺主体时不能凭空造一个——
 // 那等于用假身份去撞授权，要么必然被拒、要么（更糟）在宽松判据下真的放行。
+//
 // 人类直接提单没有 tokenId，这类动作本就不该由人代签，故明确拒绝。
+//
+// 【这是**兜底**，不是主闸】主闸在 InterceptForApproval：Agent 专属动作
+// （AgentSubjectOnly）在出票阶段就会拒绝人类主体，正常流程下走不到这里的
+// 空 tokenId 分支。保留这道校验是为了兜住两类漏网：本字段上线前遗留的历史票，
+// 以及未来若有人绕过拦截层直接构造票据。
 func (d ApprovalAdapterDeps) loadTicketPrincipal(t *model.ApprovalTicket) (*AgentPrincipal, error) {
 	tokenID := strings.TrimSpace(t.TokenID)
 	if tokenID == "" {
-		return nil, fmt.Errorf("该操作需要 Agent 身份（票据 %d 由人类提交，无 tokenId）", t.ID)
+		// 措辞指向真正的原因：不是「系统坏了」，而是该动作只产出 Agent 可用凭据。
+		return nil, fmt.Errorf(
+			"票据 %d 无 Agent 身份，无法执行 %s：该动作仅限 Agent Token 主体，"+
+				"人类请使用实例文件上传接口",
+			t.ID, t.Action)
 	}
 	if d.Agent == nil {
 		return nil, fmt.Errorf("Agent 服务未装配，无法重建票据 %d 的调用主体", t.ID)
