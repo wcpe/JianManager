@@ -23,6 +23,7 @@ export type ReadinessActionKey =
   | 'installJDK'
   | 'registerJDK'
   | 'installNode'
+  | 'openPackages'
   | 'scanRuntimes'
   | 'dispatchLogAsset'
   | 'startLogRuntime'
@@ -231,7 +232,8 @@ function judgePackages(input: ReadinessInput): ReadinessItem {
       level: 'warn',
       headline: '包管理器未配置',
       detail: '全局包安装需要先选定 npm / pnpm / yarn',
-      action: { key: 'installNode', label: '配置包管理器' },
+      // 包管理器配置与"装 Node"是两件事，不能共用一个动作 key——共用会让按钮把用户带去装 Node。
+      action: { key: 'openPackages', label: '配置包管理器' },
     }
   }
   return {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { conflictText, parseTaskConflict, tasksHref } from './task-conflict'
+import { conflictText, parseTaskConflict, tasksHref, tasksHrefForNode } from './task-conflict'
 
 /** 构造一个 axios 风格错误。 */
 const axiosErr = (status: number, data: unknown) => ({ response: { status, data } })
@@ -54,5 +54,30 @@ describe('tasksHref / conflictText', () => {
     const txt = conflictText({ message: 'm', taskTitle: '安装 JDK Temurin 21' })
     expect(txt).toContain('安装 JDK Temurin 21')
     expect(txt).not.toContain('%')
+  })
+})
+
+describe('tasksHrefForNode', () => {
+  it('带节点筛选进任务中心（安装完成后落地用）', () => {
+    expect(tasksHrefForNode(7)).toBe('/tasks?nodeId=7')
+  })
+
+  it('同时带 taskId 时展开具体那一条', () => {
+    // nodeId 在前、task 在后，便于人读；参数顺序不影响解析，但断言固定住避免无意改动。
+    expect(tasksHrefForNode(7, 'abc-123')).toBe('/tasks?nodeId=7&task=abc-123')
+  })
+
+  it('taskId 会被 URL 编码，特殊字符不会把查询串拆坏', () => {
+    const href = tasksHrefForNode(1, 'a b&c=d')
+    // 断言"解析回来的值正确"，而不是"编码成哪种字面量"：
+    // URLSearchParams 把空格编成 `+`，encodeURIComponent 编成 `%20`，两者解出来等价。
+    // 钉死字面量会让这条用例在换了序列化实现时无意义地红。
+    const params = new URLSearchParams(href.split('?')[1])
+    expect(params.get('task')).toBe('a b&c=d')
+    expect(params.get('nodeId')).toBe('1')
+  })
+
+  it('不传 taskId 时不出现空的 task 参数', () => {
+    expect(tasksHrefForNode(1, '')).toBe('/tasks?nodeId=1')
   })
 })

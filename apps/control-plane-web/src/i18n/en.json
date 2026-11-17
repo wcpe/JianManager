@@ -1257,8 +1257,7 @@
       "installPreview": "Will install Node.js {{major}} ({{lts}})",
       "installDispatching": "Dispatching…",
       "cancelWhilePending": "Dispatching — wait for acceptance",
-      "installReused": "The same install is already running; reused that task",
-      "dispatching": "Dispatching…"
+      "installReused": "The same install is already running; reused that task"
     },
     "enroll": {
       "addNode": "Add Node",

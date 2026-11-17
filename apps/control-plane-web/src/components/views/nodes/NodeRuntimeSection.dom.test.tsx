@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
@@ -133,88 +133,11 @@ describe('NodeRuntimeSection', () => {
     await waitFor(() => expect(screen.queryByText('扫描发现运行时')).not.toBeInTheDocument())
   })
 
-  it('安装 Node.js：主版本用下拉选择（不再手输），选 20 后上报', async () => {
-    const user = userEvent.setup()
-    const { onInstall } = renderSection()
-
-    await user.click(screen.getByRole('button', { name: /安装 Node\.js/ }))
-    expect(await screen.findByText('主版本')).toBeInTheDocument()
-
-    /*
-      改造后的交互：主版本是 Combobox（可输入过滤的下拉），**不再有自由手输**。
-      断言两件事：
-        ① 输入框里展示的是预选好的值（默认 22），用户不必自己敲；
-        ② 展开候选能看到带 LTS/EOL 的完整描述——这正是把它做成下拉的目的。
-    */
-    // Combobox 的触发元素是 button（点开才是候选面板），可访问名来自 ariaLabel。
-    const combo = await screen.findByRole('button', { name: '主版本' })
-    expect(combo).toHaveTextContent('Node.js 22 · LTS Jod · 当前推荐 · 维护至 2027-04')
-
-    await user.click(combo)
-    const option20 = await screen.findByText(/Node\.js 20 · LTS Iron/)
-    await user.click(option20)
-
-    await user.click(screen.getByRole('button', { name: /下发安装/ }))
-    await waitFor(() => expect(onInstall).toHaveBeenCalledWith(20))
-    await waitFor(() => expect(screen.queryByRole('button', { name: /下发安装/ })).not.toBeInTheDocument())
-  })
-
-  it('安装 Node.js：安装预览随所选版本更新（明示将装什么）', async () => {
-    const user = userEvent.setup()
-    renderSection()
-
-    await user.click(screen.getByRole('button', { name: /安装 Node\.js/ }))
-    // 默认 22 → 预览里写明 LTS 代号，用户点确认前就知道将装什么。
-    expect(await screen.findByText(/将安装 Node\.js 22（LTS Jod）/)).toBeInTheDocument()
-  })
-
-  it('安装 Node.js：在途时按钮禁用且文案切换（用户能看出正在下发）', async () => {
-    /*
-      【这个用例能证明什么、不能证明什么——说清楚免得以后误信】
-      能证明：提交在途时按钮被禁用、文案变成「正在下发…」、取消也不可用。
-      不能证明：它能挡住「同一次渲染周期内的两次点击」——那需要两次 click 之间没有
-      任何渲染。实测在 jsdom + RTL 下，即使用 fireEvent 同步连发，React 也会在两次
-      之间刷新状态，因此 setState 版防重在这里同样"看不出问题"（我做过对照实验）。
-      也就是说本用例对 ref 闸门 vs setState 是**无鉴别力**的；闸门本身的区分性
-      由 use-submit-guard.dom.test.tsx 在钩子层直接断言（那里可以直接不 await 连调）。
-    */
-    let resolveInstall: (v: boolean) => void = () => {}
-    const onInstall = vi.fn(
-      () =>
-        new Promise<boolean>((res) => {
-          resolveInstall = res
-        }),
-    )
-    renderSection({ onInstall })
-
-    await userEvent.setup().click(screen.getByRole('button', { name: /安装 Node\.js/ }))
-    const submit = await screen.findByTestId('node-install-submit')
-
-    await act(async () => {
-      fireEvent.click(submit)
-    })
-
-    expect(onInstall).toHaveBeenCalledTimes(1)
-    expect(submit).toBeDisabled()
-    expect(submit).toHaveTextContent('正在下发…')
-
-    await act(async () => {
-      resolveInstall(true)
-    })
-    await waitFor(() => expect(screen.queryByTestId('node-install-submit')).not.toBeInTheDocument())
-  })
-
-  it('安装 Node.js：下发中不允许取消（避免请求还在飞就关窗）', async () => {
-    const user = userEvent.setup()
-    const onInstall = vi.fn(() => new Promise<boolean>(() => {})) // 永不 resolve：模拟慢受理
-    renderSection({ onInstall })
-
-    await user.click(screen.getByRole('button', { name: /安装 Node\.js/ }))
-    await user.click(await screen.findByTestId('node-install-submit'))
-
-    expect(screen.getByRole('button', { name: '取消' })).toBeDisabled()
-  })
-
+  /*
+    【安装相关的 4 条用例已迁出】它们原先测的是本组件内嵌的安装模态。
+    用户报的「点安装 Node.js 打开的是 JDK」正是这种堆叠造成的，安装已独立成
+    NodeInstallSection；对应断言在 NodeInstallSection.dom.test.tsx 里，未放宽。
+  */
   it('重扫返回已登记候选时全部禁勾，入库按钮保持禁用', async () => {
     const user = userEvent.setup()
     const allRegistered = candidates.map((c) => ({ ...c, alreadyRegistered: true }))

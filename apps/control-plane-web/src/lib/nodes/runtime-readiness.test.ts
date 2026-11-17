@@ -118,10 +118,17 @@ describe('evaluateReadiness：Node 与包管理', () => {
     expect(item.action?.key).toBe('installNode')
   })
 
-  it('包管理器未配置 → warn 且指向配置入口', () => {
+  it('包管理器未配置 → warn 且指向「配置包管理器」，不是「安装 Node」', () => {
+    /*
+      【这条断言改过，原因是原实现错了】原先 package 未配置时给的 action 是 `installNode`，
+      于是那个写着「配置包管理器」的按钮点下去会跳到装 Node 的分段——文案与落地内容打架。
+      现在用独立的 `openPackages`（落到包管理 sub）。
+      钉住 key 就够了：它是"按钮带用户去哪"的唯一标识。
+    */
     const item = byKey(evaluateReadiness(base({ packages: { pm: null } })), 'packages')
     expect(item.level).toBe('warn')
-    expect(item.action?.key).toBe('installNode')
+    expect(item.action?.key).toBe('openPackages')
+    expect(item.action?.label).toBe('配置包管理器')
   })
 })
 

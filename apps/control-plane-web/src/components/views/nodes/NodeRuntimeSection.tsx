@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Boxes, Coffee, Copy, Download, Hexagon, PackageCheck, Radar, Trash2 } from 'lucide-react'
+import { Boxes, Coffee, Copy, Hexagon, Radar, Trash2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Card } from '@jianmanager/ui/components/card'
@@ -8,13 +8,10 @@ import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import { Combobox } from '@jianmanager/ui/components/combobox'
-import { useSubmitGuard } from '@/lib/hooks/use-submit-guard'
 import { cn } from '@jianmanager/ui'
 import { Spinner } from '@jianmanager/ui/components/spinner'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { copyToClipboard } from '@/lib/shared/clipboard'
-import { NODE_MAJORS, NODE_MAJOR_OPTIONS, NODE_LTS_MAJORS } from '@/lib/nodes/node-majors'
 
 /** 运行时类型展示名（专有名词，不进 i18n）。 */
 const TYPE_LABEL: Record<string, string> = { jdk: 'JDK', nodejs: 'Node.js', python: 'Python' }
@@ -83,18 +80,6 @@ export interface NodeRuntimeSectionProps {
   onRegister: (picked: RuntimeCandidateView[]) => Promise<number>
   /** 删除一条运行时。返回是否成功。 */
   onDelete: (item: RuntimeRowView) => Promise<boolean>
-  /** 一键安装 Node.js 指定主版本。返回是否成功。 */
-  onInstall: (major: number) => Promise<boolean>
-  /**
-   * 安装是否在途（外壳 mutation 的 isPending 注入）。
-   *
-   * 【为什么由外壳注入而不是组件内 state】两个理由：
-   *  ① 在途态的事实来源是 mutation（mutateAsync 期间为 true），
-   *     组件自己再维护一份 state 就有两个真相；
-   *  ② 同一动作可能从别处触发（抽屉 / 右键菜单），只有外壳知道全局是否在途。
-   *     组件内部的 useSubmitGuard 只负责挡「本组件内的同 tick 连点」。
-   */
-  installing?: boolean
   /** 复制路径的结果上报（由外壳决定提示文案）。 */
   onCopyResult?: (ok: boolean) => void
 }
@@ -106,8 +91,6 @@ export default function NodeRuntimeSection({
   onScan,
   onRegister,
   onDelete,
-  onInstall,
-  installing = false,
   onCopyResult,
 }: NodeRuntimeSectionProps) {
   const { t } = useTranslation()
@@ -119,30 +102,7 @@ export default function NodeRuntimeSection({
   const [pendingDel, setPendingDel] = useState<RuntimeRowView | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [registering, setRegistering] = useState(false)
-  const [installOpen, setInstallOpen] = useState(false)
-  const [installMajor, setInstallMajor] = useState(String(NODE_LTS_MAJORS[0]))
 
-  const installMajorNum = Number.parseInt(installMajor, 10)
-  const installMajorValid = Number.isInteger(installMajorNum) && installMajorNum > 0
-
-  /*
-    一键安装 Node.js：202 受理即提示跳任务中心，终态由心跳落库后列表自然出现。
-
-    【为什么用 useSubmitGuard 而不是 setInstalling(true)】
-    这是**异步任务**而不是幂等查询：连点两下真的会起两个下载任务、占两份磁盘。
-    而 setState 是异步的，同一次渲染周期里连点，两次事件处理读到的 installing 都还是
-    false，两道请求都会发出去。useSubmitGuard 用 ref 做同步闸门，第二次进来时闸门已关。
-    `pending` 是本组件自己的在途态（与外壳 mutation 的 isPending 互为补充：
-    外壳 in-flight 时也禁用，避免从别的入口重复提交）。
-  */
-  const installGuard = useSubmitGuard(async () => {
-    if (!installMajorValid) return false
-    const ok = await onInstall(installMajorNum)
-    if (ok) setInstallOpen(false)
-    return ok
-  })
-
-  const submitInstall = () => installGuard.run()
 
   // 列表只承载非 JDK 类型（v0.15.0 验收 e2e 抓出的双列重复修复）：JDK 已由上方 JDK 面板
   // 富列表（行卡片/筛选/复制/删除守卫）唯一呈现，此处再列 type=jdk 即整页重复；
@@ -191,10 +151,6 @@ export default function NodeRuntimeSection({
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">{t('nodes.runtimeLib.subtitle')}</p>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setInstallOpen(true)}>
-            <Download className="size-4" />
-            {t('nodes.runtimeLib.installNode')}
-          </Button>
           <Button variant="outline" size="sm" onClick={openScan}>
             <Radar className="size-4" />
             {t('nodes.runtimeLib.scan')}
@@ -268,77 +224,6 @@ export default function NodeRuntimeSection({
           ))}
         </div>
       )}
-
-      {/* 安装 Node.js 模态：LTS 主版本快选 + 自定义输入，202 受理后进度跳任务中心 */}
-      <Dialog open={installOpen} onOpenChange={setInstallOpen}>
-        <DialogContent className={scrollableDialogContentClass}>
-          <DialogHeader>
-            <DialogTitle>{t('nodes.runtimeLib.installTitle')}</DialogTitle>
-          </DialogHeader>
-          <ScrollableDialogBody className="space-y-3">
-            {/*
-              主版本改用下拉（Combobox）而不是「一排按钮 + 手输框」：
-              ① 手输数字没有任何约束，输错要到后端才失败；
-              ② 按钮排一排只给了版本号，没给「是不是 LTS / 维护到什么时候」——
-                 而这才是选版本的真正依据。下拉把两者合成一行。
-              allowCustom 关闭：候选是固定集合，允许自定义等于把手输的坑又开回来。
-            */}
-            <label className="block space-y-1.5">
-              <span className="text-sm font-medium">{t('nodes.runtimeLib.installMajor', '主版本')}</span>
-              <Combobox
-                options={[...NODE_MAJOR_OPTIONS]}
-                value={installMajor}
-                onChange={setInstallMajor}
-                allowCustom={false}
-                placeholder={t('nodes.runtimeLib.installMajorPlaceholder', '选择要安装的 Node.js 版本')}
-                ariaLabel={t('nodes.runtimeLib.installMajor', '主版本')}
-              />
-            </label>
-
-            {/* 安装预览：明示将装什么、装到哪、进度去哪看（与 JDK 安装同一套口径）。 */}
-            <div className="flex items-start gap-2 rounded-md bg-primary/5 px-3 py-2.5 text-primary">
-              <PackageCheck className="mt-0.5 size-4 shrink-0" />
-              <div className="min-w-0 text-sm">
-                <p className="font-medium">
-                  {t('nodes.runtimeLib.installPreview', '将安装 Node.js {{major}}（{{lts}}）', {
-                    major: installMajor,
-                    lts: NODE_MAJORS.find((m) => String(m.major) === installMajor)?.lts
-                      ? `LTS ${NODE_MAJORS.find((m) => String(m.major) === installMajor)!.lts}`
-                      : 'Current',
-                  })}
-                </p>
-                <p className="mt-0.5 text-xs text-primary/70">{t('nodes.runtimeLib.installHint')}</p>
-              </div>
-            </div>
-          </ScrollableDialogBody>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setInstallOpen(false)}
-              disabled={installGuard.pending}
-              title={installGuard.pending ? t('nodes.runtimeLib.cancelWhilePending', '下发中，请等待受理完成') : undefined}
-            >
-              {t('common.cancel')}
-            </Button>
-            {/*
-              disabled 同时看两条在途态：
-                · installGuard.pending —— 本次点击已在途（同步闸门的渲染镜像）；
-                · installing        —— 外壳 mutation 在途（从别的入口触发时也要挡住）。
-              两者都不可省：只挡前者会漏掉外壳侧的在途，只挡后者会漏掉同 tick 连点。
-            */}
-            <Button
-              onClick={() => void submitInstall()}
-              disabled={!installMajorValid || installing || installGuard.pending}
-              data-testid="node-install-submit"
-            >
-              {(installing || installGuard.pending) && <Spinner />}
-              {installGuard.pending
-                ? t('nodes.runtimeLib.installDispatching', '正在下发…')
-                : t('nodes.runtimeLib.installConfirm')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* 扫描发现模态：scrollable-dialog 壳（头/脚固定、候选超高内部滚动） */}
       <Dialog open={scanOpen} onOpenChange={setScanOpen}>

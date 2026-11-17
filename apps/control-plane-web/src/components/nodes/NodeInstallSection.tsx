@@ -4,7 +4,7 @@ import { Download, Loader2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Combobox } from '@jianmanager/ui/components/combobox'
 import { useSubmitGuard } from '@/lib/hooks/use-submit-guard'
-import { NODE_MAJORS, NODE_MAJOR_OPTIONS } from '@/lib/nodes/node-majors'
+import { NODE_MAJORS, NODE_MAJOR_OPTIONS, nodeChannelLabel } from '@/lib/nodes/node-majors'
 
 /**
  * Node.js 安装段（抽屉里「安装 Node.js」这一页的全部内容）。
@@ -77,7 +77,7 @@ export function NodeInstallSection({ installing = false, onInstall }: NodeInstal
         {picked
           ? t('nodes.runtime.nodeInstallPreview', '将安装 Node.js {{major}}（{{channel}}）', {
               major: picked.major,
-              channel: picked.lts ? `LTS ${picked.lts}` : 'Current',
+              channel: nodeChannelLabel(picked.major),
             })
           : t('nodes.runtime.nodeInstallPreviewEmpty', '请选择要安装的版本')}
       </div>
@@ -94,7 +94,7 @@ export function NodeInstallSection({ installing = false, onInstall }: NodeInstal
             <Download className="mr-1 size-4" aria-hidden />
           )}
           {guard.pending
-            ? t('nodes.runtimeLib.dispatching', '正在下发…')
+            ? t('nodes.runtimeLib.installDispatching', '正在下发…')
             : t('nodes.runtimeLib.installNode', '安装 Node.js')}
         </Button>
       </div>

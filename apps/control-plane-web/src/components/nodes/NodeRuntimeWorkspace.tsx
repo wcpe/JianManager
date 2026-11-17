@@ -196,8 +196,17 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
         setAddOpen(true)
         break
       case 'installNode':
-        setAddTab('jdk')
+        /*
+          【这里曾经是 jdk】就绪带的「安装 Node.js」也曾跳到 JDK 分段——
+          和抽屉里那个"点 Node 装 JDK"是同一个错误的两处表现。
+          动作 key 与目标分段必须一一对应，否则按钮文字与落地内容会打架。
+        */
+        setAddTab('node')
         setAddOpen(true)
+        break
+      case 'openPackages':
+        // 配置包管理器属于包管理 sub，不是安装向导。
+        onSub('packages')
         break
       case 'scanRuntimes':
         setAddTab('scan')

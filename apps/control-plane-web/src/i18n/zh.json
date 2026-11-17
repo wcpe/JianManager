@@ -1235,8 +1235,7 @@
       "installPreview": "将安装 Node.js {{major}}（{{lts}}）",
       "installDispatching": "正在下发…",
       "cancelWhilePending": "下发中，请等待受理完成",
-      "installReused": "相同版本的安装已在进行中，已复用该任务",
-      "dispatching": "正在下发…"
+      "installReused": "相同版本的安装已在进行中，已复用该任务"
     },
     "enroll": {
       "addNode": "添加节点",

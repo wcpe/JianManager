@@ -197,11 +197,14 @@ export function RuntimeAddDrawer({
             ) : tab === 'jdk' || tab === 'register' ? (
               jdkSection
             ) : (
-              /* 扫描发现：复用既有的受控视图（候选勾选入库 + Node.js 一键安装）。 */
+              /*
+                扫描发现：只做"扫出候选 → 勾选入库"。
+                Node.js 安装**不在这里**——它有自己独立的分段与视图（NodeInstallSection）。
+                此前安装入口被塞进这个视图里，导致"点安装 Node.js 看到的是 JDK"，
+                且同一件事存在两套模态（两个 node-install-submit）。已合并为一处。
+              */
               <NodeRuntimeSection
                 runtimes={[]}
-                /* 在途态来自 mutation（唯一真相），组件内部只做本组件内的连点闸门。 */
-                installing={install.isPending}
                 onScan={async () => {
                   try {
                     return await scan.mutateAsync(undefined)
@@ -237,47 +240,6 @@ export function RuntimeAddDrawer({
                   return ok
                 }}
                 onDelete={async () => false}
-                onInstall={async (major) => {
-                  try {
-                    const res = await install.mutateAsync({ type: 'nodejs', major })
-                    /*
-                      幂等命中（reused）不是"又下发了一个"，而是"你要的这个已经在跑"。
-                      两种回执都算成功，但提示必须不同：否则用户以为点了两次装了两个，
-                      或者反过来以为第一次没成功。
-                    */
-                    if (res.reused) {
-                      toast.info(t('nodes.runtimeLib.installReused', '相同版本的安装已在进行中，已复用该任务'), {
-                        action: {
-                          label: t('nodes.runtime.viewProgress', '查看进度'),
-                          onClick: () => window.location.assign(`/tasks?task=${encodeURIComponent(res.taskId)}`),
-                        },
-                        duration: 8000,
-                      })
-                      return true
-                    }
-                    toast.success(t('nodes.runtimeLib.installDispatched', 'Node.js 安装任务已下发'))
-                    return true
-                  } catch (err) {
-                    /*
-                      被 409 拦（同节点已有同类任务在跑）与"安装失败"是两回事：
-                      后者重试有意义，前者要先去处置那个在跑的任务。
-                      所以这里给一条带跳转的提示，而不是让用户对着一句后端 message 干点。
-                    */
-                    const conflict = parseTaskConflict(err)
-                    if (conflict) {
-                      toast.warning(conflictText(conflict), {
-                        action: { label: t('nodes.runtime.goTasks', '去任务中心'), onClick: () => window.location.assign(tasksHref(conflict)) },
-                        duration: 8000,
-                      })
-                      return false
-                    }
-                    toast.error(
-                      (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-                        t('nodes.runtimeLib.installFailed', '安装失败'),
-                    )
-                    return false
-                  }
-                }}
               />
             )}
           </div>

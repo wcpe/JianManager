@@ -205,6 +205,25 @@ describe('NodeRuntimeWorkspace', () => {
     expect(item).not.toHaveAttribute('aria-disabled', 'true')
   })
 
+  it('就绪带的「安装 Node.js」跳到 Node 分段，不是 JDK 分段', async () => {
+    /*
+      【这条盯的是同一类错误的第二个入口】抽屉里曾经"点 Node 装 JDK"，
+      就绪带上的动作按钮也犯过同样的错（installNode → jdk 分段）。
+      两者是同一个 bug 的两处表现，所以两处都要有回归防线。
+    */
+    const user = userEvent.setup()
+    // 无 JDK 时 java 卡为 blocked、给出安装动作；这里换成"没有 Node"的场景触发 installNode。
+    state.runtimes = []
+    state.jdks = [{ id: 1, vendor: 'Temurin', majorVersion: 21, version: '21.0.4', arch: 'x64', path: '/opt/jdk', managed: true, refCount: 0, instances: [] }]
+    renderWithProviders(<NodeRuntimeWorkspace node={node()} sub="inventory" onSub={vi.fn()} />)
+
+    const action = await screen.findByTestId('runtime-readiness-action-node')
+    await user.click(action)
+    // 抽屉打开后应停在 Node 段：出现 Node 安装提交按钮，而不是 JDK 的安装表单。
+    expect(await screen.findByTestId('node-install-submit')).toBeInTheDocument()
+    expect(screen.queryByTestId('jdk-install-submit')).not.toBeInTheDocument()
+  })
+
   it('点击二级 sub 上报切换；切到 log 时才开始取日志运行时', async () => {
     const onSub = vi.fn()
     const { rerender } = renderWithProviders(

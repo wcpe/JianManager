@@ -37,3 +37,16 @@ export const NODE_MAJOR_OPTIONS: readonly ComboboxOption[] = NODE_MAJORS.map((m)
 
 /** LTS 主版本号列表（默认选中项用）。 */
 export const NODE_LTS_MAJORS: readonly number[] = NODE_MAJORS.filter((m) => m.lts).map((m) => m.major)
+
+/**
+ * 某个主版本的发行通道描述：「LTS Jod」/「Current」。
+ *
+ * 【为什么抽成函数】安装预览要在两处显示这个串（抽屉的 Node 段、列表里的安装入口）。
+ * 之前两处各写一遍三元表达式，其中一处还把 `find()` 调了两次（一次判空、一次带 `!` 取值）——
+ * 同一件事两份实现，正是"同一个版本在两个入口显示得不一样"的来源。
+ */
+export function nodeChannelLabel(major: number | string): string {
+  const info = NODE_MAJORS.find((m) => String(m.major) === String(major))
+  if (!info) return ''
+  return info.lts ? `LTS ${info.lts}` : 'Current'
+}
