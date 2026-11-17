@@ -1,6 +1,7 @@
 package service
 
 import (
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -24,12 +25,21 @@ import (
 // newCursorDB 建独立内存库并只迁移位点账本表。
 func newCursorDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	// 用临时文件库，而不是 `file:<name>?mode=memory&cache=shared`。
+	//
+	// 共享内存库的生命周期绑在**连接**上：最后一个连接关闭时整库（含表结构）
+	// 随之消失。而本文件里的用例都是「先 AutoMigrate，再由后台 writer 另取连接写入」，
+	// 一旦连接池回收掉空闲连接，后台写就可能撞上「库还在、表已没」：
+	//
+	//	SQL logic error: no such table: business_event_cursors (1)
+	//	业务事件位点落库失败 ... count=10
+	//
+	// 表现为 Metrics().Written 恒为 0、用例随机转红（CI 的 Windows 分片实测如此，
+	// 本地因为负载轻、连接未被回收而不复现）。文件库没有这个生命周期问题，
+	// 表结构写在文件里，与连接无关。
+	dsn := filepath.Join(t.TempDir(), "cursor.db")
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
-	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
-	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
 	if sqlDB, derr := db.DB(); derr == nil {
 		t.Cleanup(func() { _ = sqlDB.Close() })
 	}
