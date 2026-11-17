@@ -8,6 +8,60 @@ import (
 	"time"
 )
 
+// failReopenByBlockingPath 让 Writer 的下一次「重建活跃文件」必然失败，
+// 但**不删除日志目录**。
+//
+// # 为什么不用「删掉目录」来构造
+//
+// 早期写法是 os.RemoveAll(dir)。它在 Linux 上没问题，在 Windows 上却既不稳也不对：
+//   - Windows 删除仍被打开的文件是延迟删除，目录项要等句柄全关才消失；
+//   - 更隐晦的是 Open 会立刻起后台维护协程做 filepath.Glob，Glob 本身也持有目录句柄；
+//   - 于是 RemoveAll 与二者竞争同一目录，随机报 ERROR_SHARING_VIOLATION
+//     （实测几十次里偶发一次，CI 满载时更容易踩中）。
+//
+// 为了压掉这个竞态，一度在产品代码里加了 maintMu + 测试专用方法，
+// 代价是产品类型上出现了「只有测试会调用」的 API——这是不该有的坏味道。
+//
+// # 现在的构造
+//
+// 用例要的其实是「重建必然失败」，不必等于「目录不存在」。把活跃文件路径本身
+// 换成一个**同名目录**即可：openActiveLocked 里的 os.OpenFile(path, O_WRONLY, ...)
+// 会因 EISDIR 稳定失败。
+//
+// 好处：
+//   - 完全不删目录，因此不与后台 Glob 竞争，无需任何产品侧配合；
+//   - 只删单个文件，而 Windows 在申请了 FILE_SHARE_DELETE 后允许在句柄打开时删除
+//     （这正是 reopen_test.go 依赖的能力），两平台一致；
+//   - EISDIR 对应真实故障：有人误把日志路径建成目录、或挂载点异常。
+//
+// 副作用可控：reopenIfVanishedLocked 用 os.Stat 判断「目录项还在吗」，
+// 而同名目录的 Stat 会成功，因此**不会**误触发自愈重建——那正是本用例要的：
+// 让 Write 走到「文件句柄已失效 + 无法重建」的分支。
+func failReopenByBlockingPath(t *testing.T, w *Writer) {
+	t.Helper()
+	// 先让 Writer 交出活跃文件句柄：否则 Windows 上 os.Remove 会遇到延迟删除。
+	// 这里只关文件、不置 w.closed——置了之后 Write 会直接返回 ErrClosed，
+	// 就走不到用例要验证的「重建失败上报」路径了。
+	w.mu.Lock()
+	if w.file != nil {
+		if err := w.file.Close(); err != nil {
+			w.mu.Unlock()
+			t.Fatalf("关闭活跃文件: %v", err)
+		}
+		w.file = nil
+		w.size = 0
+	}
+	w.mu.Unlock()
+
+	// 删文件（不是删目录），再在同一路径建成目录，使后续 OpenFile 必失败。
+	if err := os.Remove(w.cfg.Path); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("移除活跃文件: %v", err)
+	}
+	if err := os.Mkdir(w.cfg.Path, 0o755); err != nil {
+		t.Fatalf("占位活跃文件路径为目录: %v", err)
+	}
+}
+
 // TestWriteReportsReopenFailureViaOnError 守护「写不进去必须有人知道」。
 //
 // 背景：Write 的两个失败分支原本只 `return 0, err`，不经 OnError。
@@ -35,11 +89,8 @@ func TestWriteReportsReopenFailureViaOnError(t *testing.T) {
 	}
 	defer w.Close()
 
-	// 模拟“重建也会失败”：把父目录搬走，openActiveLocked 拿 ENOENT。
-	// 先让活跃文件消失（否则 reopenIfVanishedLocked 的 stat 会认为一切正常）。
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatalf("RemoveAll: %v", err)
-	}
+	// 构造「重建必然失败」，但**不删目录**（见 failReopenByBlockingPath 的说明）。
+	failReopenByBlockingPath(t, w)
 	w.statInterval = 0 // 禁用节流，让本次 Write 必然走到重建
 
 	if _, werr := w.Write([]byte("boom\n")); werr == nil {
@@ -99,19 +150,17 @@ func TestWriteRecoversWithoutWaitingStatInterval(t *testing.T) {
 	}
 	defer w.Close()
 
-	// 1. 让活跃文件与目录一起消失 → 重建失败 → w.file == nil
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatalf("RemoveAll: %v", err)
-	}
+	// 1. 让重建失败 → w.file == nil。同样不删目录（见 failReopenByBlockingPath）。
+	failReopenByBlockingPath(t, w)
 	w.statInterval = 0
 	if _, werr := w.Write([]byte("lost\n")); werr == nil {
-		t.Fatal("目录不存在时写入应失败")
+		t.Fatal("重建路径被占位时写入应失败")
 	}
 
-	// 2. 恢复目录，并把 statInterval 设成很大：
+	// 2. 解除占位（删掉同名目录），并把 statInterval 设成很大：
 	//    若实现仍依赖 reopenIfVanishedLocked 去重建，本次写入必失败。
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	if err := os.Remove(w.cfg.Path); err != nil {
+		t.Fatalf("解除路径占位: %v", err)
 	}
 	// 此时无并发写，直接改字段与既有 reopen_test.go 同口径。
 	w.statInterval = 24 * time.Hour
