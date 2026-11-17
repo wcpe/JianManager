@@ -546,11 +546,23 @@ func TestRetentionKeepsNewestWhenSameSecond(t *testing.T) {
 	// MaxBackups=1 只留最新一份，于是 a 与 b 双双被汰，用例必然超时。
 	// 那不是排序缺陷，只是“1 个名额被更新的文件占了”的应有行为。
 	// 这里直接调用维护函数，把被测对象限定为**排序 + 汰旧**本身。
-	w, err := Open(Config{Path: path, MaxSizeBytes: 8, MaxBackups: 1, DisableCompress: true})
-	if err != nil {
-		t.Fatalf("Open 失败: %v", err)
+	//
+	// 【为何不走 Open】Open 会立刻启动维护协程并投递首个任务（其中就包含
+	// applyRetention），于是本用例的 applyRetention 与协程的那一次**并发删除同一批档**：
+	// 先删到的成功，后删到的拿不到文件。POSIX 上删除已不存在的路径仍是静默成功
+	// （POSIX 语义下 remove 对不存在返回 ENOENT，但这里被 IsNotExist 放过），
+	// 而 Windows 上两个删除撞在同一路径会返回 Access is denied，
+	// 于是维护函数返回错误、用例转红（CI 实测：`rollog_test.go:556: applyRetention 失败:
+	// 删除过期轮转档 ... Access is denied`）。
+	//
+	// 本用例要验的是**排序与汰旧的选择**，与后台协程无关，因此直接构造只带
+	// 必要字段的 Writer：不启动协程，也不打开活跃文件，调用序列完全确定。
+	w := &Writer{
+		cfg:  Config{Path: path, MaxSizeBytes: 8, MaxBackups: 1, DisableCompress: true},
+		dir:  dir,
+		base: "app",
+		ext:  ".log",
 	}
-	defer w.Close()
 
 	if err := w.applyRetention(); err != nil {
 		t.Fatalf("applyRetention 失败: %v", err)
