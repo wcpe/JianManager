@@ -155,6 +155,9 @@ type QQDiscoveryService struct {
 	mu      sync.Mutex
 	stopCh  chan struct{}
 	running bool
+	// loopDone 在 loop 协程彻底退出后关闭。Stop 用它等待后台收尾，
+	// 消除「Stop 已记账 → loop 仍在本轮尾部写状态」的窗口（见 Stop 注释）。
+	loopDone chan struct{}
 
 	// 可注入的依赖（测试替换）。
 	dialFunc  func(url string) (*websocket.Conn, error)
@@ -607,10 +610,15 @@ func (s *QQDiscoveryService) Start() {
 	}
 	s.running = true
 	s.stopCh = make(chan struct{})
+	s.loopDone = make(chan struct{})
 	stop := s.stopCh
+	done := s.loopDone
 	s.mu.Unlock()
 
-	go s.loop(stop)
+	go func() {
+		defer close(done)
+		s.loop(stop)
+	}()
 	slog.Info("QQ 网关连接管理已启动")
 }
 
@@ -627,16 +635,33 @@ func (s *QQDiscoveryService) Stop() {
 	}
 	close(s.stopCh)
 	s.running = false
+	done := s.loopDone
 	s.mu.Unlock()
 
+	// 先关连接：让阻塞在 serve 读循环里的 loop 立刻返回，否则下面的等待要拖到
+	// 下一次连接事件。关闭顺序不能反——loop 退出依赖连接被中断。
 	s.connMu.Lock()
 	conn := s.conn
 	s.conn = nil
-	prevStatus := s.status
 	s.connMu.Unlock()
 	if conn != nil {
 		_ = conn.Close()
 	}
+
+	// 等 loop 彻底退出后**再**读取最终状态并落定。
+	//
+	// 不等就有竞态（Windows CI 偶发、本地难复现）：loop 在 connectAndServe 返回后
+	// 还有尾巴——可能把本次断开判成致命错误（fatal != ""）并 setStatus(error)，
+	// 也可能走「无 qq 通道」分支写 disconnected。这些都与 Stop 并发，于是
+	// 「Stop 保留人工介入态」的断言会看到被 loop 覆写后的状态而随机变红。
+	// 等待 + 事后统一落定后，Stop 返回时的状态是确定的。
+	if done != nil {
+		<-done
+	}
+
+	s.connMu.Lock()
+	prevStatus := s.status
+	s.connMu.Unlock()
 	if prevStatus == model.QQGatewayError {
 		slog.Info("QQ 网关连接管理已停止（保留人工介入态诊断信息）", "status", prevStatus)
 		return

@@ -3,6 +3,7 @@ module github.com/wcpe/JianManager
 go 1.26.2
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.7.0
 	github.com/gin-gonic/gin v1.12.0
@@ -26,13 +27,11 @@ require (
 	golang.org/x/text v0.38.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
-	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.1
 )
 
 require (
-	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
