@@ -629,7 +629,7 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-521 | 退役 JM 业务能力 [规格][s185] | P0 | ✅ 已交付@v0.24.0 |
 | FR-522 | 业务事件纯透传 + SSE 事件流 [规格][s186] | P0 | ✅ 已交付@v0.24.0 |
 | FR-523 | 业务批量命令接口 [规格][s187] | P0 | ✅ 已交付@v0.24.0 |
-| FR-524 | 写穿与离线禁改 [规格][s188] | P0 | ✅ 已修复（2026-11-10 真机复核后补齐）·写穿链路、审计只记通道事实、幂等键注入均在；但规格 §6 第 1 条「实例离线→409 INSTANCE_OFFLINE」**未实现**：`DispatchWrite → resolveTarget` 只校验实例存在性与节点存在性，不看实例状态，离线时返回 `200 + available=false + error="节点未连接"`。**事实安全**：探针（ServerProbe）跑在游戏服进程内，实例停止则进程消失、探针随之不可达，业务数据无法写入；JM 也不持有业务数据（全仓无业务数据表，仅游标表），所以「库内零变更」结果成立。**坏的是可归因性**：运维看到「节点未连接」会去查网络/Worker，实际原因是该实例未启动；巡检脚本无法据此区分，会把已停服的预期状态报成故障。已加 `TestBusinessWrite_OfflineInstanceMustBeRejected`（断言**必须含** INSTANCE_OFFLINE）。**2026-11-10 已修复**：在 `resolveTarget` 源头统一校验 `inst.Status != Running`，与对账路径同语义同错误码；测试改回严格断言，并做过反向验证（把检查改成 `if false && …` 则立刻转红）。对照证据：对账路径（`business_reconcile.go`）一直有这道检查，两条路径现已一致 |
+| FR-524 | 写穿与离线禁改 [规格][s188] | P0 | ✅ 已交付@v0.24.0·写穿链路、审计只记通道事实、幂等键注入均在。**2026-11-10 补齐离线禁改**：原 `DispatchWrite → resolveTarget` 只校验实例存在性与节点存在性，不看实例状态，离线时返回 `200 + available=false + error="节点未连接"`，规格 §6 第 1 条「实例离线→409 INSTANCE_OFFLINE」未实现。**事实安全**：探针（ServerProbe）跑在游戏服进程内，实例停止则进程消失、探针随之不可达，业务数据无法写入；JM 也不持有业务数据（全仓无业务数据表，仅游标表），所以「库内零变更」结果成立。**坏的是可归因性**：运维看到「节点未连接」会去查网络/Worker，实际原因是该实例未启动；巡检脚本无法据此区分，会把已停服的预期状态报成故障。修法是在 `resolveTarget` 源头统一校验 `inst.Status != Running`，与对账路径同语义同错误码；已加 `TestBusinessWrite_OfflineInstanceMustBeRejected`（断言**必须含** INSTANCE_OFFLINE），并做过反向验证（把检查改成 `if false && …` 则立刻转红）。对照证据：对账路径（`business_reconcile.go`）一直有这道检查，两条路径现已一致 |
 | FR-525 | 对账协调接口 [规格][s188] | P1 | ✅ 已交付@v0.24.0 |
 | FR-526 | 桥能力接入 [规格][s188] | P1 | ✅ 已交付@v0.24.0 |
 | FR-527 | 对外只读统计契约 [规格][s189] | P1 | ✅ 已交付@v0.24.0 |
