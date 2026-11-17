@@ -42,7 +42,18 @@ func TestTerminateManagedProcessAllowsRootPID(t *testing.T) {
 		Mode:         "kill_tree",
 	})
 	require.NoError(t, err)
-	require.True(t, resp.Success, "根进程应当允许处置：%s", resp.Message)
+	// 本用例要钉的是「根进程**不再被拒绝**处置」——放开前这里返回 PID_NOT_MANAGED，
+	// 现在最低要求是该拒绝码消失。不能直接断言 Success：
+	//
+	// 处置与取 PID 之间若进程已自然退出（helper 生命周期短、runner 负载高），
+	// 产品侧会如实回报 `os: process already finished`，这是**正确的**结果，
+	// 而不是缺陷——届时实例状态同样已离开 RUNNING，下方断言照样成立。
+	// CI core shard 2 曾因把它当失败而红灯。
+	require.NotEqual(t, "PID_NOT_MANAGED", resp.Code, "根进程应当允许处置：%s", resp.Message)
+	if !resp.Success {
+		require.Contains(t, resp.Message, "process already finished",
+			"非成功结果只接受「进程已先行退出」这一种，其余仍视为缺陷：%s", resp.Message)
+	}
 
 	// 退出监听把实例同步为 CRASHED/STOPPED，不会停在 RUNNING。
 	require.Eventually(t, func() bool {

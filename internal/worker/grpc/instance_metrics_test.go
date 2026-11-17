@@ -31,7 +31,15 @@ const metricsHelperJavaEnv = "JM_METRICS_HELPER_JAVA"
 func TestMetricsHelperProcess(t *testing.T) {
 	switch os.Getenv(metricsHelperModeEnv) {
 	case "java":
-		deadline := time.Now().Add(20 * time.Second)
+		// 存活时长必须显著长于调用方的「启动 → 取 PID → 处置」链路，否则 helper 会在
+		// 用例动手前自行退出，产品侧正确回报 `os: process already finished`，而断言
+		// `resp.Success == true` 就把这次正常退出误判成失败（CI core shard 2 实测如此）。
+		//
+		// 原先 20 秒在负载高的 runner 上不够：该链路含 copyTestExecutableAsJava 拷二进制、
+		// 起 wrapper → sh -c → java 三层进程树、等待 PID 就绪，慢机可吃掉十几秒。改成
+		// 60 秒后余量充足；用例自身有 t.Cleanup 与 5 秒 Eventually 兜底，不会因此变慢——
+		// 需要它退出的地方都是主动 kill，而不是等它自然到期。
+		deadline := time.Now().Add(60 * time.Second)
 		var counter uint64
 		for time.Now().Before(deadline) {
 			counter++
