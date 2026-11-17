@@ -136,8 +136,22 @@ func TestSixModuleMetadataCancellationReachesSameWorkerContext(t *testing.T) {
 		t.Run(operation, func(t *testing.T) {
 			coord, dialer, meters, query := metadataMeterFixture(t, true)
 			before := dialer.callCount("w2")
-			query.Budget.TimeoutMS = 30
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			// 不用请求级预算（TimeoutMS），取消只来自下方那个 1 秒的调用方 ctx。
+			//
+			// 原实现设了 TimeoutMS=30，于是存在**两层各自计时**的超时：Coordinator 在
+			// 入口用 TimeoutMS 建一层，下发给 Worker 的 local 预算又带着同一个
+			// TimeoutMS，Worker 侧 WithQueryDeadline 从**进入 Worker 的时刻**再建一层。
+			// 两层起点不同、时长相同，谁先到期取决于调度：一旦 Worker 层先到，
+			// 首个 Worker 就会在 Coordinator 的 ctx 仍存活时返回，扇出循环随即继续
+			// 拨下一个 Worker，`取消后不能再拨` 这条断言随机转红（实测 50 次里 9 次，
+			// Windows CI 同样偶发）。
+			//
+			// 本用例要钉的是「调用方取消能传到 Worker 的 ctx」——那只需要一个明确
+			// 晚于任何一次扇出的截止时间。把 TimeoutMS 设为 0 后，只有调用方这层 ctx
+			// 生效：首个 Worker 会一直阻塞到它到期，期间循环不可能继续扇出，断言因此
+			// 确定性成立，且强度不变（仍是「第二个 Worker 一次都不能被拨」）。
+			query.Budget.TimeoutMS = 0
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
 			if operation == "fields" {
 				_, _ = coord.Fields(ctx, query)

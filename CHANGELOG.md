@@ -6,7 +6,11 @@
 
 ## [Unreleased]
 
-> 本段为 `v0.24.0` 开发版归档区；正式发版时整理为新版本段。
+> 本段为 `v0.25.0` 开发版归档区；正式发版时整理为新版本段。
+
+## [0.24.0]
+
+> 正式发布版。本段为此前 `v0.24.0` 开发版归档区的内容整理。
 
 ### 新增
 - **控制面入口限流可配置 + 高并发整流**：限流预算从代码常量改为平台设置 `traffic.rate_limit.*`（只读 / 写 / 日志查询 / 全局四组，各含速率与容量共 8 键），保存在 CP 内即时生效、无需重启；速率与容量须同时为正或同时为 0（该组不限流），全局组不允许关闭，越界与脏值分别拒绝或回落默认。系统设置页新增「流量限流」分类，中英文档与逐键校验齐备。限流器本体由「单 map + 一把全局互斥锁」改为 64 分片独立加锁 + 短临界区（锁内只做取桶/补令牌/扣令牌，过期桶按片惰性清理），规格改为不可变快照原子替换，热更新不重置已有桶；同 key 判定语义不变，不同客户端 IP 不再互相排队。基准：并发多 IP 45 ns/op，同 IP 串行 117 ns/op。
@@ -40,6 +44,9 @@
     见 `internal/controlplane/database/business_retirement_restart_cycle_test.go`。
 
 ### 修复
+- **Windows 平台分叉与路径校验绕过**：CP 的路径覆盖校验原先用 `filepath.IsAbs(filepath.FromSlash(p))`，而 `path/filepath` 的语义在**编译期**按 GOOS 绑定。Windows 版 CP 上 `/etc/shadow` 经 `FromSlash` 变成 `\etc\shadow`、`IsAbs` 返回 false，于是被当作工作目录相对路径落库放行——该值下发后 Worker 会照读宿主机任意可读文件。判定改为纯字符串、按方言分离（`isPOSIXAbsPath` / `isWindowsAbsPath` / `hasDrivePrefix`），两版产物得到同一结论，逐值核对为「放松 0 个、收紧 6 个」。同一处 GOOS 绑定还漏掉 `\logs\a.log` 这类盘根相对形态，一并收紧。
+- **Windows 单测矩阵与 45 个平台分叉缺陷**：CI 原先 10 个 job 全在 ubuntu，`release.yml` 的 windows-latest 只跑二进制 `--version` 冒烟，任何「Linux 上恰好对、Windows 上失效」的判据都不会被发现。新增 `go-test-windows`（core 4 片）与 `go-test-windows-router`，共用 `scripts/go-test.sh` 分片口径。首次真机运行暴露 11 个包 45 个失败，其中 8 处是真实缺陷：rollog 压缩时源文件句柄未关就删除（Windows 上每份轮转档的 `.log` 永远残留、磁盘占用翻倍）、rollog 打开日志未申请 `FILE_SHARE_DELETE`（外部删不掉也改不了名，自愈重建永不触发）、`resolveSafePath` 同源的 GOOS 绑定、tailer 拿不到 inode 时截断重写漏采、catalog 对目录 fsync、daemon `os.FindProcess` 失败导致 PID 丢失、follow-live 超时吞掉错误、vlsup 孤儿判定不认反斜杠边界；其余为测试断言假设了 POSIX 语义（文件锁、信号退出码、路径分隔符、inode、主机观测）。
+- **rollog 用例的跨平台竞态**：`TestWriteReportsReopenFailureViaOnError` 与 `TestWriteRecoversWithoutWaitingStatInterval` 原先用「删掉日志目录」构造重建失败，而活跃文件句柄未关、`Open` 启动的后台维护协程又持有目录句柄（`filepath.Glob`），三者竞争同一目录，在 Windows 上随机报 `ERROR_SHARING_VIOLATION`（同一提交在 PR 分支 CI 上绿、在 master 上红，差别只是 runner 负载）。改为把活跃文件路径本身占位成同名目录，`OpenFile` 因 `EISDIR` 稳定失败而目录从未被删，产品代码零改动。`TestRetentionKeepsNewestWhenSameSecond` 同样因与维护协程并发调用 `applyRetention` 而偶发 `Access is denied`，改为直接构造只带必要字段的 `Writer`，不启动后台协程。
 - **备份探测代理隔离测试**：前置条件改为即时解析本用例设置的代理环境，并隔离宿主的绕过列表，避免标准库进程级代理缓存导致整包与单例结果不同；保留探测传输禁用代理的断言，不修改出站策略和正式传输行为。
 - **客户端安全日志极大页码边界**：合并日志查询先统计真实命中数，再判断越界空页并安全计算页偏移；缓冲初始容量不再由用户页码决定，每源取数上限受真实数量约束。修复空数据也可能因极大页码过量分配或整数溢出而失败的问题，保留准确总数、普通翻页和可选筛选语义。
 - **Bot 命令计划 YAML 单引号解码**：单引号正文不再转成 JSON 字符串解析，保留路径和命令里的反斜杠，仅将两个连续单引号还原为撇号；双引号转义与 JSON 高级模式保持原语义。补公共解析入口的表驱动回归，防止编辑计划时把字面量反斜杠改成制表符或换行。

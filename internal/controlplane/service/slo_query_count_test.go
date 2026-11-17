@@ -120,6 +120,12 @@ func TestComputeSLO_PlatformQueryCountSingleSeries(t *testing.T) {
 	}
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), cb)
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关则会残留整库
+	// （含已迁移的表），重复运行或整包重跑时同名库复用，AutoMigrate 撞
+	// 「table ... already exists」——确定性失败，不是偶发。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.MetricSeries{}, &model.MetricSampleRaw{},
 		&model.MetricRollup5m{}, &model.MetricRollup1h{}, &model.Instance{},
 		&model.AlertRule{}, &model.AlertEvent{}))
