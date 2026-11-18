@@ -1,10 +1,12 @@
 package daemon
 
 import (
+	"bufio"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,10 +144,12 @@ func TestWrapper_StopControl(t *testing.T) {
 	}
 	require.NoError(t, stopFrame.Encode(conn))
 
-	// wrapper 应在 stop 后退出
+	// stop 可能落在 Java 启动窗口：请求会先暂存，Java 登记后再执行优雅停止，
+	// Windows runner 在高负载下还要叠加 taskkill 异步收尾。等待覆盖完整生命周期，
+	// 不把调度/进程创建延迟误报成 wrapper 未处理 stop。
 	select {
 	case <-done:
-	case <-time.After(8 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("wrapper 在 stop 后未退出")
 	}
 	conn.Close()
@@ -153,6 +157,31 @@ func TestWrapper_StopControl(t *testing.T) {
 	// Windows 上 taskkill /T /F 异步终止进程树：等待 Java pid 真正消失、
 	// 句柄释放后再让 t.TempDir() 的 RemoveAll 清理 pidDir（否则偶发清理失败 fatal）。
 	waitForProcGone(t, javaPID)
+}
+
+// TestWrapperJavaStartFixture 模拟响应 stdin stop 的服务端；独立停止文件只供失败清理使用。
+func TestWrapperJavaStartFixture(t *testing.T) {
+	stopFile := os.Getenv("JIANMANAGER_WRAPPER_START_TEST_STOP_FILE")
+	if stopFile == "" {
+		return
+	}
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			if scanner.Text() == ControlStop {
+				os.Exit(0)
+			}
+		}
+		// 仅收到真正的 stop 才成功；单纯关 stdin 不得满足外层断言。
+		os.Exit(2)
+	}()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		if _, err := os.Stat(stopFile); err == nil {
+			os.Exit(3)
+		}
+	}
 }
 
 // TestWrapper_StopDuringJavaStartDoesNotOrphanJava 锁定真机验收（轮次）发现的产品缺陷：
@@ -163,12 +192,25 @@ func TestWrapper_StopControl(t *testing.T) {
 // 修复后：启动窗口内的停止请求被暂存，javaCmd 登记完成即补发停止——wrapper 退出前 Java 必已终止。
 func TestWrapper_StopDuringJavaStartDoesNotOrphanJava(t *testing.T) {
 	workDir := t.TempDir()
+	stopFile := filepath.Join(workDir, "java-start-fixture.stop")
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	command := "'" + strings.ReplaceAll(executable, "'", "'\\''") + "' -test.run=^TestWrapperJavaStartFixture$"
+	if runtime.GOOS == "windows" {
+		command = `%JIANMANAGER_WRAPPER_START_TEST_EXECUTABLE% -test.run=TestWrapperJavaStartFixture$`
+	}
 	cfg := WrapperConfig{
 		InstanceUUID: "test-stop-race",
-		StartCommand: keepAliveCommand(),
-		WorkDir:      workDir,
-		AutoRestart:  false,
-		PIDDir:       workDir,
+		StartCommand: command,
+		EnvVars: map[string]string{
+			"JIANMANAGER_WRAPPER_START_TEST_STOP_FILE":  stopFile,
+			"JIANMANAGER_WRAPPER_START_TEST_EXECUTABLE": `"` + executable + `"`,
+			// 去掉替身的 race 默认退出延迟，避免其与测试的 1s 优雅停止上限竞争。
+			"GORACE": "atexit_sleep_ms=0",
+		},
+		WorkDir:     workDir,
+		AutoRestart: false,
+		PIDDir:      workDir,
 	}
 	// 直接构造 Wrapper（不起监听/不跑 run）：本用例只验「启动窗口 + 停止」这段状态机。
 	w := &Wrapper{
@@ -200,10 +242,6 @@ func TestWrapper_StopDuringJavaStartDoesNotOrphanJava(t *testing.T) {
 	stdin, err := javaCmd.StdinPipe()
 	require.NoError(t, err)
 	require.NoError(t, javaCmd.Start())
-	t.Cleanup(func() {
-		// 兜底：用例提前失败时终止进程树，避免残留子进程占住工作目录（回收交给 javaWait）。
-		killProcessTree(javaCmd)
-	})
 	w.mu.Lock()
 	w.javaCmd = javaCmd
 	w.javaStdin = stdin
@@ -212,15 +250,46 @@ func TestWrapper_StopDuringJavaStartDoesNotOrphanJava(t *testing.T) {
 	w.mu.Unlock()
 
 	w.applyDeferredStop()
-	go w.javaWait(javaCmd)
+	javaWaitDone := make(chan struct{})
+	go func() {
+		defer close(javaWaitDone)
+		w.javaWait(javaCmd)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-javaWaitDone:
+			return
+		default:
+		}
+		// 兜底只触发该替身的私有停止信号，不按可能已回收或复用的 PID 终止进程。
+		if err := os.WriteFile(stopFile, nil, 0600); err != nil {
+			t.Errorf("写入 Java 替身停止信号失败: %v", err)
+		}
+		select {
+		case <-javaWaitDone:
+		case <-time.After(5 * time.Second):
+			t.Error("兜底终止后 Java 未完成回收")
+		}
+	})
 
-	// 补发后 Java 必须被终止（优雅停止超时 1s → 强杀），wrapper 才能在收摊后退出。
-	waitForProcGone(t, javaCmd.Process.Pid)
+	// closing 必须由 javaWait 在 cmd.Wait 完成后触发，不能用 Windows 上仅检查
+	// OpenProcess 成功与否的 PID 探测代替：已退出但尚存句柄的进程仍可能被探测到。
 	select {
 	case <-w.closing:
 	case <-time.After(5 * time.Second):
 		t.Fatal("补发停止后 wrapper 未收摊退出")
 	}
+	w.mu.Lock()
+	javaReaped := w.javaCmd == nil
+	w.mu.Unlock()
+	require.True(t, javaReaped, "wrapper 收摊前必须完成 Java 回收")
+	select {
+	case <-javaWaitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wrapper 收摊后 Java 回收协程未退出")
+	}
+	require.NotNil(t, javaCmd.ProcessState, "Java 必须已由 cmd.Wait 回收")
+	require.Zero(t, javaCmd.ProcessState.ExitCode(), "替身必须实际响应暂存的 stdin stop，而非启动失败或强杀退出")
 }
 
 // TestWrapper_StdoutForward 验证 wrapper 把 Java 的 stdout 转发为帧给 Worker。

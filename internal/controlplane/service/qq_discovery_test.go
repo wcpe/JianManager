@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -803,6 +804,168 @@ func TestQQDiscovery_Stop状态语义(t *testing.T) {
 		assert.Equal(t, model.QQGatewayDisconnected, svc.GatewayStatus().Status,
 			"非人工介入态 Stop 后应翻回 disconnected（既有语义不变）")
 	})
+}
+
+// TestQQDiscovery_Stop可中断建连阶段 Stop 发生在 HTTP/拨号阶段时也必须及时让 loop 退出。
+func TestQQDiscovery_Stop可中断建连阶段(t *testing.T) {
+	t.Run("网关地址请求阶段", func(t *testing.T) {
+		gatewayStarted := make(chan struct{})
+		var gatewayOnce sync.Once
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/app/getAppAccessToken":
+				_, _ = w.Write([]byte(`{"access_token":"mock-token","expires_in":7200}`))
+			case "/gateway":
+				gatewayOnce.Do(func() { close(gatewayStarted) })
+				<-r.Context().Done()
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		db := newQQDiscoveryTestDB(t)
+		svc := NewQQDiscoveryService(db, NewChannelNotifier())
+		qqDiscoveryTestChannel(t, db, "1020001", "plain", srv.URL)
+		svc.Start()
+
+		select {
+		case <-gatewayStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Stop 回归前提未满足：/gateway 请求未开始")
+		}
+
+		stopped := make(chan struct{})
+		go func() {
+			svc.Stop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(1 * time.Second):
+			t.Fatal("Stop 在网关地址请求阶段不应无界等待")
+		}
+		view := svc.GatewayStatus()
+		assert.Equal(t, model.QQGatewayDisconnected, view.Status, "Stop 后尾部状态不得覆写为 connecting")
+		assert.Empty(t, view.LastError, "Stop 后尾部错误不得覆写状态")
+	})
+
+	t.Run("网关拨号阶段", func(t *testing.T) {
+		dialStarted := make(chan struct{})
+		var dialOnce sync.Once
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/app/getAppAccessToken":
+				_, _ = w.Write([]byte(`{"access_token":"mock-token","expires_in":7200}`))
+			case "/gateway":
+				_, _ = w.Write([]byte(`{"url":"wss://gateway.invalid"}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		db := newQQDiscoveryTestDB(t)
+		svc := NewQQDiscoveryService(db, NewChannelNotifier())
+		qqDiscoveryTestChannel(t, db, "1020001", "plain", srv.URL)
+		svc.dialFunc = func(ctx context.Context, _ string) (*websocket.Conn, error) {
+			dialOnce.Do(func() { close(dialStarted) })
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		svc.Start()
+
+		select {
+		case <-dialStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Stop 回归前提未满足：拨号未开始")
+		}
+
+		stopped := make(chan struct{})
+		go func() {
+			svc.Stop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(1 * time.Second):
+			t.Fatal("Stop 在网关拨号阶段不应无界等待")
+		}
+		view := svc.GatewayStatus()
+		assert.Equal(t, model.QQGatewayDisconnected, view.Status, "Stop 后尾部状态不得覆写为 connecting")
+		assert.Empty(t, view.LastError, "Stop 后尾部错误不得覆写状态")
+	})
+}
+
+// TestQQDiscovery_Stop中断真实握手 不注入拨号替身，覆盖 TCP 已连接后等待 Upgrade 响应的阶段。
+func TestQQDiscovery_Stop中断真实握手(t *testing.T) {
+	db := newQQDiscoveryTestDB(t)
+	svc := NewQQDiscoveryService(db, NewChannelNotifier())
+	handshakeStarted := make(chan struct{})
+	peerClosed := make(chan struct{})
+	release := make(chan struct{})
+	var handshakeOnce sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/getAppAccessToken":
+			_, _ = w.Write([]byte(`{"access_token":"mock-token","expires_in":7200}`))
+		case "/gateway":
+			_ = json.NewEncoder(w).Encode(qqGatewayURLResp{URL: "ws://" + r.Host + "/ws"})
+		case "/ws":
+			if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			handshakeOnce.Do(func() { close(handshakeStarted) })
+			// 不回 Upgrade，让客户端真正阻塞在握手读；失败时由 release 收尾。
+			select {
+			case <-r.Context().Done():
+				close(peerClosed)
+			case <-release:
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	var stopped chan struct{}
+	t.Cleanup(func() {
+		close(release)
+		srv.Close()
+		if stopped == nil {
+			svc.Stop()
+		} else {
+			<-stopped
+		}
+	})
+	qqDiscoveryTestChannel(t, db, "1020001", "plain", srv.URL)
+	svc.Start()
+
+	select {
+	case <-handshakeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("服务端未收到真实 WebSocket Upgrade 请求")
+	}
+
+	stopped = make(chan struct{})
+	go func() {
+		svc.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop 未中断正在等待 Upgrade 响应的真实握手")
+	}
+	select {
+	case <-peerClosed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop 返回后服务端未观察到底层连接关闭")
+	}
+	view := svc.GatewayStatus()
+	assert.Equal(t, model.QQGatewayDisconnected, view.Status)
+	assert.Empty(t, view.LastError)
 }
 
 // ── 查询：分页与密钥安全 ──
