@@ -3,7 +3,6 @@ package grpc
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,72 +144,50 @@ func (s *Server) instanceWorkDirBytes(dirCtx context.Context, instanceUUID strin
 	return total, true
 }
 
+// completeProcessTree 收集整棵进程树（含根）。
+// 遍历与去重逻辑在 collectProcessTreeIn（纯算法，可用内存树验证），
+// 这里仅把根句柄适配为 procNode。
 func completeProcessTree(ctx context.Context, root *psproc.Process) ([]*psproc.Process, error) {
-	seen := make(map[int32]struct{})
-	processes := make([]*psproc.Process, 0, 4)
-	var walk func(*psproc.Process) error
-	walk = func(current *psproc.Process) error {
-		if current == nil {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if _, ok := seen[current.Pid]; ok {
-			return nil
-		}
-		seen[current.Pid] = struct{}{}
-		processes = append(processes, current)
-		children, err := current.ChildrenWithContext(ctx)
-		if err != nil {
-			return err
-		}
-		for _, child := range children {
-			if err := walk(child); err != nil {
-				return err
-			}
-		}
-		return nil
+	if root == nil {
+		return nil, nil
 	}
-	if err := walk(root); err != nil {
+	nodes, err := collectProcessTreeIn(ctx, &gopsutilNode{proc: root})
+	if err != nil {
 		return nil, err
+	}
+	processes := make([]*psproc.Process, 0, len(nodes))
+	for _, node := range nodes {
+		if proc := asProcess(node); proc != nil {
+			processes = append(processes, proc)
+		}
 	}
 	return processes, nil
 }
 
 func processTreeRSS(ctx context.Context, processes []*psproc.Process) (int64, bool) {
-	var total uint64
-	for _, current := range processes {
-		memory, err := current.MemoryInfoWithContext(ctx)
-		if err != nil || memory == nil || math.MaxUint64-total < memory.RSS {
-			return 0, false
-		}
-		total += memory.RSS
-	}
-	if total > math.MaxInt64 {
-		return 0, false
-	}
-	return int64(total), true
+	return sumTreeRSSIn(ctx, wrapProcesses(processes))
 }
 
 func processTreeCPU(ctx context.Context, processes []*psproc.Process) (float64, bool) {
-	var total float64
-	for _, current := range processes {
-		cpuPercent, err := current.CPUPercentWithContext(ctx)
-		if err != nil {
-			return 0, false
-		}
-		total += cpuPercent
-	}
-	return total, true
+	return sumTreeCPUIn(ctx, wrapProcesses(processes))
 }
 
 func processUptime(ctx context.Context, root *psproc.Process) (float64, bool) {
-	createdAt, err := root.CreateTimeWithContext(ctx)
-	if err != nil || createdAt <= 0 {
+	if root == nil {
 		return 0, false
 	}
-	return float64(time.Now().UnixMilli()-createdAt) / 1000, true
+	return uptimeIn(ctx, &gopsutilNode{proc: root})
+}
+
+// wrapProcesses 把 gopsutil 句柄批量适配为 procNode。
+func wrapProcesses(processes []*psproc.Process) []procNode {
+	out := make([]procNode, 0, len(processes))
+	for _, proc := range processes {
+		if proc != nil {
+			out = append(out, &gopsutilNode{proc: proc})
+		}
+	}
+	return out
 }
 
 func unavailableInstanceResourceReason(response *workerpb.GetInstanceResourceSnapshotResponse) string {
