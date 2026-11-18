@@ -50,17 +50,17 @@ test.describe('运维控制台布局（mock 模式真浏览器）', () => {
     await expect(sidebar.getByRole('button', { name: '选择服务器', exact: true })).toHaveCount(0)
     // 方案 C：品牌 Logo 位于顶栏品牌区，节点作用域下拉已下线。
     await expect(page.locator('[data-slot="console-header"]').getByText('JianManager')).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr037-e2e-console-shell.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'console-shell.png'), fullPage: true })
 
     // 经资源面板的搜索框定位实例并进深链（替代已删除的「选择服务器」弹窗路径）。
     await page.locator('[data-slot="console-sidebar"]').getByRole('textbox', { name: '搜索服务器' }).fill('creative-1')
     const hit = page.locator('[data-slot="console-sidebar"]').getByText('creative-1').first()
     await expect(hit).toBeVisible({ timeout: 10_000 })
-    await page.screenshot({ path: path.join(artifactsDir, 'fr037-e2e-server-selector.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'console-server-selector.png'), fullPage: true })
 
     await hit.click()
     await expect(page).toHaveURL(/\/instances\/3$/)
     await expect(page.getByText('creative-1').first()).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr037-e2e-instance-workspace.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'console-instance-workspace.png'), fullPage: true })
   })
 })

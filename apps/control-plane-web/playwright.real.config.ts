@@ -9,7 +9,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list']],
   use: {
-    baseURL: process.env.FR518_BASE_URL ?? 'http://127.0.0.1:5299',
+    baseURL: process.env.REAL_CP_BASE_URL ?? 'http://127.0.0.1:5299',
     trace: 'off',
     screenshot: 'off',
   },

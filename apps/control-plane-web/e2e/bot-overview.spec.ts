@@ -43,7 +43,7 @@ test.describe('全局 Bot 管理页重构（mock 模式真浏览器）', () => {
     await expect(page.getByRole('button', { name: '生存服', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '空岛服', exact: true })).toBeVisible()
     await expect(page.getByText('GuardBot')).toHaveCount(0)
-    await page.screenshot({ path: path.join(artifactsDir, 'fr040-e2e-overview.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'bot-overview-all.png'), fullPage: true })
 
     // 分组维度已收敛到 `Segments`（role=tablist / 子项 role=tab）——不再是 button。
     await page.getByRole('tab', { name: '行为', exact: true }).click()
@@ -51,14 +51,14 @@ test.describe('全局 Bot 管理页重构（mock 模式真浏览器）', () => {
     await expect(page.getByRole('button', { name: 'follow', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'patrol', exact: true })).toBeVisible()
     await expect(page.getByText('GuardBot')).toHaveCount(0)
-    await page.screenshot({ path: path.join(artifactsDir, 'fr040-e2e-group-dim-behavior.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'bot-overview-group-dim.png'), fullPage: true })
 
     await page.getByRole('tab', { name: '实例', exact: true }).click()
     const survival = botGroupCard(page, '生存服')
     await survival.getByRole('button', { name: '在控制台打开' }).click()
     await expect(page).toHaveURL(/\/instances\/1$/)
     await expect(page.getByRole('heading', { name: 'survival-1', exact: true })).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr040-e2e-open-console.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'bot-overview-open-console.png'), fullPage: true })
 
     await page.goto('/bots')
     const survivalAgain = botGroupCard(page, '生存服')
@@ -66,7 +66,7 @@ test.describe('全局 Bot 管理页重构（mock 模式真浏览器）', () => {
     await expect(survivalAgain.getByText('GuardBot')).toBeVisible()
     await expect(survivalAgain.getByText('FollowBot')).toBeVisible()
     await expect(survivalAgain.getByText('共 2 个 Bot')).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr040-e2e-group-peek.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'bot-overview-group-peek.png'), fullPage: true })
 
     await survivalAgain.getByRole('combobox').click()
     await page.getByRole('option', { name: '设为巡逻' }).click()
@@ -74,6 +74,6 @@ test.describe('全局 Bot 管理页重构（mock 模式真浏览器）', () => {
     await page.getByRole('tab', { name: '行为', exact: true }).click()
     const patrol = botGroupCard(page, 'patrol')
     await expect(patrol.getByText('在线 1 / 共 3')).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr040-e2e-batch-result.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'bot-overview-batch-result.png'), fullPage: true })
   })
 })

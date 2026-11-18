@@ -24,19 +24,19 @@ import { expect, test } from '@playwright/test'
  *
  * ## 运行前提
  *
- *   CP：真实二进制 + 隔离库（本文件按 `FR518_CP_DB` 指向该库做断言）
+ *   CP：真实二进制 + 隔离库（本文件按 `REAL_CP_DB` 指向该库做断言）
  *   FE：非 mock 的 vite dev server，`VITE_API_TARGET` 指向该 CP
- *   baseURL 由 `FR518_BASE_URL` 给出（默认 127.0.0.1:5299）
+ *   baseURL 由 `REAL_CP_BASE_URL` 给出（默认 127.0.0.1:5299）
  *
  * 缺任一前提即 skip，并**明写「未验证」而不是静默通过**。
  */
 
-const BASE_URL = process.env.FR518_BASE_URL ?? 'http://127.0.0.1:5299'
+const BASE_URL = process.env.REAL_CP_BASE_URL ?? 'http://127.0.0.1:5299'
 // 不写死绝对路径：本文件入了仓库，写死本机路径会泄漏用户名与目录结构。
-// 未设 FR518_CP_DB 时下面的 skip 会生效并明写「未验证」。
-const CP_DB = process.env.FR518_CP_DB ?? ''
-const ADMIN_USER = process.env.FR518_USER ?? 'admin'
-const ADMIN_PASS = process.env.FR518_PASS ?? 'fr514live'
+// 未设 REAL_CP_DB 时下面的 skip 会生效并明写「未验证」。
+const CP_DB = process.env.REAL_CP_DB ?? ''
+const ADMIN_USER = process.env.REAL_CP_USER ?? 'admin'
+const ADMIN_PASS = process.env.REAL_CP_PASS ?? 'real-live-pass'
 
 test.use({ baseURL: BASE_URL })
 
@@ -57,8 +57,8 @@ function readSnapshot(runId: number): string | null {
 
 test.describe('后端快照（真实 CP）', () => {
   test.skip(
-    !process.env.FR518_CP_DB && process.env.FR518_REQUIRE_REAL !== '1',
-    '需要真实 CP：设置 FR518_CP_DB 指向隔离库、FR518_BASE_URL 指向非 mock 前端；' +
+    !process.env.REAL_CP_DB && process.env.REAL_CP_REQUIRED !== '1',
+    '需要真实 CP：设置 REAL_CP_DB 指向隔离库、REAL_CP_BASE_URL 指向非 mock 前端；' +
       '本用例验的是后端落库的快照，devmock 无法替代',
   )
 

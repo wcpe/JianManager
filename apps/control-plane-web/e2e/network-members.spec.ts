@@ -30,7 +30,7 @@ test.describe('群组服关系模型（mock 模式真浏览器）', () => {
 
     await page.getByRole('button', { name: '全部停止' }).click()
     await expect(page.getByText('成功 4 · 失败 0')).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr032-e2e-network-members.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'network-members-list.png'), fullPage: true })
   })
 
   test('拓扑视图与节点端口占用可见', async ({ page }) => {
@@ -42,7 +42,7 @@ test.describe('群组服关系模型（mock 模式真浏览器）', () => {
     await expect(page.locator('svg text').filter({ hasText: 'survival-lobby' })).toBeVisible()
     await expect(page.locator('svg text').filter({ hasText: 'creative-proxy' })).toBeVisible()
 
-    await page.screenshot({ path: path.join(artifactsDir, 'fr032-e2e-topology.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'network-topology.png'), fullPage: true })
 
     // 阶段 6 起 /nodes 是列表态（状态计数 + 节点卡片墙），分段工具只在详情态，
     // 故端口占用改走详情态深链。
@@ -56,6 +56,6 @@ test.describe('群组服关系模型（mock 模式真浏览器）', () => {
     await expect(page.getByText('分配范围：server 25565+（每段 100 个）')).toBeVisible()
     await expect(page.getByText('survival-proxy')).toBeVisible()
     await expect(page.getByText('survival-lobby')).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr032-e2e-node-ports.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'network-node-ports.png'), fullPage: true })
   })
 })

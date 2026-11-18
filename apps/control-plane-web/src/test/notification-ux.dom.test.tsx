@@ -106,13 +106,13 @@ describe('前端通知系统与 UX 标准化', () => {
     await user.click(screen.getByRole('button', { name: '新建' }))
     await user.click(await screen.findByText('新建文件'))
     const dialog = await screen.findByRole('dialog')
-    await user.type(within(dialog).getByRole('textbox'), 'fr030-toast.txt')
+    await user.type(within(dialog).getByRole('textbox'), 'notify-toast.txt')
     const confirm = within(dialog).getByRole('button', { name: '确认' })
     await waitFor(() => expect(confirm).toBeEnabled())
     await user.click(confirm)
 
     expect(await screen.findByText('创建成功')).toBeInTheDocument()
-    expect(await screen.findByText('fr030-toast.txt')).toBeInTheDocument()
+    expect(await screen.findByText('notify-toast.txt')).toBeInTheDocument()
   })
 
   it('创建实例错误显示 Toast，且向导不误关闭', async () => {
@@ -122,7 +122,7 @@ describe('前端通知系统与 UX 标准化', () => {
     // 预填节点（?node=1）后只剩「填名称 → 下一步 → 下一步 → 创建」四步。
     renderWithProviders(<CreateInstanceToastHarness />, { route: '/instances/new?node=1' })
 
-    await user.type(await screen.findByPlaceholderText('Survival Server'), 'fr030-create-fail')
+    await user.type(await screen.findByPlaceholderText('Survival Server'), 'notify-create-fail')
     await user.click(screen.getByRole('button', { name: /下一步/ })) // → 启动
     await user.click(screen.getByRole('button', { name: /下一步/ })) // → 确认
     await user.click(screen.getByRole('button', { name: '创建' }))

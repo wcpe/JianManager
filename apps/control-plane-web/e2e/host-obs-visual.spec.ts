@@ -15,10 +15,10 @@ import { login } from './helpers'
  * 3. 分挂载点磁盘——单值只覆盖根分区，`/var` 写满而 `/` 宽松时完全无感
  * 4. 整机 Top 进程 + 进程数——只看受管进程树会得出「我们都闲，为何机器卡」
  *
- * 截图落在 `test-results/fr513/`，作为验收证据附在交付里。
+ * 截图落在 `test-results/host-obs/`，作为验收证据附在交付里。
  */
 
-const SHOT_DIR = 'test-results/fr513'
+const SHOT_DIR = 'test-results/host-obs'
 
 /** 
  * 打开**经典**首页（三个资源球所在页），等外壳与页面就绪。

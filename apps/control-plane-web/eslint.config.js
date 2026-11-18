@@ -108,26 +108,8 @@ export default defineConfig([
   //
   //  不复用上面的规则数组：no-restricted-syntax 在 flat config 里是**覆盖**而非追加，
   //  同一 files 下写两次只有最后一次生效，所以这里得用独立的 files 作用域。
-  makeNoRefInCodeConfig([
-    // 规则出台前就已带编号的存量文件（.claude/rules/no-ref-in-code.md「执行范围」）。
-    // ****
-    // 这里列的是**豁免清单**，不是待清理清单：存量全量清理是独立一轮工作，
-    // 不在日常改动里顺手做。清理掉一个就从这里删一行，清单只应收紧不应变长。
-    'e2e/assistant-page-context-real.spec.ts',
-    // 与上面那个 spec 同一套真机验收：pw-real.tmp.config.ts 专门指向它，
-    // 两者共用同一组环境变量名。改名会断开既有验收调用方式，故一并豁免。
-    'pw-real.tmp.config.ts',
-    'e2e/bot-console-segment.spec.ts',
-    'e2e/bot-fleet-scale.spec.ts',
-    'e2e/bot-overview.spec.ts',
-    'e2e/host-obs-visual.spec.ts',
-    'e2e/instance-clone.spec.ts',
-    'e2e/network-members.spec.ts',
-    'e2e/node-jdk-install.spec.ts',
-    'e2e/ops-console-layout.spec.ts',
-    'e2e/provision-backend.spec.ts',
-    'e2e/provision-proxy.spec.ts',
-    'src/components/instances/InstanceBatchBar.dom.test.tsx',
-    'src/test/notification-ux.dom.test.tsx',
-  ]),
+  //
+  //  没有存量豁免清单：全量存量已在本轮清完（截图名、测试夹具名、真机验收的
+  //  环境变量名全部改成主题词）。以后新增的违规应当直接改掉，不要再往清单里加。
+  makeNoRefInCodeConfig(),
 ])

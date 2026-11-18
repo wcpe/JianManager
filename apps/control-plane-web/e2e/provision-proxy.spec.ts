@@ -24,12 +24,12 @@ test.describe('搭建代理（mock 模式真浏览器）', () => {
     // 默认 60s 预算在慢 runner 上会超时（是预算不够，不是断言失败）。
     test.setTimeout(120_000)
 
-    const name = `fr035-velocity-${Date.now()}`
+    const name = `provision-velocity-${Date.now()}`
 
     await page.goto('/instances')
     // 页名已随 i18n 统一由「实例管理」改为「服务器」（instances.title）。
     await expect(page.getByRole('heading', { name: '服务器', exact: true })).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr035-e2e-instances-before.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'provision-proxy-instances-before.png'), fullPage: true })
 
     // 【改】「搭建代理」在「更多新建方式」下拉菜单里（role=menuitem），不是页头 button。
 
@@ -45,7 +45,7 @@ test.describe('搭建代理（mock 模式真浏览器）', () => {
     await expect(page.getByText(/将下载: velocity-3\.3\.0-SNAPSHOT-196\.jar/)).toBeVisible()
     await expect(page.getByText(/temurin 21/i)).toBeVisible()
     await expect(page.getByRole('checkbox', { name: '正版校验 online-mode' })).toBeChecked()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr035-e2e-proxy-dialog.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'provision-proxy-dialog.png'), fullPage: true })
 
     await page.getByRole('button', { name: '搭建', exact: true }).click()
     await expect(page.getByText(/mock-(forwarding-secret|fwd-secret)/)).toBeVisible()
@@ -53,6 +53,6 @@ test.describe('搭建代理（mock 模式真浏览器）', () => {
     await page.getByRole('searchbox', { name: '搜索实例' }).fill(name)
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
     await expect(page.getByText('代理').last()).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr035-e2e-proxy-created.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'provision-proxy-created.png'), fullPage: true })
   })
 })

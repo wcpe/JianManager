@@ -9,9 +9,9 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import InstanceBatchBar, { type BatchSelectedInstance } from './InstanceBatchBar'
 
-const running: BatchSelectedInstance = { id: 101, name: 'fr058-running-a', status: 'RUNNING' }
-const runningB: BatchSelectedInstance = { id: 102, name: 'fr058-running-b', status: 'RUNNING' }
-const stopped: BatchSelectedInstance = { id: 103, name: 'fr058-stopped-c', status: 'STOPPED' }
+const running: BatchSelectedInstance = { id: 101, name: 'batch-running-a', status: 'RUNNING' }
+const runningB: BatchSelectedInstance = { id: 102, name: 'batch-running-b', status: 'RUNNING' }
+const stopped: BatchSelectedInstance = { id: 103, name: 'batch-stopped-c', status: 'STOPPED' }
 
 /** 渲染批量栏并返回用户交互对象与回调 spy。 */
 function renderBatchBar(selected: BatchSelectedInstance[]) {
@@ -41,14 +41,14 @@ describe('InstanceBatchBar（实例批量操作）', () => {
     const { user, onClear } = renderBatchBar([running, runningB])
 
     expect(screen.getByText('已选 2 个')).toBeInTheDocument()
-    await user.type(screen.getByPlaceholderText(/输入要下发到选中运行中实例的命令/), 'say fr058')
+    await user.type(screen.getByPlaceholderText(/输入要下发到选中运行中实例的命令/), 'say batch-probe')
     await user.click(screen.getByRole('button', { name: '下发命令' }))
 
     const dialog = await screen.findByRole('dialog', { name: '确认批量下发命令？' })
-    expect(within(dialog).getByText(/say fr058/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/say batch-probe/)).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: '执行' }))
 
-    await waitFor(() => expect(captured).toEqual({ action: 'command', ids: [101, 102], command: 'say fr058' }))
+    await waitFor(() => expect(captured).toEqual({ action: 'command', ids: [101, 102], command: 'say batch-probe' }))
     expect(onClear).toHaveBeenCalledTimes(1)
   })
 
@@ -94,7 +94,7 @@ describe('InstanceBatchBar（实例批量操作）', () => {
     await user.click(within(await screen.findByRole('dialog', { name: '确认批量下发命令？' })).getByRole('button', { name: '执行' }))
 
     const failDialog = await screen.findByRole('dialog', { name: '部分操作失败' })
-    expect(within(failDialog).getByText('fr058-stopped-c')).toBeInTheDocument()
+    expect(within(failDialog).getByText('batch-stopped-c')).toBeInTheDocument()
     expect(within(failDialog).getByText('实例未运行，无法下发命令')).toBeInTheDocument()
     expect(onRetainFailed).toHaveBeenCalledWith([103])
   })

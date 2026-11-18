@@ -26,7 +26,7 @@ test.describe('一键复制子服（mock 模式真浏览器）', () => {
     // 全量跑时资源竞争会把它推过去，表现为偶发失败。显式给预算。
     test.setTimeout(120_000)
 
-    const name = `fr036-clone-${Date.now()}`
+    const name = `clone-name-${Date.now()}`
 
     // 复制目标不在默认首页的数据中，显式按名称查询以验证真实分页搜索下的复制入口。
     await page.goto('/instances?view=card&q=creative-1')
@@ -34,7 +34,7 @@ test.describe('一键复制子服（mock 模式真浏览器）', () => {
     await expect(page.getByRole('heading', { name: '服务器', exact: true })).toBeVisible()
     const sourceCard = instanceCard(page, 'creative-1')
     await expect(sourceCard).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr036-e2e-instances-before.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'clone-instances-before.png'), fullPage: true })
 
     await sourceCard.getByRole('button', { name: '更多操作' }).click()
     await page.getByRole('menuitem', { name: '复制', exact: true }).click()
@@ -50,13 +50,13 @@ test.describe('一键复制子服（mock 模式真浏览器）', () => {
     await form.getByRole('button', { name: '预检', exact: true }).click()
     await expect(page.getByText(/将分配：端口 25566\/25566，目录 \/srv\/instances\//)).toBeVisible()
     await expect(page.getByText(/将排除/)).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr036-e2e-clone-dialog.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'clone-dialog.png'), fullPage: true })
 
     await form.getByRole('button', { name: '复制', exact: true }).click()
     await expect(page.getByRole('heading', { name: '复制子服 — creative-1' })).toHaveCount(0)
     await page.getByRole('searchbox', { name: '搜索实例' }).fill(name)
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
     await expect(page.getByText('后端').last()).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr036-e2e-clone-created.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'clone-created.png'), fullPage: true })
   })
 })

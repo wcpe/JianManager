@@ -22,7 +22,7 @@ test.describe('JDK 与运行时管理（mock 模式真浏览器）', () => {
     await expect(page.getByRole('button', { name: '已登记' })).toBeVisible({ timeout: 90_000 })
     await expect(page.getByText('/opt/jdks/temurin-21')).toBeVisible()
     await expect(page.getByRole('button', { name: /托管\s*2/ })).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr033-e2e-jdk-list.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'jdk-list.png'), fullPage: true })
 
     await page.getByRole('button', { name: '登记已有' }).click()
     await expect(page.getByLabel('标记为 Worker 托管（仅作记录）')).toBeVisible()
@@ -32,12 +32,12 @@ test.describe('JDK 与运行时管理（mock 模式真浏览器）', () => {
     await page.getByRole('button', { name: '保存', exact: true }).click() // exact：同页有「保存配置」
     await expect(page.getByText('/opt/jdks/e2e-java-21')).toBeVisible()
     await expect(page.getByRole('button', { name: /外部\s*1/ })).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr033-e2e-jdk-register.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'jdk-register.png'), fullPage: true })
 
     await page.getByRole('button', { name: '一键下载' }).click()
     await expect(page.getByText(/将安装/)).toBeVisible()
     await page.getByRole('button', { name: '下载安装' }).click()
     await expect(page.getByText('/opt/jdks/Temurin-21')).toBeVisible()
-    await page.screenshot({ path: path.join(artifactsDir, 'fr033-e2e-jdk-install.png'), fullPage: true })
+    await page.screenshot({ path: path.join(artifactsDir, 'jdk-install.png'), fullPage: true })
   })
 })
