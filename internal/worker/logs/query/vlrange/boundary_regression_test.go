@@ -21,7 +21,7 @@ import (
 )
 
 // 同戳组按合法但任意的时间并列顺序返回，每次请求反转，不能依赖 VL 的隐含次序。
-func pr61BoundaryService(t *testing.T, n int, merged, reverse bool) (*query.Service, query.QueryRequest, []string, func() []fakeVLWindow) {
+func boundaryService(t *testing.T, n int, merged, reverse bool) (*query.Service, query.QueryRequest, []string, func() []fakeVLWindow) {
 	t.Helper()
 	day := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
 	stamp := day.Add(10 * time.Hour)
@@ -145,14 +145,14 @@ func pr61BoundaryService(t *testing.T, n int, merged, reverse bool) (*query.Serv
 		limit = 1000
 	}
 	req := query.QueryRequest{Budget: query.Budget{Limit: limit}, TimeRange: query.TimeRange{FromUTC: day.Format(time.RFC3339Nano), ToUTC: day.Add(24 * time.Hour).Format(time.RFC3339Nano)}}
-	return query.NewService(query.NewPlanner(cat, nil), client, "pr61"), req, want, func() []fakeVLWindow { mu.Lock(); defer mu.Unlock(); return append([]fakeVLWindow(nil), windows...) }
+	return query.NewService(query.NewPlanner(cat, nil), client, "boundary"), req, want, func() []fakeVLWindow { mu.Lock(); defer mu.Unlock(); return append([]fakeVLWindow(nil), windows...) }
 }
 
-func TestPR61BoundaryGroupsArbitraryOrder(t *testing.T) {
+func TestBoundaryGroupsArbitraryOrder(t *testing.T) {
 	for _, n := range []int{21, 301, 2101} {
 		for _, reverse := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%d/%v", n, reverse), func(t *testing.T) {
-				svc, req, want, windows := pr61BoundaryService(t, n, n > 21, reverse)
+				svc, req, want, windows := boundaryService(t, n, n > 21, reverse)
 				var got []string
 				exhausted := false
 				for page := 0; page < 10; page++ {
@@ -183,8 +183,8 @@ func TestPR61BoundaryGroupsArbitraryOrder(t *testing.T) {
 	}
 }
 
-func TestPR61BoundaryBudgetCannotAdvance(t *testing.T) {
-	svc, req, _, windows := pr61BoundaryService(t, 301, true, true)
+func TestBoundaryBudgetCannotAdvance(t *testing.T) {
+	svc, req, _, windows := boundaryService(t, 301, true, true)
 	req.Budget.MaxBytes = 128 << 10
 	// 初查足够读满 300 行，剩余额度不足完整重读同戳组。
 	resp := svc.Search(context.Background(), req)
@@ -197,8 +197,8 @@ func TestPR61BoundaryBudgetCannotAdvance(t *testing.T) {
 }
 
 // 高时间分辨率控制：互异时间页不额外补查，保留正常一次查询路径。
-func TestPR61DistinctQueryHasOneRequestPerPage(t *testing.T) {
-	svc, req, _, calls := pr61CursorFixture(t, false)
+func TestDistinctQueryHasOneRequestPerPage(t *testing.T) {
+	svc, req, _, calls := cursorFixture(t, false)
 	resp := svc.Search(context.Background(), req)
 	require.Nil(t, resp.Err)
 	require.True(t, resp.Coverage.Complete)

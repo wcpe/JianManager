@@ -22,7 +22,7 @@ import (
 // 仅建模查询明确声明的排序、窗口与上限，不声称复刻真实 VL 未承诺的并列次序。
 // 并列输入特意使用最有利的复合全序，稳定保留它仍是合法的仅时间 top-K 输出。
 // 所有夹具都属于同一已发布范围，因此选择器过滤与水位过滤不改变结果集合。
-func pr61CursorFixture(t *testing.T, tied bool) (*query.Service, query.QueryRequest, []string, func() []string) {
+func cursorFixture(t *testing.T, tied bool) (*query.Service, query.QueryRequest, []string, func() []string) {
 	t.Helper()
 	day := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
 	rows := make([]fakeVLRow, 0, 21)
@@ -140,19 +140,19 @@ func pr61CursorFixture(t *testing.T, tied bool) (*query.Service, query.QueryRequ
 		t.Fatal(err)
 	}
 	req := query.QueryRequest{
-		RequestID: "pr61-cursor", Budget: query.Budget{Limit: 5},
+		RequestID: "cursor-pagination", Budget: query.Budget{Limit: 5},
 		TimeRange: query.TimeRange{FromUTC: day.Format(time.RFC3339Nano), ToUTC: day.Add(24 * time.Hour).Format(time.RFC3339Nano)},
 	}
-	return query.NewService(query.NewPlanner(cat, nil), client, "pr61-isolation"), req, want, func() []string {
+	return query.NewService(query.NewPlanner(cat, nil), client, "cursor-isolation"), req, want, func() []string {
 		mu.Lock()
 		defer mu.Unlock()
 		return append([]string(nil), calls...)
 	}
 }
 
-func pr61CheckAllCursorPages(t *testing.T, tied bool) {
+func assertAllCursorPages(t *testing.T, tied bool) {
 	t.Helper()
-	svc, req, want, calls := pr61CursorFixture(t, tied)
+	svc, req, want, calls := cursorFixture(t, tied)
 	var got []string
 	var sizes []int
 	var last query.SearchResponse
@@ -183,11 +183,11 @@ func pr61CheckAllCursorPages(t *testing.T, tied bool) {
 }
 
 // 对抗用例：大于单次 top-K 的同时间戳组必须全部可达。
-func TestPR61ReproSameTimestampPagination(t *testing.T) {
-	pr61CheckAllCursorPages(t, true)
+func TestSameTimestampPagination(t *testing.T) {
+	assertAllCursorPages(t, true)
 }
 
 // 反证控制：时间戳互异时，窗口收窄与额外一条前瞻应足以覆盖所有页。
-func TestPR61ReproDistinctTimestampControl(t *testing.T) {
-	pr61CheckAllCursorPages(t, false)
+func TestDistinctTimestampControl(t *testing.T) {
+	assertAllCursorPages(t, false)
 }

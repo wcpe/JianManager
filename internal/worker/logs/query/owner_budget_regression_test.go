@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
-func TestPR61MergedFanoutCountsOriginalRanges(t *testing.T) {
+func TestMergedFanoutCountsOriginalRanges(t *testing.T) {
 	for _, maxFanout := range []uint32{0, 1, 2} {
 		t.Run(fmt.Sprint(maxFanout), func(t *testing.T) {
 			client := &fakeMergedClient{}
@@ -33,7 +33,7 @@ func TestPR61MergedFanoutCountsOriginalRanges(t *testing.T) {
 }
 
 // 热层未完整12点组不得借冷层11点行推进；其它owner的14点安全行仍参与top-N。
-func TestPR61OwnerMergeUsesNewestIncompleteFence(t *testing.T) {
+func TestOwnerMergeUsesNewestIncompleteFence(t *testing.T) {
 	cat := catalog.New(nil)
 	for _, owner := range []catalog.Owner{catalog.OwnerHot, catalog.OwnerCold} {
 		key := catalog.PartitionKey{StorageNamespace: string(owner), UTCDay: "2026-09-22"}

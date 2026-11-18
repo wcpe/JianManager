@@ -13,8 +13,8 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// pr61Worker 通过真实适配映射响应，观测协调器下发额度。
-type pr61Worker struct {
+// recordingWorker 通过真实适配映射响应，观测协调器下发额度。
+type recordingWorker struct {
 	*fakeWorker
 	searchPB *workerpb.LogSearchResponse
 	statsPB  *workerpb.LogStatsResponse
@@ -23,7 +23,7 @@ type pr61Worker struct {
 	requests []WorkerSearchRequest
 }
 
-func (w *pr61Worker) Search(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error) {
+func (w *recordingWorker) Search(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error) {
 	w.muBudget.Lock()
 	w.budgets = append(w.budgets, req.Budget.MaxBytes)
 	w.requests = append(w.requests, req)
@@ -34,7 +34,7 @@ func (w *pr61Worker) Search(ctx context.Context, req WorkerSearchRequest) (*Work
 	}
 	return resp, err
 }
-func (w *pr61Worker) Stats(ctx context.Context, req WorkerSearchRequest, dims []string, bucket string) (*WorkerStatsResponse, error) {
+func (w *recordingWorker) Stats(ctx context.Context, req WorkerSearchRequest, dims []string, bucket string) (*WorkerStatsResponse, error) {
 	w.muBudget.Lock()
 	w.budgets = append(w.budgets, req.Budget.MaxBytes)
 	w.requests = append(w.requests, req)
@@ -45,7 +45,7 @@ func (w *pr61Worker) Stats(ctx context.Context, req WorkerSearchRequest, dims []
 	}
 	return resp, err
 }
-func pr61Coverage(partial bool) *workerpb.LogCoverage {
+func coverageWith(partial bool) *workerpb.LogCoverage {
 	return &workerpb.LogCoverage{Complete: !partial, PartialReasons: func() []string {
 		if partial {
 			return []string{"BUDGET_EXCEEDED"}
@@ -54,7 +54,7 @@ func pr61Coverage(partial bool) *workerpb.LogCoverage {
 	}(), EnumerationState: workerpb.LogEnumerationState_LOG_ENUMERATION_OPEN, Targets: []*workerpb.LogCoverageTarget{{TargetId: "inst:1", State: workerpb.LogCoverageState_LOG_COVERAGE_SUCCESS}}}
 }
 
-// pr61ExactQuality 是 pr61Worker 替身的默认上报质量，对齐真实 Worker 的行为
+// exactQualityForFake 是 recordingWorker 替身的默认上报质量，对齐真实 Worker 的行为
 // （planner 以上报 duplicate=exact / stats=exact 为初值，见 fake_test.go 的同名说明）。
 //
 // 为什么替身必须显式给：CP 的聚合现在是 fail-closed 的——proto 缺省 Quality 会被
@@ -62,16 +62,16 @@ func pr61Coverage(partial bool) *workerpb.LogCoverage {
 // 变成 unspecified。那些只关心 gaps / budget 的用例若不自报 exact，断言的 exact/partial
 // 就会被「未上报」这条完全无关的路径改写。未上报本身的拦截语义由
 // TestExportBlocksWhenAnyWorkerOmitsQuality 与 TestExportBlocksWhenWorkerOmitsQuality 覆盖。
-func pr61ExactQuality() *workerpb.LogQuality {
+func exactQualityForFake() *workerpb.LogQuality {
 	return &workerpb.LogQuality{
 		DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_EXACT,
 		StatsQuality:     workerpb.LogStatsQuality_LOG_QUALITY_STATS_EXACT,
 	}
 }
-func pr61Query() Query {
+func budgetQuery() Query {
 	return Query{AuthorizedTargetIDs: []string{"inst:1"}, PrincipalKey: "user:1", PermissionScope: "scope:1", FromUTC: "2026-10-08T00:00:00Z", ToUTC: "2026-10-09T00:00:00Z", Budget: QueryBudget{Limit: 10, MaxBytes: 10000}}
 }
-func pr61Coord(workers map[string]*pr61Worker) *Coordinator {
+func newCoordinatorWith(workers map[string]*recordingWorker) *Coordinator {
 	d := newFakeDialer()
 	r := &fakeTargetResolver{}
 	for id, w := range workers {
@@ -80,12 +80,12 @@ func pr61Coord(workers map[string]*pr61Worker) *Coordinator {
 	}
 	return New(r, d)
 }
-func TestPR61SearchTopLevelCutOpen(t *testing.T) {
-	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(true), Quality: &workerpb.LogQuality{DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_EXACT, StatsQuality: workerpb.LogStatsQuality_LOG_QUALITY_STATS_PARTIAL}, Exhausted: true, Items: []*workerpb.LogEvent{{EventId: "one", EventTimeUtc: "2026-10-08T12:00:00Z"}}}}
+func TestSearchTopLevelCutOpen(t *testing.T) {
+	w := &recordingWorker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(true), Quality: &workerpb.LogQuality{DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_EXACT, StatsQuality: workerpb.LogStatsQuality_LOG_QUALITY_STATS_PARTIAL}, Exhausted: true, Items: []*workerpb.LogEvent{{EventId: "one", EventTimeUtc: "2026-10-08T12:00:00Z"}}}}
 	for _, fast := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "fast"}[fast], func(t *testing.T) {
-			c := pr61Coord(map[string]*pr61Worker{"w1": w})
-			q := pr61Query()
+			c := newCoordinatorWith(map[string]*recordingWorker{"w1": w})
+			q := budgetQuery()
 			q.Fast = fast
 			for i := 0; i < 2; i++ {
 				resp, err := c.Search(context.Background(), q)
@@ -100,26 +100,26 @@ func TestPR61SearchTopLevelCutOpen(t *testing.T) {
 	}
 }
 
-// TestPR61StatsTopLevelPartial 锁定「coverage 不完整时顶层 stats 质量必须降为 partial」这条兜底规则。
-// 替身必须自报 exact：该规则的前提是 Worker 已表态 exact（见 pr61ExactQuality）。
-func TestPR61StatsTopLevelPartial(t *testing.T) {
-	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, statsPB: &workerpb.LogStatsResponse{Coverage: pr61Coverage(true), Quality: pr61ExactQuality()}}
-	resp, err := pr61Coord(map[string]*pr61Worker{"w1": w}).Stats(context.Background(), StatsQuery{Query: pr61Query()})
+// TestStatsTopLevelPartial 锁定「coverage 不完整时顶层 stats 质量必须降为 partial」这条兜底规则。
+// 替身必须自报 exact：该规则的前提是 Worker 已表态 exact（见 exactQualityForFake）。
+func TestStatsTopLevelPartial(t *testing.T) {
+	w := &recordingWorker{fakeWorker: &fakeWorker{workerID: "w1"}, statsPB: &workerpb.LogStatsResponse{Coverage: coverageWith(true), Quality: exactQualityForFake()}}
+	resp, err := newCoordinatorWith(map[string]*recordingWorker{"w1": w}).Stats(context.Background(), StatsQuery{Query: budgetQuery()})
 	require.NoError(t, err)
 	require.False(t, resp.Coverage.Complete)
 	require.Contains(t, resp.Coverage.PartialReasons, "BUDGET_EXCEEDED")
 	require.Equal(t, StatsQPartial, resp.Quality.StatsQuality)
 }
-func TestPR61GapProtoNormalFastCache(t *testing.T) {
+func TestGapProtoNormalFastCache(t *testing.T) {
 	gap := &workerpb.IngestPositionGap{StorageNamespace: "inst:1/stdout", From: 9007199254740993, To: ^uint64(0), ReasonCode: "PERMANENTLY_LOST", Operator: "ops", AtUtc: "2026-10-08T12:00:00Z"}
 	for _, fast := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal", true: "fast"}[fast], func(t *testing.T) {
-			workers := map[string]*pr61Worker{}
+			workers := map[string]*recordingWorker{}
 			for _, id := range []string{"w1", "w2"} {
-				workers[id] = &pr61Worker{fakeWorker: &fakeWorker{workerID: id}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Quality: pr61ExactQuality(), Exhausted: true, IngestPositionGaps: []*workerpb.IngestPositionGap{gap}}}
+				workers[id] = &recordingWorker{fakeWorker: &fakeWorker{workerID: id}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(false), Quality: exactQualityForFake(), Exhausted: true, IngestPositionGaps: []*workerpb.IngestPositionGap{gap}}}
 			}
-			c := pr61Coord(workers)
-			q := pr61Query()
+			c := newCoordinatorWith(workers)
+			q := budgetQuery()
 			q.Fast = fast
 			for i := 0; i < 2; i++ {
 				resp, err := c.Search(context.Background(), q)
@@ -149,16 +149,16 @@ func TestPR61GapProtoNormalFastCache(t *testing.T) {
 		})
 	}
 }
-func TestPR61BudgetReservation(t *testing.T) {
+func TestBudgetReservation(t *testing.T) {
 	for _, amount := range []uint64{1, 19} {
-		workers := map[string]*pr61Worker{}
+		workers := map[string]*recordingWorker{}
 		for _, id := range []string{"w1", "w2", "w3"} {
-			workers[id] = &pr61Worker{fakeWorker: &fakeWorker{workerID: id}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Exhausted: true}}
+			workers[id] = &recordingWorker{fakeWorker: &fakeWorker{workerID: id}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(false), Exhausted: true}}
 		}
-		q := pr61Query()
+		q := budgetQuery()
 		q.Fast = true
 		q.Budget.MaxBytes = amount
-		_, err := pr61Coord(workers).Search(context.Background(), q)
+		_, err := newCoordinatorWith(workers).Search(context.Background(), q)
 		require.NoError(t, err)
 		var sum uint64
 		for _, w := range workers {
@@ -181,10 +181,10 @@ func TestPR61BudgetReservation(t *testing.T) {
 //
 // 历史形态（本用例改写前）断言「不同主体不得互命中」，那是把身份放进键时的过度保守设计；
 // 身份入键会使预热条目永不命中，与「限制宽窗查询对整机的抢占」的初衷相反（PR review CP-1）。
-func TestPR61CacheAuthorizationIsolation(t *testing.T) {
-	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Exhausted: true}}
-	c := pr61Coord(map[string]*pr61Worker{"w1": w})
-	q := pr61Query()
+func TestCacheAuthorizationIsolation(t *testing.T) {
+	w := &recordingWorker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(false), Exhausted: true}}
+	c := newCoordinatorWith(map[string]*recordingWorker{"w1": w})
+	q := budgetQuery()
 	q.Fast = true
 	first, err := c.Search(context.Background(), q)
 	require.NoError(t, err)
@@ -209,20 +209,20 @@ func TestPR61CacheAuthorizationIsolation(t *testing.T) {
 	require.Equal(t, "user:2", different.View.PrincipalKey)
 }
 
-func TestPR61DedupeCannotOverwriteConflictQuality(t *testing.T) {
+func TestDedupeCannotOverwriteConflictQuality(t *testing.T) {
 	for _, sameID := range []bool{true, false} {
 		t.Run(fmt.Sprint(sameID), func(t *testing.T) {
-			workers := map[string]*pr61Worker{}
+			workers := map[string]*recordingWorker{}
 			for _, id := range []string{"w1", "w2"} {
 				eventID := id
 				if sameID {
 					eventID = "same"
 				}
-				workers[id] = &pr61Worker{fakeWorker: &fakeWorker{workerID: id}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Exhausted: true, Quality: &workerpb.LogQuality{DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_CONFLICT}, Items: []*workerpb.LogEvent{{EventId: eventID, CanonicalContentHash: id, EventTimeUtc: "2026-10-08T12:00:00Z"}}}}
+				workers[id] = &recordingWorker{fakeWorker: &fakeWorker{workerID: id}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(false), Exhausted: true, Quality: &workerpb.LogQuality{DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_CONFLICT}, Items: []*workerpb.LogEvent{{EventId: eventID, CanonicalContentHash: id, EventTimeUtc: "2026-10-08T12:00:00Z"}}}}
 			}
-			q := pr61Query()
+			q := budgetQuery()
 			q.Fast = true
-			resp, err := pr61Coord(workers).Search(context.Background(), q)
+			resp, err := newCoordinatorWith(workers).Search(context.Background(), q)
 			require.NoError(t, err)
 			require.Equal(t, DupConflict, resp.Quality.DuplicateQuality)
 			require.Len(t, resp.Items, 2, "同事件不同内容必须保留，不得重写成未决质量")
@@ -230,27 +230,27 @@ func TestPR61DedupeCannotOverwriteConflictQuality(t *testing.T) {
 	}
 }
 
-func TestPR61ConflictQualityCannotBeOverwrittenByPartialTarget(t *testing.T) {
-	w1 := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Quality: &workerpb.LogQuality{DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_CONFLICT}, Exhausted: true}}
-	w2 := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w2"}, searchPB: &workerpb.LogSearchResponse{Coverage: &workerpb.LogCoverage{Complete: false, Targets: []*workerpb.LogCoverageTarget{{TargetId: "inst:1", State: workerpb.LogCoverageState_LOG_COVERAGE_PARTIAL}}}, Exhausted: true}}
-	q := pr61Query()
+func TestConflictQualityCannotBeOverwrittenByPartialTarget(t *testing.T) {
+	w1 := &recordingWorker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(false), Quality: &workerpb.LogQuality{DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_CONFLICT}, Exhausted: true}}
+	w2 := &recordingWorker{fakeWorker: &fakeWorker{workerID: "w2"}, searchPB: &workerpb.LogSearchResponse{Coverage: &workerpb.LogCoverage{Complete: false, Targets: []*workerpb.LogCoverageTarget{{TargetId: "inst:1", State: workerpb.LogCoverageState_LOG_COVERAGE_PARTIAL}}}, Exhausted: true}}
+	q := budgetQuery()
 	q.Fast = true
-	resp, err := pr61Coord(map[string]*pr61Worker{"w1": w1, "w2": w2}).Search(context.Background(), q)
+	resp, err := newCoordinatorWith(map[string]*recordingWorker{"w1": w1, "w2": w2}).Search(context.Background(), q)
 	require.NoError(t, err)
 	require.Equal(t, DupConflict, resp.Quality.DuplicateQuality)
 	require.False(t, resp.Coverage.Complete)
 }
 
-func TestPR61GapSourceGenerationNotMerged(t *testing.T) {
+func TestGapSourceGenerationNotMerged(t *testing.T) {
 	gaps := []*workerpb.IngestPositionGap{
 		{StorageNamespace: "inst:1/shared", From: 1, To: 3, ReasonCode: "PERMANENTLY_LOST", LogSourceId: "inst:1/file-a", SourceGeneration: "g1"},
 		{StorageNamespace: "inst:1/shared", From: 1, To: 3, ReasonCode: "PERMANENTLY_LOST", LogSourceId: "inst:1/file-a", SourceGeneration: "g2"},
 		{StorageNamespace: "inst:1/shared", From: 1, To: 3, ReasonCode: "PERMANENTLY_LOST", LogSourceId: "inst:1/file-b", SourceGeneration: "g1"},
 		{StorageNamespace: "inst:1/shared", From: 1, To: 3, ReasonCode: "PERMANENTLY_LOST"},
 	}
-	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Quality: pr61ExactQuality(), Exhausted: true, IngestPositionGaps: gaps}}
-	c := pr61Coord(map[string]*pr61Worker{"w1": w})
-	q := pr61Query()
+	w := &recordingWorker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(false), Quality: exactQualityForFake(), Exhausted: true, IngestPositionGaps: gaps}}
+	c := newCoordinatorWith(map[string]*recordingWorker{"w1": w})
+	q := budgetQuery()
 	q.Fast = true
 	for i := 0; i < 2; i++ {
 		resp, err := c.Search(context.Background(), q)
@@ -276,16 +276,16 @@ func TestPR61GapSourceGenerationNotMerged(t *testing.T) {
 	require.NotContains(t, wire, "source_generation")
 }
 
-func TestPR61ViewReuseHonorsCurrentCostBudget(t *testing.T) {
+func TestViewReuseHonorsCurrentCostBudget(t *testing.T) {
 	for _, stats := range []bool{false, true} {
 		for _, fast := range []bool{false, true} {
 			t.Run(fmt.Sprintf("stats=%t/fast=%t", stats, fast), func(t *testing.T) {
-				workers := map[string]*pr61Worker{}
+				workers := map[string]*recordingWorker{}
 				for _, id := range []string{"w1", "w2"} {
-					workers[id] = &pr61Worker{fakeWorker: &fakeWorker{workerID: id}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Exhausted: true}, statsPB: &workerpb.LogStatsResponse{Coverage: pr61Coverage(false)}}
+					workers[id] = &recordingWorker{fakeWorker: &fakeWorker{workerID: id}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(false), Exhausted: true}, statsPB: &workerpb.LogStatsResponse{Coverage: coverageWith(false)}}
 				}
-				c := pr61Coord(workers)
-				q := pr61Query()
+				c := newCoordinatorWith(workers)
+				q := budgetQuery()
 				q.Fast = fast
 				view, err := c.CreateView(context.Background(), q)
 				require.NoError(t, err)
@@ -322,17 +322,17 @@ func TestPR61ViewReuseHonorsCurrentCostBudget(t *testing.T) {
 	}
 }
 
-func TestPR61StatsBudgetAndFanoutReservation(t *testing.T) {
+func TestStatsBudgetAndFanoutReservation(t *testing.T) {
 	for _, fanout := range []uint32{0, 1, 2} {
 		t.Run(fmt.Sprint(fanout), func(t *testing.T) {
-			workers := map[string]*pr61Worker{}
+			workers := map[string]*recordingWorker{}
 			for _, id := range []string{"w1", "w2", "w3"} {
-				workers[id] = &pr61Worker{fakeWorker: &fakeWorker{workerID: id}, statsPB: &workerpb.LogStatsResponse{Coverage: pr61Coverage(false)}}
+				workers[id] = &recordingWorker{fakeWorker: &fakeWorker{workerID: id}, statsPB: &workerpb.LogStatsResponse{Coverage: coverageWith(false)}}
 			}
-			q := pr61Query()
+			q := budgetQuery()
 			q.Budget.MaxBytes = 2
 			q.Budget.MaxFanout = fanout
-			resp, err := pr61Coord(workers).Stats(context.Background(), StatsQuery{Query: q})
+			resp, err := newCoordinatorWith(workers).Stats(context.Background(), StatsQuery{Query: q})
 			require.NoError(t, err)
 			require.False(t, resp.Coverage.Complete)
 			require.True(t, resp.BudgetCut)
@@ -356,7 +356,7 @@ func TestPR61StatsBudgetAndFanoutReservation(t *testing.T) {
 		})
 	}
 }
-func TestPR61ReserveDefaultAndUint64(t *testing.T) {
+func TestReserveDefaultAndUint64(t *testing.T) {
 	order := []string{"w1", "w2", "w3"}
 	for _, n := range []uint64{0, 1, 19, ^uint64(0)} {
 		budget := QueryBudget{MaxBytes: n}
@@ -374,28 +374,28 @@ func TestPR61ReserveDefaultAndUint64(t *testing.T) {
 	}
 }
 
-// pr61BlockedWorker 用取消屏障验证未开始的路由不再发起请求。
-type pr61BlockedWorker struct {
+// blockedWorker 用取消屏障验证未开始的路由不再发起请求。
+type blockedWorker struct {
 	*fakeWorker
 	started, stopped *atomic.Int32
 }
 
-func (w *pr61BlockedWorker) Search(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error) {
+func (w *blockedWorker) Search(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error) {
 	w.started.Add(1)
 	defer w.stopped.Add(1)
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
-func TestPR61BudgetTimeoutCancelsInflight(t *testing.T) {
+func TestBudgetTimeoutCancelsInflight(t *testing.T) {
 	var started, stopped atomic.Int32
 	d := newFakeDialer()
 	r := &fakeTargetResolver{}
 	for i := 0; i < 16; i++ {
 		id := fmt.Sprintf("worker-%02d", i)
 		r.targets = append(r.targets, TargetInfo{ID: "inst:1@" + id, WorkerTargetID: "inst:1", WorkerID: id, Readiness: ReadyOnline})
-		d.clients[id] = &pr61BlockedWorker{fakeWorker: &fakeWorker{workerID: id}, started: &started, stopped: &stopped}
+		d.clients[id] = &blockedWorker{fakeWorker: &fakeWorker{workerID: id}, started: &started, stopped: &stopped}
 	}
-	q := pr61Query()
+	q := budgetQuery()
 	q.Fast = true
 	q.Budget.TimeoutMS = 50
 	_, err := New(r, d).Search(context.Background(), q)
@@ -404,18 +404,18 @@ func TestPR61BudgetTimeoutCancelsInflight(t *testing.T) {
 	require.LessOrEqual(t, started.Load(), int32(8), "并发请求必须有界；超时后的排队任务不能开始")
 	require.Eventually(t, func() bool { return stopped.Load() == started.Load() }, time.Second, time.Millisecond, "所有在途读取必须收到取消")
 }
-func TestPR61MultiWorkerCutCannotCrossUnknownGroup(t *testing.T) {
+func TestMultiWorkerCutCannotCrossUnknownGroup(t *testing.T) {
 	for _, safeRows := range []bool{true, false} {
 		for _, cut := range []bool{true, false} {
 			t.Run(fmt.Sprintf("safe=%t/cut=%t", safeRows, cut), func(t *testing.T) {
-				w1 := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(cut), Exhausted: !cut}}
+				w1 := &recordingWorker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(cut), Exhausted: !cut}}
 				if safeRows {
 					w1.searchPB.Items = []*workerpb.LogEvent{{EventId: "safe-13", EventTimeUtc: "2026-10-08T13:00:00Z"}}
 				}
-				w2 := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w2"}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Exhausted: true, Items: []*workerpb.LogEvent{{EventId: "older-11", EventTimeUtc: "2026-10-08T11:00:00Z"}}}}
-				q := pr61Query()
+				w2 := &recordingWorker{fakeWorker: &fakeWorker{workerID: "w2"}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(false), Exhausted: true, Items: []*workerpb.LogEvent{{EventId: "older-11", EventTimeUtc: "2026-10-08T11:00:00Z"}}}}
+				q := budgetQuery()
 				q.Fast = true
-				resp, err := pr61Coord(map[string]*pr61Worker{"w1": w1, "w2": w2}).Search(context.Background(), q)
+				resp, err := newCoordinatorWith(map[string]*recordingWorker{"w1": w1, "w2": w2}).Search(context.Background(), q)
 				require.NoError(t, err)
 				if cut {
 					require.Empty(t, resp.Items, "另一Worker的11点行不能越过缺少可信wire边界的12点组")
@@ -431,13 +431,13 @@ func TestPR61MultiWorkerCutCannotCrossUnknownGroup(t *testing.T) {
 	}
 }
 
-// pr61WindowWorker 在复合游标过滤前按真实闭开窗口读取。
-type pr61WindowWorker struct {
+// windowedWorker 在复合游标过滤前按真实闭开窗口读取。
+type windowedWorker struct {
 	cursorWorker
 	calls int
 }
 
-func (w *pr61WindowWorker) Search(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error) {
+func (w *windowedWorker) Search(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error) {
 	w.calls++
 	copyWorker := w.cursorWorker
 	copyWorker.items = nil
@@ -450,10 +450,10 @@ func (w *pr61WindowWorker) Search(ctx context.Context, req WorkerSearchRequest) 
 	}
 	return copyWorker.Search(ctx, req)
 }
-func TestPR61MinuteCacheExpandedWindowDoesNotSkipNewRows(t *testing.T) {
+func TestMinuteCacheExpandedWindowDoesNotSkipNewRows(t *testing.T) {
 	for _, fast := range []bool{false, true} {
 		t.Run(fmt.Sprint(fast), func(t *testing.T) {
-			w := &pr61WindowWorker{cursorWorker: cursorWorker{id: "w1", target: "inst:1", items: []Event{
+			w := &windowedWorker{cursorWorker: cursorWorker{id: "w1", target: "inst:1", items: []Event{
 				mkEvent("new-15", "s", "g", 15, "2026-10-08T12:00:15Z", "INFO", "new"),
 				mkEvent("old-09", "s", "g", 9, "2026-10-08T12:00:09Z", "INFO", "old"),
 				mkEvent("old-08", "s", "g", 8, "2026-10-08T12:00:08Z", "INFO", "old"),
@@ -462,7 +462,7 @@ func TestPR61MinuteCacheExpandedWindowDoesNotSkipNewRows(t *testing.T) {
 			d := newFakeDialer()
 			d.clients["w1"] = w
 			c := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "inst:1", WorkerID: "w1", Readiness: ReadyOnline}}}, d)
-			q := pr61Query()
+			q := budgetQuery()
 			q.Fast = fast
 			q.Budget.Limit = 2
 			q.FromUTC = "2026-10-08T11:00:00Z"
@@ -493,11 +493,11 @@ func TestPR61MinuteCacheExpandedWindowDoesNotSkipNewRows(t *testing.T) {
 	}
 }
 
-func TestPR61NormalPaginationKeepsCursor(t *testing.T) {
-	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Exhausted: false, NextCursor: "normal-next", Items: []*workerpb.LogEvent{{EventId: "one", EventTimeUtc: "2026-10-08T12:00:00Z"}}}}
-	q := pr61Query()
+func TestNormalPaginationKeepsCursor(t *testing.T) {
+	w := &recordingWorker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: coverageWith(false), Exhausted: false, NextCursor: "normal-next", Items: []*workerpb.LogEvent{{EventId: "one", EventTimeUtc: "2026-10-08T12:00:00Z"}}}}
+	q := budgetQuery()
 	q.Fast = true
-	resp, err := pr61Coord(map[string]*pr61Worker{"w1": w}).Search(context.Background(), q)
+	resp, err := newCoordinatorWith(map[string]*recordingWorker{"w1": w}).Search(context.Background(), q)
 	require.NoError(t, err)
 	require.False(t, resp.BudgetCut)
 	require.NotEmpty(t, resp.NextCursor)

@@ -7,7 +7,7 @@ import "context"
 // # 为什么要单独一个文件
 //
 // WorkerClient 接口新增了 Streams / StreamFieldNames / StreamFieldValues。
-// 包里原有十几个手工 fake（cursorWorker / pagedWorker / pr61WindowWorker …），
+// 包里原有十几个手工 fake（cursorWorker / pagedWorker / windowedWorker …），
 // 它们只关心自己那个场景，根本不会调 stream 接口——逐个补 3 个方法既咀噪
 // 又容易在下次接口扩展时再漏一遍。
 //

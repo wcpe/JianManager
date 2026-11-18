@@ -225,7 +225,7 @@ func TestSearchHydrationSharesBytesFanoutAndDeadline(t *testing.T) {
 			defer cancel()
 			deadline, ok := ctx.Deadline()
 			require.True(t, ok)
-			client := pr61ByteClient(t, func(r *http.Request) (*http.Response, error) {
+			client := byteClient(t, func(r *http.Request) (*http.Response, error) {
 				gotDeadline, hasDeadline := r.Context().Deadline()
 				require.True(t, hasDeadline)
 				require.Equal(t, deadline, gotDeadline, "hydration must not extend the original request deadline")
@@ -365,7 +365,7 @@ func TestSearchHydrationHTTPErrorBodyKeepsPhysicalByteAccount(t *testing.T) {
 	row := hydrationFixtureRow(2, day.Add(time.Hour))
 	projected := hydrationFixtureLine(t, row, true)
 	var actual uint64
-	client := pr61ByteClient(t, func(r *http.Request) (*http.Response, error) {
+	client := byteClient(t, func(r *http.Request) (*http.Response, error) {
 		code, body := http.StatusOK, string(projected)
 		if isSearchHydrationRequest(r) {
 			code, body = http.StatusInternalServerError, strings.Repeat("unavailable", 1000)

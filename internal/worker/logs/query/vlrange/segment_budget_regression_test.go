@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 )
 
-func TestPR61MergedSegmentsShareRemainingBytes(t *testing.T) {
+func TestMergedSegmentsShareRemainingBytes(t *testing.T) {
 	newer := `{"_time":"2026-10-08T10:00:00Z","event_id":"new","log_source_id":"src-a","source_generation":"g1","record_start":"1","record_end":"2"}` + "\n"
 	older := `{"_time":"2026-09-01T10:00:00Z","event_id":"old","log_source_id":"src-b","source_generation":"g1","record_start":"1","record_end":"2"}` + "\n"
 	ranges := []query.AuthoritativeRange{
@@ -24,12 +24,12 @@ func TestPR61MergedSegmentsShareRemainingBytes(t *testing.T) {
 		t.Run(fmt.Sprint(remaining), func(t *testing.T) {
 			var actual atomic.Uint64
 			var calls atomic.Int32
-			client := pr61ByteClient(t, func(r *http.Request) (*http.Response, error) {
+			client := byteClient(t, func(r *http.Request) (*http.Response, error) {
 				text := newer
 				if calls.Add(1) > 1 && !isSearchHydrationRequest(r) {
 					text = older
 				}
-				return &http.Response{StatusCode: 200, Body: &pr61Body{Reader: strings.NewReader(text), read: &actual}}, nil
+				return &http.Response{StatusCode: 200, Body: &tinyBody{Reader: strings.NewReader(text), read: &actual}}, nil
 			})
 			budget := uint64(len(newer)) + remaining
 			res, err := client.SearchMerged(context.Background(), ranges, query.RangeQuery{Budget: query.Budget{Limit: 100, MaxBytes: budget}})

@@ -326,7 +326,7 @@ func acceptanceCreateTemplate(t *testing.T, c *acceptanceClient, env acceptanceE
 		"commandSchedule": commandSchedule,
 		"loadProfile":     loadProfile,
 		"thresholds":      thresholds,
-		"tags":            []string{"acceptance", "fr-370"},
+		"tags":            []string{"acceptance", "load-template"},
 	}
 	resp, data, err := c.do("POST", "/api/v1/bots/load-templates", body)
 	if err != nil {

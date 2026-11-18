@@ -386,7 +386,7 @@ func TestS3Store_RealMinIO(t *testing.T) {
 	ctx := context.Background()
 
 	src := filepath.Join(t.TempDir(), "real.bin")
-	content := []byte("fr-347 real minio round trip")
+	content := []byte("minio round trip payload")
 	require.NoError(t, os.WriteFile(src, content, 0o644))
 	key := "var/artifacts/client-file/te/realminio-test.bin"
 

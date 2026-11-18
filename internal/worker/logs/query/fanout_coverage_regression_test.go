@@ -12,7 +12,7 @@ import (
 )
 
 // 两个范围同属一个 Worker 和同一日志命名空间，排除 CP 跨 Worker 预算先行截断的反证。
-func pr61FanoutPlanner(t *testing.T) *query.Planner {
+func fanoutPlanner(t *testing.T) *query.Planner {
 	t.Helper()
 	cat := catalog.New(nil)
 	for i, day := range []string{"2026-09-21", "2026-09-22"} {
@@ -30,7 +30,7 @@ func pr61FanoutPlanner(t *testing.T) *query.Planner {
 	return query.NewPlanner(cat, nil)
 }
 
-func pr61BudgetReason(c query.Coverage) bool {
+func hasBudgetReason(c query.Coverage) bool {
 	for _, reason := range c.PartialReasons {
 		if reason == query.ReasonBudgetExceeded {
 			return true
@@ -40,7 +40,7 @@ func pr61BudgetReason(c query.Coverage) bool {
 }
 
 // 预算小于范围数必须报告跳过；零预算和正好足够预算是独立反证控制。
-func TestPR61ReproFanoutCoverage(t *testing.T) {
+func TestFanoutCoverageReportsSkipped(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		maxFanout   uint32
@@ -52,8 +52,8 @@ func TestPR61ReproFanoutCoverage(t *testing.T) {
 		{name: "正好两个范围", maxFanout: 2, wantCalls: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			planner := pr61FanoutPlanner(t)
-			req := query.QueryRequest{RequestID: "pr61-fanout", Budget: query.Budget{Limit: 10, MaxFanout: tc.maxFanout}}
+			planner := fanoutPlanner(t)
+			req := query.QueryRequest{RequestID: "fanout-coverage", Budget: query.Budget{Limit: 10, MaxFanout: tc.maxFanout}}
 			plan := planner.Plan(query.PlanRequest{RequestID: req.RequestID, Budget: req.Budget})
 			if plan.Err != nil || len(plan.Ranges) != 2 || !plan.Coverage.Complete || len(plan.Coverage.PartialReasons) != 0 {
 				t.Fatalf("反证前提失败：planner 应交付两个完整权威范围，实际=%+v", plan)
@@ -76,7 +76,7 @@ func TestPR61ReproFanoutCoverage(t *testing.T) {
 						DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}, nil
 				},
 			}
-			svc := query.NewService(planner, client, "pr61-isolation")
+			svc := query.NewService(planner, client, "fanout-isolation")
 			search := svc.Search(context.Background(), req)
 			if search.Err != nil {
 				t.Fatalf("Search 意外错误: %v", search.Err)
@@ -85,7 +85,7 @@ func TestPR61ReproFanoutCoverage(t *testing.T) {
 			if searchCalls.Load() != tc.wantCalls || len(search.Items) != int(tc.wantCalls) {
 				t.Errorf("Search 应调用并返回 %d 个范围，实际调用=%d 行数=%d", tc.wantCalls, searchCalls.Load(), len(search.Items))
 			}
-			if search.Coverage.Complete == tc.wantPartial || pr61BudgetReason(search.Coverage) != tc.wantPartial {
+			if search.Coverage.Complete == tc.wantPartial || hasBudgetReason(search.Coverage) != tc.wantPartial {
 				t.Errorf("Search 跳过范围必须报告不完整与 BUDGET_EXCEEDED：应 partial=%v，实际=%+v", tc.wantPartial, search.Coverage)
 			}
 			stats := svc.Stats(context.Background(), req, nil)
@@ -104,7 +104,7 @@ func TestPR61ReproFanoutCoverage(t *testing.T) {
 			if tc.wantPartial {
 				wantQuality = query.StatsPartial
 			}
-			if stats.Coverage.Complete == tc.wantPartial || pr61BudgetReason(stats.Coverage) != tc.wantPartial || stats.Quality.StatsQuality != wantQuality {
+			if stats.Coverage.Complete == tc.wantPartial || hasBudgetReason(stats.Coverage) != tc.wantPartial || stats.Quality.StatsQuality != wantQuality {
 				t.Errorf("Stats 跳过范围必须报告不完整与部分质量：应 partial=%v quality=%s，实际 coverage=%+v quality=%s", tc.wantPartial, wantQuality, stats.Coverage, stats.Quality.StatsQuality)
 			}
 		})

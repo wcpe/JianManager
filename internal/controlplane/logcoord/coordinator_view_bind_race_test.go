@@ -13,10 +13,10 @@ import (
 // 并发复用必须读取首屏已经绑定的同一快照，不重建 Worker 视图，也不修改共享 map。
 // 原先空绑定再 OpenView 的交错既存在共享写竞态，也会把并发请求绑定到不同逻辑集合。
 func TestConcurrentViewReuseDoesNotWriteSharedViewMaps(t *testing.T) {
-	w := &pr61Worker{
+	w := &recordingWorker{
 		fakeWorker: &fakeWorker{workerID: "w1"},
 		searchPB: &workerpb.LogSearchResponse{
-			Coverage:  pr61Coverage(false),
+			Coverage:  coverageWith(false),
 			Exhausted: true,
 			Quality: &workerpb.LogQuality{
 				DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_EXACT,
@@ -24,10 +24,10 @@ func TestConcurrentViewReuseDoesNotWriteSharedViewMaps(t *testing.T) {
 			},
 		},
 	}
-	c := pr61Coord(map[string]*pr61Worker{"w1": w})
+	c := newCoordinatorWith(map[string]*recordingWorker{"w1": w})
 
 	// 首屏只有采用真实 Worker 引用后才允许公开 CP 视图。
-	q := pr61Query()
+	q := budgetQuery()
 	q.Fast = true
 	created, err := c.Search(context.Background(), q)
 	require.NoError(t, err)

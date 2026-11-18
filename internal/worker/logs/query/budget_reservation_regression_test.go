@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 )
 
-func pr61BudgetPlanner(t *testing.T, n int) *Planner {
+func budgetPlanner(t *testing.T, n int) *Planner {
 	t.Helper()
 	cat := catalog.New(nil)
 	for i := 0; i < n; i++ {
@@ -24,7 +24,7 @@ func pr61BudgetPlanner(t *testing.T, n int) *Planner {
 }
 
 // 八个在途任务由屏障保持；剩余四个不能偷偷获得同一份整额预算。
-func TestPR61BudgetReservationsAndIncrementalStop(t *testing.T) {
+func TestBudgetReservationsAndIncrementalStop(t *testing.T) {
 	for _, stats := range []bool{false, true} {
 		t.Run(fmt.Sprint(stats), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -49,7 +49,7 @@ func TestPR61BudgetReservationsAndIncrementalStop(t *testing.T) {
 					return StatsResult{Bytes: call(q)}, nil
 				},
 			}
-			svc := NewService(pr61BudgetPlanner(t, 12), client, "test")
+			svc := NewService(budgetPlanner(t, 12), client, "test")
 			done := make(chan Coverage, 1)
 			go func() {
 				req := QueryRequest{Budget: Budget{MaxBytes: 128}}
@@ -87,7 +87,7 @@ func TestPR61BudgetReservationsAndIncrementalStop(t *testing.T) {
 }
 
 // 完成一个任务即释放未用预留，排队任务无需等待其它七个慢任务全部结束。
-func TestPR61UnusedReservationReleasedIncrementally(t *testing.T) {
+func TestUnusedReservationReleasedIncrementally(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	entered := make(chan int, 12)
@@ -141,7 +141,7 @@ func TestPR61UnusedReservationReleasedIncrementally(t *testing.T) {
 }
 
 // 取消等待中的任务不应在信号量释放后迟到发出请求。
-func TestPR61BudgetCancellationDoesNotLaunchQueuedTasks(t *testing.T) {
+func TestBudgetCancellationDoesNotLaunchQueuedTasks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	entered := make(chan struct{}, 12)
@@ -152,7 +152,7 @@ func TestPR61BudgetCancellationDoesNotLaunchQueuedTasks(t *testing.T) {
 		<-ctx.Done()
 		return RangeResult{}, ctx.Err()
 	}}
-	svc := NewService(pr61BudgetPlanner(t, 12), client, "test")
+	svc := NewService(budgetPlanner(t, 12), client, "test")
 	done := make(chan SearchResponse, 1)
 	go func() { done <- svc.Search(ctx, QueryRequest{}) }()
 	for i := 0; i < 8; i++ {

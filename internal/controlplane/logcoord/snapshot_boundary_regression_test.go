@@ -37,16 +37,16 @@ func TestSixModuleUnknownWorkerBoundaryCannotAdvanceCursor(t *testing.T) {
 
 // Worker 本身的范围失败也不能被 CP 再次合成为全局游标。
 func TestSixModuleWorkerTopLevelPartialCannotAdvanceCursor(t *testing.T) {
-	coverage := pr61Coverage(false)
+	coverage := coverageWith(false)
 	coverage.Complete = false
 	coverage.PartialReasons = []string{"RANGE_UNAVAILABLE"}
-	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{
-		Coverage: coverage, Quality: pr61ExactQuality(), Exhausted: false,
+	w := &recordingWorker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{
+		Coverage: coverage, Quality: exactQualityForFake(), Exhausted: false,
 		Items: []*workerpb.LogEvent{{EventId: "old", EventTimeUtc: "2026-10-08T10:00:00Z"}},
 	}}
-	q := pr61Query()
+	q := budgetQuery()
 	q.Fast = true
-	out, err := pr61Coord(map[string]*pr61Worker{"w1": w}).Search(context.Background(), q)
+	out, err := newCoordinatorWith(map[string]*recordingWorker{"w1": w}).Search(context.Background(), q)
 	require.NoError(t, err)
 	require.NotEmpty(t, out.Items)
 	require.Empty(t, out.NextCursor)

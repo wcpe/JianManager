@@ -13,24 +13,24 @@ import (
 	"google.golang.org/grpc"
 )
 
-// pr61FederationPB 让 HTTP 回归经过真实 proto 适配器而非直接构造 CP 字段。
-type pr61FederationPB struct {
+// federationWorker 让 HTTP 回归经过真实 proto 适配器而非直接构造 CP 字段。
+type federationWorker struct {
 	workerpb.WorkerServiceClient
 	response *workerpb.LogSearchResponse
 	calls    int
 }
 
-func (p *pr61FederationPB) LogSearch(ctx context.Context, req *workerpb.LogSearchRequest, opts ...grpc.CallOption) (*workerpb.LogSearchResponse, error) {
+func (p *federationWorker) LogSearch(ctx context.Context, req *workerpb.LogSearchRequest, opts ...grpc.CallOption) (*workerpb.LogSearchResponse, error) {
 	p.calls++
 	// 对齐真实 Worker：首屏自动建出的本地视图也必须随 PB 返回。
 	if p.response != nil && p.response.View == nil {
-		p.response.View = &workerpb.LogQueryViewRef{ViewId: "pr61-worker-view"}
+		p.response.View = &workerpb.LogQueryViewRef{ViewId: "federation-worker-view"}
 	}
 	return p.response, nil
 }
-func TestPR61FederationGapProtoToHTTPAndCache(t *testing.T) {
+func TestFederationGapProtoToHTTPAndCache(t *testing.T) {
 	gap := &workerpb.IngestPositionGap{StorageNamespace: "inst:1/stdout", From: 9007199254740993, To: ^uint64(0), ReasonCode: "PERMANENTLY_LOST", Operator: "authenticated-ops", AtUtc: "2026-10-08T00:00:00Z", LogSourceId: "inst:1/old-file", SourceGeneration: "prior-boot"}
-	pb := &pr61FederationPB{response: &workerpb.LogSearchResponse{Coverage: &workerpb.LogCoverage{Complete: true, EnumerationState: workerpb.LogEnumerationState_LOG_ENUMERATION_EXHAUSTED, Targets: []*workerpb.LogCoverageTarget{{TargetId: "inst:1", State: workerpb.LogCoverageState_LOG_COVERAGE_SUCCESS}}}, Quality: &workerpb.LogQuality{DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_EXACT, StatsQuality: workerpb.LogStatsQuality_LOG_QUALITY_STATS_EXACT}, Exhausted: true, IngestPositionGaps: []*workerpb.IngestPositionGap{gap}}}
+	pb := &federationWorker{response: &workerpb.LogSearchResponse{Coverage: &workerpb.LogCoverage{Complete: true, EnumerationState: workerpb.LogEnumerationState_LOG_ENUMERATION_EXHAUSTED, Targets: []*workerpb.LogCoverageTarget{{TargetId: "inst:1", State: workerpb.LogCoverageState_LOG_COVERAGE_SUCCESS}}}, Quality: &workerpb.LogQuality{DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_EXACT, StatsQuality: workerpb.LogStatsQuality_LOG_QUALITY_STATS_EXACT}, Exhausted: true, IngestPositionGaps: []*workerpb.IngestPositionGap{gap}}}
 	resolver := &fedResolver{targets: []logcoord.TargetInfo{{ID: "inst:1", WorkerID: "trusted-node-uuid", Readiness: logcoord.ReadyOnline}}}
 	dialer := logcoord.NewTunnelDialer(func(context.Context, string) (workerpb.WorkerServiceClient, error) { return pb, nil })
 	r, _ := setupFederationRouter(t, logcoord.New(resolver, dialer))
@@ -66,8 +66,8 @@ func TestPR61FederationGapProtoToHTTPAndCache(t *testing.T) {
 	_, exists := body["ingest_position_gaps"]
 	require.False(t, exists)
 }
-func TestPR61FederationTopLevelBudgetToHTTP(t *testing.T) {
-	pb := &pr61FederationPB{response: &workerpb.LogSearchResponse{Coverage: &workerpb.LogCoverage{Complete: false, PartialReasons: []string{"BUDGET_EXCEEDED"}, EnumerationState: workerpb.LogEnumerationState_LOG_ENUMERATION_OPEN, Targets: []*workerpb.LogCoverageTarget{{TargetId: "inst:1", State: workerpb.LogCoverageState_LOG_COVERAGE_SUCCESS}}}, Exhausted: true}}
+func TestFederationTopLevelBudgetToHTTP(t *testing.T) {
+	pb := &federationWorker{response: &workerpb.LogSearchResponse{Coverage: &workerpb.LogCoverage{Complete: false, PartialReasons: []string{"BUDGET_EXCEEDED"}, EnumerationState: workerpb.LogEnumerationState_LOG_ENUMERATION_OPEN, Targets: []*workerpb.LogCoverageTarget{{TargetId: "inst:1", State: workerpb.LogCoverageState_LOG_COVERAGE_SUCCESS}}}, Exhausted: true}}
 	resolver := &fedResolver{targets: []logcoord.TargetInfo{{ID: "inst:1", WorkerID: "trusted-node", Readiness: logcoord.ReadyOnline}}}
 	r, _ := setupFederationRouter(t, logcoord.New(resolver, logcoord.NewTunnelDialer(func(context.Context, string) (workerpb.WorkerServiceClient, error) { return pb, nil })))
 	w := makeRequest(r, "GET", "/api/v1/logs/federation?instanceId=1", nil, getAdminToken(t, r))
@@ -83,7 +83,7 @@ func TestPR61FederationTopLevelBudgetToHTTP(t *testing.T) {
 
 // CP-8 回归：聚合类同参缓存不得被分页标识打散。
 // 同参不同 cursor/page/pageSize 必须落到同一聚合条目，结果相关参数变化仍必须分键。
-func TestPR61AggCacheKeyIgnoresPagingParams(t *testing.T) {
+func TestAggCacheKeyIgnoresPagingParams(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	keyFor := func(rawQuery string) string {
 		w := httptest.NewRecorder()
@@ -120,7 +120,7 @@ func TestPR61AggCacheKeyIgnoresPagingParams(t *testing.T) {
 }
 
 // CP-8 行为回归：同参不同 cursor 的 stats 请求只聚合一次（命中回放同一份字节）。
-func TestPR61StatsCacheHitsAcrossCursors(t *testing.T) {
+func TestStatsCacheHitsAcrossCursors(t *testing.T) {
 	resolver := &fedResolver{targets: []logcoord.TargetInfo{
 		{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
 	}}
@@ -146,7 +146,7 @@ func TestPR61StatsCacheHitsAcrossCursors(t *testing.T) {
 }
 
 // CP-16 回归：热集与预热失败频控必须是 handler 实例状态，不得跨实例串扰。
-func TestPR61WarmStateIsPerHandlerInstance(t *testing.T) {
+func TestWarmStateIsPerHandlerInstance(t *testing.T) {
 	h1 := &LogFederationHandler{}
 	h2 := &LogFederationHandler{}
 
