@@ -1,7 +1,7 @@
-# 代码禁止出现 FR / ADR 编号
+# 代码禁止出现 FR / ADR / PR 编号
 
-> **编号只属于文档**（PRD / spec / ADR / CHANGELOG）。
-> 代码、文件名、注释、字符串、标识符一律不写 `FR-NNN` / `ADR-NNN`。
+> **编号只属于文档**（PRD / spec / ADR / CHANGELOG / PR 描述）。
+> 代码、文件名、注释、字符串、标识符一律不写 `FR-NNN` / `ADR-NNN` / `PR-NNN`。
 
 ## 为什么
 
@@ -26,12 +26,15 @@
 
 | 位置 | 反例 |
 |---|---|
-| 注释 | `// FR-486 范围③：复用扫描缓冲区`、`// 参见 ADR-003: 守护进程 Wrapper 模式` |
-| 文件名 | `proxy_fr035_test.go`、`fr513-host-obs-visual.spec.ts`、`adr074-smoke.go` |
-| 标识符 | `handleFR486Case()`、`TestFR397_ToolsRegistered`、`openFR370DB()` |
-| 字符串 / 测试描述 | `it('FR-507 阶段6：…')`、`os.Getenv("JM_FR501_S3_AK")` |
+| 注释 | `// FR-486 范围③：复用扫描缓冲区`、`// 参见 ADR-003: 守护进程 Wrapper 模式`、`// 见 PR-061 的改动` |
+| 文件名 | `proxy_fr035_test.go`、`fr513-host-obs-visual.spec.ts`、`adr074-smoke.go`、`pr61_budget_regression_test.go` |
+| 标识符 | `handleFR486Case()`、`TestFR397_ToolsRegistered`、`openFR370DB()`、`TestPR61BudgetReservations` |
+| 字符串 / 测试描述 | `it('FR-507 阶段6：…')`、`os.Getenv("JM_FR501_S3_AK")`、`RequestID: "pr61-fanout"` |
 
 > 环境变量前缀、测试函数名、临时路径（`.tmp/acceptance/FR-xxx/`）都算「字符串 / 标识符」，同样禁止。
+>
+> **PR 编号额外说明**：`PR` 在代码里大量用作 Pull Request 的缩写（`// 见 PR #74`），那不是本规则
+> 针对的编号，不会被拦。只拦「前缀与数字紧贴」的写法（`pr61`、`PR61`），因为那种形式只可能是编号。
 
 ### 允许
 
@@ -58,26 +61,75 @@
 判定方式：**只检查本次 diff 新增/修改的行**。存量行原样保留，即使它就在你改的那个文件里。
 
 ```bash
-# 门禁做法（见 scripts/check-no-ref-in-code.sh）
-# 只扫 `git diff <base>...HEAD` 的 `+` 行，存量不参与
+# 门禁做法（见 scripts/check-no-ref-in-code.go）
+# 只扫 `git diff <base>...HEAD` 的新增行，存量不参与
 ```
 
 ## 门禁
 
-`.claude/scripts/check-no-ref-in-code.sh`：
+`scripts/check-no-ref-in-code.go`（语法级解析，**不是 grep / 正则**）：
 
 | 模式 | 命令 | 用途 |
 |---|---|---|
-| diff（默认） | `sh .claude/scripts/check-no-ref-in-code.sh` | 只扫 diff 的 `+` 行，命中即失败并打印位置。日常提交前跑 |
-| 存量 | `sh .claude/scripts/check-no-ref-in-code.sh --stock` | 扫全仓代码现有编号，**期望 0 命中**。全量清理的验收就是这个 |
+| diff（默认） | `go run ./scripts/check-no-ref-in-code.go` | 只扫 diff 新增行，命中即失败并打印行列。日常提交前跑 |
+| 存量 | `go run ./scripts/check-no-ref-in-code.go --stock` | 扫全仓现有编号，**期望 0 命中**。全量清理的验收就是这个 |
+
+### 为什么不是 grep / 正则
+
+早先版本是 shell + 正则，实测留下了两个洞：
+
+1. 正则只认**带短横线**的 `FR-123`，而仓里实际写法是紧贴的 `TestFR397_ToolsRegistered`、`openFR370DB()`——
+   规则文档自己举的反例，匹配器根本接不住。
+2. 正则里**压根没有 PR**，所以 `pr61_*_test.go` 这一整批文件在门禁全绿的情况下活到了今天。
+
+编号会变形（`FR-397` / `FR397` / `fr397` / `fr-091`），补字符类是打不完的补丁。
+现在的做法是**语法级解析**：
+
+- `.go` 走 `go/parser` + `go/ast`：标识符、注释、字符串字面量分开取，位置精确到行列，
+  注释不会被误当成代码，字符串里的转义也不会打乱列号
+- `.ts`/`.tsx`/`.js`/`.mjs` 交给 ESLint 的 `no-restricted-syntax`（AST 选择器，
+  见 `packages/eslint-config/index.js` 与各 app 的 flat config）
+- `.java`/`.kts`/`.proto` 无现成解析器接入 lint，走词法切分兜底
+- 文件名对 basename 做同样的词法切分
+
+词法切分的判据是：把文本切成「字母段 / 数字段」交替的序列，相邻两段是
+「编号前缀 + 数字」就命中。这样 `TestFR397Xxx`、`fr-091`、`PR61` 都能抓住，
+而 `XFR-1` 这类标识符切出来是 `[XFR] [1]`——整段不等于任何前缀，不会误报。
 
 扫描范围：`apps/` `internal/` `packages/` `scripts/` `proto/` `client-updater/` `configs/`（生成文件 `*.pb.go` 除外）。
 
 配套 CI 步骤在 [gate-merge.md](gate-merge.md) 的静态检查项里。
 
 **误报例外**：文档路径（`docs/`、`CHANGELOG.md`）与 `.claude/rules/` 本身不在扫描范围。
+代码里指向文档的**路径**也不算违规（如 `docs/specs/x/fr-091.md`）——那是路标，不是代码自称；
+检查器按「命中段是否属于文件路径」判定。
 若确有必需保留的场景（例如迁移脚本要按旧编号匹配历史数据、测试夹具要复现线上环境变量名），在该行加
 `// no-ref-check: <原因>` 豁免，并在 PR 描述里说明。
+
+### 前端：存量文件豁免清单
+
+Go 侧靠 `--stock`（查存量）/ 默认模式（只查 diff）区分，但 **ESLint 没有 diff 概念**——
+规则一生效就会对全量文件报错。若不做处理，上线当天会直接红 50 处存量错误，
+团队只能整体关掉规则（规则因此形同虚设）。
+
+所以前端采用 flat config 官方的 `ignores` 做**文件级存量豁免**：
+
+```js
+// apps/control-plane-web/eslint.config.js
+makeNoRefInCodeConfig([
+  'e2e/bot-overview.spec.ts',   // 规则出台前就把编号写进 e2e 标题
+  ...
+])
+```
+
+**纪律**：
+
+- 这份清单是**豁免单**，不是待办清单。存量全量清理是独立一轮工作，不在日常改动里顺手做。
+- 清理掉一个文件就**从清单里删一行**。清单只应收紧，不应变长。
+- 新增文件**不得**往这里加。确实需要写入编号的场景走行内 `// no-ref-check: <原因>`。
+
+代价是「存量文件里的新编号也拦不住」。取舍：与 Go 侧双模式口径保持一致，
+不让存量清理挟持日常开发；清单有限且可缩，不会成为永久洞。
 
 ### 已废止：验收脚本目录豁免
 
@@ -90,7 +142,7 @@
 
 ## 自检
 
-- [ ] 本次新增/修改的注释里没有 `FR-\d+` 与 `ADR-\d+`
-- [ ] 新增文件名不含 `fr\d+` / `adr\d+`
+- [ ] 本次新增/修改的注释里没有 `FR-\d+`、`ADR-\d+` 与 `PR\d+`
+- [ ] 新增文件名不含 `fr\d+` / `adr\d+` / `pr\d+`
 - [ ] 测试描述（`describe` / `it` / `t.Run`）与测试函数名不含编号
 - [ ] 需要决策依据时，写的是**理由本身**，不是编号

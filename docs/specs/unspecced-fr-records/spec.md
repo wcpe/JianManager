@@ -152,9 +152,25 @@ PRD 的 FR 表按约定「**只保留一行 FR + 状态，详情归 spec**」。
 
 ### FR-552 代码内 FR / ADR 编号全量清理（ref，免 spec）
 
-**需求补充**：代码 / 文件名 / 注释 / 标识符中不得出现 FR 与 ADR 编号——编号只在 PRD 与 spec 里作为需求标签存在，进了代码就成了「没有解析器的引用」：读者看到 `// FR-431` 还得去翻 PRD，而编号本身不解释任何实现理由。门禁为 `.claude/scripts/check-no-ref-in-code.sh`（日常只扫 diff 新增行，`--stock` 扫全仓）。
+**需求补充**：代码 / 文件名 / 注释 / 标识符中不得出现 FR、ADR 与 PR 编号——编号只在 PRD 与 spec 里作为需求标签存在，进了代码就成了「没有解析器的引用」：读者看到 `// FR-431` 还得去翻 PRD，而编号本身不解释任何实现理由。门禁为 `scripts/check-no-ref-in-code.go`（日常只扫 diff 新增行，`--stock` 扫全仓）。
 
 **交付状态**：✅ 已交付@v0.24.0（**2026-11-09 重做并核实**：前一轮「9,089 处已清零」的结论已被证伪——`--stock` 实测回潮至 2,131 处编号与 63 个违规文件名，成因是只看 diff 的门禁放过了重构 / 搬包复制出的存量。本轮范围扩到 ADR 编号与 `proto/`、`client-updater/`、`configs/`（原扫不到），文件名 63→0、编号 2,131→0，均为 `--stock` 0 命中；`go build` / `go vet` / `tsc -b` 全通过）
+
+**补记（2026-11-18）：上一轮的「0 命中」也是假绿。** 当时的门禁是 shell + 正则，`PAT='(^|[^A-Za-z0-9_-])(FR|ADR)-[0-9]+'` 只能匹配**带短横线**的写法，于是：
+
+- 紧贴形式 `TestFR397_ToolsRegistered` / `openFR370DB()` / `fr397ReadTools` 全部漏过（回归自测实测 57 处）；
+- 前缀表里**压根没有 PR**，整批 `pr61_*.go`（6 个文件、39 个测试函数、18 个辅助符号）在门禁全绿时活到了这一天。
+
+即：规则文档自己举的反例（`TestFR397_ToolsRegistered`）正是匹配器接不住的那一类。
+
+**本轮改法（换掉正则，改语法级解析）**：
+
+- Go → `scripts/check-no-ref-in-code.go`，`go/parser` + `go/ast` 分别取标识符 / 注释 / 字符串字面量，位置精确到行列；零正则、零新依赖；
+- 前端 → ESLint `no-restricted-syntax` AST 选择器（`packages/eslint-config` 导出 `noRefInCodeRules`，两个 app 的 flat config 接线）；
+- 判据改成**词法切分**：把文本切成「字母段 / 数字段」，相邻两段是「编号前缀 + 数字」即命中，天然处理 `FR-397`/`FR397`/`fr397` 全部变形；`PR` 额外要求紧贴，以避开 Pull Request 语义；
+- 文档路径（`docs/specs/x/fr-091.md`）按「命中段是否属于文件路径」豁免，不再误报。
+
+**本轮实测**：新门禁在切出的干净 `origin/master` 上报 **166 处**（旧门禁报 0）；清理后 `--stock` 0 命中。PR61 六个文件按主题改名、39 个 `TestPR61*` 与 18 个 `pr61Xxx` 辅助符号按职责重命名（跨 14 个文件、共 183 处替换，含被其它测试文件引用的交叉引用），另修 5 个上一轮改名留下的「结巴」文件名（`clone_clone_creates_test.go` 等）。
 ### FR-553 侧栏资源面板收敛为「一个分组方式 + 服务器列表」（feat，增强 FR-165/FR-293，免 spec）
 
 **需求补充**：侧栏此前有 8 种分组模式（`pinned`/`node`/`network`/`tag`/`topology`/`name`/`created`/`custom`），其中 `custom` 是仅存 localStorage 的本地分组（换机即失）、`topology` 与后端分组树同源（FR-444 已把 Beacon 拓扑映射进 `instance_group_nodes`）、`name`/`created` 是排序不是分类。本 FR 删除 `custom`，把 `topology` 并入 `groupTree`，并**放弃常驻分组树与标签两块**（试做后判定：标签是次要维度，无论平铺还是折叠都会挤占侧栏；分组树常驻会把侧栏变成第二棵树）——收敛为**搜索 + 状态筛选 + 一个分组方式下拉（置顶 / 按节点 / 按分组 / 按群组 / 按标签 / 按名称 / 按创建时间）+ 服务器列表**。`groupTree` 维度按树的深度优先序分段、只在段内列出该子树成员（M:N 多归保留：同一实例可在多个段各出现一次），空组不占位置，层级用段名前缀缩进表达。**边界**：不改 ADR-033 的 M:N、不新增数据表与后端接口。**验收**：① 侧栏只有一个维度下拉，无 `custom`，无常驻分组树/标签块；② 历史 localStorage 存有 `custom` 时回落默认；③ `groupTree` 维度按树序分段、含后代成员、空组不出现；④ M:N 实例在多个段各出现一次；⑤ 置顶维度按收藏顺序且快照行可取消置顶；⑥ 空/无匹配有引导态；⑦ 真机过一遍（dev:mock 与真实 CP）。**实施备注**：devmock 的 `/instances/search` 原不支持 `groupId`，已按子树语义补齐（与 `GET /instance-groups/:id/instances` 同口径）。

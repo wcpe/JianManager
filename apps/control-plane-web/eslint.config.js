@@ -1,5 +1,5 @@
 import { defineConfig, globalIgnores } from 'eslint/config'
-import { reactBase } from '@jianmanager/eslint-config'
+import { reactBase, makeNoRefInCodeConfig } from '@jianmanager/eslint-config'
 
 /**
  * 禁止直接用原生 `<select>` 的回潮闸（本轮 UI 组件收敛）。
@@ -100,4 +100,34 @@ export default defineConfig([
       'no-restricted-syntax': ['error', NO_RAW_SELECT, NO_RAW_TEXTAREA, NO_RAW_TABLE],
     },
   },
+  //  编号闸：代码里不得出现 FR / ADR / PR 编号（.claude/rules/no-ref-in-code.md）。
+  //
+  //  单独一条、覆盖全量 src 与 e2e：编号会出现在**测试标题**与**用例数据**里
+  //  （describe 的标题、QueryRequest 的 RequestID），而上面那条 no-restricted-syntax
+  //  为了不误伤 '<select' 反而把测试排除了——两件事判据不同，不能挤同一条规则。
+  //
+  //  不复用上面的规则数组：no-restricted-syntax 在 flat config 里是**覆盖**而非追加，
+  //  同一 files 下写两次只有最后一次生效，所以这里得用独立的 files 作用域。
+  makeNoRefInCodeConfig([
+    // 规则出台前就已带编号的存量文件（.claude/rules/no-ref-in-code.md「执行范围」）。
+    // ****
+    // 这里列的是**豁免清单**，不是待清理清单：存量全量清理是独立一轮工作，
+    // 不在日常改动里顺手做。清理掉一个就从这里删一行，清单只应收紧不应变长。
+    'e2e/assistant-page-context-real.spec.ts',
+    // 与上面那个 spec 同一套真机验收：pw-real.tmp.config.ts 专门指向它，
+    // 两者共用同一组环境变量名。改名会断开既有验收调用方式，故一并豁免。
+    'pw-real.tmp.config.ts',
+    'e2e/bot-console-segment.spec.ts',
+    'e2e/bot-fleet-scale.spec.ts',
+    'e2e/bot-overview.spec.ts',
+    'e2e/host-obs-visual.spec.ts',
+    'e2e/instance-clone.spec.ts',
+    'e2e/network-members.spec.ts',
+    'e2e/node-jdk-install.spec.ts',
+    'e2e/ops-console-layout.spec.ts',
+    'e2e/provision-backend.spec.ts',
+    'e2e/provision-proxy.spec.ts',
+    'src/components/instances/InstanceBatchBar.dom.test.tsx',
+    'src/test/notification-ux.dom.test.tsx',
+  ]),
 ])

@@ -511,15 +511,19 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
           bash scripts/check-openapi.sh
 
-      # 代码/文件名/注释里不得出现 FR 或 ADR 编号（.claude/rules/no-ref-in-code.md）。
+      # 代码/文件名/注释里不得出现 FR / ADR / PR 编号（.claude/rules/no-ref-in-code.md）。
       #
       # 用 --stock 全量比对，而不是只看本次 diff：编号会随重构/搬包被复制到新位置，
       # 只看 diff 会让存量在每轮大重构里悄悄回潮（实测从「0 命中」回潮到 2000+ 处）。
-      - name: 代码内 FR/ADR 编号检查（--stock）
+      #
+      # 为什么是 go run 而不是 shell + 正则：见规则文档「为什么不是 grep / 正则」——
+      # 正则只能写死一种变形（早先只认 FR-123 带横线，紧贴的 TestFR397 全漏，PR 压根没写），
+      # 现在用 go/parser + go/ast 直接看标识符/注释/字符串，前端由 ESLint no-restricted-syntax 接管。
+      - name: 代码内 FR/ADR/PR 编号检查（--stock）
         shell: bash
         run: |
           set -euo pipefail
-          sh .claude/scripts/check-no-ref-in-code.sh --stock
+          go run ./scripts/check-no-ref-in-code.go --stock
 
       # 文档里不得出现 git commit hash（.claude/rules/no-hash-in-docs.md）。
       #
