@@ -467,12 +467,18 @@ func newMetricsProcessFixture(t *testing.T, javaPath string, rootPID int, rootDo
 	return fixture
 }
 
+// metricsReadyBudget 是等夹具就绪的上限，不是业务断言。
+// Windows CI 上四层进程首次拉起可能到秒级，给足余量避免把冷启动误判成缺陷；
+// 超时仍失败，并在失败时输出现场。
+const metricsReadyBudget = 20 * time.Second
+
 func (f *metricsProcessFixture) waitReady(t *testing.T) int32 {
 	t.Helper()
 	require.Positive(t, f.rootPID)
 	require.NotEqual(t, int32(os.Getpid()), f.rootPID)
 	var lastErr error
-	ok := pollMetricsCondition(5*time.Second, 50*time.Millisecond, func() bool {
+	started := time.Now()
+	ok := pollMetricsCondition(metricsReadyBudget, 50*time.Millisecond, func() bool {
 		found, err := f.watchJava()
 		lastErr = err
 		if !found || err != nil {
@@ -481,8 +487,36 @@ func (f *metricsProcessFixture) waitReady(t *testing.T) int32 {
 		f.watches, lastErr = f.watchTree()
 		return lastErr == nil
 	})
-	require.True(t, ok, "未能确认自有 Java 已就绪并记录完整进程树: %v", lastErr)
+	require.True(t, ok, "未能确认自有 Java 已就绪并记录完整进程树（耗时 %s）: %v\n%s",
+		time.Since(started).Round(time.Millisecond), lastErr, f.diagnostics())
 	return f.javaWatch.pid
+}
+
+// diagnostics 在就绪超时时给出可判定的现场：根进程是否还在、握手文件走到哪一步、
+// 以及为什么没走到。缺了这些信息，超时只能靠猜。
+func (f *metricsProcessFixture) diagnostics() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "根 PID %d 已回收=%v；Java 监测句柄=%v\n", f.rootPID, f.rootDone(), f.javaWatch != nil)
+	for _, suffix := range []string{".ready", ".ready.tmp", ".stop"} {
+		info, err := os.Stat(f.javaPath + suffix)
+		if err != nil {
+			fmt.Fprintf(&b, "  %s: %v\n", suffix, err)
+			continue
+		}
+		fmt.Fprintf(&b, "  %s: 存在，大小 %d，修改时间 %s\n", suffix, info.Size(), info.ModTime().Format(time.RFC3339Nano))
+	}
+	if data, err := os.ReadFile(f.javaPath + ".ready"); err == nil {
+		fmt.Fprintf(&b, "  .ready 内容: %s\n", strings.TrimSpace(string(data)))
+	}
+	if proc, err := psproc.NewProcess(f.rootPID); err == nil {
+		if children, cerr := proc.Children(); cerr == nil {
+			for _, child := range children {
+				name, _ := child.Name()
+				fmt.Fprintf(&b, "  子进程 PID %d 名称 %q\n", child.Pid, name)
+			}
+		}
+	}
+	return b.String()
 }
 
 // watchJava 独立于根 PID 和树遍历；即使启动检查失败，清理也可接收 Java 自己发布的身份。
