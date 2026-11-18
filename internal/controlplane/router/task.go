@@ -42,11 +42,6 @@ func (h *TaskHandler) List(c *gin.Context) {
 			f.Offset = n
 		}
 	}
-	// active=1：只看非终态任务。页面用它回答「这个节点现在有什么在跑」，
-	// 不必拉全量历史再由前端过滤（那样在任务多的节点上既费带宽又容易漏）。
-	if v := c.Query("active"); v == "1" || v == "true" {
-		f.OnlyActive = true
-	}
 	if v := c.Query("nodeId"); v != "" {
 		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 			f.NodeID = uint(n)
