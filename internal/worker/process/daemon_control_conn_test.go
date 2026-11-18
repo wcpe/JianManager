@@ -6,9 +6,13 @@ package process
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +21,114 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
+
+const daemonControlStopFileEnv = "JIANMANAGER_CONTROL_TEST_STOP_FILE"
+
+// TestDaemonControlFixture 是控制连接测试的 stdin 消费替身，独立停止文件使清理不依赖控制连接健康。
+func TestDaemonControlFixture(t *testing.T) {
+	stopFile := os.Getenv(daemonControlStopFileEnv)
+	if stopFile == "" {
+		return
+	}
+	if err := os.WriteFile(stopFile+".ready", nil, 0600); err != nil {
+		os.Exit(2)
+	}
+	go func() { _, _ = io.Copy(io.Discard, os.Stdin) }()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	for {
+		if _, err := os.Stat(stopFile); err == nil {
+			os.Exit(0)
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			os.Exit(1)
+		}
+	}
+}
+
+func daemonControlFixtureCommand(t *testing.T) string {
+	t.Helper()
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	if runtime.GOOS == "windows" {
+		// 让 cmd 展开带引号的路径，避免 Go 的命令行转义把引号变成字面量反斜杠。
+		return `%JIANMANAGER_CONTROL_TEST_EXECUTABLE% -test.run=TestDaemonControlFixture$`
+	}
+	return "'" + strings.ReplaceAll(executable, "'", "'\\''") + "' -test.run=^TestDaemonControlFixture$"
+}
+
+func daemonControlFixtureEnv(t *testing.T, stopFile string) map[string]string {
+	t.Helper()
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	return map[string]string{
+		daemonControlStopFileEnv:              stopFile,
+		"JIANMANAGER_CONTROL_TEST_EXECUTABLE": `"` + executable + `"`,
+	}
+}
+
+// TestDaemonControlFixtureIndependentStop 验证控制通道不可达时，独立停止文件仍可结束替身进程。
+func TestDaemonControlFixtureIndependentStop(t *testing.T) {
+	stopFile := filepath.Join(t.TempDir(), "control-fixture.stop")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "cmd.exe", "/c", daemonControlFixtureCommand(t))
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", daemonControlFixtureCommand(t))
+	}
+	cmd.Env = os.Environ()
+	for key, value := range daemonControlFixtureEnv(t, stopFile) {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	var output []byte
+	done := make(chan error, 1)
+	go func() {
+		var err error
+		output, err = cmd.CombinedOutput()
+		done <- err
+		close(done)
+	}()
+	defer func() {
+		_ = os.WriteFile(stopFile, nil, 0600)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("独立停止信号回归测试未回收替身")
+		}
+	}()
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(stopFile + ".ready")
+		return err == nil
+	}, 3*time.Second, 20*time.Millisecond, "替身必须先实际启动，再验证独立停止")
+	require.NoError(t, os.WriteFile(stopFile, nil, 0600))
+	select {
+	case err := <-done:
+		require.NoError(t, err, "独立停止信号应使替身自行退出，输出: %s", output)
+	case <-ctx.Done():
+		t.Fatal("替身未响应独立停止信号")
+	}
+}
+
+func cleanupDaemonWrapper(t *testing.T, pidDir, uuid string, done <-chan error) {
+	t.Helper()
+
+	// 即使控制通道完全失效，替身也会自行退出；done 随后证明 wrapper 已完成 cmd.Wait。
+	if err := os.WriteFile(filepath.Join(pidDir, "control-fixture.stop"), nil, 0600); err != nil {
+		t.Errorf("写入替身独立停止信号失败: %v", err)
+	}
+	// 不根据 PID 文件盲杀：这里 wrapper 与测试同进程，Unix 按组终止可能误杀测试宿主。
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		t.Fatalf("daemon wrapper %s 未在清理期限内回收替身并退出", uuid)
+	}
+}
 
 // TestDaemonStrategy_SendCommandRecoversFromLostControlConnection 是同一事故的**韧性子**回归：
 // 控制长连接被外部原因踢掉（本机 jmctl 应急客户端拨号、探针拨号、wrapper 侧异常）后，
@@ -30,14 +142,21 @@ func TestDaemonStrategy_SendCommandRecoversFromLostControlConnection(t *testing.
 	uuid := "daemon-sendcmd-recover-" + filepath.Base(pidDir)
 	cfg := daemon.WrapperConfig{
 		InstanceUUID: uuid,
-		StartCommand: stdinConsumingCmd(),
+		StartCommand: daemonControlFixtureCommand(t),
+		EnvVars:      daemonControlFixtureEnv(t, filepath.Join(pidDir, "control-fixture.stop")),
 		WorkDir:      pidDir,
 		AutoRestart:  false,
 		PIDDir:       pidDir,
 	}
 	ready := make(chan struct{}, 1)
 	done := make(chan error, 1)
-	go func() { done <- daemon.RunWithReady(cfg, ready) }()
+	go func() {
+		defer close(done)
+		done <- daemon.RunWithReady(cfg, ready)
+	}()
+	t.Cleanup(func() {
+		cleanupDaemonWrapper(t, pidDir, uuid, done)
+	})
 	waitDaemonWrapperReady(t, ready, done)
 
 	pidPath := filepath.Join(pidDir, uuid+".pid")
@@ -45,18 +164,6 @@ func TestDaemonStrategy_SendCommandRecoversFromLostControlConnection(t *testing.
 		rec, err := daemon.NewPIDFile(pidPath).ReadRecord()
 		return err == nil && rec.JavaPID > 0 && daemon.IsPIDAlive(rec.JavaPID)
 	}, 15*time.Second, 50*time.Millisecond, "应能读到存活的被托管子进程 pid")
-
-	t.Cleanup(func() {
-		if conn, err := daemon.Dial(daemon.SocketAddr(pidDir, uuid)); err == nil {
-			f := &daemon.Frame{Header: daemon.Header{Channel: daemon.ChannelControl, Type: daemon.TypeCommand}, Payload: []byte(daemon.ControlKill)}
-			_ = f.Encode(conn)
-			_ = conn.Close()
-		}
-		select {
-		case <-done:
-		case <-time.After(8 * time.Second):
-		}
-	})
 
 	mgr := NewManager(pidDir)
 	recovered, err := mgr.RecoverDaemonInstances()
@@ -88,12 +195,12 @@ func TestDaemonStrategy_SendCommandRecoversFromLostControlConnection(t *testing.
 // 造成命令丢失或反复重连。本用例要求并发下发全部成功，且在 -race 下无数据竞争
 // （sendFrame 读 d.conn 与 reconnectAndSend/readLoop 写 d.conn 必须遵循同一加锁纪律）。
 //
-// 夹具必须用 stdinConsumingCmd（消费 stdin 的替身）而非 keepAliveCmd（ping/sleep）：
+// 夹具必须持续消费 stdin，而非使用 keepAliveCmd（ping/sleep）：
 // 本用例并发写入 16×8=128 条 1KiB 命令，替身若不读 stdin，第 4 条即塞满 stdin 管道缓冲
 // （约 4KiB），此后写入阻塞至替身寿命结束（ping -n 30 场景 ≈28.9s），退出瞬间缓冲丢失，
 // 与测试收尾竞态——Windows 真机复验中该夹具假象稳定复现（128 条写入耗时 28.9s / 589µs
-// 两组对照，见 .tmp/acceptance/r2_stdin_probe.log）。真实服务端常驻读 stdin，more/cat 与
-// 其消费语义一致。
+// 两组对照，见 .tmp/acceptance/r2_stdin_probe.log）。测试替身持续丢弃 stdin，保持同样的消费语义，
+// 并通过独立停止文件保证控制连接失效后仍可退出。
 func TestDaemonStrategy_ConcurrentSendCommandAfterConnectionLoss(t *testing.T) {
 	t.Setenv("JIANMANAGER_GRACEFUL_STOP_TIMEOUT", "1s")
 	t.Setenv("JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT", "1s")
@@ -102,14 +209,21 @@ func TestDaemonStrategy_ConcurrentSendCommandAfterConnectionLoss(t *testing.T) {
 	uuid := "daemon-concurrent-send-" + filepath.Base(pidDir)
 	cfg := daemon.WrapperConfig{
 		InstanceUUID: uuid,
-		StartCommand: stdinConsumingCmd(),
+		StartCommand: daemonControlFixtureCommand(t),
+		EnvVars:      daemonControlFixtureEnv(t, filepath.Join(pidDir, "control-fixture.stop")),
 		WorkDir:      pidDir,
 		AutoRestart:  false,
 		PIDDir:       pidDir,
 	}
 	ready := make(chan struct{}, 1)
 	done := make(chan error, 1)
-	go func() { done <- daemon.RunWithReady(cfg, ready) }()
+	go func() {
+		defer close(done)
+		done <- daemon.RunWithReady(cfg, ready)
+	}()
+	t.Cleanup(func() {
+		cleanupDaemonWrapper(t, pidDir, uuid, done)
+	})
 	waitDaemonWrapperReady(t, ready, done)
 
 	pidPath := filepath.Join(pidDir, uuid+".pid")
@@ -117,18 +231,6 @@ func TestDaemonStrategy_ConcurrentSendCommandAfterConnectionLoss(t *testing.T) {
 		rec, err := daemon.NewPIDFile(pidPath).ReadRecord()
 		return err == nil && rec.JavaPID > 0 && daemon.IsPIDAlive(rec.JavaPID)
 	}, 15*time.Second, 50*time.Millisecond, "应能读到存活的被托管子进程 pid")
-
-	t.Cleanup(func() {
-		if conn, err := daemon.Dial(daemon.SocketAddr(pidDir, uuid)); err == nil {
-			f := &daemon.Frame{Header: daemon.Header{Channel: daemon.ChannelControl, Type: daemon.TypeCommand}, Payload: []byte(daemon.ControlKill)}
-			_ = f.Encode(conn)
-			_ = conn.Close()
-		}
-		select {
-		case <-done:
-		case <-time.After(8 * time.Second):
-		}
-	})
 
 	mgr := NewManager(pidDir)
 	recovered, err := mgr.RecoverDaemonInstances()
@@ -171,7 +273,40 @@ func TestDaemonStrategy_ConcurrentSendCommandAfterConnectionLoss(t *testing.T) {
 		}(s)
 	}
 	close(start)
-	wg.Wait()
+	sendersDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(sendersDone)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-sendersDone:
+			return
+		default:
+		}
+		// 先独立回收私有替身，不让策略的关闭等待挡住夹具收尾。
+		strategyClosed := make(chan struct{})
+		go func() {
+			defer close(strategyClosed)
+			_ = d.Close()
+		}()
+		cleanupDaemonWrapper(t, pidDir, uuid, done)
+		select {
+		case <-strategyClosed:
+		case <-time.After(5 * time.Second):
+			t.Error("压力测试控制策略关闭超时")
+		}
+		select {
+		case <-sendersDone:
+		case <-time.After(5 * time.Second):
+			t.Error("压力写入收尾超时：尚未登记的在途重连无法由测试直接取消")
+		}
+	})
+	select {
+	case <-sendersDone:
+	case <-time.After(15 * time.Second):
+		t.Fatal("并发下发未在期限内完成，触发替身与控制连接清理")
+	}
 
 	for i, err := range errs {
 		require.NoError(t, err, "并发下发第 %d 条不应失败（不得因并发重连互相替换而丢命令）", i)
@@ -199,6 +334,10 @@ func TestDaemonStrategy_WriteFrameSerializesEncoding(t *testing.T) {
 	const rounds = 20
 	for round := 0; round < rounds; round++ {
 		server, client := net.Pipe()
+		defer server.Close()
+		defer client.Close()
+		require.NoError(t, server.SetReadDeadline(time.Now().Add(5*time.Second)))
+		require.NoError(t, client.SetWriteDeadline(time.Now().Add(5*time.Second)))
 		writeErr := make(chan error, 2)
 		go func() {
 			var wg sync.WaitGroup
@@ -227,8 +366,12 @@ func TestDaemonStrategy_WriteFrameSerializesEncoding(t *testing.T) {
 		}
 		require.Zero(t, rd.Len(), "第 %d 轮流中存在多余字节（写入被交错）", round)
 		for i := 0; i < 2; i++ {
-			require.NoError(t, <-writeErr)
+			select {
+			case err := <-writeErr:
+				require.NoError(t, err)
+			case <-time.After(1 * time.Second):
+				t.Fatalf("第 %d 轮第 %d 次帧写入未在截止时间内完成", round, i)
+			}
 		}
-		_ = server.Close()
 	}
 }
