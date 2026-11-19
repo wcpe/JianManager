@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -95,4 +96,130 @@ func drainPlayerEvents(ch <-chan PlayerEvent) []PlayerEvent {
 			return out
 		}
 	}
+}
+
+// TestManagedEventPayload_ExtractsNestedPayload 验证托管桥事件的载荷提取。
+//
+// 回归的是**真实缺陷**：探针把 config_applied/config_state 的结构化字段放在 `payload` 下
+// （与 metric_snapshot 一致），早期直接把整帧当载荷解析，于是 configVersion 恒为 0、
+// result 恒为空串——每条回执都被判成 failed，且失败原因永远显示"探针未给出失败原因"。
+func TestManagedEventPayload_ExtractsNestedPayload(t *testing.T) {
+	t.Run("config_applied 取 payload 段", func(t *testing.T) {
+		frame := map[string]any{
+			"type":     "event",
+			"event":    "config_applied",
+			"instance": "inst-1",
+			"dedupKey": "cfg:7:applied",
+			"payload": map[string]any{
+				"configVersion": float64(7),
+				"result":        "applied",
+				"effective":     map[string]any{"collect-period-ticks": float64(40)},
+			},
+		}
+		got, ok := managedEventPayload(frame)
+		require.True(t, ok)
+		assert.Equal(t, "applied", got["result"], "result 必须来自 payload 段而不是信封")
+		assert.Equal(t, float64(7), got["configVersion"])
+	})
+
+	t.Run("config_state 取 payload 段", func(t *testing.T) {
+		frame := map[string]any{
+			"type":  "event",
+			"event": "config_state",
+			"payload": map[string]any{
+				"configVersion":   float64(9),
+				"mode":            "managed",
+				"connection":      "connected",
+				"cacheAgeSeconds": nil, // 从未应用过：null 而不是 0
+			},
+		}
+		got, ok := managedEventPayload(frame)
+		require.True(t, ok)
+		assert.Equal(t, "connected", got["connection"])
+		assert.Nil(t, got["cacheAgeSeconds"])
+	})
+
+	t.Run("回退 data 段", func(t *testing.T) {
+		frame := map[string]any{
+			"type": "event",
+			"data": map[string]any{"configVersion": float64(3), "result": "rejected"},
+		}
+		got, ok := managedEventPayload(frame)
+		require.True(t, ok)
+		assert.Equal(t, "rejected", got["result"])
+	})
+
+	t.Run("平铺载荷也认", func(t *testing.T) {
+		frame := map[string]any{"configVersion": float64(4), "result": "applied"}
+		got, ok := managedEventPayload(frame)
+		require.True(t, ok)
+		assert.Equal(t, "applied", got["result"])
+	})
+
+	t.Run("无载荷段的帧被拒", func(t *testing.T) {
+		frame := map[string]any{"type": "event", "event": "config_applied", "instance": "inst-1"}
+		_, ok := managedEventPayload(frame)
+		assert.False(t, ok, "既无 payload/data 也无协议字段时应拒收，而不是当成空回执")
+	})
+
+	t.Run("空 payload 段视为无载荷", func(t *testing.T) {
+		frame := map[string]any{"type": "event", "payload": map[string]any{}}
+		_, ok := managedEventPayload(frame)
+		assert.False(t, ok)
+	})
+}
+
+// TestManagedConfigApplied_AppliedAtBothForms 验证 config_applied 的 appliedAt 两种形态都收。
+//
+// 回归的是**真机发现的协议缺陷**：探针给的是 ISO-8601 字符串（ConfigPushOutcome.appliedAt），
+// 而 CP 早期把它声明成 int64，于是每条回执都因
+// `json: cannot unmarshal string into Go struct field ... AppliedAt of type int64`
+// 整条反序列化失败被丢弃——目标全部走 ACK 超时，矩阵显示"探针没回执"，
+// 而探针其实早就应用成功了。
+func TestManagedConfigApplied_AppliedAtBothForms(t *testing.T) {
+	t.Run("ISO-8601 字符串（当前探针）", func(t *testing.T) {
+		// 与探针 BridgeFrames.configApplied 的真实载荷逐字一致（含 error:null）。
+		raw := `{"configVersion":1,"result":"applied","effective":{"collect-period-ticks":40},` +
+			`"selfCheck":{"collectorAlive":true},"error":null,"appliedAt":"2026-11-16T14:57:29Z"}`
+		var applied ManagedConfigApplied
+		require.NoError(t, json.Unmarshal([]byte(raw), &applied),
+			"ISO 字符串形式的 appliedAt 必须能解析整条回执")
+		assert.Equal(t, int64(1), applied.ConfigVersion)
+		assert.Equal(t, "applied", applied.Result)
+
+		got := applied.AppliedAtTime()
+		require.False(t, got.IsZero(), "ISO 时间应能解析出来")
+		assert.Equal(t, 2026, got.UTC().Year())
+		assert.Equal(t, 11, int(got.UTC().Month()))
+		assert.Equal(t, 14, got.UTC().Hour())
+	})
+
+	t.Run("epoch 毫秒数字（早期草案）", func(t *testing.T) {
+		raw := `{"configVersion":2,"result":"applied","appliedAt":1794841049442}`
+		var applied ManagedConfigApplied
+		require.NoError(t, json.Unmarshal([]byte(raw), &applied))
+		got := applied.AppliedAtTime()
+		require.False(t, got.IsZero())
+		assert.Equal(t, int64(1794841049442), got.UnixMilli())
+	})
+
+	t.Run("null 与缺失都当作未生效", func(t *testing.T) {
+		for _, raw := range []string{
+			`{"configVersion":3,"result":"failed","appliedAt":null}`,
+			`{"configVersion":3,"result":"failed"}`,
+		} {
+			var applied ManagedConfigApplied
+			require.NoError(t, json.Unmarshal([]byte(raw), &applied), raw)
+			assert.True(t, applied.AppliedAtTime().IsZero(), "未生效时时间应为零值: %s", raw)
+		}
+	})
+
+	t.Run("非法时间不拖垮回执", func(t *testing.T) {
+		raw := `{"configVersion":4,"result":"applied","appliedAt":"不是时间"}`
+		var applied ManagedConfigApplied
+		require.NoError(t, json.Unmarshal([]byte(raw), &applied),
+			"时间戳只是展示用，格式不认识也不该让整条回执作废")
+		assert.True(t, applied.AppliedAtTime().IsZero())
+		assert.Equal(t, "applied", applied.Result)
+	})
 }

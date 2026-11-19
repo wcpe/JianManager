@@ -5,7 +5,9 @@ import (
 	"log/slog"
 )
 
-// 托管模式（ServerProbe PR#64）的 CP 侧装配：把“身份文件 + 托管版 config.yml”一起下发。
+// 托管模式（ServerProbe PR#64 / FR-561）的 CP 侧装配：把“身份文件 + 托管版 config.yml”一起下发。
+//
+// 协议权威定义：docs/specs/probe-managed-mode/spec.md。
 //
 // ## 为什么要成对下发，不能只发一半
 // 探针的两个开关是独立的，但托管模式下它们必须同时到位：

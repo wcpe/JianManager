@@ -3,9 +3,13 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 )
 
-// 托管模式的帧协议（探针侧权威实现在 ServerProbe project:core 的 bridge/ 与 config/）。
+// 托管模式的帧协议（FR-561；探针侧权威实现在 ServerProbe project:core 的 bridge/ 与 config/）。
+//
+// 协议权威定义：docs/specs/probe-managed-mode/spec.md。
 //
 // 本文件只定义 CP 侧需要构造 / 解析的那部分帧，形态**逐字段对齐探针实现**：
 //   - 上行：`type=event` + `event=<子类型>`，业务载荷在 `data`（command_result）或
@@ -85,7 +89,40 @@ type ManagedConfigApplied struct {
 	Effective     map[string]any `json:"effective,omitempty"`
 	SelfCheck     map[string]any `json:"selfCheck,omitempty"`
 	Error         string         `json:"error,omitempty"`
-	AppliedAt     int64          `json:"appliedAt,omitempty"`
+	// AppliedAt 生效时刻，探针给的是 **ISO-8601 UTC 字符串**（见 ServerProbe
+	// ConfigPushOutcome.appliedAt），未生效时为 null。
+	//
+	// 早期这里声明成 int64（按"epoch 毫秒"猜的），结果真机每条回执都因
+	// `cannot unmarshal string into ... int64` 整条反序列化失败而被丢弃——
+	// 目标全部走 ACK 超时，矩阵显示"探针没回执"，而探针其实早就应用成功了。
+	// 用 RawMessage 接住原始形态，两种都给得出：字符串按 ISO 解析，数字按毫秒。
+	AppliedAt json.RawMessage `json:"appliedAt,omitempty"`
+}
+
+// AppliedAtTime 把 appliedAt 解析成时间；空值或无法识别返回零值。
+//
+// 两种形态都认：ISO-8601 字符串（当前探针）与 epoch 毫秒数字（早期草案）。
+// 解析失败不影响回执本身的有效性——时间戳只是展示用，不该让整条回执作废。
+func (a ManagedConfigApplied) AppliedAtTime() time.Time {
+	raw := strings.TrimSpace(string(a.AppliedAt))
+	if raw == "" || raw == "null" {
+		return time.Time{}
+	}
+	if strings.HasPrefix(raw, `"`) {
+		var s string
+		if err := json.Unmarshal(a.AppliedAt, &s); err != nil || s == "" {
+			return time.Time{}
+		}
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t
+		}
+		return time.Time{}
+	}
+	var ms int64
+	if err := json.Unmarshal(a.AppliedAt, &ms); err != nil || ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
 }
 
 // 配置应用结果码（探针侧 ConfigPushOutcome.result 的原值）。
