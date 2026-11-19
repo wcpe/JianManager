@@ -121,6 +121,16 @@ jm config remove staging
 - 平台清单在 `packages/jm-npm/package.json` 与发布脚本中各有一份，
   脚本启动时强制校验两者一致（漏改一侧的后果是「某平台装上后没有二进制」，只有该平台用户会遇到）
 
+**包管理器选择**
+
+文档只推荐 npm，原因是 npm 与 pnpm 的全局 `bin` 目录不同（`npm config get prefix`
+vs `pnpm bin -g`），混用会让两份 `jm` 并存，PATH 里靠前者生效，版本问题极难排查。
+
+功能上两者都支持：启动器优先用 `require.resolve('<pkg>/package.json')` 定位平台二进制，
+Node 的模块解析天然处理 npm 平铺与 pnpm 的 `.pnpm` + 符号链接两种布局，
+两条路径均已实测。硬编码路径探测仅作兜底——早先只写探测时正是因为路径多推导了一层，
+导致「装好了却找不到二进制」。
+
 ## 4. 不做
 
 - ❌ 把 408 条路由逐个映射成子命令（正是 `gh` 避免的做法）
