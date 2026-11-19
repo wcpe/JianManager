@@ -36,7 +36,7 @@ import {
 } from '@jianmanager/ui/components/table'
 
 /**
- * 我的令牌（FR-563 / ADR-112）。
+ * 我的令牌。
  *
  * 与「Agent Token」页的区别：这里是**用户自助**的人类凭证（`jmut_`），
  * 任何登录用户都能看到自己名下的令牌并吊销；Agent Token 那页仅平台管理员可见。

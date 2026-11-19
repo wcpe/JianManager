@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 配置与环境变量（FR-564 / ADR-112）。
+// 配置与环境变量。
 //
 // 优先级（高 → 低）：--url / --token 命令行 → JM_URL / JM_TOKEN 环境变量
 //                  → 当前默认 host（配置文件）→ 内置默认值。
@@ -292,7 +292,7 @@ var subcommandFlags = map[string]struct{}{
 	"--force":   {},
 	"--approve": {},
 	"--deny":    {},
-	// skill install 的目标与来源（FR-566）：
+	// skill install 的目标与来源：
 	// 全局解析阶段只透传，由 runSkill 自行解释。
 	"--dir":  {},
 	"--from": {},

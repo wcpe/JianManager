@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// runAPI 实现 `jm api <METHOD> <PATH>`（FR-564）。
+// runAPI 实现 `jm api <METHOD> <PATH>`。
 //
 // 与 gh api 同构：一条命令覆盖 CP 全部 HTTP 路由，不做子命令映射。
 // 输出保持原始 JSON，便于 jq / 脚本消费。

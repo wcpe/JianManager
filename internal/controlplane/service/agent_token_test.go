@@ -267,7 +267,7 @@ func TestAgentCapability_CatalogAndDiscover(t *testing.T) {
 }
 
 // TestCatalog_SummaryPresent 断言所有 action 都有非空摘要。
-// 摘要供 MCP tool 描述使用，缺失会导致 agent 无从判断工具用途（ADR-111）。
+// 摘要供 MCP tool 描述使用，缺失会导致 agent 无从判断工具用途。
 func TestCatalog_SummaryPresent(t *testing.T) {
 	for _, d := range AgentActionCatalog() {
 		assert.NotEmpty(t, d.Summary, "action %s 缺 Summary", d.Action)

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// runAuth 分发 `jm auth <sub>`（FR-565）。
+// runAuth 分发 `jm auth <sub>`。
 func runAuth(cfg Config, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("用法: jm auth login|status|logout [--host <url>]")
@@ -320,7 +320,10 @@ func runAuthStatus(cfg Config) error {
 	return nil
 }
 
-// runAuthLogout 本地删除 + 远端吊销（FR-565 决策 5）。
+// runAuthLogout 本地删除 + 远端吊销。
+//
+// 两件事都要做：只清本地会让令牌在服务端继续有效（泄露时无法回收），
+// 只吊销远端则本机钥匙串里还留着已无效的凭据，下次调用才暴露 401。
 func runAuthLogout(cfg Config) error {
 	if cfg.HostKey == "" {
 		return fmt.Errorf("未确定当前主机，无法登出")

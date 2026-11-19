@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// DeviceFlowHandler 设备授权（FR-562 / RFC 8628 / ADR-112）。
+// DeviceFlowHandler 设备授权（RFC 8628）。
 //
 // 三个端点分两类鉴权：
 //   - /device/code 与 /device/token 供 CLI 使用，匿名（CLI 此时还没有凭证）

@@ -192,12 +192,12 @@ type Services struct {
 	EnrollToken      *service.EnrollTokenService
 	// AgentToken Agent 专用令牌 + 策略引擎；nil 时 agent 端点关闭。
 	AgentToken *service.AgentTokenService
-	// UserToken 用户自助令牌与设备授权（FR-560/435，见 ADR-112）；
+	// UserToken 用户自助令牌与设备授权；
 	// nil 时 /user/tokens 与 /oauth/device 关闭。
 	UserToken *service.UserTokenService
-	// DeviceFlow 设备授权流程（FR-562 / RFC 8628）；nil 时 /oauth/device 关闭。
+	// DeviceFlow 设备授权流程（RFC 8628）；nil 时 /oauth/device 关闭。
 	DeviceFlow *service.DeviceFlowService
-	// AgentCallLog Agent 调用流水（FR-390，见 ADR-076）；nil 时不记流水、无 call-logs/count。
+	// AgentCallLog Agent 调用流水；nil 时不记流水、无 call-logs/count。
 	AgentCallLog *service.AgentCallLogService
 	// AgentTransfer 流式传输票据：MCP 不承载大文件字节，改由票据换取一次性数据面。
 	// nil 时 /api/v1/agent-transfer 关闭（未配置服务端主密钥）。
@@ -349,7 +349,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 	// 需要认证的路由
 	protected := api.Group("")
-	// 用户令牌分流置于 JWT 之前（ADR-112）：jmut_ 走 UserTokenAuth，其余前缀交给 JWTAuth。
+	// 用户令牌分流置于 JWT 之前：jmut_ 走 UserTokenAuth，其余前缀交给 JWTAuth。
 	// 顺序不可调换，否则 jmut_ 会先被 JWTAuth 判为「Token 无效」。
 	if svcs.UserToken != nil {
 		protected.Use(middleware.UserTokenAuth(svcs.UserToken))
@@ -376,13 +376,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		NewRBACHandler(permSvc, svcs.User).RegisterRoutes(protected)
 	}
 
-	// 用户自助令牌（FR-561 / ADR-112）：登录用户管理自己的 jmut_ 令牌，无需额外权限节点。
+	// 用户自助令牌：登录用户管理自己的 jmut_ 令牌，无需额外权限节点。
 	// 平台管理员可吊销他人令牌（handler 内判定）。
 	if svcs.UserToken != nil {
 		NewUserTokenHandler(svcs.UserToken, svcs.Audit).RegisterRoutes(protected)
 	}
 
-	// 设备授权（FR-562 / RFC 8628）：CLI 侧端点匿名（此时尚无凭证），确认端点需 JWT。
+	// 设备授权（RFC 8628）：CLI 侧端点匿名（此时尚无凭证），确认端点需 JWT。
 	if svcs.DeviceFlow != nil {
 		deviceHandler := NewDeviceFlowHandler(svcs.DeviceFlow)
 		publicGroup := api.Group("")
@@ -390,7 +390,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		deviceHandler.RegisterAuthorizeRoutes(protected)
 	}
 
-	// 所有认证用户可访问的资源（FR-432：路由组挂权限节点，清空模板后 API 403）
+	// 所有认证用户可访问的资源（路由组挂权限节点，清空模板后 API 403）
 	{
 		// 域级读权限子组：组内无节点即整组拒绝
 		permRead := func(nodes ...string) *gin.RouterGroup {
@@ -999,11 +999,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	// 依赖 CP 自托管这两个脚本。显式注册（根路径、非 /api/v1）以先于下方 SPA NoRoute 回退命中。
 	registerInstallScriptRoutes(r)
 
-	// Agent 运维知识静态端点（FR-566 / ADR-111）：匿名可读，供纯内网 agent 取 SKILL.md。
+	// Agent 运维知识静态端点：匿名可读，供纯内网 agent 取 SKILL.md。
 	// 同样需先于 SPA NoRoute 注册，否则会被回退成 index.html。
 	registerSkillRoutes(r)
 
-	// Worker 二进制 CP-local 下载端点（FR-190）：匿名路径由短 token 保护，先于 SPA NoRoute 注册。
+	// Worker 二进制 CP-local 下载端点：匿名路径由短 token 保护，先于 SPA NoRoute 注册。
 	if svcs.SelfUpdate != nil {
 		NewSelfUpdateHandler(svcs.SelfUpdate, svcs.Audit).RegisterDownloadRoutes(r)
 	}

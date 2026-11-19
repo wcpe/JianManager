@@ -429,11 +429,11 @@ func main() {
 	enrollTokenSvc := service.NewEnrollTokenService(db)
 	// Agent 专用令牌 + 策略引擎：与人类 JWT 分离，默认只读 + 写白名单 + scope。
 	agentTokenSvc := service.NewAgentTokenService(db)
-	// 用户自助令牌（FR-560 / ADR-112）：人类凭证 jmut_，权限 = token scope ∩ 用户 RBAC。
+	// 用户自助令牌：人类凭证 jmut_，权限 = token scope ∩ 用户 RBAC。
 	userTokenSvc := service.NewUserTokenService(db, authzSvc)
-	// 设备授权流程（FR-562 / RFC 8628）：CLI 通过浏览器确认换取 user_token。
+	// 设备授权流程（RFC 8628）：CLI 通过浏览器确认换取 user_token。
 	deviceFlowSvc := service.NewDeviceFlowService(db, userTokenSvc)
-	// Agent 流式传输票据（FR-397）：MCP 不承载大文件字节，改签发短时单用途票据换取数据面。
+	// Agent 流式传输票据：MCP 不承载大文件字节，改签发短时单用途票据换取数据面。
 	// 密钥从服务端主密钥域分离派生，与计划令牌互不通用。
 	agentTransferSvc, err := service.NewAgentTransferTicketService(
 		service.DeriveAgentTransferTicketSecret([]byte(cfg.JWT.Secret)), agentTokenSvc, nil)

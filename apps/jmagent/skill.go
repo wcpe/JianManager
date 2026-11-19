@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Agent 运维知识的宿主侧安装（FR-566 / ADR-111）。
+// Agent 运维知识的宿主侧安装。
 //
 // 双通道取内容：
 //   - CP 静态路由：`GET /api/v1/skill/<path>`，匿名可读，内网无外网时可用（默认）

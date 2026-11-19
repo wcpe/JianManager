@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict"
 
-// `jm` 的 npm 启动器（FR-567）。
+// `jm` 的 npm 启动器。
 //
 // 分发模型：主包 `@jianmanager/jm` 不含二进制，占位靠 `optionalDependencies` 引入
 // 当前平台的 `@jianmanager/jm-<platform>`，由它携带真正的 Go 二进制。

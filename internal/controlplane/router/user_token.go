@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// UserTokenHandler 用户自助令牌管理（FR-561 / ADR-112）。
+// UserTokenHandler 用户自助令牌管理。
 //
 // 与 AgentTokenHandler 的差异：挂在 JWT 保护下的「本人」路由组，
 // 普通用户即可操作，不需要平台管理员；管理员可额外吊销他人令牌。

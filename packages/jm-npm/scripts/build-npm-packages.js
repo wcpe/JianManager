@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict"
 
-// `jm` 的 npm 平台分包发布脚本（FR-567）。
+// `jm` 的 npm 平台分包发布脚本。
 //
 // 设计：一次 `go build` 产出各平台二进制，随后为每个平台生成一个独立 npm 包目录
 // （`@jianmanager/jm-<platform>`），最后按需发布。主包 `@jianmanager/jm` 通过

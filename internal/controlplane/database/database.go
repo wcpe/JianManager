@@ -154,11 +154,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.HostProcessSnapshot{},
 		// Agent 专用令牌：与人类 JWT 分离，scope + 写白名单。
 		&model.AgentToken{},
-		// 用户自助令牌（FR-560 / ADR-112）：与 Agent Token 分表，人类凭证，权限取交集。
+		// 用户自助令牌：与 Agent Token 分表，人类凭证，权限取交集。
 		&model.UserToken{},
-		// 设备授权一次性码（FR-562 / RFC 8628）。
+		// 设备授权一次性码（RFC 8628）。
 		&model.DeviceCode{},
-		// Agent 调用流水（FR-390，见 ADR-076）：读+写 Ops 与日后 MCP tool。
+		// Agent 调用流水：读+写 Ops 与日后 MCP tool。
 		&model.AgentCallLog{},
 		&model.AgentTransferTicket{},
 		&model.Instance{},

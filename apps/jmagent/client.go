@@ -94,7 +94,7 @@ func (c *Client) doRequest(method, path string, query url.Values, body []byte) (
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	// FR-390：默认自报客户端，便于 CP 调用流水区分 jm / curl / mcp。
+	// 默认自报客户端：便于 CP 的调用流水区分 jm / curl / mcp。
 	req.Header.Set("X-JM-Agent-Client", "jm")
 
 	resp, err := c.httpClient.Do(req)

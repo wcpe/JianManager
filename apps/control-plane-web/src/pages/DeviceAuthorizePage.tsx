@@ -10,7 +10,7 @@ import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
 
 /**
- * 设备授权确认页（FR-562 / RFC 8628 / ADR-112）。
+ * 设备授权确认页（RFC 8628）。
  *
  * 场景：用户在终端运行 `jm auth login`，CLI 显示 user_code 与 URL；
  * 用户在本页输入 user_code 并确认，CLI 那边轮询到令牌完成登录。
