@@ -73,11 +73,39 @@ func runAPI(cfg Config, args []string) error {
 		return fmt.Errorf("用法: jm api <METHOD> <PATH> [--data @file|-] [--query k=v]...\n" +
 			"       jm api <PATH>            （默认 GET）")
 	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
+	// 完整 URL 直接使用（gh api 也支持）：这是绕开 shell 路径改写最彻底的方式，
+	// 因为它本就不以 `/` 开头，不会被当成文件系统路径。
+	var absURL string
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		absURL = path
+		path = ""
+	}
+	if path != "" {
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		// 折叠开头的重复斜杠：Git Bash 下用户常写 `//api/v1/x` 来绕开路径改写，
+		// 而 `baseURL + "//api/..."` 会得到 `host//api/...`，路由据此匹配失败。
+		// 与 gh 一致地把它当作单个前导斜杠。
+		for strings.HasPrefix(path, "//") {
+			path = path[1:]
+		}
 	}
 	if !validMethod(method) {
 		return fmt.Errorf("不支持的 HTTP 方法: %s", method)
+	}
+
+	// 拦截「shell 把 URL 路径当成文件系统路径改写」的情形。
+	//
+	// 最典型的是 Git Bash / MSYS2：它会把 `/api/v1/user/tokens` 改写成
+	// `C:/Program Files/Git/api/v1/user/tokens`，于是请求打到 SPA 兜底路由，
+	// 拿回一坨 HTML —— 用户看到的是「接口没数据」，完全联想不到是 shell 干的。
+	// 与 `gh api` 一致的处理：明确点出原因，并给出「省略前导斜杠」这条解法。
+	if looksLikeRewrittenPath(path) {
+		return fmt.Errorf("请求路径被 shell 改写成了 %q\n"+
+			"这通常是 Git Bash / MSYS2 把 URL 路径当文件路径转换所致。\n"+
+			"改为省略前导斜杠即可：%s api %s %s\n"+
+			"（也可用双斜杠或完整 URL）", path, progName(), method, strings.TrimPrefix(rewrittenSuffix(path), "/"))
 	}
 
 	var body []byte
@@ -94,7 +122,13 @@ func runAPI(cfg Config, args []string) error {
 	if hasQuery {
 		q = query
 	}
-	respBody, err := client.doRequest(method, path, q, body)
+	var respBody []byte
+	var err error
+	if absURL != "" {
+		respBody, err = client.doRequestAbs(method, absURL, q, body)
+	} else {
+		respBody, err = client.doRequest(method, path, q, body)
+	}
 	if err != nil {
 		return err
 	}
@@ -107,6 +141,41 @@ func runAPI(cfg Config, args []string) error {
 	out := strings.TrimRight(string(respBody), "\n")
 	fmt.Fprintln(os.Stdout, out)
 	return nil
+}
+
+// looksLikeRewrittenPath 判定路径是否被 shell 改写成了文件系统路径。
+//
+// 只认得形态明显的两种，避免误伤正常路由：
+//   - `C:/Program Files/Git/api/...`：Git Bash 把 `/api/...` 拼到其安装根
+//   - `/c/Program Files/...`：少数 shell 的另一种盘符写法
+//
+// 判定依据是「路径里出现了盘符或 Program Files 这类明显非 API 片段的目录名」。
+func looksLikeRewrittenPath(p string) bool {
+	low := strings.ToLower(p)
+	// Windows 盘符形态：字母 + ":"
+	if len(p) >= 2 && p[1] == ':' && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) {
+		return true
+	}
+	if strings.Contains(low, "/program files") || strings.Contains(low, "\\program files") {
+		return true
+	}
+	// 形如 /c/Program Files/... 的盘符挂载写法
+	if len(p) > 3 && p[0] == '/' && p[2] == '/' && strings.Contains(low, "/git/") {
+		return true
+	}
+	return false
+}
+
+// rewrittenSuffix 从被改写的路径里取出原本的 API 路径部分。
+//
+// 找不到可识别的标记时原样返回，让错误信息至少还带着用户输入过的内容。
+func rewrittenSuffix(p string) string {
+	for _, marker := range []string{"/api/", "/oauth/"} {
+		if i := strings.Index(p, marker); i >= 0 {
+			return p[i:]
+		}
+	}
+	return p
 }
 
 // addQuery 解析 key=value 并累加（允许同名多值）。

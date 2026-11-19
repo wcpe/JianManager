@@ -86,17 +86,24 @@ func subcommandUsage(sub string) string {
 
 参数:
   <METHOD>          GET / POST / PUT / PATCH / DELETE（省略则默认 GET）
-  <PATH>            CP 路由路径，如 /api/v1/instances
+  <PATH>            CP 路由路径，如 api/v1/instances（可省略前导斜杠）
 
 选项:
   --data, -d <v>    请求体：@文件路径、- 表示 stdin、其它按字面量 JSON
   --query, -q k=v   查询参数，可重复
 
 示例:
-  jm api GET /api/v1/instances
-  jm api POST /api/v1/instances -d @payload.json
-  jm api GET /api/v1/instances -q page=2 -q size=20
-  echo '{"name":"x"}' | jm api POST /api/v1/instances -d -
+  jm api GET api/v1/instances
+  jm api POST api/v1/instances -d @payload.json
+  jm api GET api/v1/instances -q page=2 -q size=20
+  echo '{"name":"x"}' | jm api POST api/v1/instances -d -
+
+Git Bash / MSYS2 注意:
+  带前导斜杠的路径（/api/v1/x）会被 shell 改写成 C:/Program Files/Git/api/v1/x，
+  请求随即打到前端兜底路由、拿回一坨 HTML。**省略前导斜杠**即可避免：
+      jm api GET api/v1/instances      ← 推荐
+      jm api GET //api/v1/instances    ← 也可（等价于单斜杠）
+      jm api GET http://host/api/v1/instances   ← 完整 URL 亦可
 `
 	case "auth":
 		return `用法: jm auth <子命令>

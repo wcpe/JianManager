@@ -71,7 +71,20 @@ func (c *Client) doRequest(method, path string, query url.Values, body []byte) (
 	if c.baseURL == "" {
 		return nil, fmt.Errorf("Control Plane 基址为空")
 	}
-	u, err := url.Parse(c.baseURL + path)
+	return c.doRequestURL(method, c.baseURL+path, query, body)
+}
+
+// doRequestAbs 以完整 URL 发起请求（`jm api` 支持直接给 URL，gh 同样支持）。
+//
+// 这条路不经过 baseURL 拼接，因此不受 shell 路径改写影响——URL 不像以 `/` 开头的
+// 参数那样会被 Git Bash / MSYS2 转成文件系统路径。
+func (c *Client) doRequestAbs(method, absURL string, query url.Values, body []byte) ([]byte, error) {
+	return c.doRequestURL(method, absURL, query, body)
+}
+
+// doRequestURL 是两条入口的共用实现。
+func (c *Client) doRequestURL(method, rawURL string, query url.Values, body []byte) ([]byte, error) {
+	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("构造请求 URL 失败: %w", err)
 	}
