@@ -434,6 +434,30 @@ jobs:
           done
           ls -l dist/jm-*
 
+      - name: 交叉编译 jmctl 紧急控制台（FR-184 / ADR-041）
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 单列而不并入 CP：它的用途正是 CP 与 Worker 全挂时的本机救援，
+          # 那时无法指望 CP 自身携带这个工具。ADR-041 写明「纳入 release 矩阵
+          # 可后续增量」，此处兑现。
+          # 只出 linux/windows amd64：jmctl 直连本机 daemon 的 socket/命名管道，
+          # 实际部署只有这两类主机。
+          LDFLAGS="-s -w -X github.com/wcpe/JianManager/internal/version.Version=${VERSION}"
+          mkdir -p dist
+          for target in windows/amd64 linux/amd64; do
+            os="${target%%/*}"
+            arch="${target##*/}"
+            ext=""
+            [ "$os" = "windows" ] && ext=".exe"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "${LDFLAGS}" \
+              -o "dist/jmctl-${os}-${arch}${ext}" ./apps/jmctl
+          done
+          ls -l dist/jmctl-*
+
       - name: 上传二进制产物（供 smoke 校验，retention 1 天）
         uses: actions/upload-artifact@v7
         with:
@@ -457,6 +481,8 @@ jobs:
           - { runner: windows-latest, artifact: binaries-windows-amd64, binary: worker-windows-amd64.exe }
           - { runner: ubuntu-24.04, artifact: binaries-linux-amd64, binary: jm-linux-amd64 }
           - { runner: windows-latest, artifact: binaries-windows-amd64, binary: jm-windows-amd64.exe }
+          - { runner: ubuntu-24.04, artifact: binaries-linux-amd64, binary: jmctl-linux-amd64 }
+          - { runner: windows-latest, artifact: binaries-windows-amd64, binary: jmctl-windows-amd64.exe }
     runs-on: ${{ matrix.runner }}
     steps:
       - name: 下载待验二进制

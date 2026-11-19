@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test test-plain e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-jm dist-jm-npm dist-prep
+.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test test-plain e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-jm dist-jm-npm dist-jmctl dist-prep
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -125,7 +125,7 @@ dist-full: dist-prep embed-worker dist-bin-full
 dist-slim: dist-prep clear-worker-embed dist-bin-slim
 
 # 一次产出 full + slim CP 与独立 worker（先 full 再 slim，避免 embed 目录互相污染）。
-dist-all: dist-full dist-slim dist-jm
+dist-all: dist-full dist-slim dist-jm dist-jmctl
 
 # 完整版二进制命名（ADR-036）：control-plane / worker × linux|windows amd64。
 dist-bin-full:
@@ -164,6 +164,19 @@ dist-jm:
 # 依赖 dist-jm 的产物；加 PUBLISH=1 才会真正推送到 npm。
 dist-jm-npm: dist-jm
 	node packages/jm-npm/scripts/build-npm-packages.js $(if $(PUBLISH),--publish,)
+
+# 紧急控制台 CLI jmctl 的发行物（FR-184 / ADR-041）。
+#
+# 单独发布而不并入 CP：它的用途正是 CP 与 Worker 全挂时的本机救援，
+# 此时无法指望 CP 自身携带这个工具。ADR-041 原文即写明「纳入 release 矩阵
+# 可后续增量」，这里兑现该条。
+#
+# 只出 linux/windows amd64：jmctl 走 Unix socket / 命名管道直连本机 daemon，
+# 实际部署只有这两类主机。
+dist-jmctl:
+	mkdir -p dist
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jmctl-windows-amd64.exe ./apps/jmctl
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jmctl-linux-amd64 ./apps/jmctl
 
 # 构建 Bot Worker
 build-bot:

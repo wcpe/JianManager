@@ -13,6 +13,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/wcpe/JianManager/internal/version"
 )
 
 // usage 打印命令总览。
@@ -28,6 +30,8 @@ func usage() {
 所有 <uuid 前缀> 支持唯一前缀补全（类 docker/git 短 ID）。
 PID 目录默认取数据根下 var/servers（与 Worker 实际写入路径对齐）：
   --pid-dir > $JIANMANAGER_DATA_DIR/var/servers > ./data/var/servers
+
+  jmctl --version                                         显示版本号
 `)
 }
 
@@ -39,6 +43,13 @@ func newFlagSet(name string) *flag.FlagSet {
 }
 
 func main() {
+	// 版本先于一切解析。应急场景里「手上这份是哪个版本」直接影响能否对上
+	// 目标 daemon 的帧协议，且发行产物的冒烟校验正是靠它自证身份。
+	if version.Requested(os.Args[1:]) {
+		fmt.Println(version.Version)
+		return
+	}
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
