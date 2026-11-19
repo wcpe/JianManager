@@ -16,6 +16,7 @@
 
 const { spawn } = require("node:child_process")
 const { existsSync } = require("node:fs")
+const { createRequire } = require("node:module")
 const path = require("node:path")
 
 /** 当前平台标识，与平台包命名一一对应。 */
@@ -37,26 +38,39 @@ function binaryName() {
 }
 
 /**
- * 定位平台包根目录。
+ * 定位平台包里的二进制。
  *
- * 不用 `require.resolve` 直接找二进制：可选依赖在某些包管理器的严格模式下
- * 不会提升到本包的 node_modules，导致 resolve 失败。逐个候选路径探测更稳，
- * 且在失败时能给出具体找过的位置，便于用户自查。
+ * 优先用 Node 的模块解析（`require.resolve`）：它天然认识 npm 的平铺布局、
+ * pnpm 的 `.pnpm` + symlink 布局，以及其他包管理器的变体，无需为每种布局
+ * 各写一条硬编码路径。定位到平台包的 package.json 后再回溯到 bin/。
+ *
+ * 解析失败时才退回路径探测，用于 `resolve` 也失效的极端情况（例如某些
+ * 严格隔离配置把可选依赖放在不可解析的位置）。两条路都失败时返回 null，
+ * 由调用方给出可操作的提示。
  */
 function findBinary() {
   const id = platformId()
   const pkg = platformPackageName(id)
   const bin = binaryName()
-  // 包根：本文件在 <pkg>/bin/jm.js，上溯一级即包根。
-  const pkgRoot = path.join(__dirname, "..")
 
+  // 首选：模块解析。
+  try {
+    const require_ = createRequire(__filename)
+    const pkgJSON = require_.resolve(`${pkg}/package.json`)
+    const candidate = path.join(path.dirname(pkgJSON), "bin", bin)
+    if (existsSync(candidate)) return candidate
+  } catch {
+    // 解析不到（未安装 / 包管理器隔离），走下面的探测。
+  }
+
+  // 兜底：按已知布局逐条探测。
+  // __dirname 形如 <...>/node_modules/@jianmanager/jm/bin，故 pkgRoot 是本包的
+  // 上一级（即 @jianmanager 目录），平台包与它同级。
+  const scopeDir = path.join(__dirname, "..", "..")
   const candidates = [
-    // 常规：npm 平铺安装，平台包与本包同处 <node_modules>/@jianmanager/
-    path.join(pkgRoot, "..", `jm-${id}`, "bin", bin),
-    // pnpm：平台包经符号链接挂在 <pkg>/node_modules 下
-    path.join(pkgRoot, "node_modules", pkg, "bin", bin),
-    // 全局安装的次级回退：直接在同级 node_modules 里找
-    path.join(pkgRoot, "..", "..", pkg, "bin", bin),
+    path.join(scopeDir, `jm-${id}`, "bin", bin), // npm 平铺：同级 scope 目录
+    path.join(__dirname, "..", "node_modules", pkg, "bin", bin), // pnpm：包内 node_modules
+    path.join(scopeDir, "..", pkg, "bin", bin), // 兜底：上一级 node_modules
   ]
 
   for (const candidate of candidates) {
