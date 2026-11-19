@@ -1,0 +1,97 @@
+/**
+ * 设置字段的**渲染类型**判定。
+ *
+ * 【为什么要抽出来】改造前这段逻辑是 SettingsPageView 里的一串 `item.key === 'xxx' ? … : …`
+ * 硬编码：`debug.mode` 渲染 Switch、`log.level` 渲染 Select、其余一律 Input。
+ * 三个问题：
+ *  ① 想在别的页面复用这套「按类型渲染 + 即时校验 + 保存」时，只能复制那段 JSX；
+ *  ② 新增一种字段要改组件内部，而不是"给一份字段描述"；
+ *  ③ 像 `log.acq.path_overrides` 这种需要**自定义编辑器**的字段，只能再塞一个三元分支，
+ *     越堆越长。
+ *
+ * 现在改成：字段类型由一份**声明**决定（keys → 类型），组件按类型分派渲染器。
+ * 纯函数放这里，可脱离 UI 单测。
+ */
+
+/** 字段渲染类型。新增类型时同步补 FieldRenderers 映射（类型系统会强制）。 */
+export type FieldType =
+  /** 单行文本（默认）。 */
+  | 'text'
+  /** 密码/令牌：遮显 + 关闭自动填充。 */
+  | 'secret'
+  /** 单行文本但只收数字（移动端弹数字键盘）。 */
+  | 'numeric'
+  /** 二值开关（Switch），提交值仍为 "true"/"false"。 */
+  | 'switch'
+  /** 有限选项下拉。 */
+  | 'select'
+  /**
+   * 键值对编辑器（一组可增删的「键 → 值」行）。
+   *
+   * 用于后端契约是 JSON 对象文本、但语义是"一组映射"的字段（如
+   * `log.acq.path_overrides`）。这类字段绝不能让用户手写 JSON。
+   */
+  | 'kv-pairs'
+
+/** 一个字段的渲染声明。 */
+export interface FieldSpec {
+  type: FieldType
+  /** select 的候选值。 */
+  options?: readonly { value: string; label: string }[]
+  /** switch 的开启/关闭文案（缺省用通用"开启/关闭"）。 */
+  onLabel?: string
+  offLabel?: string
+  /** 是否即时生效（false 时界面标注"Worker 侧生效"）。 */
+  effectiveImmediately?: boolean
+  /** 额外的输入提示。 */
+  placeholder?: string
+}
+
+/**
+ * 已知字段的渲染声明表。
+ *
+ * 【为什么用表而不是 if-else】表可以被别处读取（例如"哪些字段需要 Worker 侧生效标注"），
+ * 而 if-else 只能活在渲染函数里。新增字段只需加一行，不用改组件。
+ *
+ * 未登记的 key 落回默认类型（text），所以这张表可以逐步补全，不必一次穷举。
+ */
+export const FIELD_SPECS: Readonly<Record<string, FieldSpec>> = {
+  'debug.mode': { type: 'switch', onLabel: '开启', offLabel: '关闭', effectiveImmediately: true },
+  'log.level': {
+    type: 'select',
+    options: [
+      { value: 'debug', label: 'debug' },
+      { value: 'info', label: 'info' },
+      { value: 'warn', label: 'warn' },
+      { value: 'error', label: 'error' },
+    ],
+    effectiveImmediately: true,
+  },
+  'invite.smtp.password': { type: 'secret', effectiveImmediately: true },
+  'github.token': { type: 'secret', effectiveImmediately: true },
+  'backup.retention_days': { type: 'numeric', effectiveImmediately: false },
+  // 这一项就是"不要让我手输 JSON"的那个字段：渲染为成对行编辑器。
+  'log.acq.path_overrides': { type: 'kv-pairs', effectiveImmediately: false },
+}
+
+/** 取某个字段的渲染声明（未登记时返回默认 text）。 */
+export function fieldSpecOf(key: string): FieldSpec {
+  return FIELD_SPECS[key] ?? { type: 'text' }
+}
+
+/** 该字段是否即时生效（给"Worker 侧生效"徽标用）。 */
+export function isEffectiveImmediately(key: string): boolean {
+  return fieldSpecOf(key).effectiveImmediately ?? false
+}
+
+/**
+ * 该字段是否由**自定义编辑器**接管（不是普通输入框）。
+ *
+ * 【为什么要这个判断】自定义编辑器的字段，其"草稿"是结构化数据而不是字符串，
+ * 不能套用"值与原始值比较"的脏检查，也不能在提交前把它当普通字符串校验。
+ * 调用方据此走不同的草稿通道。
+ */
+export function usesCustomEditor(key: string): boolean {
+  const t = fieldSpecOf(key).type
+  return t === 'kv-pairs'
+}
