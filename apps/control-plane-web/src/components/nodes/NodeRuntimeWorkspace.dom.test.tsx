@@ -22,6 +22,10 @@ const state = {
   runtimes: [] as Array<Record<string, unknown>>,
   logEnabled: false,
   pm: null as string | null,
+  /** 当前 registry 列表（摘要里的源条数）。 */
+  registries: [] as Array<{ url: string; scope?: string }>,
+  /** 采集面板收到的 active（用来断言「弹窗关着就不取数」）。 */
+  logAcqActive: null as boolean | null,
   /** 日志运行时状态：默认「未启用」（无实例），用例可覆盖。 */
   logRuntime: { instances: [] as Array<Record<string, unknown>> } as
     | { instances: Array<Record<string, unknown>> }
@@ -41,7 +45,10 @@ vi.mock('@/api/runtimes', () => ({
   useDeleteRuntime: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }))
 vi.mock('@/api/pmConfig', () => ({
-  useNodePMConfig: () => ({ data: state.pm ? { pm: state.pm } : undefined, isLoading: false }),
+  useNodePMConfig: () => ({
+    data: state.pm ? { pm: state.pm, registries: state.registries } : undefined,
+    isLoading: false,
+  }),
   useSetNodePMConfig: () => ({ mutate: vi.fn() }),
   useGlobalPackages: () => ({ data: undefined, isLoading: false, isFetching: false, refetch: vi.fn(), error: null }),
   useInstallGlobalPackage: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -72,8 +79,12 @@ vi.mock('@/api/metrics', async (importOriginal) => {
   }
 })
 // 日志采集面板自带取数（settings 域），本用例不关心其内容，给一个轻量替身。
+// 替身要透出 active：弹窗关闭 = 不挂载 = 不取数，这是「关闭即停止请求」的直接证据。
 vi.mock('@/components/logs/NodeLogAcqPanel', () => ({
-  default: () => <div data-testid="log-acq-panel" />,
+  default: ({ active = true }: { active?: boolean }) => {
+    state.logAcqActive = active
+    return <div data-testid="log-acq-panel" data-active={String(active)} />
+  },
 }))
 
 const node = (over: Partial<NodeInfo> = {}): NodeInfo =>
@@ -108,6 +119,8 @@ beforeEach(() => {
   state.runtimes = []
   state.logEnabled = false
   state.pm = null
+  state.registries = []
+  state.logAcqActive = null
   state.logRuntime = { instances: [] }
 })
 
@@ -273,9 +286,87 @@ describe('NodeRuntimeWorkspace', () => {
     expect(await screen.findByText('本节点尚未启用日志平台运行时')).toBeInTheDocument()
   })
 
-  it('采集规则 sub 挂上原本零引用的 NodeLogAcqPanel', async () => {
+  it('采集规则 sub 只放摘要与编辑按钮，原本零引用的 NodeLogAcqPanel 收进弹窗', async () => {
+    const user = userEvent.setup()
     renderWithProviders(<NodeRuntimeWorkspace node={node()} sub="logAcq" onSub={() => {}} />)
-    expect(await screen.findByTestId('log-acq-panel')).toBeInTheDocument()
+
+    // 页面上常驻的是摘要与入口，不是规则表本体。
+    expect(screen.getByTestId('runtime-logacq-summary')).toBeInTheDocument()
+    expect(screen.getByTestId('runtime-logacq-edit')).toBeInTheDocument()
+    expect(screen.queryByTestId('log-acq-panel')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('runtime-logacq-dialog')).not.toBeInTheDocument()
+
+    // 点开才出现——原本零引用的面板现在经弹窗可达。
+    await user.click(screen.getByTestId('runtime-logacq-edit'))
+    const dialog = await screen.findByTestId('runtime-logacq-dialog')
+    const panel = within(dialog).getByTestId('log-acq-panel')
+    expect(panel).toBeInTheDocument()
+    expect(panel.dataset.active).toBe('true')
+  })
+
+  it('包管理器改成摘要 + 编辑按钮：弹窗打开才渲染 NodePMConfigSection', async () => {
+    state.pm = 'pnpm'
+    state.registries = [{ url: 'https://registry.npmmirror.com' }, { url: 'https://a.example', scope: '@a' }]
+    const user = userEvent.setup()
+    renderWithProviders(<NodeRuntimeWorkspace node={node()} sub="packages" onSub={() => {}} />)
+
+    // 摘要常驻：不用开弹窗也知道当前 pm 与配了几个源。
+    const summary = screen.getByTestId('runtime-pm-summary')
+    expect(summary).toHaveTextContent('pnpm')
+    expect(summary).toHaveTextContent('2')
+
+    // 弹窗关着时表单不在文档里（不渲染 = 不发请求）。
+    expect(screen.queryByTestId('runtime-pm-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'registry 地址' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByTestId('runtime-pm-edit'))
+    const dialog = await screen.findByTestId('runtime-pm-dialog')
+    // NodePMConfigSection 的标志性元素：PM 选择与 registry 输入框。
+    expect(within(dialog).getByText('包管理器与下载源')).toBeInTheDocument()
+    expect(within(dialog).getAllByRole('textbox', { name: 'registry 地址' })).toHaveLength(2)
+    expect(within(dialog).getByRole('button', { name: '保存配置' })).toBeInTheDocument()
+  })
+
+  it('弹窗关闭后编辑内容不渲染（关闭即停止取数）', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<NodeRuntimeWorkspace node={node()} sub="packages" onSub={() => {}} />)
+
+    await user.click(screen.getByTestId('runtime-pm-edit'))
+    expect(await screen.findByTestId('runtime-pm-dialog')).toBeInTheDocument()
+
+    // 关闭：编辑内容必须整个消失，不能只是藏起来继续挂载（否则后台仍在轮询）。
+    // 关闭键文案取自 common.close（中文「关闭」），不用 Escape —— 后者依赖焦点落在 content 内。
+    await user.click(screen.getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByTestId('runtime-pm-dialog')).not.toBeInTheDocument())
+    expect(screen.queryByRole('textbox', { name: 'registry 地址' })).not.toBeInTheDocument()
+    // 摘要仍在：收起的是表单，不是状态。
+    expect(screen.getByTestId('runtime-pm-summary')).toBeInTheDocument()
+  })
+
+  it('日志平台运行时是常驻状态卡，不进弹窗', async () => {
+    state.logRuntime = {
+      instances: [
+        {
+          namespace: 'hot',
+          state: 'RUNNING',
+          health_ok: true,
+          query_ready: true,
+          listen_addr: '127.0.0.1:9428',
+          asset_tag: 'v1.52.0',
+        },
+      ],
+    }
+    renderWithProviders(<NodeRuntimeWorkspace node={node()} sub="log" onSub={() => {}} />)
+
+    // 状态卡直接在页面上（排障入口不能藏在弹窗后面）。
+    const flow = await screen.findByTestId('log-runtime-flow')
+    expect(flow).toBeInTheDocument()
+    // 它不在任何弹窗内容容器内。
+    expect(screen.queryByTestId('runtime-pm-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('runtime-logacq-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    // 本 sub 也不该出现采集面板（规则属于 logAcq 的弹窗）。
+    expect(screen.queryByTestId('log-acq-panel')).not.toBeInTheDocument()
   })
 
   it('节点离线：就绪带把可用项压成 blocked 并说明原因', async () => {

@@ -4,6 +4,9 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
+import { http, HttpResponse } from 'msw'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import { useAuthStore } from '@/stores/auth'
 import SettingsPage from './SettingsPage'
 import { keyCategory, validateSettingDraft } from '@/lib/settings/settings-form'
@@ -141,5 +144,86 @@ describe('SettingsPage 布尔设置项（输入侧优化）', () => {
     await waitFor(() => expect(toggle).toBeChecked())
     // 旁边文字同步反映状态（避免只有颜色/位置变化这一个信号），用 getAllByText 避免歧义。
     expect(screen.getAllByText('开启').length).toBeGreaterThan(0)
+  })
+})
+
+/**
+ * 保存成功后必须清草稿。
+ *
+ * 【这条守的是什么】通用表单组件只负责"提交什么"，清草稿是容器的职责
+ * （见 `settings-draft` 的 `clearSubmitted`）。改造期间两边都以为对方会做，
+ * 结果保存后草稿一直留着 —— 表现是「保存按钮永远可点、脏提示永远在」，
+ * 用户会以为保存没生效而反复点。
+ *
+ * 【为什么必须让服务端返回"旧值"】脏判定是「草稿 vs 服务端当前值」。如果 PUT 之后
+ * GET 返回新值（真实后端如此），那么即使**没清草稿**，草稿与新值相等、也算无改动——
+ * 这条用例就变成永远通过，抓不到缺陷（我第一版正是这样，做变异验证时它没红）。
+ * 所以这里注入一个"PUT 成功但 GET 仍返回旧值"的假后端，把「草稿到底有没有被清」
+ * 单独暴露出来。
+ */
+/** 只含本用例用到的项：graceful_stop.timeout 固定返回 30s（服务端"没变"）。 */
+const SEED_SETTINGS = {
+  editable: [
+    { key: 'graceful_stop.timeout', value: '30s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  ],
+  readOnly: [],
+}
+
+describe('SettingsPage 保存后清草稿', () => {
+  it('保存成功后保存按钮回到禁用、脏提示消失', async () => {
+    loginAsPlatformAdmin()
+    /*
+      构造"PUT 成功但 GET 仍返回旧值"的假后端。
+      devmock 的 PUT 会真的改种子数据，那样"没清草稿"也会因为草稿==新服务端值
+      被判定为无改动，用例就抓不到缺陷（第一版正是如此，变异验证没红）。
+    */
+    server.use(
+      http.get(API('/settings'), () => HttpResponse.json(SEED_SETTINGS)),
+      http.put(API('/settings'), () => HttpResponse.json({ ok: true })),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<SettingsPage />)
+
+    await user.click(await screen.findByRole('button', { name: /运行时/ }))
+    const input = (await screen.findByDisplayValue('30s')) as HTMLInputElement
+    await user.clear(input)
+    await user.type(input, '45s')
+
+    const save = screen.getByRole('button', { name: '保存' })
+    await waitFor(() => expect(save).toBeEnabled())
+    await user.click(save)
+
+    /*
+      先等展示值回落服务端值（30s），再断言"无改动"。
+      【为什么不能直接等按钮变禁用】保存过程中 `busy` 也会让按钮禁用；
+      `waitFor(toBeDisabled)` 会在**在途那一刻**就满足，等于什么都没测到。
+      必须先确认草稿已被清（输入框回到 30s），此时的禁用才是"无改动"导致的。
+    */
+    await waitFor(() => expect(screen.getByDisplayValue('30s')).toBeInTheDocument())
+    // 若没清草稿：草稿仍是 45s ≠ 服务端 30s ⇒ 仍算有改动 ⇒ 下面两条会红。
+    expect(screen.getByTestId('settings-save')).toBeDisabled()
+    expect(screen.getByTestId('settings-dirty-hint')).toHaveTextContent('无改动')
+  })
+})
+
+/**
+ * 设置页「日志采集」分类里的 path_overrides 必须是成对行编辑器，不是 JSON 文本框。
+ *
+ * 【这条守的是改造期间的一个真实缺陷】接入通用组件时，我的桥接层只透传了文本通道，
+ * 把结构化通道（kv）整个丢了 —— `log.acq.path_overrides` 正好落在这个分类里，
+ * 于是用户编辑它**永远不生效**，且界面上看不出任何异常。
+ * 这条用例从页面级确认：该字段渲染的是行编辑器（可增删行），而不是一个要手写 JSON 的输入框。
+ */
+describe('SettingsPage 日志采集：path_overrides 可视化编辑', () => {
+  it('渲染成对行编辑器，而不是 JSON 文本框', async () => {
+    loginAsPlatformAdmin()
+    const user = userEvent.setup()
+    renderWithProviders(<SettingsPage />)
+
+    await user.click(await screen.findByRole('button', { name: /日志采集/ }))
+    // 行编辑器存在即说明走的是 kv-pairs 分支（JSON 文本框不会渲染这个 testid）。
+    expect(await screen.findByTestId('path-overrides-editor')).toBeInTheDocument()
+    // 能加行：证明这是可编辑的成对行，而非只读展示。
+    expect(screen.getByTestId('path-overrides-add')).toBeEnabled()
   })
 })

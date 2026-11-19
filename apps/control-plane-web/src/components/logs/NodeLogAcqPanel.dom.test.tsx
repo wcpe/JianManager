@@ -10,7 +10,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
@@ -43,8 +43,31 @@ function acqView(overrides: Record<string, string> = {}) {
   }
 }
 
+/**
+ * 填第一行「实例覆盖」：实例 ID 与日志路径。
+ *
+ * 优先级：本节点有实例清单时用下拉，没有则降级为手填 ID 输入框。
+ * 测试里没有实例清单（mock 视图不带 instances），所以走手填分支。
+ *
+ * 【instanceId 是纯数字】序列化器 `serializePathOverrides` 自己会拼上 `inst:` 前缀，
+ * 所以这里传 "1" 而不是 "inst:1"——传 "inst:1" 会变成 `{"inst:inst:1":...}`，
+ * 那是个永远匹配不到任何实例、且会被前端校验拦下的非法值。
+ */
+async function fillFirstOverrideRow(
+  user: ReturnType<typeof userEvent.setup>,
+  instanceId: string,
+  path: string,
+) {
+  // 用容器查询取当下存在的行：点「添加」后行 key 是新增的，按正则拿到它。
+  const rowEl = document.querySelector('[data-testid^="path-override-row-"]')
+  if (!rowEl) throw new Error('没有生成覆盖行')
+  const rowKey = rowEl.getAttribute('data-testid')!.replace('path-override-row-', '')
+  // userEvent.type 会逐键触发 onChange 并重渲染；重新查元素避免持有已卸载节点。
+  await user.type(screen.getByTestId(`path-override-instance-${rowKey}`), instanceId)
+  await user.type(screen.getByTestId(`path-override-path-${rowKey}`), path)
+}
+
 const SCAN_KEY = 'log.acq.gz_scan_interval'
-const PATH_KEY = 'log.acq.path_overrides'
 
 /**
  * 悬停式 PUT：只有测试显式放行（release）才返回，用来构造「保存中继续输入」的窗口。
@@ -88,15 +111,15 @@ describe('NodeLogAcqPanel × 草稿生命周期（review D-02）', () => {
     const user = userEvent.setup()
     renderWithProviders(<NodeLogAcqPanel nodeId={1} online />)
 
-    const scanInput = await screen.findByTestId(`node-log-acq-input-${SCAN_KEY}`)
-    const pathInput = screen.getByTestId(`node-log-acq-input-${PATH_KEY}`)
+    const scanInput = await screen.findByTestId('setting-field-log-acq-gz_scan_interval').then(e => e.querySelector('input')!)
+    expect(screen.getByTestId('path-overrides-editor')).toBeInTheDocument()
 
-    // 初始无改动 → 没有未保存提示。
-    expect(screen.queryByTestId('node-log-acq-unsaved-hint')).not.toBeInTheDocument()
+    // 初始无改动 → 提示区显示「无改动」（该元素恒在，只是文案随状态变化）。
+    expect(screen.getByTestId('settings-dirty-hint')).toHaveTextContent('无改动')
 
     await user.type(scanInput, '1h')
     // 未保存提示可见（面板的草稿是暂存式，不给提示就分不清「已提交」与「只是敲进来了」）。
-    expect(await screen.findByTestId('node-log-acq-unsaved-hint')).toHaveTextContent('1 项未保存改动')
+    expect(await screen.findByTestId('settings-dirty-hint')).toHaveTextContent('有未保存修改')
 
     await user.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(puts).toHaveLength(1))
@@ -104,16 +127,18 @@ describe('NodeLogAcqPanel × 草稿生命周期（review D-02）', () => {
     expect(puts[0].values).toEqual({ [SCAN_KEY]: '1h' })
 
     // PUT 在途期间用户改了**另一个**键 —— 这条新输入必须在保存成功后仍在。
-    // 用 fireEvent.change 而非 user.type：userEvent 会把 `{` 解析成键盘描述符（须转义），
-    // 而这里只是「在途期间产生一次新输入」，一次性输入与逐键输入的语义等价。
-    fireEvent.change(pathInput, { target: { value: '{"inst:1":"proxy.log.0"}' } })
+    // path_overrides 现在是成对行编辑器（不再是 JSON 文本框）。
+    // 注意：只点「添加」留下的**半填行不算改动**（序列化结果空串 = 无覆盖），
+    // 所以这里要把这一行填完整，才构成"另一个键有未保存改动"。
+    await user.click(screen.getByTestId('path-overrides-add'))
+    await fillFirstOverrideRow(user, '1', 'proxy.log.0')
     await act(async () => {
       put.release()
     })
 
-    // 该键未被提交 ⇒ 仍是未保存草稿：输入框保留新值、提示仍然在（1 项）。
-    await waitFor(() => expect(pathInput).toHaveValue('{"inst:1":"proxy.log.0"}'))
-    expect(screen.getByTestId('node-log-acq-unsaved-hint')).toHaveTextContent('1 项未保存改动')
+    // 该键未被提交 ⇒ 仍是未保存草稿：行仍在、提示仍然在。
+    await waitFor(() => expect(screen.getByTestId('path-overrides-editor')).toBeInTheDocument())
+    expect(screen.getByTestId('settings-dirty-hint')).toHaveTextContent('有未保存修改')
     // 已提交的键已清出草稿（服务端返回的覆盖值接手展示）。
     // 用 waitFor 包住（2026-10-20 审查）：PUT 成功后该输入框会先回落到旧的查询缓存
     // （platform: ''），要等 invalidateQueries 的重取落地才变回 '1h'。裸断言是无等待快照，
@@ -133,7 +158,7 @@ describe('NodeLogAcqPanel × 草稿生命周期（review D-02）', () => {
 
     const user = userEvent.setup()
     renderWithProviders(<NodeLogAcqPanel nodeId={1} online />)
-    const scanInput = await screen.findByTestId(`node-log-acq-input-${SCAN_KEY}`)
+    const scanInput = await screen.findByTestId('setting-field-log-acq-gz_scan_interval').then(e => e.querySelector('input')!)
 
     await user.type(scanInput, '1h')
     await user.click(screen.getByRole('button', { name: '保存' }))
@@ -148,7 +173,7 @@ describe('NodeLogAcqPanel × 草稿生命周期（review D-02）', () => {
 
     // 界面保留 2h（= 与已提交的 1h 不同 ⇒ 仍是未保存改动，提示仍在）。
     await waitFor(() => expect(scanInput).toHaveValue('2h'))
-    expect(screen.getByTestId('node-log-acq-unsaved-hint')).toBeInTheDocument()
+    expect(screen.getByTestId('settings-dirty-hint')).toBeInTheDocument()
   })
 
   it('③ 改回原值等于没改：不留提示、不发请求', async () => {
@@ -164,15 +189,15 @@ describe('NodeLogAcqPanel × 草稿生命周期（review D-02）', () => {
 
     const user = userEvent.setup()
     renderWithProviders(<NodeLogAcqPanel nodeId={1} online />)
-    const scanInput = await screen.findByTestId(`node-log-acq-input-${SCAN_KEY}`)
+    const scanInput = await screen.findByTestId('setting-field-log-acq-gz_scan_interval').then(e => e.querySelector('input')!)
 
     await user.type(scanInput, '1h')
-    expect(await screen.findByTestId('node-log-acq-unsaved-hint')).toBeInTheDocument()
+    expect(await screen.findByTestId('settings-dirty-hint')).toBeInTheDocument()
     await user.clear(scanInput)
 
-    // 判据与提交集同源：改回原值后既没有未保存提示，也不会发一次「没有改动」的请求。
+    // 判据与提交集同源：改回原值后回到「无改动」，也不会发一次「没有改动」的请求。
     await waitFor(() =>
-      expect(screen.queryByTestId('node-log-acq-unsaved-hint')).not.toBeInTheDocument(),
+      expect(screen.getByTestId('settings-dirty-hint')).toHaveTextContent('无改动'),
     )
     await user.click(screen.getByRole('button', { name: '保存' }))
     expect(putCalls).toBe(0)
@@ -201,9 +226,11 @@ describe('NodeLogAcqPanel × 保存前校验（与设置页同口径）', () => 
 
     const user = userEvent.setup()
     renderWithProviders(<NodeLogAcqPanel nodeId={1} online />)
-    const input = await screen.findByTestId(`node-log-acq-input-${PATH_KEY}`)
-    // JSON 文本里的 `{` 是 userEvent 的特殊语法字符，直接用 change 事件赋值。
-    fireEvent.change(input, { target: { value: '{"inst:1":"/etc/shadow"}' } })
+    await screen.findByTestId('path-overrides-editor')
+
+    // 成对行编辑器：点「添加」→ 填实例 ID 与路径（不再是手写 JSON）。
+    await user.click(screen.getByTestId('path-overrides-add'))
+    await fillFirstOverrideRow(user, '1', '/etc/shadow')
 
     await user.click(screen.getByRole('button', { name: /保存/ }))
 
@@ -225,8 +252,10 @@ describe('NodeLogAcqPanel × 保存前校验（与设置页同口径）', () => 
 
     const user = userEvent.setup()
     renderWithProviders(<NodeLogAcqPanel nodeId={1} online />)
-    const input = await screen.findByTestId(`node-log-acq-input-${PATH_KEY}`)
-    fireEvent.change(input, { target: { value: '{"inst:1":"logs/a.log"}' } })
+    await screen.findByTestId('path-overrides-editor')
+
+    await user.click(screen.getByTestId('path-overrides-add'))
+    await fillFirstOverrideRow(user, '1', 'logs/a.log')
 
     await user.click(screen.getByRole('button', { name: /保存/ }))
 

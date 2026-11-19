@@ -1588,7 +1588,8 @@
         "register": "Register existing JDK",
         "scan": "Scan for runtimes",
         "jdk": "Install JDK",
-        "node": "Install Node.js"
+        "node": "Install Node.js",
+        "registerNode": "Register existing Node.js"
       },
       "installMajorPlaceholder": "Select the Node.js version to install",
       "installPreview": "Will install Node.js {{major}} ({{lts}})",
@@ -1606,10 +1607,40 @@
       "nodeVersion": "Node.js version",
       "nodeVersionPlaceholder": "Select a version",
       "nodeInstallPreview": "Will install Node.js {{major}} ({{channel}})",
-      "nodeInstallPreviewEmpty": "Select a version to install"
+      "nodeInstallPreviewEmpty": "Select a version to install",
+      "pmEdit": "Edit config",
+      "pmSummary": "Current {{pm}}, {{count}} registry source(s)",
+      "pmSummaryEmpty": "No package manager configured",
+      "logAcqEdit": "Edit rules",
+      "logAcqSummary": "Changes apply via heartbeat (≤1 cycle, ~30s); uncovered items inherit the platform default."
     },
     "jdkInstalling": "Dispatching…",
-    "jdkInstallReused": "The same JDK install is already running; reused that task"
+    "jdkInstallReused": "The same JDK install is already running; reused that task",
+    "register": {
+      "jdkHint": "If this node already has a JDK (installed manually, say), just point at its path to register it — no need to download again.",
+      "nodeHint": "If this node already has Node.js, point at its path to register it. Plugins and bot tooling that depend on Node need it; Java servers are unaffected.",
+      "path": "{{name}} path",
+      "jdkPlaceholder": "e.g. /opt/jdk-21 or /usr/lib/jvm/temurin-21",
+      "nodePlaceholder": "e.g. /opt/node/bin/node or /opt/node-v22",
+      "browse": "Browse node directories",
+      "probing": "Probing…",
+      "probe": "Probe",
+      "offline": "Node offline: probing and directory browsing require the node to be online.",
+      "probeFailed": "Probe failed: cannot reach node",
+      "found": "Found {{name}}",
+      "alreadyRegistered": "Registered",
+      "vendor": "Vendor",
+      "version": "Version",
+      "major": "Majors",
+      "arch": "Arch",
+      "pathLabel": "Path",
+      "invalidPath": "No {{name}} found at this path",
+      "submitting": "Registering…",
+      "submit": "Register",
+      "alreadyHint": "This path is already in the list; no need to register twice.",
+      "selectDir": "Choose {{name}} directory",
+      "success": "Runtime registered"
+    }
   },
   "nodeProxy": {
     "title": "Outbound proxy",

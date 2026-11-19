@@ -171,6 +171,54 @@ func detectJDKAt(dir string) (Candidate, bool) {
 	}, true
 }
 
+// ProbePath 探测**指定路径**上的某个运行时（供 Worker 的 ProbeRuntime RPC 用）。
+//
+// 与 Scan 的区别：Scan 在硬编码的常见目录里找，本方法只认用户给的那一个路径。
+// 用户把运行时装在 /opt/my-runtime 这类位置时 Scan 扫不到，但他自己知道路径——
+// 让他指着路径说"就这个"，比让他手填版本号靠谱得多。
+//
+// path 的形态按类型归一：
+//   - nodejs：可以是 node 可执行文件本身，也可以是其所在目录或 ../（本方法按 bin/node、node 依次尝试）；
+//   - jdk：可以是 JDK home，也可以是 bin/java 或 java 本身（沿用 jdk.Manager 的归一逻辑）。
+//
+// 找不到/不是该类型时返回 (Candidate{}, false)，由调用方决定怎么描述错误。
+// 这里不返回 error：路径不对是常规输入错误，不是异常。
+func (s *Scanner) ProbePath(typ, path string) (Candidate, bool) {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return Candidate{}, false
+	}
+	switch strings.ToLower(typ) {
+	case TypeNodeJS:
+		for _, exe := range nodeExecutableCandidates(p) {
+			if c, ok := s.probeNode(exe); ok {
+				return c, true
+			}
+		}
+		return Candidate{}, false
+	default:
+		return Candidate{}, false
+	}
+}
+
+// nodeExecutableCandidates 把用户给的路径展开成可能的 node 可执行文件路径。
+//
+// 【为什么要展开】用户对"路径"的理解不一致：有人贴 `node --version` 里那个绝对路径，
+// 有人贴解压根目录（/opt/node-v22），也有人贴 bin 目录。逐个试的成本很低
+// （最多三次 stat+exec），而让用户猜"该填哪个层级"的成本高得多。
+func nodeExecutableCandidates(p string) []string {
+	out := []string{p}
+	// 路径以 node（或 node.exe）结尾时，它就是可执行文件本身。
+	base := strings.ToLower(filepath.Base(p))
+	if base == "node" || base == "node.exe" {
+		return out
+	}
+	// 否则当作目录，试 <dir>/bin/node 与 <dir>/node（Windows 下再试 .exe）。
+	out = append(out, filepath.Join(p, "bin", "node"), filepath.Join(p, "node"))
+	out = append(out, filepath.Join(p, "bin", "node.exe"), filepath.Join(p, "node.exe"))
+	return out
+}
+
 // probeNodeExecutable 真 Node.js 探测：`node --version`（vX.Y.Z）+ `node -p process.arch`。
 // 任一步失败视为无效候选（静默跳过）。
 func probeNodeExecutable(exe string) (Candidate, bool) {

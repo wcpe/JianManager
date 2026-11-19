@@ -2034,9 +2034,6 @@ function rowToItem(r: SettingsRow) {
 
 db<SettingsRow>('settings', () => [
   { id: 1, key: 'log.level', value: 'info', editable: true, sensitive: false, overridden: false, effectiveImmediately: true },
-  // debug.mode 是唯一的布尔型平台设置，前端用 Switch 呈现（值仍是 "true"/"false" 字符串）。
-  // 种子必须包含它，否则「开关能正确提交字符串」这条契约在 mock 环境里无法被验证。
-  { id: 100, key: 'debug.mode', value: 'false', editable: true, sensitive: false, overridden: false, effectiveImmediately: true },
   {
     id: 2,
     key: 'graceful_stop.timeout',
@@ -2049,6 +2046,10 @@ db<SettingsRow>('settings', () => [
   { id: 3, key: 'jdk.mirror', value: 'https://mirror.example.com', editable: true, sensitive: false, overridden: false, effectiveImmediately: true },
   { id: 4, key: 'database.dsn', value: 'sqlite://****', editable: false, sensitive: true, overridden: false, effectiveImmediately: false },
   { id: 5, key: 'jwt.secret', value: '****', editable: false, sensitive: true, overridden: false, effectiveImmediately: false },
+  // debug.mode 是唯一的布尔型平台设置，前端用 Switch 呈现（值仍是 "true"/"false" 字符串）。
+  // 种子必须包含它，否则「开关能正确提交字符串」这条契约在 mock 环境里无法被验证。
+  // 【只能有一条】此前这里误存了两条（id 100 与 id 6），列表以 key 作 React key 时会
+  // 触发 "two children with the same key"，真实后端不会出现重复 key。
   { id: 6, key: 'debug.mode', value: 'false', editable: true, sensitive: false, overridden: false, effectiveImmediately: true },
   // github.token：敏感项，回显掩码（与后端 maskSecret 行为一致）。
   { id: 7, key: 'github.token', value: 'ghp***eed', editable: true, sensitive: true, overridden: false, effectiveImmediately: true },

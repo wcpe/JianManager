@@ -16,6 +16,7 @@
  */
 
 import { usesCustomEditor } from './field-types'
+import { serializePathOverrides, type PathOverrideRow } from './path-overrides'
 
 /** 一条设置项的服务端快照（与各页面 API 的形状对齐后由调用方映射）。 */
 export interface SettingItem {
@@ -119,4 +120,30 @@ export function clearSubmitted(
     }
   }
   return next
+}
+
+/** 把一个字段的草稿行映射成 path_overrides 编辑器的行形态（编辑器用 `key` 做列表身份）。 */
+export function toOverrideRows(rows: readonly KvPairRow[]): PathOverrideRow[] {
+  return rows.map((r, i) => ({ key: `kvrow-${i}`, instanceId: r.key, path: r.value }))
+}
+
+/** 反向映射：编辑器的行变回草稿行。**保留原串**（不 trim），否则用户打不出临时的空格。 */
+export function fromOverrideRows(rows: readonly PathOverrideRow[]): KvPairRow[] {
+  return rows.map((r) => ({ key: r.instanceId, value: r.path }))
+}
+
+/**
+ * kv-pairs 字段的默认序列化器（提交给后端的字符串）。
+ *
+ * 【为什么放在 lib 而不是视图里】提交（`buildSubmitValues`）、脏判定（`hasChanges`）、
+ * 清草稿（`clearSubmitted`）与渲染**必须用同一个序列化器**——否则"有改动"与
+ * "提交什么"会各说各话。放进 lib 复用，也避开「组件文件不导出非组件值」的 lint 约束。
+ *
+ * 【已知前提】`SettingsDraft.kv` 目前只服务 `log.acq.path_overrides` 一个字段，
+ * 签名 `(rows) => string` 不含字段键。将来若出现第二个 kv-pairs 字段，
+ * 必须把它改成 `(key, rows) => string` 并按字段分派，否则会拿实例路径的规则
+ * 去序列化别的结构化字段。
+ */
+export function defaultSerializeKv(rows: readonly KvPairRow[]): string {
+  return serializePathOverrides(toOverrideRows(rows))
 }

@@ -1566,7 +1566,8 @@
         "register": "登记已有 JDK",
         "scan": "扫描发现",
         "jdk": "安装 JDK",
-        "node": "安装 Node.js"
+        "node": "安装 Node.js",
+        "registerNode": "登记已有 Node.js"
       },
       "installMajorPlaceholder": "选择要安装的 Node.js 版本",
       "installPreview": "将安装 Node.js {{major}}（{{lts}}）",
@@ -1584,10 +1585,40 @@
       "nodeVersion": "Node.js 版本",
       "nodeVersionPlaceholder": "选择版本",
       "nodeInstallPreview": "将安装 Node.js {{major}}（{{channel}}）",
-      "nodeInstallPreviewEmpty": "请选择要安装的版本"
+      "nodeInstallPreviewEmpty": "请选择要安装的版本",
+      "pmEdit": "编辑配置",
+      "pmSummary": "当前 {{pm}}，{{count}} 个 registry 源",
+      "pmSummaryEmpty": "尚未配置包管理器",
+      "logAcqEdit": "编辑规则",
+      "logAcqSummary": "改动经心跳下发（≤1 周期，约 30s）生效；未覆盖项继承平台默认。"
     },
     "jdkInstalling": "正在下发…",
-    "jdkInstallReused": "相同版本的 JDK 安装已在进行中，已复用该任务"
+    "jdkInstallReused": "相同版本的 JDK 安装已在进行中，已复用该任务",
+    "register": {
+      "jdkHint": "如果这台节点上已经有 JDK（比如手工装过），填它的路径即可登记，不必重新下载。",
+      "nodeHint": "如果这台节点上已经有 Node.js，填它的路径即可登记。依赖 Node 的插件与 Bot 工具链需要它；Java 服不受影响。",
+      "path": "{{name}} 路径",
+      "jdkPlaceholder": "如 /opt/jdk-21 或 /usr/lib/jvm/temurin-21",
+      "nodePlaceholder": "如 /opt/node/bin/node 或 /opt/node-v22",
+      "browse": "浏览节点目录",
+      "probing": "探测中…",
+      "probe": "探测",
+      "offline": "节点离线：探测与目录浏览需要节点在线。",
+      "probeFailed": "探测失败：无法连接节点",
+      "found": "探测到 {{name}}",
+      "alreadyRegistered": "已登记",
+      "vendor": "厂商",
+      "version": "版本",
+      "major": "大版本",
+      "arch": "架构",
+      "pathLabel": "路径",
+      "invalidPath": "这个路径上没找到 {{name}}",
+      "submitting": "登记中…",
+      "submit": "确认登记",
+      "alreadyHint": "这条路径已在清单里，无需重复登记。",
+      "selectDir": "选择 {{name}} 目录",
+      "success": "已登记该运行时"
+    }
   },
   "artifactVersions": {
     "title": "ServerProbe 制品版本库",

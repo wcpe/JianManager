@@ -28,6 +28,11 @@ vi.mock('@/components/nodes/NodeInstallSection', () => ({
     return <div data-testid="node-install-section">Node 安装段</div>
   },
 }))
+vi.mock('@/components/nodes/NodeRegisterSection', () => ({
+  NodeRegisterSection: ({ type }: { type: string }) => (
+    <div data-testid="node-register-section">Node 登记段 · {type}</div>
+  ),
+}))
 vi.mock('@/components/views/nodes/NodeRuntimeSection', () => ({
   default: () => <div data-testid="runtime-scan-section">扫描段</div>,
 }))
@@ -48,7 +53,7 @@ vi.mock('@/api/jdks', () => ({
   useUpdateJDK: () => ({ mutateAsync: vi.fn() }),
 }))
 
-function setup(tab: 'jdk' | 'node' | 'register' | 'scan') {
+function setup(tab: 'jdk' | 'node' | 'register' | 'register-node' | 'scan') {
   const onTab = vi.fn()
   render(
     <RuntimeAddDrawer
@@ -106,5 +111,28 @@ describe('RuntimeAddDrawer 分段与内容对应', () => {
     setup('register')
     expect(screen.getByTestId('jdk-panel')).toBeInTheDocument()
     expect(screen.queryByTestId('node-install-section')).not.toBeInTheDocument()
+  })
+
+  /*
+    JDK 有「登记已有 JDK」，Node.js 此前**没有**登记入口——只能下载安装或扫描发现。
+    用户把 Node 装在 /opt/node-v22 这类非标准位置时，两条路都走不通。
+    后端 POST /runtimes 本来就支持 type=nodejs 登记，缺的只是这个入口。
+  */
+  it('有独立的「登记已有 Node.js」分段', () => {
+    setup('jdk')
+    expect(screen.getByTestId('runtime-add-register-node')).toBeInTheDocument()
+  })
+
+  it('停在「登记已有 Node.js」段时渲染 Node 登记段，**不渲染 JDK 面板**', () => {
+    setup('register-node')
+    expect(screen.getByTestId('node-register-section')).toBeInTheDocument()
+    expect(screen.queryByTestId('jdk-panel')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('node-install-section')).not.toBeInTheDocument()
+  })
+
+  it('点「登记已有 Node.js」分段上报 register-node', async () => {
+    const { onTab } = setup('jdk')
+    await userEvent.click(screen.getByTestId('runtime-add-register-node'))
+    expect(onTab).toHaveBeenCalledWith('register-node')
   })
 })

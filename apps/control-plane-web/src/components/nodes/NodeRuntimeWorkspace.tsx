@@ -3,6 +3,17 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Coffee, Package, ScrollText, Settings2 } from 'lucide-react'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Button } from '@jianmanager/ui/components/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
 import { Segments, Segment } from '@jianmanager/ui/components/layout'
 import { useNodeJDKsWithRefs, useDeleteJDK, useUpdateJDK } from '@/api/jdks'
 import { useNodeRuntimes, useDeleteRuntime } from '@/api/runtimes'
@@ -144,11 +155,34 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
   const [addTab, setAddTab] = useState<RuntimeAddTab>('jdk')
   const [editing, setEditing] = useState<RuntimeInventoryRow | null>(null)
   const [pendingDelete, setPendingDelete] = useState<RuntimeInventoryRow | null>(null)
+  /*
+    【编辑类配置一律进弹窗，信息展示类留在页面】
+    包管理器/registry 与采集规则都是「一次性改完就走」的配置表单：常驻会把
+    页面撑成表单堆，用户在运行时页签里看不到结论。改成「摘要 + 编辑按钮」后，
+    页面常驻的是**当前状态**，要改才开弹窗。
+    反过来，运行时清单（主内容）、全局包（列表 + 安装动作）、日志平台运行时
+    （状态卡）都**必须常驻**——状态卡尤其不能塞进弹窗：日志平台是排障入口，
+    塞进弹窗等于「要开弹窗才知道服务死活」。
+  */
+  const [pmOpen, setPmOpen] = useState(false)
+  const [logAcqOpen, setLogAcqOpen] = useState(false)
 
   const inventory = useMemo(
     () => buildRuntimeInventory(jdksQ.data ?? [], runtimesQ.data ?? []),
     [jdksQ.data, runtimesQ.data],
   )
+
+  /*
+    包管理器摘要：复用就绪带已在取的 `pmQ`，不额外发请求。
+    弹窗关着时用户也要知道「现在用的是哪个 pm、配了几个源」，所以摘要必须常驻。
+  */
+  const pmSummary = pmQ.data
+    ? t('nodes.runtime.pmSummary', {
+        pm: pmQ.data.pm,
+        count: pmQ.data.registries?.length ?? 0,
+        defaultValue: '当前 {{pm}}，{{count}} 个 registry 源',
+      })
+    : t('nodes.runtime.pmSummaryEmpty', '尚未配置包管理器')
 
   // ── 日志平台 ──
   const control = useControlLogRuntime(node.id)
@@ -287,15 +321,42 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
 
       {sub === 'packages' && (
         <div className="space-y-3">
+          {/*
+            包管理器与 registry 是**编辑类**配置 → 只需摘要 + 编辑按钮，表单进弹窗。
+            摘要常驻显示「当前 pm + registry 条数」，用户不点开也知道现状。
+          */}
           <Panel title={t('pmConfig.title', '包管理器与 registry')}>
-            <NodePMConfigSection nodeId={node.id} active />
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground" data-testid="runtime-pm-summary">
+                {pmSummary}
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setPmOpen(true)}
+                data-testid="runtime-pm-edit"
+              >
+                <Settings2 className="size-3.5" />
+                {t('nodes.runtime.pmEdit', '编辑配置')}
+              </Button>
+            </div>
           </Panel>
+          {/*
+            全局包保持常驻：它是「列表 + 安装动作」，不是一次性改完的配置表单；
+            塞进弹窗会让用户每次看已装包都要先开弹窗。
+          */}
           <Panel title={t('pkg.title', '全局包')}>
             <NodeGlobalPackagesTab nodeId={node.id} active />
           </Panel>
         </div>
       )}
 
+      {/*
+        【日志平台运行时**不进弹窗**】
+        它是状态卡（运行中/已停止、健康、容量、启停），不是编辑表单；而且日志平台是
+        排障入口——塞进弹窗会导致「要开弹窗才知道服务死活」，出问题时反而多一步。
+        与它相对的是同 sub 无关的采集规则（进弹窗）：状态留在页面，规则才收起来。
+      */}
       {sub === 'log' && (
         <Panel title={t('logsRuntime.title', '日志平台运行时')}>
           <LogRuntimeFlow
@@ -344,11 +405,61 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
       )}
 
       {sub === 'logAcq' && (
-        <Panel title={t('nodeLogAcq.title', '日志采集规则')}>
-          {/* 这个面板原本零引用（写好但没入口）；这里挂上来，让「采集规则」在节点内可达。 */}
-          <NodeLogAcqPanel nodeId={node.id} active online={online} />
+        <Panel title={t('nodeLogAcq.title', '日志采集')}>
+          {/*
+            采集规则同样是**编辑类**配置 → 摘要 + 编辑按钮，规则表进弹窗。
+            这个面板原本零引用（写好但没入口）；这里挂上来，让「采集规则」在节点内可达。
+          */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground" data-testid="runtime-logacq-summary">
+              {t(
+                'nodes.runtime.logAcqSummary',
+                '改动经心跳下发（≤1 周期，约 30s）生效；未覆盖项继承平台默认。',
+              )}
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setLogAcqOpen(true)}
+              data-testid="runtime-logacq-edit"
+            >
+              <Settings2 className="size-3.5" />
+              {t('nodes.runtime.logAcqEdit', '编辑规则')}
+            </Button>
+          </div>
         </Panel>
       )}
+
+      {/*
+        包管理器配置弹窗。`active={pmOpen}` 而不是恒 true：
+        关着就不发查询（组件内部 `enabled` 门控），关掉即停止后台轮询。
+      */}
+      <Dialog open={pmOpen} onOpenChange={setPmOpen}>
+        <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
+          <DialogHeader>
+            <DialogTitle>{t('pmConfig.title', '包管理器与下载源')}</DialogTitle>
+          </DialogHeader>
+          <ScrollableDialogBody>
+            <div data-testid="runtime-pm-dialog">
+              <NodePMConfigSection nodeId={node.id} active={pmOpen} />
+            </div>
+          </ScrollableDialogBody>
+        </DialogContent>
+      </Dialog>
+
+      {/* 采集规则弹窗：同样只在打开时取数（active={logAcqOpen}）。 */}
+      <Dialog open={logAcqOpen} onOpenChange={setLogAcqOpen}>
+        <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
+          <DialogHeader>
+            <DialogTitle>{t('nodeLogAcq.title', '日志采集')}</DialogTitle>
+          </DialogHeader>
+          <ScrollableDialogBody>
+            <div data-testid="runtime-logacq-dialog">
+              <NodeLogAcqPanel nodeId={node.id} active={logAcqOpen} online={online} />
+            </div>
+          </ScrollableDialogBody>
+        </DialogContent>
+      </Dialog>
 
       <RuntimeAddDrawer
         open={addOpen}

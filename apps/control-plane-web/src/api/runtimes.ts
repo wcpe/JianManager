@@ -63,6 +63,36 @@ export function useScanRuntimes(nodeId: number) {
   })
 }
 
+/**
+ * 探测结果（POST /nodes/:id/runtimes/probe）。
+ *
+ * `valid=false` 是**常规业务结果**而不是请求失败：用户输错路径、或那个路径确实不是
+ * 该运行时，都返回 200 + valid=false + error 文案。界面直接把 error 显示在输入框下方，
+ * 不该当成"服务出错"弹错误 toast。
+ */
+export interface RuntimeProbeResult {
+  valid: boolean
+  /** 失败原因（valid=false 时有值）。 */
+  error?: string
+  /** 探测成功时的候选（字段同扫描候选，alreadyRegistered 由 CP 按 DB 补标）。 */
+  candidate?: RuntimeCandidate
+}
+
+/**
+ * POST /nodes/:id/runtimes/probe — 探测**指定路径**上的运行时。
+ *
+ * 【为什么需要它】扫描（`useScanRuntimes`）只在节点上硬编码的常见目录里找。
+ * 用户把运行时装在 /opt/my-runtime 这类位置时扫不到，但他自己知道路径。
+ * 登记接口又要求提供 version/majorVersion——让用户手填既容易错也没必要，
+ * 节点上跑一次 `node --version` 就是准确值。
+ */
+export function useProbeRuntime(nodeId: number) {
+  return useMutation({
+    mutationFn: (body: { type: string; path: string }) =>
+      api.post<RuntimeProbeResult>(`/nodes/${nodeId}/runtimes/probe`, body).then((r) => r.data),
+  })
+}
+
 /** POST /nodes/:id/runtimes — 登记单条运行时（扫描候选入库 / 手动登记泛化）。 */
 export function useRegisterRuntime(nodeId: number) {
   const qc = useQueryClient()

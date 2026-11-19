@@ -82,6 +82,12 @@ func (h *RuntimeLibraryHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, rows)
 }
 
+// probeRuntimeRequest 探测指定路径的请求体。
+type probeRuntimeRequest struct {
+	Type string `json:"type" binding:"required"`
+	Path string `json:"path" binding:"required"`
+}
+
 type scanRuntimesRequest struct {
 	// Types 过滤要扫描的类型（jdk/nodejs）；空 = 全部可扫描类型。
 	Types []string `json:"types"`
@@ -111,6 +117,37 @@ func (h *RuntimeLibraryHandler) Scan(c *gin.Context) {
 		"nodeId": nodeID, "types": req.Types, "found": len(candidates),
 	})
 	c.JSON(http.StatusOK, gin.H{"candidates": candidates})
+}
+
+// Probe POST /nodes/:id/runtimes/probe — 探测**指定路径**上的运行时。
+//
+// 与 Scan 的区别：Scan 在 Worker 硬编码的常见目录里找；本接口让用户直接给路径。
+// 用户把运行时装在 /opt/my-runtime 这类位置时扫不到，但他自己知道在哪。
+//
+// 【失败语义】路径不对返回 200 + valid=false + error 文案，不是 4xx/5xx：
+// 输错路径是常规输入，界面要能把它显示成"这个路径不对"，而不是"服务出错"。
+func (h *RuntimeLibraryHandler) Probe(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	var req probeRuntimeRequest
+	if bindErr := c.ShouldBindJSON(&req); bindErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误：需要 type 与 path"})
+		return
+	}
+	res, err := h.svc.Probe(nodeID, req.Type, req.Path)
+	if err != nil {
+		h.writeRuntimeLibErr(c, err)
+		return
+	}
+	h.recordAudit(c, "node.runtime.probe", c.Param("id"), map[string]any{
+		"nodeId": nodeID, "type": req.Type, "path": req.Path, "valid": res.Valid,
+	})
+	c.JSON(http.StatusOK, res)
 }
 
 // Register POST /nodes/:id/runtimes — 泛化登记（type=jdk 转发现有 JDK 链路，其它落 node_runtimes）。
@@ -216,6 +253,7 @@ func (h *RuntimeLibraryHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rt.GET("", h.List)
 	rt.POST("", h.Register)
 	rt.POST("/scan", h.Scan)
+	rt.POST("/probe", h.Probe)
 	rt.POST("/install", h.Install)
 	rt.DELETE("/:rid", h.Delete)
 }

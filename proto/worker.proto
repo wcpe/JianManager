@@ -213,6 +213,13 @@ service WorkerService {
   // ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，节点运行时库）。
   // 路径不存在/探测失败静默跳过，不阻断整体扫描；托管根下的候选标 already_registered。
   rpc ScanRuntimes(ScanRuntimesRequest) returns (ScanRuntimesResponse);
+  // ProbeRuntime 探测**指定路径**上的运行时（jdk/nodejs，节点运行时库）。
+  //
+  // 为什么需要它：ScanRuntimes 只在硬编码的常见目录里找，用户把运行时装在
+  // /opt/my-runtime 这类位置时扫不到。而登记接口要求提供 version 等字段，
+  // 让用户手填版本号既容易错、也没必要——节点上跑一下 `node --version` 就知道。
+  // 本 RPC 就是"给一个路径，读出它是什么版本"。
+  rpc ProbeRuntime(ProbeRuntimeRequest) returns (ProbeRuntimeResponse);
   // InstallRuntime 下载并安装指定运行时到 Worker 托管目录（首批 nodejs）。
   // 携带 task_id 异步执行（语义同 InstallJDK）：启动即返回，进度/日志/终态经心跳上报。
   rpc InstallRuntime(InstallRuntimeRequest) returns (InstallRuntimeResponse);
@@ -1935,6 +1942,28 @@ message RuntimeCandidate {
 
 message ScanRuntimesResponse {
   repeated RuntimeCandidate candidates = 1;
+}
+
+// ProbeRuntimeRequest 探测指定路径上的运行时。
+message ProbeRuntimeRequest {
+  // type 运行时类型（jdk / nodejs）。
+  string type = 1;
+  // path jdk=home 目录或 java 可执行文件；nodejs=node 可执行文件。
+  // 传目录时由 Worker 按类型拼出可执行文件（bin/java、bin/node）。
+  string path = 2;
+}
+
+// ProbeRuntimeResponse 探测结果。
+//
+// 探测失败（路径不存在、不是该运行时、执行失败）**不是 RPC 错误**：
+// 用户输错路径是常规情况，用 valid=false + error 说明原因，界面直接展示即可。
+// 这样调用方能区分"节点失联"（RPC 错误）与"这个路径不对"（valid=false）。
+message ProbeRuntimeResponse {
+  bool valid = 1;
+  // error 失败原因（valid=false 时有值）。
+  string error = 2;
+  // candidate 探测成功时的候选（字段语义同 RuntimeCandidate）。
+  RuntimeCandidate candidate = 3;
 }
 
 // InstallRuntime 下载并安装运行时（首批 nodejs：nodejs.org dist 便携归档）。

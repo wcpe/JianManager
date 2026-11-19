@@ -79,9 +79,33 @@ export function fieldSpecOf(key: string): FieldSpec {
   return FIELD_SPECS[key] ?? { type: 'text' }
 }
 
-/** 该字段是否即时生效（给"Worker 侧生效"徽标用）。 */
+/**
+ * 字段的生效时机。
+ *
+ * 【为什么是三态而不是布尔】布尔只能表达"即时 / 非即时"两种，于是未登记的字段
+ * 只能二选一。上一版把未登记字段当"非即时"，界面上就给 `traffic.rate_limit.*`
+ * 这类其实即时生效的配置打了「Worker 侧生效」——**标错比不标更糟**：用户会去重启
+ * Worker 找一个根本不存在的开关。
+ *
+ * 所以未登记 spec 的字段返回 `unknown`，界面据此**不显示生效时机徽标**。
+ */
+export type EffectTiming = 'immediate' | 'worker' | 'unknown'
+
+export function effectTimingOf(key: string): EffectTiming {
+  const spec = FIELD_SPECS[key]
+  if (!spec || spec.effectiveImmediately === undefined) return 'unknown'
+  return spec.effectiveImmediately ? 'immediate' : 'worker'
+}
+
+/**
+ * 该字段是否即时生效。
+ *
+ * 注意：`unknown` 也返回 false。这个布尔只适合"要判断是否立刻生效"的场合
+ * （例如决定保存后是否提示刷新）；**要渲染"何时生效"的提示请用 `effectTimingOf`**，
+ * 否则会把未知当成"Worker 侧生效"，正是上面说的标错。
+ */
 export function isEffectiveImmediately(key: string): boolean {
-  return fieldSpecOf(key).effectiveImmediately ?? false
+  return effectTimingOf(key) === 'immediate'
 }
 
 /**

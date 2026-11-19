@@ -225,6 +225,73 @@ type RegisterRuntimeRequest struct {
 	Managed      bool   `json:"managed"`
 }
 
+// RuntimeProbeResult 探测指定路径的结果。
+type RuntimeProbeResult struct {
+	Valid     bool              `json:"valid"`
+	Error     string            `json:"error,omitempty"`
+	Candidate *RuntimeCandidate `json:"candidate,omitempty"`
+}
+
+// Probe 探测**指定路径**上的运行时（jdk/nodejs）。
+//
+// 【为什么要有这个】Scan 只在 Worker 硬编码的常见目录里找。用户把运行时装在
+// 别处（如 /opt/my-runtime）时扫不到，但他自己知道路径。而登记接口要求提供
+// version/majorVersion 等字段——让用户手填版本号既容易错也没必要，
+// 节点上跑一下就是准确值。本方法就是"给一个路径，问节点它是什么版本"。
+//
+// 失败语义分两级（这个区分很重要）：
+//   - 节点离线/不存在/RPC 失败 → 返回 error，由路由映射成 503/404/502；
+//   - 路径不对/不是该运行时 → Valid=false + Error 文案，**HTTP 200**。
+//     用户输错路径是常规操作，不该表现为"服务故障"。
+func (s *RuntimeLibraryService) Probe(nodeID uint, typ, path string) (*RuntimeProbeResult, error) {
+	tt := strings.ToLower(strings.TrimSpace(typ))
+	if tt == "" {
+		return nil, fmt.Errorf("%w: type 不能为空", ErrInvalidRuntimeType)
+	}
+	if !scanableRuntimeTypes[tt] {
+		return nil, fmt.Errorf("%w: %q（可探测类型：jdk、nodejs）", ErrInvalidRuntimeType, typ)
+	}
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("path 不能为空")
+	}
+
+	node, err := s.nodeByID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeOffline
+	}
+	// 探测要真跑一次 java/node（冷启动可能慢），给 20s；再长就该让用户检查节点了。
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	resp, err := client.Worker.ProbeRuntime(ctx, &workerpb.ProbeRuntimeRequest{Type: tt, Path: path})
+	if err != nil {
+		return nil, fmt.Errorf("Worker ProbeRuntime RPC 失败: %w", err)
+	}
+	if !resp.GetValid() || resp.GetCandidate() == nil {
+		return &RuntimeProbeResult{Valid: false, Error: resp.GetError()}, nil
+	}
+	c := resp.GetCandidate()
+	registered, err := s.registeredPaths(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	return &RuntimeProbeResult{
+		Valid: true,
+		Candidate: &RuntimeCandidate{
+			Type:              c.Type,
+			Vendor:            c.Vendor,
+			Version:           c.Version,
+			MajorVersion:      int(c.MajorVersion),
+			Arch:              c.Arch,
+			Path:              c.Path,
+			AlreadyRegistered: registered[c.Type+"\x00"+c.Path],
+		},
+	}, nil
+}
+
 // Register 登记运行时：type=jdk 转发 JDKService.Create（落 node_jdks），
 // 其它已知类型落 node_runtimes；未知类型 ErrInvalidRuntimeType。
 func (s *RuntimeLibraryService) Register(nodeID uint, req RegisterRuntimeRequest) (*RuntimeView, error) {

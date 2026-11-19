@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FIELD_SPECS, fieldSpecOf, isEffectiveImmediately, usesCustomEditor } from './field-types'
+import { FIELD_SPECS, effectTimingOf, fieldSpecOf, isEffectiveImmediately, usesCustomEditor } from './field-types'
 
 describe('fieldSpecOf', () => {
   it('已登记的字段返回声明的类型', () => {
@@ -37,6 +37,37 @@ describe('isEffectiveImmediately', () => {
 
   it('未登记字段默认不标"即时生效"（宁可少标，不可误导）', () => {
     expect(isEffectiveImmediately('mystery.key')).toBe(false)
+  })
+})
+
+describe('effectTimingOf（三态）', () => {
+  it('登记为互即时的字段返回 immediate', () => {
+    expect(effectTimingOf('debug.mode')).toBe('immediate')
+    expect(effectTimingOf('log.level')).toBe('immediate')
+  })
+
+  it('登记为非即时的字段返回 worker', () => {
+    expect(effectTimingOf('backup.retention_days')).toBe('worker')
+    expect(effectTimingOf('log.acq.path_overrides')).toBe('worker')
+  })
+
+  /*
+    这是本组最重要的一条：未登记 spec 的字段必须是 unknown，**不能默认成 worker**。
+    真实反例：traffic.rate_limit.* 是即时生效的，但它没有登记 spec；若默认 worker，
+    界面就会给它打「Worker 侧生效」，用户会去重启 Worker 找一个不存在的开关。
+  */
+  it('未登记字段返回 unknown，而不是默认 worker（标错比不标更糟）', () => {
+    expect(effectTimingOf('traffic.rate_limit.qps')).toBe('unknown')
+    expect(effectTimingOf('mystery.key')).toBe('unknown')
+  })
+
+  it('登记了 spec 但没声明 effectiveImmediately 的字段也是 unknown', () => {
+    // 表里没有任何这种字段，用兜底断言防止将来悄悄加一个"忘了声明"的条目。
+    for (const [key, spec] of Object.entries(FIELD_SPECS)) {
+      if (spec.effectiveImmediately === undefined) {
+        expect(effectTimingOf(key), `${key} 未声明 effectiveImmediately`).toBe('unknown')
+      }
+    }
   })
 })
 
