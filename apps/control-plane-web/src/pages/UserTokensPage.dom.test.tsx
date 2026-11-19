@@ -65,8 +65,8 @@ describe('userTokenStatus', () => {
 
 describe('statusLevel', () => {
   it('映射到 StatusBadge 档位', () => {
-    expect(statusLevel('active')).toBe('ok')
-    expect(statusLevel('revoked')).toBe('error')
+    expect(statusLevel('active')).toBe('success')
+    expect(statusLevel('revoked')).toBe('danger')
     expect(statusLevel('expired')).toBe('warning')
   })
 })

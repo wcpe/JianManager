@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Copy, KeyRound, Plus, Terminal } from 'lucide-react'
+import { Copy, Plus, Terminal } from 'lucide-react'
 import {
   useUserTokens,
   useCreateUserToken,
@@ -193,12 +193,12 @@ export default function UserTokensPage() {
 }
 
 /** 状态到 StatusBadge 档位映射。 */
-function statusLevel(status: 'active' | 'revoked' | 'expired'): 'ok' | 'error' | 'warning' {
+function statusLevel(status: 'active' | 'revoked' | 'expired'): 'success' | 'warning' | 'danger' {
   switch (status) {
     case 'active':
-      return 'ok'
+      return 'success'
     case 'revoked':
-      return 'error'
+      return 'danger'
     default:
       return 'warning'
   }
