@@ -42,6 +42,15 @@ export const ROUTE_CHUNKS = {
   '/config-adopt': () => import('@/pages/ConfigAdoptPage'),
   '/config-deliveries': () => import('@/pages/ConfigDeliveriesPage'),
   '/config-deliveries/:id': () => import('@/pages/ConfigDeliveryDetailPage'),
+  // 探针托管：管的是**探针进程自己的 config.yml**（探针侧定档表决定的 66 个键），
+  // 与上面几页「配置文件在实例磁盘上的形态」是两套对象。
+  // 结构：单页 3 Tab（配置与下发 / 对账矩阵 / 下发历史），挂在两级路由 /probe/managed 下。
+  // 两个子键指向被复用的既有页面组件，供总控页内部懒加载。
+  '/probe/managed': () => import('@/pages/ManagedConfigPage'),
+  '/probe/managed/matrix': () => import('@/pages/ManagedMatrixPage'),
+  // 旧路径保留为别名，避免已收藏的链接失效（Workspace 里做重定向）。
+  '/managed-configs': () => import('@/pages/ProbeManagedPage'),
+  '/managed-matrix': () => import('@/pages/ProbeManagedPage'),
   '/networks': () => import('@/pages/NetworksPage'),
   // 拓扑与分组管理同属 NetworkPage（同 chunk），但两个入口都要能被预取，故两个键指向同一 import。
   '/networks/topology': () => import('@/pages/NetworksPage'),
