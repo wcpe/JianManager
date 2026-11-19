@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
-import UserTokensPage, { statusLevel } from './UserTokensPage'
+import UserTokensPage from './UserTokensPage'
+import { userTokenStatusLevel } from '@/lib/auth/status'
 import { userTokenStatus, normalize, type UserTokenInfo } from '@/api/userTokens'
 import api from '@/api/client'
 
@@ -63,11 +64,11 @@ describe('userTokenStatus', () => {
   })
 })
 
-describe('statusLevel', () => {
+describe('userTokenStatusLevel', () => {
   it('映射到 StatusBadge 档位', () => {
-    expect(statusLevel('active')).toBe('success')
-    expect(statusLevel('revoked')).toBe('danger')
-    expect(statusLevel('expired')).toBe('warning')
+    expect(userTokenStatusLevel('active')).toBe('success')
+    expect(userTokenStatusLevel('revoked')).toBe('danger')
+    expect(userTokenStatusLevel('expired')).toBe('warning')
   })
 })
 

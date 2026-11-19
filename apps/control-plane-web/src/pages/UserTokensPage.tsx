@@ -12,6 +12,7 @@ import {
   type CreateUserTokenPayload,
 } from '@/api/userTokens'
 import { copyToClipboard } from '@/lib/shared/clipboard'
+import { userTokenStatusLevel } from '@/lib/auth/status'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
@@ -149,7 +150,7 @@ export default function UserTokensPage() {
                       {tok.lastUsedAt ? new Date(tok.lastUsedAt).toLocaleString() : '—'}
                     </TableCell>
                     <TableCell>
-                      <StatusBadge level={statusLevel(status)} label={t(`userTokens.status.${status}`)} />
+                      <StatusBadge level={userTokenStatusLevel(status)} label={t(`userTokens.status.${status}`)} />
                     </TableCell>
                     <TableCell className="text-right">
                       {status === 'active' && (
@@ -193,17 +194,6 @@ export default function UserTokensPage() {
 }
 
 /** 状态到 StatusBadge 档位映射。 */
-function statusLevel(status: 'active' | 'revoked' | 'expired'): 'success' | 'warning' | 'danger' {
-  switch (status) {
-    case 'active':
-      return 'success'
-    case 'revoked':
-      return 'danger'
-    default:
-      return 'warning'
-  }
-}
-
 /** 创建令牌对话框；创建成功后原地切换为「明文展示」视图。 */
 function CreateUserTokenDialog({
   open,
@@ -301,4 +291,3 @@ function CreateUserTokenDialog({
   )
 }
 
-export { statusLevel }
