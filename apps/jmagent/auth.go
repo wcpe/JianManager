@@ -230,10 +230,16 @@ type whoamiMeta struct {
 	ExpiresAt   string
 }
 
-// fetchWhoami 查询当前令牌身份；失败返回空 meta（不阻断登录）。
+// fetchWhoami 查询当前身份；失败返回空 meta（不阻断登录）。
+//
+// 走用户侧 `/api/v1/auth/me`（`jmut_` 可访问），而非 Agent 侧的 `/agent/whoami`
+// （只认 `jmat_`，用用户令牌调必失败）。
+//
+// tokenId / expiresAt 不在 auth/me 里，改由 `/api/v1/user/tokens` 按 prefix 反查：
+// 这一步失败不影响登录主流程，只是这些字段留空。
 func fetchWhoami(cfg Config) whoamiMeta {
 	client := newClient(cfg)
-	body, err := client.get("/api/v1/agent/whoami", nil)
+	body, err := client.get("/api/v1/auth/me", nil)
 	if err != nil {
 		return whoamiMeta{}
 	}
@@ -245,16 +251,53 @@ func fetchWhoami(cfg Config) whoamiMeta {
 	if v, ok := raw["username"].(string); ok {
 		m.Username = v
 	}
-	if v, ok := raw["tokenId"].(float64); ok {
-		m.TokenID = uint(v)
-	}
+	// 令牌自身的 id / 过期时间在令牌列表里，按前缀匹配当前令牌。
 	if v, ok := raw["tokenPrefix"].(string); ok {
 		m.TokenPrefix = v
 	}
 	if v, ok := raw["expiresAt"].(string); ok {
 		m.ExpiresAt = v
 	}
+	if m.TokenPrefix == "" {
+		m.TokenPrefix = tokenPrefixOf(cfg.Token)
+	}
+	fillTokenMeta(client, &m)
 	return m
+}
+
+// fillTokenMeta 从 `/api/v1/user/tokens` 里按前缀补齐 tokenId 与 expiresAt。
+//
+// 只填仍为空的字段：若上面已拿到更权威的值就不覆盖。
+func fillTokenMeta(c *Client, m *whoamiMeta) {
+	if m.TokenPrefix == "" || (m.TokenID != 0 && m.ExpiresAt != "") {
+		return
+	}
+	body, err := c.get("/api/v1/user/tokens", nil)
+	if err != nil {
+		return
+	}
+	var page struct {
+		Tokens []struct {
+			ID          uint   `json:"id"`
+			TokenPrefix string `json:"tokenPrefix"`
+			ExpiresAt   string `json:"expiresAt"`
+		} `json:"tokens"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return
+	}
+	for _, tk := range page.Tokens {
+		if tk.TokenPrefix != m.TokenPrefix {
+			continue
+		}
+		if m.TokenID == 0 {
+			m.TokenID = tk.ID
+		}
+		if m.ExpiresAt == "" {
+			m.ExpiresAt = tk.ExpiresAt
+		}
+		return
+	}
 }
 
 // upsertHostConfig 写入或更新 host 配置。

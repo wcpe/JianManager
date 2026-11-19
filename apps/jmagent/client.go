@@ -147,3 +147,18 @@ func (c *Client) get(path string, query url.Values) ([]byte, error) {
 func (c *Client) post(path string) ([]byte, error) {
 	return c.doRequest(http.MethodPost, path, nil, nil)
 }
+
+// postJSON 以 JSON 体发起 POST（body 为 nil 时等价于 post）。
+//
+// 单独开一个方法而不是让 post 接受 body：无体的 POST 调用点很多，
+// 让它们都传 nil 会掩盖「这个请求到底带不带体」的意图。
+func (c *Client) postJSON(path string, payload any) ([]byte, error) {
+	if payload == nil {
+		return c.post(path)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
+	return c.doRequest(http.MethodPost, path, nil, body)
+}

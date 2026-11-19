@@ -32,47 +32,48 @@ func captureStdout(t *testing.T, fn func()) string {
 
 // TestRunWhoami_TextAndJSON 覆盖 whoami 成功 text/json 输出。
 func TestRunWhoami_TextAndJSON(t *testing.T) {
+	// 用户侧身份结构（jmut_ 令牌）：jm 走 /api/v1/auth/me 而非 Agent 的 whoami。
 	payload := map[string]any{
-		"kind":              "agent",
-		"name":              "ci",
-		"tokenId":           float64(1),
-		"scopedInstanceIds": []any{float64(10)},
-		"scopedNodeIds":     []any{float64(20)},
-		"writeAllowlist":    []any{"instance.life", "node.maintenance"},
+		"userId":          float64(7),
+		"username":        "ci",
+		"role":            float64(10),
+		"roleKey":         "platform_admin",
+		"isPlatformAdmin": true,
+		"nodes":           []any{"instance.read", "node.read"},
 	}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/agent/whoami", r.URL.Path)
+		assert.Equal(t, "/api/v1/auth/me", r.URL.Path)
 		_ = json.NewEncoder(w).Encode(payload)
 	}))
 	defer ts.Close()
 
 	c := newTestClient(ts, "jmat_ok")
 
-	// text
-	cfg := Config{Token: "jmat_ok", BaseURL: ts.URL, Output: "text"}
+	// text：用户侧字段
+	cfg := Config{Token: "jmut_ok", BaseURL: ts.URL, Output: "text"}
 	out := captureStdout(t, func() {
 		require.NoError(t, runWhoami(c, cfg, nil))
 	})
-	assert.Contains(t, out, "kind:")
-	assert.Contains(t, out, "agent")
+	assert.Contains(t, out, "username:")
 	assert.Contains(t, out, "ci")
-	assert.Contains(t, out, "instance.life")
+	assert.Contains(t, out, "platform_admin")
+	assert.Contains(t, out, "isPlatformAdmin:")
 
-	// json
+	// json：原样返回 CP 响应
 	cfg.Output = "json"
 	out = captureStdout(t, func() {
 		require.NoError(t, runWhoami(c, cfg, nil))
 	})
 	var m map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &m))
-	assert.Equal(t, "ci", m["name"])
+	assert.Equal(t, "ci", m["username"])
 }
 
 // TestRunInstanceStart_Forbidden403 写操作 403：错误为中文且 asAPIError 可断言。
 func TestRunInstanceStart_Forbidden403(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "/api/v1/agent/instances/9/start", r.URL.Path)
+		assert.Equal(t, "/api/v1/instances/9/start", r.URL.Path)
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"error":"FORBIDDEN","message":"写白名单/scope 不足或硬拒绝"}`))
 	}))
@@ -91,7 +92,7 @@ func TestRunInstanceStart_Forbidden403(t *testing.T) {
 // TestRunInstanceStart_Success 生命周期成功返回 ok。
 func TestRunInstanceStart_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/agent/instances/3/restart", r.URL.Path)
+		assert.Equal(t, "/api/v1/instances/3/restart", r.URL.Path)
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	}))
 	defer ts.Close()
@@ -127,7 +128,7 @@ func TestRunListInstances_NodeFilter(t *testing.T) {
 // TestRunListNodes_Empty 空列表 text 提示。
 func TestRunListNodes_Empty(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/agent/nodes", r.URL.Path)
+		assert.Equal(t, "/api/v1/nodes", r.URL.Path)
 		_, _ = w.Write([]byte(`[]`))
 	}))
 	defer ts.Close()
@@ -140,30 +141,45 @@ func TestRunListNodes_Empty(t *testing.T) {
 	assert.Contains(t, out, "无节点")
 }
 
-// TestRunNodeMaintenance_EnterLeave 维护 enter/leave 路径正确。
+// TestRunNodeMaintenance_EnterLeave 维护 enter/leave 落到同一端点，靠请求体区分。
+//
+// 用户侧是单个 `POST /nodes/:id/maintenance` + `{"enabled":bool}`，
+// 与 Agent 侧的 `/maintenance/enter|leave` 两个子路径不同；糖的对外用法不变，
+// 差异在客户端内部消化，这里正是守这条转换的用例。
 func TestRunNodeMaintenance_EnterLeave(t *testing.T) {
 	var paths []string
+	var bodies []map[string]any
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
+		var b map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&b); err == nil {
+			bodies = append(bodies, b)
+		} else {
+			bodies = append(bodies, nil)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	}))
 	defer ts.Close()
 
-	c := newTestClient(ts, "jmat_ok")
-	cfg := Config{Token: "jmat_ok", BaseURL: ts.URL, Output: "json"}
+	c := newTestClient(ts, "jmut_ok")
+	cfg := Config{Token: "jmut_ok", BaseURL: ts.URL, Output: "json"}
 
 	require.NoError(t, runNode(c, cfg, []string{"maintenance", "enter", "4"}))
 	require.NoError(t, runNode(c, cfg, []string{"maintenance", "leave", "4"}))
+
 	assert.Equal(t, []string{
-		"/api/v1/agent/nodes/4/maintenance/enter",
-		"/api/v1/agent/nodes/4/maintenance/leave",
+		"/api/v1/nodes/4/maintenance",
+		"/api/v1/nodes/4/maintenance",
 	}, paths)
+	require.Len(t, bodies, 2)
+	assert.Equal(t, true, bodies[0]["enabled"], "enter 应传 enabled=true")
+	assert.Equal(t, false, bodies[1]["enabled"], "leave 应传 enabled=false")
 }
 
 // TestRunInstanceStatus_Success status 拉详情。
 func TestRunInstanceStatus_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/agent/instances/11", r.URL.Path)
+		assert.Equal(t, "/api/v1/instances/11", r.URL.Path)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": 11, "uuid": "u-11", "name": "survival", "status": "STOPPED",
 			"nodeId": 1, "role": "universal", "type": "minecraft_java", "processType": "daemon",
