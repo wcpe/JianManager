@@ -11,8 +11,8 @@ import {
   type UserTokenInfo,
   type CreateUserTokenPayload,
 } from '@/api/userTokens'
-import { copyToClipboard } from '@/lib/clipboard'
-import DangerConfirm from '@/components/DangerConfirm'
+import { copyToClipboard } from '@/lib/shared/clipboard'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
