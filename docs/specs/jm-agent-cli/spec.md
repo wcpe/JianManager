@@ -151,7 +151,7 @@ Node 的模块解析天然处理 npm 平铺与 pnpm 的 `.pnpm` + 符号链接�
 | copilot | `~/.copilot/skills` |
 | agents | `~/.agents/skills` |
 | narrafork | `~/.narrafork/skills` |
-| vantaloom | `$VANTALOOM_HOME/skills`（默认 Windows `D:\Vantaloom\skills`） |
+| vantaloom | `<installDir>/data/skills`（见下方平台默认位） |
 
 **项目级根目录**（相对项目根）：
 
@@ -170,12 +170,24 @@ Node 的模块解析天然处理 npm 平铺与 pnpm 的 `.pnpm` + 符号链接�
 - **NarraFork** 运行时按优先级链扫描：`~/.narrafork/skills` < `~/.narrafork/skill`
   < `~/.claude/skills` < `~/.agents/skills` < `<ws>/.narrafork/skills` < ...
   写入一律落在原生目录，避免被兼容目录的低优先级坑到。
-- **Vantaloom** 运行时**只扫** `<ws>/.vantaloom/skills`（全局库为 `$VANTALOOM_HOME/skills`）。
+- **Vantaloom** 运行时**只扫** `<ws>/.vantaloom/skills`（全局库为 `<installDir>/data/skills`）。
   它的 `.claude` / `.codex` / `.agents` 是**导入源**而非数据源，写进去不会被运行时装上——
   因此本项目级目标必须是 `.vantaloom/skills`，不是 `.claude/skills`。
 
-Vantaloom 的库根不在家目录，而由 `VANTALOOM_HOME` 决定（默认 Windows `D:\Vantaloom`、
-其他平台 `~/Applications/Vantaloom`），这与其它宿主「`~/.<host>`」的形态不同。
+Vantaloom 的库根有两处与其它宿主不同，都要对齐上游 `DefaultPrefix()` 与 `dataDir()`：
+
+1. **多一层 `data`**：`server.go` 先取数据根（`<installDir>/data`），再拼 `skills`。
+   因此真实位置是 `<installDir>/data/skills`——少写这层会落到 `<installDir>/skills`，
+   那是升级前的旧位置，运行时不再读取。
+2. **不在家目录**：安装前缀 `installDir` 由 `VANTALOOM_HOME` 决定，未设时按平台取默认：
+
+   | 平台 | 默认 installDir | 技能库 |
+   |---|---|---|
+   | Windows | `D:\Vantaloom`（无 D 盘则 `C:\Vantaloom`） | `<installDir>/data/skills` |
+   | macOS | `~/Applications/Vantaloom` | `<installDir>/data/skills` |
+   | Linux 等 | `~/.local/vantaloom`（无家目录则 `/opt/vantaloom`） | `<installDir>/data/skills` |
+
+   三处分支必须与上游保持一致，否则同一台机器上 `jm` 与 Vantaloom 会指向不同目录。
 
 每个宿主统一装到 `<skills>/jianmanager/` 子目录：宿主按子目录发现技能，
 SKILL.md 必须位于该子目录根部；平铺在 `skills/` 下会与其它技能混淆。

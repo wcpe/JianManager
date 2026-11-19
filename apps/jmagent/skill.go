@@ -76,10 +76,9 @@ func hostSkillRoot(host string) (string, error) {
 		// getSkillSearchDirs 首项）；它同时兼容 .claude/.agents，但写入一律落在原生目录。
 		return filepath.Join(home, ".narrafork", "skills"), nil
 	case "vantaloom":
-		// Vantaloom 的库根不是「家目录下的点目录」，而是 VANTALOOM_HOME（默认
-		// Windows D:\Vantaloom、其他平台 ~/...）。全局库为 <home>/skills，见
-		// server.go 的 skills.New(filepath.Join(base, "skills"))。
-		return filepath.Join(vantaloomHome(), "skills"), nil
+		// 全局库是 <installDir>/data/skills：server.go 先用 dataDir() 取数据根
+		// （installDir 非空时为 installDir/data），再 skills.New(base/skills)。
+		return filepath.Join(vantaloomDataDir(), "skills"), nil
 	default:
 		return "", fmt.Errorf("未知宿主 %q；支持 %s", host, strings.Join(skillHosts, " / "))
 	}
@@ -94,14 +93,37 @@ func vantaloomHome() string {
 	if v := os.Getenv("VANTALOOM_HOME"); v != "" {
 		return v
 	}
-	if runtime.GOOS == "windows" {
-		return `D:\Vantaloom`
+	switch runtime.GOOS {
+	case "windows":
+		// Windows 优先 D:（历史默认），没有 D 盘时退到 C:。
+		// 与上游 DefaultPrefix()/defaultPrefix() 保持同序，否则两边指向不同目录。
+		if _, err := os.Stat(`D:\`); err == nil {
+			return `D:\Vantaloom`
+		}
+		return `C:\Vantaloom`
+	case "darwin":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return filepath.Join(".", "Vantaloom")
+		}
+		return filepath.Join(home, "Applications", "Vantaloom")
+	default:
+		// Linux 等：~/.local/vantaloom（上游 default 分支即此）。
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "/opt/vantaloom"
+		}
+		return filepath.Join(home, ".local", "vantaloom")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".", "Vantaloom")
-	}
-	return filepath.Join(home, "Applications", "Vantaloom")
+}
+
+// vantaloomDataDir 返回 Vantaloom 的数据根。
+//
+// 对齐上游 server.go 的 dataDir()：<installDir>/data（DataDir 是程序内配置项，
+// 没有对应环境变量，故此处不伪造一个）。技能库位于该数据根下的 skills/。
+// 少写一层 data 会落到 <installDir>/skills —— 那是升级前的旧位置，运行时不再读。
+func vantaloomDataDir() string {
+	return filepath.Join(vantaloomHome(), "data")
 }
 
 // workspaceSkillRoot 返回某宿主在**当前项目**内的 skills 目录。

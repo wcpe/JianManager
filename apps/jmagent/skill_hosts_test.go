@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -151,7 +153,8 @@ func TestVantaloomHomeRespectsEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
-	want := filepath.Join("tmp", "custom-home", "skills")
+	// 必须是 <home>/data/skills：少一层 data 会落到升级前的旧位置。
+	want := filepath.Join("tmp", "custom-home", "data", "skills")
 	if got != want {
 		t.Errorf("vantaloom 根目录 = %q，期望 %q", got, want)
 	}
@@ -169,6 +172,40 @@ func TestVantaloomHomeDefaultIsNotDotDir(t *testing.T) {
 	}
 	if filepath.Base(got) != "skills" {
 		t.Errorf("vantaloom 全局库最后一级应为 skills，得到 %q", got)
+	}
+	if filepath.Base(filepath.Dir(got)) != "data" {
+		t.Errorf("vantaloom 全局库上一级应为 data，得到 %q", got)
+	}
+}
+
+// vantaloomHome 默认位按平台取值，与上游 DefaultPrefix 一致。
+//
+// 三个分支错一个，就会让对应平台的用户把技能装到运行时根本不读的位置。
+func TestVantaloomHomePerPlatform(t *testing.T) {
+	t.Setenv("VANTALOOM_HOME", "")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("无主目录")
+	}
+	got := vantaloomHome()
+
+	switch runtime.GOOS {
+	case "windows":
+		// 有 D 盘用 D:\Vantaloom，否则 C:\Vantaloom。
+		if !strings.Contains(got, "Vantaloom") {
+			t.Errorf("windows 默认位异常: %q", got)
+		}
+		if !strings.HasPrefix(got, `D:`) && !strings.HasPrefix(got, `C:`) {
+			t.Errorf("windows 默认位应在 D: 或 C:，得到 %q", got)
+		}
+	case "darwin":
+		if want := filepath.Join(home, "Applications", "Vantaloom"); got != want {
+			t.Errorf("darwin 默认位 = %q，期望 %q", got, want)
+		}
+	default:
+		if want := filepath.Join(home, ".local", "vantaloom"); got != want {
+			t.Errorf("linux 默认位 = %q，期望 %q", got, want)
+		}
 	}
 }
 
