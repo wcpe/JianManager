@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -709,6 +710,83 @@ func main() {
 	// 补口：部署探针前为导入/历史实例补分配缺失的探针端口（probe_port=0 会写出坏配置）。
 	probeUpdateSvc.SetInstanceService(instanceSvc)
 
+	// 探针托管配置：三层配置存储、灰度下发编排、对账矩阵。
+	// 三者共享 db；push 需要会话与目标表，matrix 需要读期望/观测两侧。
+	managedConfigSvc := service.NewManagedConfigService(db)
+	managedStateSvc := service.NewManagedInstanceStateService(db)
+	managedPushSvc := service.NewManagedPushService(db, pool, managedConfigSvc, managedStateSvc)
+	managedMatrixSvc := service.NewManagedMatrixService(db, managedStateSvc, managedPushSvc)
+
+	// 托管桥事件路由：config_applied / config_state 与玩家事件走同一条 StreamPluginEvents，
+	// 由 PlayerEventService 统一消费后路由到此处（另起订阅会重复消费同一条长驻流）。
+	//
+	// 两件事都必须做，缺一矩阵就会失真：
+	//   - 回执/状态：交托管服务落库（目标终态 + 每实例最新状态）；
+	//   - 桥连接态：connected/disconnected 是本服务唯一能拿到的「通道还活着」证据，
+	//     而 config_state 走同一条桥、断连时根本发不出去，故矩阵的连接维度必须以它为准。
+	playerEventSvc.SetManagedEventHook(func(instanceUUID, eventType string, raw map[string]any) {
+		// 钩子在事件流读循环里同步调用，落库动作必须切到独立 goroutine，否则会卡住
+		// 该节点所有实例的实时事件（与 SetProbeConnectedHook 同一约束）。
+		go func() {
+			defer func() {
+				// 单条坏帧/单次落库失败不得影响事件流。
+				if r := recover(); r != nil {
+					slog.Error("托管桥事件处理 panic", "instanceUuid", instanceUUID, "type", eventType, "panic", r)
+				}
+			}()
+			var inst model.Instance
+			if err := db.Where("uuid = ?", instanceUUID).First(&inst).Error; err != nil {
+				slog.Debug("托管桥事件找不到实例，已跳过", "instanceUuid", instanceUUID, "type", eventType)
+				return
+			}
+			// 载荷已是 JSON 对象（PlayerEventService 解析后传入），这里再按帧结构反序列化。
+			rawJSON, err := json.Marshal(raw)
+			if err != nil {
+				slog.Warn("托管桥事件重编码失败", "instanceUuid", instanceUUID, "err", err)
+				return
+			}
+			switch eventType {
+			case service.ManagedBridgeEventConfigApplied:
+				var applied service.ManagedConfigApplied
+				if err := json.Unmarshal(rawJSON, &applied); err != nil {
+					slog.Warn("config_applied 载荷非法", "instanceUuid", instanceUUID, "err", err)
+					return
+				}
+				managedPushSvc.ConsumeConfigApplied(inst, applied)
+			case service.ManagedBridgeEventConfigState:
+				var state service.ManagedConfigState
+				if err := json.Unmarshal(rawJSON, &state); err != nil {
+					slog.Warn("config_state 载荷非法", "instanceUuid", instanceUUID, "err", err)
+					return
+				}
+				managedPushSvc.ConsumeConfigState(inst, state)
+			}
+		}()
+	})
+
+	// 桥连接/断开是矩阵连接维度的**主证据**：config_state 走同一条桥，断连时根本发不
+	// 出去，只信自报会把「早就掉线、停在断连前补报值」的实例显示成在线。
+	// 这里独立于上面的托管钩子挂接，因为 connected/disconnected 对所有实例都发生，
+	// 不限于托管模式下的托管帧。
+	playerEventSvc.SetProbeBridgeStateHook(func(instanceUUID string, connected bool) {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("桥连接态同步 panic", "instanceUuid", instanceUUID, "panic", r)
+				}
+			}()
+			var inst model.Instance
+			if err := db.Where("uuid = ?", instanceUUID).First(&inst).Error; err != nil {
+				return
+			}
+			if connected {
+				_ = managedStateSvc.MarkBridgeConnected(inst)
+				return
+			}
+			_ = managedStateSvc.MarkBridgeDisconnected(inst.ID)
+		}()
+	})
+
 	// 告警分发器：所有触发源经此统一去抖聚合 / 静默 / 分级路由 / 落库 / 通知。
 	alertDispatcher := service.NewAlertDispatcher(db)
 	// 容量趋势告警器：容量预测命中「预计 N 天内耗尽」时经 metric 规则同构路径发趋势告警。
@@ -1153,6 +1231,9 @@ func main() {
 		OrphanRuntime:           orphanRuntimeSvc,
 		BotReclaim:              botReclaimSvc,
 		ProbeUpdate:             probeUpdateSvc,
+		ManagedConfig:           managedConfigSvc,
+		ManagedPush:             managedPushSvc,
+		ManagedMatrix:           managedMatrixSvc,
 		ClientChannel:           clientChannelSvc,
 		ClientVersion:           clientVersionSvc,
 		ClientChunkUpload:       clientChunkUploadSvc,
