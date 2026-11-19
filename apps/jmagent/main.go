@@ -35,42 +35,34 @@ func progName() string {
 }
 
 // usage 打印命令总览到 stderr。
+//
+// 顶层只列「有什么」，不解释「怎么用」：细节在 `jm <命令> --help`。
+// 一屏放得下是硬要求——帮助太长时用户反而找不到要用的那条。
 func usage() {
 	n := progName()
 	fmt.Fprintf(os.Stderr, `%s — JianManager 命令行客户端（经 CP HTTPS + 用户令牌）
 
 用法:
-  %s api <METHOD> <PATH> [--data @file|-] [--query k=v]...   直接调用任意 CP 接口
-  %s auth login [--host <url>]                                设备授权登录
-  %s auth status                                              查看当前登录状态
-  %s auth logout                                              登出（本地清除 + 远端吊销）
-  %s config set-url|get-url|list|use|remove                   管理多个 CP 主机
-  %s skill install [--host claude|codex|cursor]...             安装 Agent 运维知识到宿主
-                    [--dir <path>] [--from <目录>] [--dry-run]
+  %s api <METHOD> <PATH>                调用任意 CP 接口
+  %s auth login|status|logout           设备授权登录 / 查看状态 / 登出
+  %s config set-url|get-url|list        管理多个 CP 主机
+  %s skill install                      安装 Agent 运维知识到宿主
 
-高频命令（等价于 jm api 的封装）:
-  %s whoami
-  %s list nodes
-  %s list instances [--node <id>]
-  %s instance status|metrics <id>
-  %s instance start|stop|restart <id>
-  %s node maintenance enter|leave <id>
+  高频命令:
+  %s whoami                             当前身份
+  %s list nodes|instances               列出节点 / 实例
+  %s instance status|start|stop <id>    实例操作
+  %s node maintenance enter|leave <id>  节点维护模式
 
 全局选项:
-  --version         显示版本号
-  --url string      临时指定 CP 基址（优先于配置与环境变量）
-  --token string    临时指定令牌（优先于钥匙串与环境变量）
-  --output string   输出格式：text（默认）| json
+  --url <url>      临时指定 CP 基址     --token <t>    临时指定令牌
+  --output text|json                    --version      显示版本号
 
 环境变量:
-  JM_URL            CP 基址（优先级低于 --url，高于配置文件）
-  JM_TOKEN          令牌（优先级低于 --token，高于钥匙串）
+  JM_URL / JM_TOKEN                     优先级低于对应命令行选项
 
-说明:
-  - 令牌存系统钥匙串；当前环境无钥匙串时报错并提示改用 JM_TOKEN，不落盘明文
-  - 401：令牌无效/已吊销/已过期；403：权限或 scope 不足
-  - 详见 docs/specs/jm-agent-cli/spec.md
-`, n, n, n, n, n, n, n, n, n, n, n, n, n)
+运行 %s <命令> --help 查看该命令的全部选项。
+`, n, n, n, n, n, n, n, n, n, n)
 }
 
 // subcommandUsage 返回子命令专属的帮助正文；未知子命令返回空串。
@@ -136,7 +128,7 @@ Git Bash / MSYS2 注意:
 
 install 选项:
   --host <name>    目标宿主：claude / codex / cursor；可重复或逗号分隔
-                   缺省按 ~/.claude、~/.codex、~/.cursor 是否存在自动探测
+                   缺省在终端里列出来让你选；非交互环境则装到全部已探测宿主
   --dir <path>     直接指定安装目录（覆盖 --host 的路径推导）
   --from <dir>     从本地目录取内容，而非经 CP 静态路由（离线/开发用）
   --dry-run        只打印将写入的位置，不实际落盘

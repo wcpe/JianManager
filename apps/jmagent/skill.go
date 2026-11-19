@@ -79,6 +79,13 @@ func detectHosts() []string {
 	return out
 }
 
+// joinSkillDir 拼出某个 skills 根下本技能的安装目录。
+//
+// 统一多一层 `jianmanager/`：宿主按子目录发现技能，SKILL.md 必须位于该子目录根部。
+func joinSkillDir(skillRoot string) string {
+	return filepath.Join(skillRoot, "jianmanager")
+}
+
 // runSkill 分发 `jm skill <sub>`。
 func runSkill(cfg Config, args []string) error {
 	if len(args) == 0 {
@@ -160,24 +167,63 @@ func parseSkillInstallArgs(args []string) (skillInstallOptions, error) {
 }
 
 // runSkillInstall 把知识文件装进宿主 skills 目录。
+//
+// 三种入口，按明确度递增：
+//   - 无参数 + 交互终端：列出候选位置让用户选（默认全选已探测到的宿主）
+//   - 无参数 + 非交互（管道 / CI / JM_NO_PROMPT）：直接装到全部已探测宿主，不阻塞
+//   - 显式 --host / --dir：按指定目标装，不提示
 func runSkillInstall(cfg Config, args []string) error {
 	opt, err := parseSkillInstallArgs(args)
 	if err != nil {
 		return err
 	}
 
-	// --dir 显式指定时，hosts 仅用于展示，不参与路径推导。
-	targets := opt.hosts
-	if opt.dir == "" {
-		if len(targets) == 0 {
-			targets = detectHosts()
-			if len(targets) == 0 {
+	var roots []string
+
+	switch {
+	case opt.dir != "":
+		// 显式目录优先，hosts 不参与路径推导。
+		roots = []string{opt.dir}
+
+	case len(opt.hosts) > 0:
+		for _, h := range opt.hosts {
+			root, err := hostSkillRoot(h)
+			if err != nil {
+				return err
+			}
+			roots = append(roots, joinSkillDir(root))
+		}
+
+	default:
+		// 未指定目标：交互环境让用户选，否则沿用「装到全部已探测宿主」。
+		// --dry-run 也走交互：先选再看落点，比「不给选就预览全部」更符合预期。
+		detected := detectHosts()
+		if isInteractive() {
+			picked, customDir, err := promptTargets(buildTargets(detected))
+			if err != nil {
+				if err == errUserCancelled {
+					fmt.Println("已取消。")
+					return nil
+				}
+				return err
+			}
+			if customDir != "" {
+				roots = []string{customDir}
+			} else {
+				for _, t := range picked {
+					roots = append(roots, t.Path)
+				}
+			}
+		} else {
+			if len(detected) == 0 {
 				return fmt.Errorf("未探测到任何宿主（~/.claude、~/.codex、~/.cursor 均不存在）；请用 --host 指定，或 --dir 直接给目录")
 			}
-		}
-		for _, h := range targets {
-			if _, err := hostSkillRoot(h); err != nil {
-				return err
+			for _, h := range detected {
+				root, err := hostSkillRoot(h)
+				if err != nil {
+					return err
+				}
+				roots = append(roots, joinSkillDir(root))
 			}
 		}
 	}
@@ -185,19 +231,6 @@ func runSkillInstall(cfg Config, args []string) error {
 	entries, srcDesc, err := loadSkillEntries(cfg, opt.from)
 	if err != nil {
 		return err
-	}
-
-	var roots []string
-	if opt.dir != "" {
-		roots = []string{opt.dir}
-	} else {
-		for _, h := range targets {
-			root, err := hostSkillRoot(h)
-			if err != nil {
-				return err
-			}
-			roots = append(roots, filepath.Join(root, "jianmanager"))
-		}
 	}
 
 	for _, root := range roots {
