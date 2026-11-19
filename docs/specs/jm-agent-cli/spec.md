@@ -89,9 +89,37 @@ jm config remove staging
 
 ### 3.6 依赖约束（硬性）
 
-- `jm` 内部只允许依赖 `internal/platform/*`（keyring、httpclient、dataroot）
+- `jm` 内部只允许依赖 `internal/platform/*`（keyring、httpclient、dataroot）与 `internal/version`
+- `internal/version` 是唯一允许的非 `platform` 例外：单个文件、零外部依赖、只读常量，
+  引入它是为了让 `--version` 与发行烟测有单一真值（否则安装包无法自证版本）
 - **禁止**依赖 `internal/controlplane/service|mcp|model`、`proto/workerpb`、gRPC、GORM
 - 目标：与 `jmctl` 同量级（当前 jmctl 依赖 3 个内部包）
+
+### 3.7 分发与安装（FR-567）
+
+`jm` 是 Go 单二进制，分发走两条独立通道；两者内容同源，只是触达方式不同。
+
+**通道 A：GitHub Releases**
+
+`make dist-jm` 交叉编译五件套（windows/linux/darwin × amd64/arm64，`CGO_ENABLED=0`），
+由 `release.yml` 的 build 任务产出并随 Release 发布，附 `checksums.txt`。
+`--version` 由 `-ldflags` 注入 `internal/version.Version`，供 smoke 校验。
+
+**通道 B：npm 双包分发**
+
+| 包 | 内容 | 作用 |
+|---|---|---|
+| `@jianmanager/jm` | 启动器 `bin/jm.js`（约 2.5 kB） | 定位平台二进制并 `spawn`，透传 stdio 与退出码 |
+| `@jianmanager/jm-<platform>` ×5 | Go 二进制（约 7 MB） | `os`/`cpu` 限定，只装匹配当前平台的那个 |
+
+平台标识与 npm 的 `process.platform-process.arch` 对齐：
+`linux-x64`、`linux-arm64`、`darwin-x64`、`darwin-arm64`、`win32-x64`。
+
+- 主包经 `optionalDependencies` 引用五个平台包；npm 按 `os`/`cpu` 自动跳过不匹配项
+- **先发布平台分包、再发布主包**：反序会让安装者在平台包就位前解析失败
+- 不用 `postinstall` 下载：企业内网/代理环境同样可装，且卸载升级由 npm 统一管理
+- 平台清单在 `packages/jm-npm/package.json` 与发布脚本中各有一份，
+  脚本启动时强制校验两者一致（漏改一侧的后果是「某平台装上后没有二进制」，只有该平台用户会遇到）
 
 ## 4. 不做
 

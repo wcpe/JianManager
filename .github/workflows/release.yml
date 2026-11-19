@@ -413,6 +413,27 @@ jobs:
             -o "dist/control-plane-slim-${GOOS}-${GOARCH}${{ matrix.ext }}" ./apps/control-plane
           ls -l dist/
 
+      - name: 交叉编译 jm 客户端（三平台，独立于 CP/Worker 形态）
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 客户端是独立演进的人类侧工具，同一个二进制对任意 CP 实例工作，
+          # 因此不随服务的 full/slim 形态分叉，且一次编译覆盖全部目标平台。
+          LDFLAGS="-s -w -X github.com/wcpe/JianManager/internal/version.Version=${VERSION}"
+          mkdir -p dist
+          for target in windows/amd64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%%/*}"
+            arch="${target##*/}"
+            ext=""
+            [ "$os" = "windows" ] && ext=".exe"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "${LDFLAGS}" \
+              -o "dist/jm-${os}-${arch}${ext}" ./apps/jmagent
+          done
+          ls -l dist/jm-*
+
       - name: 上传二进制产物（供 smoke 校验，retention 1 天）
         uses: actions/upload-artifact@v7
         with:
@@ -434,6 +455,8 @@ jobs:
           - { runner: windows-latest, artifact: binaries-windows-amd64, binary: control-plane-windows-amd64.exe }
           - { runner: windows-latest, artifact: binaries-windows-amd64, binary: control-plane-slim-windows-amd64.exe }
           - { runner: windows-latest, artifact: binaries-windows-amd64, binary: worker-windows-amd64.exe }
+          - { runner: ubuntu-24.04, artifact: binaries-linux-amd64, binary: jm-linux-amd64 }
+          - { runner: windows-latest, artifact: binaries-windows-amd64, binary: jm-windows-amd64.exe }
     runs-on: ${{ matrix.runner }}
     steps:
       - name: 下载待验二进制
@@ -477,6 +500,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: 检出仓库
+        uses: actions/checkout@v5
+
       - name: 下载全部二进制产物到 dist/
         uses: actions/download-artifact@v8
         with:
@@ -508,3 +534,27 @@ jobs:
               --generate-notes \
               --repo "${GITHUB_REPOSITORY}"
           fi
+
+      # ── npm 分发（FR-567）──
+      # 仅在配置了 NPM_TOKEN 时执行：未配置的仓库/分支不因缺密钥而失败。
+      # 顺序上必须「先平台分包、再主包」——主包通过 optionalDependencies 引用平台包，
+      # 主包先发布会让安装者在平台包就位前解析失败。
+      - name: 校验 npm 平台清单与 optionalDependencies 一致
+        shell: bash
+        run: node packages/jm-npm/scripts/build-npm-packages.js
+
+      - name: 发布 jm 到 npm（平台分包 + 主包）
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          # secrets 不能直接用于 if 条件，故在步骤内判断：未配置令牌时明确跳过，
+          # 而不是让整条发布流水线因为「没配这个可选通道」而失败。
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::notice::未配置 NPM_TOKEN，跳过 npm 发布（GitHub Releases 通道不受影响）"
+            exit 0
+          fi
+          # npm 从 NODE_AUTH_TOKEN 读凭据；registry 显式指向 npmjs，避免继承镜像配置。
+          printf '//registry.npmjs.org/:_authToken=%s\n' "${NODE_AUTH_TOKEN}" > ~/.npmrc
+          node packages/jm-npm/scripts/build-npm-packages.js --publish

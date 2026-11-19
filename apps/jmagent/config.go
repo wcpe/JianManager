@@ -292,6 +292,10 @@ var subcommandFlags = map[string]struct{}{
 	"--force":   {},
 	"--approve": {},
 	"--deny":    {},
+	// skill install 的目标与来源（FR-566）：
+	// 全局解析阶段只透传，由 runSkill 自行解释。
+	"--dir":  {},
+	"--from": {},
 }
 
 // isSubcommandFlag 判定是否为已知子命令选项（含 --key=value 形式）。

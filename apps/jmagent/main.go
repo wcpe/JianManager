@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/wcpe/JianManager/internal/version"
 )
 
 // progName 返回展示用程序名：按 argv[0] 识别 jm / jmagent。
@@ -43,6 +45,8 @@ func usage() {
   %s auth status                                              查看当前登录状态
   %s auth logout                                              登出（本地清除 + 远端吊销）
   %s config set-url|get-url|list|use|remove                   管理多个 CP 主机
+  %s skill install [--host claude|codex|cursor]...             安装 Agent 运维知识到宿主
+                    [--dir <path>] [--from <目录>] [--dry-run]
 
 高频命令（等价于 jm api 的封装）:
   %s whoami
@@ -53,6 +57,7 @@ func usage() {
   %s node maintenance enter|leave <id>
 
 全局选项:
+  --version         显示版本号
   --url string      临时指定 CP 基址（优先于配置与环境变量）
   --token string    临时指定令牌（优先于钥匙串与环境变量）
   --output string   输出格式：text（默认）| json
@@ -65,10 +70,17 @@ func usage() {
   - 令牌存系统钥匙串；当前环境无钥匙串时报错并提示改用 JM_TOKEN，不落盘明文
   - 401：令牌无效/已吊销/已过期；403：权限或 scope 不足
   - 详见 docs/specs/jm-agent-cli/spec.md
-`, n, n, n, n, n, n, n, n, n, n, n, n)
+`, n, n, n, n, n, n, n, n, n, n, n, n, n)
 }
 
 func main() {
+	// 版本先于一切解析：`--version` 不带其它参数也要能出结果，
+	// 否则装了哪个版本只能靠文件名猜（发行包正是靠它做烟测）。
+	if version.Requested(os.Args[1:]) {
+		fmt.Println(version.Version)
+		return
+	}
+
 	cfg, args, err := parseGlobalArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %v\n\n", err)
@@ -96,6 +108,8 @@ func main() {
 		runErr = runAuth(cfg, rest)
 	case "config":
 		runErr = runConfig(cfg, rest)
+	case "skill":
+		runErr = runSkill(cfg, rest)
 	case "whoami":
 		runErr = runWhoami(newClient(cfg), cfg, rest)
 	case "list":

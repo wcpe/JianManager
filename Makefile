@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test test-plain e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
+.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test test-plain e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-jm dist-jm-npm dist-prep
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -122,7 +122,7 @@ dist-full: dist-prep embed-worker dist-bin-full
 dist-slim: dist-prep clear-worker-embed dist-bin-slim
 
 # 一次产出 full + slim CP 与独立 worker（先 full 再 slim，避免 embed 目录互相污染）。
-dist-all: dist-full dist-slim
+dist-all: dist-full dist-slim dist-jm
 
 # 完整版二进制命名（ADR-036）：control-plane / worker × linux|windows amd64。
 dist-bin-full:
@@ -143,6 +143,24 @@ dist-bin-slim:
 
 # 兼容旧目标名：dist-bin = 完整版四件套。
 dist-bin: dist-bin-full
+
+# 客户端 `jm` 的三平台发行物（FR-564）。
+#
+# 与 CP/Worker 分开命名（不带 slim/full）：客户端是独立演进的人类侧工具，
+# 同一个二进制即可对任意 CP 实例工作，不随服务端形态分叉。
+# darwin 一并出：macOS 是 `jm` 的主要使用环境之一（钥匙串实现见 internal/platform/keyring）。
+dist-jm:
+	mkdir -p dist
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-windows-amd64.exe ./apps/jmagent
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-linux-amd64 ./apps/jmagent
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-darwin-amd64 ./apps/jmagent
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-darwin-arm64 ./apps/jmagent
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-linux-arm64 ./apps/jmagent
+
+# 生成 npm 分发包目录（主包 + 5 个平台分包）到 .tmp/jm-npm-build/（FR-567）。
+# 依赖 dist-jm 的产物；加 PUBLISH=1 才会真正推送到 npm。
+dist-jm-npm: dist-jm
+	node packages/jm-npm/scripts/build-npm-packages.js $(if $(PUBLISH),--publish,)
 
 # 构建 Bot Worker
 build-bot:
