@@ -19,6 +19,7 @@ func TestHostSkillRootAllHosts(t *testing.T) {
 		"kiro":    filepath.Join(home, ".kiro", "skills"),
 		"copilot": filepath.Join(home, ".copilot", "skills"),
 		"agents":  filepath.Join(home, ".agents", "skills"),
+		"narrafork": filepath.Join(home, ".narrafork", "skills"),
 	}
 	for host, exp := range want {
 		got, err := hostSkillRoot(host)
@@ -48,8 +49,8 @@ func TestSkillHostsCoverage(t *testing.T) {
 			t.Errorf("workspaceSkillRoot 缺 %s: %v", h, err)
 		}
 	}
-	if len(skillHosts) != 6 {
-		t.Errorf("宿主数应为 6，实际 %d", len(skillHosts))
+	if len(skillHosts) != 8 {
+		t.Errorf("宿主数应为 8，实际 %d", len(skillHosts))
 	}
 }
 
@@ -66,6 +67,8 @@ func TestWorkspaceSkillRootConventions(t *testing.T) {
 		"kiro":    filepath.Join(ws, ".kiro", "skills"),
 		"copilot": filepath.Join(ws, ".github", "skills"),
 		"agents":  filepath.Join(ws, ".agents", "skills"),
+		"narrafork":  filepath.Join(ws, ".narrafork", "skills"),
+		"vantaloom":  filepath.Join(ws, ".vantaloom", "skills"),
 	}
 	for host, exp := range cases {
 		got, err := workspaceSkillRoot(host, ws)
@@ -135,5 +138,48 @@ func TestDetectHostsIncludesWorkspace(t *testing.T) {
 	}
 	if !has {
 		t.Errorf("应识别出项目内的 .kiro，实际 %v", found)
+	}
+}
+
+// Vantaloom 的全局库跟 VANTALOOM_HOME 走，不是 ~/.vantaloom。
+//
+// 这是它与其它宿主的根本差别：技能库放在安装前缀下，而不是家目录的点目录。
+// 写错位置的后果是「装完 Vantaloom 看不见」——它的运行时只扫 <home>/skills。
+func TestVantaloomHomeRespectsEnv(t *testing.T) {
+	t.Setenv("VANTALOOM_HOME", filepath.Join("tmp", "custom-home"))
+	got, err := hostSkillRoot("vantaloom")
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	want := filepath.Join("tmp", "custom-home", "skills")
+	if got != want {
+		t.Errorf("vantaloom 根目录 = %q，期望 %q", got, want)
+	}
+}
+
+// 未设环境变量时按平台取默认安装位，仍不是 ~/.vantaloom。
+func TestVantaloomHomeDefaultIsNotDotDir(t *testing.T) {
+	t.Setenv("VANTALOOM_HOME", "")
+	got, err := hostSkillRoot("vantaloom")
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if filepath.Base(filepath.Dir(got)) == ".vantaloom" {
+		t.Errorf("vantaloom 全局库不应落在 ~/.vantaloom，得到 %q", got)
+	}
+	if filepath.Base(got) != "skills" {
+		t.Errorf("vantaloom 全局库最后一级应为 skills，得到 %q", got)
+	}
+}
+
+// NarraFork 的项目级原生目录优先级最高，是它运行时的首选。
+func TestNarraforkWorkspaceIsNative(t *testing.T) {
+	ws := filepath.Join("tmp", "ws")
+	got, err := workspaceSkillRoot("narrafork", ws)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if want := filepath.Join(ws, ".narrafork", "skills"); got != want {
+		t.Errorf("narrafork 项目级 = %q，期望 %q", got, want)
 	}
 }

@@ -149,6 +149,7 @@ Git Bash / MSYS2 注意:
 
 install 选项:
   --host <name>    目标宿主：claude / codex / cursor / kiro / copilot / agents
+                   / narrafork / vantaloom
                    可重复或逗号分隔；缺省在终端里列出来让你选
   --scope <s>      user（默认，装给本机）| project（装进当前仓库，随仓库分发）
   --dir <path>     直接指定安装目录（覆盖 --host / --scope 的路径推导）
@@ -159,8 +160,8 @@ install 选项:
 说明:
   - 内容来源默认是 CP 的匿名路由 GET /api/v1/skill/<path>，无需登录
   - 每个宿主都装到 <skills>/jianmanager/ 子目录，避免与其它技能混淆
-  - project 作用域可直接对接已有的技能库目录（如 Vantaloom 的
-    .claude/skills、NarraFork 的 .kiro/skills）：--scope project 即可
+  - 两个自带技能库的应用各有原生目录：narrafork 用 .narrafork/skills，
+    vantaloom 用 .vantaloom/skills（其运行时只扫这个原生约定）
 `
 	case "whoami":
 		return `用法: jm whoami

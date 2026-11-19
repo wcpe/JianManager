@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -70,9 +71,37 @@ func hostSkillRoot(host string) (string, error) {
 		return filepath.Join(home, ".copilot", "skills"), nil
 	case "agents":
 		return filepath.Join(home, ".agents", "skills"), nil
+	case "narrafork":
+		// NarraFork 的全局库固定在 ~/.narrafork/skills（skill-service.ts 的
+		// getSkillSearchDirs 首项）；它同时兼容 .claude/.agents，但写入一律落在原生目录。
+		return filepath.Join(home, ".narrafork", "skills"), nil
+	case "vantaloom":
+		// Vantaloom 的库根不是「家目录下的点目录」，而是 VANTALOOM_HOME（默认
+		// Windows D:\Vantaloom、其他平台 ~/...）。全局库为 <home>/skills，见
+		// server.go 的 skills.New(filepath.Join(base, "skills"))。
+		return filepath.Join(vantaloomHome(), "skills"), nil
 	default:
-		return "", fmt.Errorf("未知宿主 %q；支持 claude / codex / cursor / kiro / copilot / agents", host)
+		return "", fmt.Errorf("未知宿主 %q；支持 %s", host, strings.Join(skillHosts, " / "))
 	}
+}
+
+// vantaloomHome 返回 Vantaloom 的数据根。
+//
+// 与上游一致：优先环境变量 VANTALOOM_HOME，其次按平台取默认安装位。
+// 之所以不硬编码 `~/.vantaloom`：Vantaloom 把运行时与技能库一起放在安装前缀下，
+// 技能库并不在家目录。
+func vantaloomHome() string {
+	if v := os.Getenv("VANTALOOM_HOME"); v != "" {
+		return v
+	}
+	if runtime.GOOS == "windows" {
+		return `D:\Vantaloom`
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".", "Vantaloom")
+	}
+	return filepath.Join(home, "Applications", "Vantaloom")
 }
 
 // workspaceSkillRoot 返回某宿主在**当前项目**内的 skills 目录。
@@ -94,8 +123,17 @@ func workspaceSkillRoot(host, projectDir string) (string, error) {
 		return filepath.Join(projectDir, ".github", "skills"), nil
 	case "agents":
 		return filepath.Join(projectDir, ".agents", "skills"), nil
+	case "narrafork":
+		// 项目级原生目录，优先级高于 .claude/.agents（skill-service.ts 的
+		// priority chain：<project>/.narrafork/skills 覆盖所有全局与兼容目录）。
+		return filepath.Join(projectDir, ".narrafork", "skills"), nil
+	case "vantaloom":
+		// Vantaloom 的项目级安装目标固定为 <ws>/.vantaloom/skills：
+		// store.go 明确「运行时只扫这个原生约定」，.claude/.codex/.agents
+		// 只是导入源，写进去不会被运行时装上。
+		return filepath.Join(projectDir, ".vantaloom", "skills"), nil
 	default:
-		return "", fmt.Errorf("未知宿主 %q；支持 claude / codex / cursor / kiro / copilot / agents", host)
+		return "", fmt.Errorf("未知宿主 %q；支持 %s", host, strings.Join(skillHosts, " / "))
 	}
 }
 
@@ -108,7 +146,7 @@ const (
 // skillHosts 是全部支持的宿主，顺序即候选列表的展示顺序。
 //
 // 前三个是最常见的 agent 客户端，排前面让默认序号落在最可能的选择上。
-var skillHosts = []string{"claude", "codex", "cursor", "kiro", "copilot", "agents"}
+var skillHosts = []string{"claude", "codex", "cursor", "kiro", "copilot", "agents", "narrafork", "vantaloom"}
 
 // detectHosts 探测本机/本项目已存在哪些宿主的配置目录。
 //
@@ -116,10 +154,6 @@ var skillHosts = []string{"claude", "codex", "cursor", "kiro", "copilot", "agent
 // 用户刚装好宿主、还没建 skills 目录时也应算作可用目标。
 // 项目级目录优先级更高：同一宿主在项目里装了，说明这个仓库就是想分发给它。
 func detectHosts(projectDir string) []string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
 	var out []string
 	seen := make(map[string]bool)
 	mark := func(host string) {
@@ -129,18 +163,22 @@ func detectHosts(projectDir string) []string {
 		}
 	}
 
+	// 判「该宿主已存在」一律看它自己的根目录，而不是拼一个 `~/.<host>`：
+	// Vantaloom 的根是 VANTALOOM_HOME、NarraFork 用的是 ~/.narrafork，
+	// 拼字符串的写法对这两个必然判错。
 	for _, host := range skillHosts {
-		// 项目级：`<ws>/.<host>` 或 copilot 的 `.github`。
+		// 项目级：取 skills 目录的上一级（`.claude` / `.github` / `.narrafork` …）。
 		if root, err := workspaceSkillRoot(host, projectDir); err == nil {
-			base := filepath.Dir(root)
-			if st, err := os.Stat(base); err == nil && st.IsDir() {
+			if st, err := os.Stat(filepath.Dir(root)); err == nil && st.IsDir() {
 				mark(host)
 				continue
 			}
 		}
-		// 用户级：`~/.<host>`。
-		if st, err := os.Stat(filepath.Join(home, "."+host)); err == nil && st.IsDir() {
-			mark(host)
+		// 用户级：同样取上一级，兼容 `~/.claude` 与 `D:\Vantaloom` 两类结构。
+		if root, err := hostSkillRoot(host); err == nil {
+			if st, err := os.Stat(filepath.Dir(root)); err == nil && st.IsDir() {
+				mark(host)
+			}
 		}
 	}
 	return out

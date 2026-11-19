@@ -150,6 +150,8 @@ Node 的模块解析天然处理 npm 平铺与 pnpm 的 `.pnpm` + 符号链接�
 | kiro | `~/.kiro/skills` |
 | copilot | `~/.copilot/skills` |
 | agents | `~/.agents/skills` |
+| narrafork | `~/.narrafork/skills` |
+| vantaloom | `$VANTALOOM_HOME/skills`（默认 Windows `D:\Vantaloom\skills`） |
 
 **项目级根目录**（相对项目根）：
 
@@ -158,13 +160,22 @@ Node 的模块解析天然处理 npm 平铺与 pnpm 的 `.pnpm` + 符号链接�
 | claude / codex / cursor / kiro | `<ws>/.<host>/skills` |
 | copilot | `<ws>/.github/skills` |
 | agents | `<ws>/.agents/skills` |
+| narrafork | `<ws>/.narrafork/skills` |
+| vantaloom | `<ws>/.vantaloom/skills` |
 
 `copilot` 与其他宿主不同，用 `.github/skills` 而不是 `.<host>`，这是 GitHub 侧的既有约定。
 
-两类目录并存是刻意的：多个 harness（Claude Code、Codex、Kiro）都会优先读工作区下的同名目录，
-因此 `--scope project` 可直接对接已有技能库——例如 Vantaloom 的
-`.claude/skills` / `.codex/skills` / `.agents/skills`，NarraFork 的 `.kiro/skills`，
-装完后结构与它们各自的技能目录完全一致，无需额外配置。
+`narrafork` 与 `vantaloom` 是**自带技能库的应用**，各有原生目录，与通用 harness 不同：
+
+- **NarraFork** 运行时按优先级链扫描：`~/.narrafork/skills` < `~/.narrafork/skill`
+  < `~/.claude/skills` < `~/.agents/skills` < `<ws>/.narrafork/skills` < ...
+  写入一律落在原生目录，避免被兼容目录的低优先级坑到。
+- **Vantaloom** 运行时**只扫** `<ws>/.vantaloom/skills`（全局库为 `$VANTALOOM_HOME/skills`）。
+  它的 `.claude` / `.codex` / `.agents` 是**导入源**而非数据源，写进去不会被运行时装上——
+  因此本项目级目标必须是 `.vantaloom/skills`，不是 `.claude/skills`。
+
+Vantaloom 的库根不在家目录，而由 `VANTALOOM_HOME` 决定（默认 Windows `D:\Vantaloom`、
+其他平台 `~/Applications/Vantaloom`），这与其它宿主「`~/.<host>`」的形态不同。
 
 每个宿主统一装到 `<skills>/jianmanager/` 子目录：宿主按子目录发现技能，
 SKILL.md 必须位于该子目录根部；平铺在 `skills/` 下会与其它技能混淆。
