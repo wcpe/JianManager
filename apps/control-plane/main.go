@@ -717,6 +717,18 @@ func main() {
 	managedPushSvc := service.NewManagedPushService(db, pool, managedConfigSvc, managedStateSvc)
 	managedMatrixSvc := service.NewManagedMatrixService(db, managedStateSvc, managedPushSvc)
 
+	// 启动收口上次进程遗留的推进中会话。
+	//
+	// 推进循环由内存 goroutine 驱动，进程重启后它已经不在了，而库里的会话仍是 running：
+	// 没人推进、没人计时、人工也放行不了（Release 要求 awaiting_release），只能手动 Cancel。
+	// 必须先于任何 HTTP/事件接线执行，否则面板会先在「正在推」这个假象上渲染一轮。
+	if n, rerr := managedPushSvc.RecoverInterrupted(); rerr != nil {
+		slog.Warn("托管配置下发：启动收口推进中会话失败", "error", rerr)
+	} else if n > 0 {
+		slog.Warn("托管配置下发：已把上次进程遗留的推进中会话置为暂停",
+			"sessions", n, "note", "需人工核对当前批进度后决定是否续推")
+	}
+
 	// 托管桥事件路由：config_applied / config_state 与玩家事件走同一条 StreamPluginEvents，
 	// 由 PlayerEventService 统一消费后路由到此处（另起订阅会重复消费同一条长驻流）。
 	//

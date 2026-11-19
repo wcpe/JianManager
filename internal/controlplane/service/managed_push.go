@@ -432,8 +432,12 @@ func (s *ManagedPushService) finishBatch(session *model.ManagedPushSession) (boo
 	if tripped {
 		reason := fmt.Sprintf("失败率 %.1f%% 超过阈值 %.1f%%（本批已终结的失败目标）",
 			observed, fresh.FailureRateThreshold)
-		if err := s.pause(fresh.ID, model.ManagedPushPauseCircuitBreak, reason,
-			BreakReasonFailureRate, fresh.FailureRateThreshold, observed); err != nil {
+		// 熔断落 `failed`（终态），不是 `paused`。
+		//
+		// 两者都能「不再推进」，但只有 failed 表达了「本轮已经不该继续」——
+		// paused 是可 Resume 的，而熔断的语义是现场保留、等人工判断是否要改动后重建会话。
+		// 允许一键 Resume 会绕过那次人工判断，把触发熔断的那个配置直接推给剩余批次。
+		if err := s.failByCircuitBreak(fresh.ID, reason, fresh.FailureRateThreshold, observed); err != nil {
 			return false, err
 		}
 		s.recordAudit(0, "managed_config.push.circuit_break", fresh.ID, reason)
@@ -505,16 +509,20 @@ func (s *ManagedPushService) Pause(sessionID uint, reason string) (*model.Manage
 	if reason == "" {
 		reason = "人工暂停"
 	}
-	if err := s.pause(sessionID, model.ManagedPushPauseManual, reason, "", 0, 0); err != nil {
+	if err := s.pause(sessionID, model.ManagedPushPauseManual, reason); err != nil {
 		return nil, err
 	}
 	s.recordAudit(0, "managed_config.push.pause", sessionID, reason)
 	return s.Get(sessionID)
 }
 
-// Resume 从暂停恢复（熔断解除也走这条）。
+// Resume 从**人工暂停**恢复。
 //
 // 恢复后**重试本批未终结的目标**：暂停时可能有目标还停在 pending。
+//
+// 熔断不能走这条：熔断是终态（`failByCircuitBreak` 置 failed），恢复只认 paused。
+// 这是刻意的——熔断说明「按当前配置继续推是危险的」，要推进应改动配置后重建会话，
+// 而不是把同一份配置一键续推给剩余批次。`break_*` 现场在恢复后仍保留，便于事后核对。
 func (s *ManagedPushService) Resume(sessionID uint) (*model.ManagedPushSession, error) {
 	session, err := s.Get(sessionID)
 	if err != nil {
@@ -631,55 +639,92 @@ func (s *ManagedPushService) pushOne(session *model.ManagedPushSession, target m
 		return nil
 	}
 
-	// 每台重新合并：不同实例的 node/instance 层不同，不能复用会话里的代表值。
-	merged, err := s.config.MergeForInstance(inst)
-	if err != nil {
-		s.finishTarget(target, model.ManagedPushTargetFailed,
-			model.ManagedTargetCodeApplyFailed, "合并配置层失败: "+err.Error())
-		return nil
-	}
-	if len(merged.ForbiddenKeys) > 0 {
-		s.finishTarget(target, model.ManagedPushTargetRejected,
-			model.ManagedTargetCodeRejected, "含禁止远程写入的键: "+strings.Join(merged.ForbiddenKeys, "、"))
-		return nil
-	}
-
+	// 载荷来源分两种，必须分清：
+	//   - 回滚会话：重推源会话**当时对这台机器实际发出去的那份配置内容**（PushedPayloadJSON）。
+	//     不能重新合并——两次推送之间只要有人改过 global 层，重新合并出的就是一份
+	//     从未在任何机器上生效过的配置，而「回到上一次推送的状态」这句话也就不成立了。
+	//   - 常规会话：按该实例的 node/instance 层现场合并（各台不同，不能复用会话级代表值）。
+	//
+	// 注意回滚只复用**内容**（values/removals），不复用版本号：configVersion 必须是本次
+	// 回滚会话新铸的版本，baseVersion 必须是该实例当前的真实基线。若把源载荷的旧版本号
+	// 原样发出去，探针会按旧版本回执，而 CP 正按新版本等它——回执永远对不上，最终全批超时。
+	var raw []byte
 	base := s.baseVersionFor(inst)
-	payload := ManagedConfigPush{
-		ConfigVersion: session.ConfigVersion,
-		BaseVersion:   base,
-		Values:        merged.Values,
-		Removals:      merged.Removals,
-		Reason:        session.Reason,
-	}
-	if payload.Values == nil {
-		payload.Values = map[string]any{}
-	}
+	if session.Kind == model.ManagedPushKindRollback && target.PushedPayloadJSON != "" {
+		var frozen ManagedConfigPush
+		if uerr := json.Unmarshal([]byte(target.PushedPayloadJSON), &frozen); uerr != nil {
+			s.finishTarget(target, model.ManagedPushTargetFailed,
+				model.ManagedTargetCodeApplyFailed, "回滚载荷损坏: "+uerr.Error())
+			return nil
+		}
+		payload := ManagedConfigPush{
+			ConfigVersion: session.ConfigVersion,
+			BaseVersion:   base,
+			Values:        frozen.Values,
+			Removals:      frozen.Removals,
+			Reason:        session.Reason,
+		}
+		if payload.Values == nil {
+			payload.Values = map[string]any{}
+		}
+		built, berr := payload.BuildConfigPushPayload()
+		if berr != nil {
+			s.finishTarget(target, model.ManagedPushTargetFailed,
+				model.ManagedTargetCodeApplyFailed, berr.Error())
+			return nil
+		}
+		raw = built
+	} else {
+		merged, err := s.config.MergeForInstance(inst)
+		if err != nil {
+			s.finishTarget(target, model.ManagedPushTargetFailed,
+				model.ManagedTargetCodeApplyFailed, "合并配置层失败: "+err.Error())
+			return nil
+		}
+		if len(merged.ForbiddenKeys) > 0 {
+			s.finishTarget(target, model.ManagedPushTargetRejected,
+				model.ManagedTargetCodeRejected, "含禁止远程写入的键: "+strings.Join(merged.ForbiddenKeys, "、"))
+			return nil
+		}
 
-	// 下发前复校：上游的禁档校验是最后一道闸，宁可在这里拒也不让探针整包拒。
-	if v := ValidateConfigPush(payload); !v.OK() {
-		s.finishTarget(target, model.ManagedPushTargetRejected,
-			model.ManagedTargetCodeRejected, v.Error())
-		return nil
-	}
+		payload := ManagedConfigPush{
+			ConfigVersion: session.ConfigVersion,
+			BaseVersion:   base,
+			Values:        merged.Values,
+			Removals:      merged.Removals,
+			Reason:        session.Reason,
+		}
+		if payload.Values == nil {
+			payload.Values = map[string]any{}
+		}
+		// 下发前复校：上游的禁档校验是最后一道闸，宁可在这里拒也不让探针整包拒。
+		if v := ValidateConfigPush(payload); !v.OK() {
+			s.finishTarget(target, model.ManagedPushTargetRejected,
+				model.ManagedTargetCodeRejected, v.Error())
+			return nil
+		}
 
-	raw, err := payload.BuildConfigPushPayload()
-	if err != nil {
-		s.finishTarget(target, model.ManagedPushTargetFailed,
-			model.ManagedTargetCodeApplyFailed, err.Error())
-		return nil
+		built, berr := payload.BuildConfigPushPayload()
+		if berr != nil {
+			s.finishTarget(target, model.ManagedPushTargetFailed,
+				model.ManagedTargetCodeApplyFailed, berr.Error())
+			return nil
+		}
+		raw = built
 	}
 
 	// 标记 pushing + 记录本次用的基线（回执到达时要按基线判定冲突）。
+	// 同时留存载荷原文——下一次回滚要重推的就是它。
 	now := time.Now()
 	res := s.db.Model(&model.ManagedPushTarget{}).
 		Where("id = ? AND state = ?", target.ID, model.ManagedPushTargetPending).
 		Updates(map[string]any{
-			"state":           model.ManagedPushTargetPushing,
-			"base_version":    base,
-			"desired_version": session.ConfigVersion,
-			"pushed_at":       now,
-			"attempts":        gorm.Expr("attempts + 1"),
+			"state":               model.ManagedPushTargetPushing,
+			"base_version":        base,
+			"desired_version":     session.ConfigVersion,
+			"pushed_at":           now,
+			"pushed_payload_json": string(raw),
+			"attempts":            gorm.Expr("attempts + 1"),
 		})
 	if res.Error != nil {
 		return fmt.Errorf("标记下发中失败: %w", res.Error)
@@ -928,6 +973,10 @@ func (s *ManagedPushService) Rollback(in ManagedRollbackInput, operatorID uint) 
 				NodeID:       src.NodeID,
 				BatchNo:      1,
 				State:        model.ManagedPushTargetPending,
+				// 带上源目标**当时实际发出去**的载荷：回滚要重推的就是它。
+				// 空值说明该目标从未真正下发过（pending/skipped），此时回滚按现场重新合并，
+				// 与「没推过的东西无所谓回到哪个状态」一致。
+				PushedPayloadJSON: src.PushedPayloadJSON,
 			}
 			if terr := tx.Create(&target).Error; terr != nil {
 				return fmt.Errorf("创建回滚目标失败: %w", terr)
@@ -1113,23 +1162,86 @@ func (s *ManagedPushService) evaluateCircuitBreak(session *model.ManagedPushSess
 	return observed >= session.FailureRateThreshold, observed, nil
 }
 
-// pause 写暂停现场。
-func (s *ManagedPushService) pause(sessionID uint, kind, reason, breakReason string, threshold, observed float64) error {
+// pause 写人工暂停现场。
+//
+// 只用于**人工**暂停。熔断不走这里——熔断是终态（`failByCircuitBreak`），
+// 因为它表达「本轮不该继续」，而 paused 会被 Resume 一键绕过那次判断。
+func (s *ManagedPushService) pause(sessionID uint, kind, reason string) error {
 	updates := map[string]any{
 		"status":       model.ManagedPushPaused,
 		"pause_kind":   kind,
 		"pause_reason": truncateManagedText(reason, 500),
-	}
-	if breakReason != "" {
-		updates["break_reason"] = breakReason
-		updates["break_threshold"] = threshold
-		updates["break_observed"] = observed
 	}
 	if err := s.db.Model(&model.ManagedPushSession{}).Where("id = ?", sessionID).
 		Updates(updates).Error; err != nil {
 		return fmt.Errorf("暂停会话失败: %w", err)
 	}
 	return nil
+}
+
+// failByCircuitBreak 把会话标 failed 并写熔断现场（终态，不可 Resume）。
+//
+// 为什么要单独一个函数而不是复用 pause：两者只差一个 status，但**可恢复性相反**。
+// paused 能被 Resume 一键续跑，而熔断恰恰要拦住「直接续推剩余批次」这个动作——
+// 触发熔断的配置很可能就是问题本身，续推等于把已验证的坏配置扩散到更多机器。
+//
+// 现场字段（break_reason/break_threshold/break_observed）必须留存：
+// 运维要据此判断「是配置有问题，还是这批机器环境有问题」。
+func (s *ManagedPushService) failByCircuitBreak(sessionID uint, reason string, threshold, observed float64) error {
+	now := time.Now()
+	updates := map[string]any{
+		"status":          model.ManagedPushFailed,
+		"pause_kind":      model.ManagedPushPauseCircuitBreak,
+		"pause_reason":    truncateManagedText(reason, 500),
+		"break_reason":    BreakReasonFailureRate,
+		"break_threshold": threshold,
+		"break_observed":  observed,
+		"finished_at":     now,
+	}
+	if err := s.db.Model(&model.ManagedPushSession{}).
+		Where("id = ? AND status IN ?", sessionID,
+			[]model.ManagedPushSessionStatus{model.ManagedPushRunning, model.ManagedPushAwaitingRelease}).
+		Updates(updates).Error; err != nil {
+		return fmt.Errorf("标记熔断失败: %w", err)
+	}
+	return nil
+}
+
+// RecoverInterrupted 启动时收口上次进程遗留的推进中会话。
+//
+// 【为何必须有】推进循环完全由内存 goroutine 驱动（`running` map + `run`）。
+// 进程重启后那个 goroutine 已经不在了，但会话在库里仍是 `running`：
+//   - `run` 不会自己醒来，`pendingTargets` 里那批 `pending` 永远没人推；
+//   - `expireStaleTargets` 只扫 `pushing`，碰不到 `pending`；
+//   - `Release` 要求 `awaiting_release`，而它停在 `running`，人工也放行不了。
+// 结果是页面显示「正在推」，实际上什么都不再发生，只能靠运维手动 Cancel 才脱离该态。
+//
+// 【处理方向】把 `running` 落成 `paused`（`pause_kind=restart`），而不是 completed/failed：
+//   - 不标 completed：本批还有未终结目标，标完成是谎报。
+//   - 不标 failed：进程重启不是配置或探针的问题，标失败会诱导人去排查一个不存在的缺陷。
+//   - paused 是**可人工续推**的最近形态：运维看一眼现场，点 Resume 即从当前批继续。
+//
+// `awaiting_release` **不动**：它本就是静止态（等人工放行），重启后 Release 依然可用，
+// 改动它反而会丢掉「已经推完一批、该看效果了」这个进度事实。
+//
+// 幂等：只选 `status=running`，重复调用不会再改动任何行。
+func (s *ManagedPushService) RecoverInterrupted() (int64, error) {
+	res := s.db.Model(&model.ManagedPushSession{}).
+		Where("status = ?", model.ManagedPushRunning).
+		Updates(map[string]any{
+			"status":       model.ManagedPushPaused,
+			"pause_kind":   model.ManagedPushPauseRestart,
+			"pause_reason": "进程重启时该会话仍在推进中，已暂停；请核对当前批进度后决定是否继续",
+		})
+	if res.Error != nil {
+		return 0, fmt.Errorf("收口推进中会话失败: %w", res.Error)
+	}
+	if res.RowsAffected > 0 {
+		slog.Warn("托管配置下发：已收口上次进程遗留的推进中会话",
+			"sessions", res.RowsAffected,
+			"note", "置为暂停而非完成/失败：进度未终结，需人工确认是否续推")
+	}
+	return res.RowsAffected, nil
 }
 
 // completeFresh 把会话标 completed（幂等：已终态时直接返回）。

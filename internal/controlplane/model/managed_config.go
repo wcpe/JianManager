@@ -71,11 +71,14 @@ const (
 	ManagedPushRunning ManagedPushSessionStatus = "running"
 	// ManagedPushAwaitingRelease 当前批已全部终结，等人工放行下一批。
 	ManagedPushAwaitingRelease ManagedPushSessionStatus = "awaiting_release"
-	// ManagedPushPaused 已暂停（人工暂停或熔断）。
+	// ManagedPushPaused 已暂停（人工暂停，或进程重启后由启动收口置入）。**可 Resume**。
 	ManagedPushPaused ManagedPushSessionStatus = "paused"
 	// ManagedPushCompleted 全部批次终结且未触发熔断。
 	ManagedPushCompleted ManagedPushSessionStatus = "completed"
-	// ManagedPushFailed 因熔断结束（保留现场，不再推进）。
+	// ManagedPushFailed 因熔断结束（保留现场，不再推进）。**终态，不可 Resume**。
+	//
+	// 与 paused 的关键差别不是「能不能再推进」，而是「该不该让它一键续推」：
+	// 熔断说明按当前配置继续推是危险的，续推应改动配置后重建会话。
 	ManagedPushFailed ManagedPushSessionStatus = "failed"
 	// ManagedPushCancelled 人工取消。
 	ManagedPushCancelled ManagedPushSessionStatus = "cancelled"
@@ -163,7 +166,15 @@ const (
 	// ManagedPushPauseManual 人工暂停。
 	ManagedPushPauseManual = "manual"
 	// ManagedPushPauseCircuitBreak 失败率熔断。
+	//
+	// 注意：熔断写的是 `failed`（终态），不是 `paused`——它表达「按当前配置继续推是危险的」，
+	// 允许 Resume 一键续推会绕过那次判断。本常量只用于记录暂停现场的分类。
 	ManagedPushPauseCircuitBreak = "circuit_break"
+	// ManagedPushPauseRestart 进程重启导致推进中断（启动时由 RecoverInterrupted 写入）。
+	//
+	// 归到暂停分类而非另立状态：处置动作与人工暂停相同（看一眼现场 → 决定续推或取消），
+	// 只是原因不同，而原因由本字段表达。
+	ManagedPushPauseRestart = "restart"
 )
 
 // 会话类型：下发 / 回滚。
@@ -330,6 +341,15 @@ type ManagedPushTarget struct {
 	AckVersion *int64 `json:"ackVersion,omitempty"`
 	// EffectiveJSON 探针回报的生效值（applied 时记录，供下钻比对）。
 	EffectiveJSON string `gorm:"type:longtext" json:"-"`
+	// PushedPayloadJSON 本次**实际发出去**的 config_push 载荷原文（CP 视角，下发时记录）。
+	//
+	// 与 EffectiveJSON 的区别必须分清：那是探针回报的「它现在生效什么」，这是 CP 写下的
+	// 「我当时发了什么」。回滚要重推的是后者——只有它才能让「回到上一次推送的状态」这句话成立。
+	//
+	// 为什么必须在**每台目标**上存而不是只存会话级：每台的载荷都不同。三层配置里
+	// node/instance 层按实例求值，同一会话下 A 机器的有效配置不是 B 机器的，故会话级的
+	// ValuesJSON 只是代表值，拿它重推会让回滚变成「推一份从未存在过的配置」。
+	PushedPayloadJSON string `gorm:"type:longtext" json:"-"`
 	// ErrorKind/Error 失败/拒绝的原因（机器码 + 人读文案）。
 	ErrorKind string `gorm:"type:varchar(48)" json:"errorKind,omitempty"`
 	Error     string `gorm:"type:varchar(1024)" json:"error,omitempty"`
