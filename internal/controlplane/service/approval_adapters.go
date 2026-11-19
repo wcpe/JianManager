@@ -54,11 +54,21 @@ type ApprovalAdapterDeps struct {
 // 为什么需要重建：executor 拿到的只有票据（含 tokenId 字符串），而有些领域方法
 // （如传输票据签发）会**再次做授权判定**。缺主体时不能凭空造一个——
 // 那等于用假身份去撞授权，要么必然被拒、要么（更糟）在宽松判据下真的放行。
+//
 // 人类直接提单没有 tokenId，这类动作本就不该由人代签，故明确拒绝。
+//
+// 【这是**兜底**，不是主闸】主闸在 InterceptForApproval：Agent 专属动作
+// （AgentSubjectOnly）在出票阶段就会拒绝人类主体，正常流程下走不到这里的
+// 空 tokenId 分支。保留这道校验是为了兜住两类漏网：本字段上线前遗留的历史票，
+// 以及未来若有人绕过拦截层直接构造票据。
 func (d ApprovalAdapterDeps) loadTicketPrincipal(t *model.ApprovalTicket) (*AgentPrincipal, error) {
 	tokenID := strings.TrimSpace(t.TokenID)
 	if tokenID == "" {
-		return nil, fmt.Errorf("该操作需要 Agent 身份（票据 %d 由人类提交，无 tokenId）", t.ID)
+		// 措辞指向真正的原因：不是「系统坏了」，而是该动作只产出 Agent 可用凭据。
+		return nil, fmt.Errorf(
+			"票据 %d 无 Agent 身份，无法执行 %s：该动作仅限 Agent Token 主体，"+
+				"人类请使用实例文件上传接口",
+			t.ID, t.Action)
 	}
 	if d.Agent == nil {
 		return nil, fmt.Errorf("Agent 服务未装配，无法重建票据 %d 的调用主体", t.ID)
@@ -363,33 +373,49 @@ func RegisterApprovalAdapters(ex *ApprovalExecutor, d ApprovalAdapterDeps) []str
 
 	// ── 传输票据签发 ──
 	if d.Transfer != nil {
-		reg(ex, "file_issue_transfer_ticket", func(ctx context.Context, t *model.ApprovalTicket, p map[string]any) error {
-			id, err := payloadUint(p, "id")
-			if err != nil {
-				return err
-			}
-			direction, err := payloadString(p, "direction")
-			if err != nil {
-				return err
-			}
-			path, err := payloadString(p, "path")
-			if err != nil {
-				return err
-			}
-			// 必须按**原始 Token** 重建真实主体，不能塞一个空壳：
-			// Issue 内部会再跑一次 AuthorizeInstanceAction（并把 p.TokenID 写进票据声明），
-			// 空壳 principal 的 TokenID=0 且无任何 scope，必然被判越权——
-			// 表现为「批准了却执行失败：agent 操作被拒绝」，看起来像审批坏了。
-			//
-			// 从票据的 tokenId 加载：人类直接提单时该字段为空，此时无 Agent 主体可重建，
-			// 退化为拒绝并给出明确原因（而不是用一个假主体去撞授权）。
-			principal, perr := d.loadTicketPrincipal(t)
-			if perr != nil {
-				return perr
-			}
-			_, _, err = d.Transfer.Issue(principal, id, direction, path)
-			return err
-		})
+		// 走 WithResult 登记：票据明文必须回传给申请人，否则「批准了却拿不到」。
+		// 服务端只存 sha256(digest)，签发后丢弃就再也无法还原
+		// （见 agent_transfer_ticket.go 的 Issue）。
+		ex.RegisterAdapterWithResult("file_issue_transfer_ticket",
+			func(ctx context.Context, t *model.ApprovalTicket, p map[string]any) (any, error) {
+				id, err := payloadUint(p, "id")
+				if err != nil {
+					return nil, err
+				}
+				direction, err := payloadString(p, "direction")
+				if err != nil {
+					return nil, err
+				}
+				path, err := payloadString(p, "path")
+				if err != nil {
+					return nil, err
+				}
+				// 必须按**原始 Token** 重建真实主体，不能塞一个空壳：
+				// Issue 内部会再跑一次 AuthorizeInstanceAction（并把 p.TokenID 写进票据声明），
+				// 空壳 principal 的 TokenID=0 且无任何 scope，必然被判越权——
+				// 表现为「批准了却执行失败：agent 操作被拒绝」，看起来像审批坏了。
+				//
+				// 从票据的 tokenId 加载：人类直接提单时该字段为空，此时无 Agent 主体可重建，
+				// 退化为拒绝并给出明确原因（而不是用一个假主体去撞授权）。
+				principal, perr := d.loadTicketPrincipal(t)
+				if perr != nil {
+					return nil, perr
+				}
+				ticket, expiresAt, ierr := d.Transfer.Issue(principal, id, direction, path)
+				if ierr != nil {
+					return nil, ierr
+				}
+				// 字段与 MCP 直连路径（tools_file.go 的 callFileIssueTransferTicket）保持一致，
+				// 让「直连」与「审批后取回」两条路给出同一套信息，调用方无需写两套解析。
+				return map[string]any{
+					"ticket":           ticket,
+					"direction":        direction,
+					"path":             path,
+					"expiresAt":        expiresAt,
+					"uploadEndpoint":   "PUT /api/v1/agent-transfer/upload?ticket=<ticket>",
+					"downloadEndpoint": "GET /api/v1/agent-transfer/download?ticket=<ticket>",
+				}, nil
+			})
 	}
 
 	// ── 快照 / 二进制 ──
