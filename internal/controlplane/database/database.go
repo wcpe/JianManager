@@ -310,6 +310,12 @@ func AutoMigrate(db *gorm.DB) error {
 		// 系统更新页检查结果缓存（增强）：单行覆盖式，存上次成功 CheckResult 的
 		// JSON blob + checkedAt，进页即显 + 后台静默刷新，刷新失败保留旧缓存。
 		&model.SelfUpdateCheckCache{},
+		// 探针托管模式：三层配置层（global/product/instance）、下发会话、逐个目标、
+		// 以及每实例的已应用配置状态（config_applied / config_state 落库与对账矩阵来源）。
+		&model.ManagedConfigLayer{},
+		&model.ManagedPushSession{},
+		&model.ManagedPushTarget{},
+		&model.ManagedInstanceConfigState{},
 	); err != nil {
 		return err
 	}
