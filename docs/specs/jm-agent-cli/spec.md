@@ -131,6 +131,44 @@ Node 的模块解析天然处理 npm 平铺与 pnpm 的 `.pnpm` + 符号链接�
 两条路径均已实测。硬编码路径探测仅作兜底——早先只写探测时正是因为路径多推导了一层，
 导致「装好了却找不到二进制」。
 
+### 3.8 `jm skill install` 的宿主目录约定
+
+技能是宿主侧的静态文件，安装位置由宿主自己决定。`jm` 支持两个作用域：
+
+| 作用域 | 含义 | 典型用途 |
+|---|---|---|
+| `user`（默认） | 装到本机用户目录，对该机器的所有项目生效 | 个人日常使用 |
+| `project` | 装到当前仓库内，随仓库分发给协作者 | 项目自带技能库 |
+
+**用户级根目录**（`~/.<host>/skills`）：
+
+| 宿主 | 目录 |
+|---|---|
+| claude | `~/.claude/skills` |
+| codex | `~/.codex/skills` |
+| cursor | `~/.cursor/skills` |
+| kiro | `~/.kiro/skills` |
+| copilot | `~/.copilot/skills` |
+| agents | `~/.agents/skills` |
+
+**项目级根目录**（相对项目根）：
+
+| 宿主 | 目录 |
+|---|---|
+| claude / codex / cursor / kiro | `<ws>/.<host>/skills` |
+| copilot | `<ws>/.github/skills` |
+| agents | `<ws>/.agents/skills` |
+
+`copilot` 与其他宿主不同，用 `.github/skills` 而不是 `.<host>`，这是 GitHub 侧的既有约定。
+
+两类目录并存是刻意的：多个 harness（Claude Code、Codex、Kiro）都会优先读工作区下的同名目录，
+因此 `--scope project` 可直接对接已有技能库——例如 Vantaloom 的
+`.claude/skills` / `.codex/skills` / `.agents/skills`，NarraFork 的 `.kiro/skills`，
+装完后结构与它们各自的技能目录完全一致，无需额外配置。
+
+每个宿主统一装到 `<skills>/jianmanager/` 子目录：宿主按子目录发现技能，
+SKILL.md 必须位于该子目录根部；平铺在 `skills/` 下会与其它技能混淆。
+
 ## 4. 不做
 
 - ❌ 把 408 条路由逐个映射成子命令（正是 `gh` 避免的做法）

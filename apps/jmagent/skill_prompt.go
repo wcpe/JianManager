@@ -41,24 +41,31 @@ func isInteractive() bool {
 //
 // 顺序：已探测到的宿主在前（用户最可能选这些），其余已知宿主排后，
 // 最后附「自定义目录」。这样默认序号 1 就是最常用的那个。
-func buildTargets(detected []string) []skillTarget {
+func buildTargets(detected []string, scope, projectDir string) []skillTarget {
 	detectedSet := make(map[string]bool, len(detected))
 	for _, h := range detected {
 		detectedSet[h] = true
 	}
 
+	root := func(host string) (string, error) {
+		if scope == skillScopeProject {
+			return workspaceSkillRoot(host, projectDir)
+		}
+		return hostSkillRoot(host)
+	}
+
 	var out []skillTarget
 	for _, h := range detected {
-		if root, err := hostSkillRoot(h); err == nil {
-			out = append(out, skillTarget{Label: h, Path: joinSkillDir(root), Detected: true})
+		if r, err := root(h); err == nil {
+			out = append(out, skillTarget{Label: h, Path: joinSkillDir(r), Detected: true})
 		}
 	}
-	for _, h := range []string{"claude", "codex", "cursor"} {
+	for _, h := range skillHosts {
 		if detectedSet[h] {
 			continue
 		}
-		if root, err := hostSkillRoot(h); err == nil {
-			out = append(out, skillTarget{Label: h, Path: joinSkillDir(root), Detected: false})
+		if r, err := root(h); err == nil {
+			out = append(out, skillTarget{Label: h, Path: joinSkillDir(r), Detected: false})
 		}
 	}
 	return out

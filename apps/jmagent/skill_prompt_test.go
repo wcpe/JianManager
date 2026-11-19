@@ -14,9 +14,9 @@ func TestBuildTargetsOrderAndFlags(t *testing.T) {
 		t.Skip("无主目录")
 	}
 
-	targets := buildTargets([]string{"codex"})
-	if len(targets) != 3 {
-		t.Fatalf("应列出 3 个宿主，实际 %d", len(targets))
+	targets := buildTargets([]string{"codex"}, skillScopeUser, "")
+	if len(targets) != len(skillHosts) {
+		t.Fatalf("应列出 %d 个宿主，实际 %d", len(skillHosts), len(targets))
 	}
 	if targets[0].Label != "codex" || !targets[0].Detected {
 		t.Errorf("首个应为已探测的 codex，实际 %+v", targets[0])

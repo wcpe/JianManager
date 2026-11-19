@@ -47,6 +47,7 @@ func usage() {
   %s auth login|status|logout           设备授权登录 / 查看状态 / 登出
   %s config set-url|get-url|list        管理多个 CP 主机
   %s skill install                      安装 Agent 运维知识到宿主
+  %s doctor                             诊断环境（版本 / 路径 / 钥匙串 / 配置）
 
   高频命令:
   %s whoami                             当前身份
@@ -62,7 +63,7 @@ func usage() {
   JM_URL / JM_TOKEN                     优先级低于对应命令行选项
 
 运行 %s <命令> --help 查看该命令的全部选项。
-`, n, n, n, n, n, n, n, n, n, n)
+`, n, n, n, n, n, n, n, n, n, n, n)
 }
 
 // subcommandUsage 返回子命令专属的帮助正文；未知子命令返回空串。
@@ -120,6 +121,26 @@ Git Bash / MSYS2 注意:
 说明:
   - 地址优先级：--url > JM_URL > 默认主机 > 内置默认
 `
+	case "doctor":
+		return `用法: jm doctor
+
+一次列出当前环境的关键信息，用于排查「装的是哪份、为什么连不上」：
+
+  - 版本、平台、可执行文件的真实路径（会解析符号链接）
+  - 按路径推断的安装渠道（npm / pnpm / 手动 / 本地构建）
+  - 配置文件位置、已配置主机数、当前主机与登录用户
+  - 令牌来源与系统钥匙串可用性
+  - 环境变量覆盖（JM_URL / JM_TOKEN，优先级高于配置文件）
+
+本命令只读：不移动、不删除、不写任何文件，也不发起网络请求。
+
+关于「为什么不提供 jm install」：运行中的程序无法安全替换自身
+（Windows 下 .exe 被占用时既不能覆盖也不能删除），且自行挪动二进制会
+破坏包管理器对它的所有权。安装请交给 npm / pnpm 或系统包管理器。
+
+选项:
+  --output json    以 JSON 输出，便于脚本消费
+`
 	case "skill":
 		return `用法: jm skill <子命令>
 
@@ -127,15 +148,19 @@ Git Bash / MSYS2 注意:
   list             列出内置知识文件清单
 
 install 选项:
-  --host <name>    目标宿主：claude / codex / cursor；可重复或逗号分隔
-                   缺省在终端里列出来让你选；非交互环境则装到全部已探测宿主
-  --dir <path>     直接指定安装目录（覆盖 --host 的路径推导）
+  --host <name>    目标宿主：claude / codex / cursor / kiro / copilot / agents
+                   可重复或逗号分隔；缺省在终端里列出来让你选
+  --scope <s>      user（默认，装给本机）| project（装进当前仓库，随仓库分发）
+  --dir <path>     直接指定安装目录（覆盖 --host / --scope 的路径推导）
+  --project <dir>  指定项目根，配合 --scope project；缺省用当前目录
   --from <dir>     从本地目录取内容，而非经 CP 静态路由（离线/开发用）
   --dry-run        只打印将写入的位置，不实际落盘
 
 说明:
   - 内容来源默认是 CP 的匿名路由 GET /api/v1/skill/<path>，无需登录
   - 每个宿主都装到 <skills>/jianmanager/ 子目录，避免与其它技能混淆
+  - project 作用域可直接对接已有的技能库目录（如 Vantaloom 的
+    .claude/skills、NarraFork 的 .kiro/skills）：--scope project 即可
 `
 	case "whoami":
 		return `用法: jm whoami
@@ -240,6 +265,8 @@ func main() {
 		runErr = runAuth(cfg, rest)
 	case "config":
 		runErr = runConfig(cfg, rest)
+	case "doctor":
+		runErr = runDoctor(cfg, rest)
 	case "skill":
 		runErr = runSkill(cfg, rest)
 	case "whoami":

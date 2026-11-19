@@ -43,7 +43,15 @@ var skillManifest = []string{
 	"references/policy-and-diagnostics.md",
 }
 
-// hostSkillRoot 返回某宿主的 skills 根目录。
+// hostSkillRoot 返回某宿主的**用户级** skills 根目录。
+//
+// 覆盖三类来源：
+//   - 单机 agent 客户端：claude（Claude Code）、codex、cursor
+//   - 常见编辑器/IDE 侧的兼容约定：kiro、copilot
+//   - `.agents/skills`：跨工具的通用约定，多个 harness 会一并扫描
+//
+// 工作区级目录（相对当前项目，如 `<ws>/.claude/skills`）由 workspaceSkillRoot 处理：
+// 它们不是「这台机器装了哪个宿主」，而是「这个项目想装给谁」，两者不能混为一谈。
 func hostSkillRoot(host string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -56,24 +64,83 @@ func hostSkillRoot(host string) (string, error) {
 		return filepath.Join(home, ".codex", "skills"), nil
 	case "cursor":
 		return filepath.Join(home, ".cursor", "skills"), nil
+	case "kiro":
+		return filepath.Join(home, ".kiro", "skills"), nil
+	case "copilot":
+		return filepath.Join(home, ".copilot", "skills"), nil
+	case "agents":
+		return filepath.Join(home, ".agents", "skills"), nil
 	default:
-		return "", fmt.Errorf("未知宿主 %q；支持 claude / codex / cursor", host)
+		return "", fmt.Errorf("未知宿主 %q；支持 claude / codex / cursor / kiro / copilot / agents", host)
 	}
 }
 
-// detectHosts 探测本机已存在哪些宿主的配置目录。
+// workspaceSkillRoot 返回某宿主在**当前项目**内的 skills 目录。
 //
-// 只看 `~/.<host>` 是否存在，不创建：目的是「用户装了哪个宿主就装给哪个」。
-// 一个都没有时由调用方兜底报错，提示显式 --host。
-func detectHosts() []string {
+// 与用户级目录并存是刻意的：Claude Code、Codex、Kiro 等都会优先读工作区下的
+// 同名目录，这样技能可以随仓库分发给所有协作者，而不是只装给运行安装命令的那台机器。
+// Vantaloom 与 NarraFork 都按这个约定组织各自的技能库。
+func workspaceSkillRoot(host, projectDir string) (string, error) {
+	switch host {
+	case "claude":
+		return filepath.Join(projectDir, ".claude", "skills"), nil
+	case "codex":
+		return filepath.Join(projectDir, ".codex", "skills"), nil
+	case "cursor":
+		return filepath.Join(projectDir, ".cursor", "skills"), nil
+	case "kiro":
+		return filepath.Join(projectDir, ".kiro", "skills"), nil
+	case "copilot":
+		return filepath.Join(projectDir, ".github", "skills"), nil
+	case "agents":
+		return filepath.Join(projectDir, ".agents", "skills"), nil
+	default:
+		return "", fmt.Errorf("未知宿主 %q；支持 claude / codex / cursor / kiro / copilot / agents", host)
+	}
+}
+
+// 安装作用域：user 装给本机所有项目，project 装进当前仓库（随仓库分发）。
+const (
+	skillScopeUser    = "user"
+	skillScopeProject = "project"
+)
+
+// skillHosts 是全部支持的宿主，顺序即候选列表的展示顺序。
+//
+// 前三个是最常见的 agent 客户端，排前面让默认序号落在最可能的选择上。
+var skillHosts = []string{"claude", "codex", "cursor", "kiro", "copilot", "agents"}
+
+// detectHosts 探测本机/本项目已存在哪些宿主的配置目录。
+//
+// 判定「已存在」用宿主自身的配置根（如 `~/.kiro`），而不是 skills 子目录——
+// 用户刚装好宿主、还没建 skills 目录时也应算作可用目标。
+// 项目级目录优先级更高：同一宿主在项目里装了，说明这个仓库就是想分发给它。
+func detectHosts(projectDir string) []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
 	var out []string
-	for _, host := range []string{"claude", "codex", "cursor"} {
-		if st, err := os.Stat(filepath.Join(home, "."+host)); err == nil && st.IsDir() {
+	seen := make(map[string]bool)
+	mark := func(host string) {
+		if !seen[host] {
+			seen[host] = true
 			out = append(out, host)
+		}
+	}
+
+	for _, host := range skillHosts {
+		// 项目级：`<ws>/.<host>` 或 copilot 的 `.github`。
+		if root, err := workspaceSkillRoot(host, projectDir); err == nil {
+			base := filepath.Dir(root)
+			if st, err := os.Stat(base); err == nil && st.IsDir() {
+				mark(host)
+				continue
+			}
+		}
+		// 用户级：`~/.<host>`。
+		if st, err := os.Stat(filepath.Join(home, "."+host)); err == nil && st.IsDir() {
+			mark(host)
 		}
 	}
 	return out
@@ -89,7 +156,7 @@ func joinSkillDir(skillRoot string) string {
 // runSkill 分发 `jm skill <sub>`。
 func runSkill(cfg Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: jm skill install [--host claude|codex|cursor]... [--dir <path>] [--from <本地目录>] [--dry-run]")
+		return fmt.Errorf("用法: jm skill install [--host <host>]... [--scope user|project] [--dir <path>] [--from <本地目录>] [--dry-run]")
 	}
 	sub := args[0]
 	switch sub {
@@ -116,6 +183,9 @@ type skillInstallOptions struct {
 	dir    string
 	from   string
 	dryRun bool
+	// scope 决定装到用户级还是项目级；project 为项目根（scope=project 时用）。
+	scope   string
+	project string
 }
 
 // parseSkillInstallArgs 解析 install 参数。
@@ -155,10 +225,26 @@ func parseSkillInstallArgs(args []string) (skillInstallOptions, error) {
 				return opt, err
 			}
 			opt.from = v
+		case "--scope":
+			v, err := needValue()
+			if err != nil {
+				return opt, err
+			}
+			v = strings.ToLower(strings.TrimSpace(v))
+			if v != skillScopeUser && v != skillScopeProject {
+				return opt, fmt.Errorf("--scope 仅支持 user 或 project，收到 %q", v)
+			}
+			opt.scope = v
+		case "--project":
+			v, err := needValue()
+			if err != nil {
+				return opt, err
+			}
+			opt.project = v
 		case "--dry-run":
 			opt.dryRun = true
 		case "-h", "--help":
-			return opt, fmt.Errorf("用法: jm skill install [--host claude|codex|cursor]... [--dir <path>] [--from <本地目录>] [--dry-run]")
+			return opt, fmt.Errorf("用法: jm skill install [--host <host>]... [--scope user|project] [--dir <path>] [--from <本地目录>] [--dry-run]")
 		default:
 			return opt, fmt.Errorf("未知参数 %q", a)
 		}
@@ -178,16 +264,38 @@ func runSkillInstall(cfg Config, args []string) error {
 		return err
 	}
 
+	// 作用域与项目根：--scope 未指定时按 user（装给本机）。
+	scope := opt.scope
+	if scope == "" {
+		scope = skillScopeUser
+	}
+	projectDir := opt.project
+	if projectDir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("无法确定当前目录: %w", err)
+		}
+		projectDir = cwd
+	}
+
+	// resolveRoot 把「某个宿主」解析成该作用域下的 skills 根。
+	resolveRoot := func(host string) (string, error) {
+		if scope == skillScopeProject {
+			return workspaceSkillRoot(host, projectDir)
+		}
+		return hostSkillRoot(host)
+	}
+
 	var roots []string
 
 	switch {
 	case opt.dir != "":
-		// 显式目录优先，hosts 不参与路径推导。
+		// 显式目录优先，hosts/scope 都不参与路径推导。
 		roots = []string{opt.dir}
 
 	case len(opt.hosts) > 0:
 		for _, h := range opt.hosts {
-			root, err := hostSkillRoot(h)
+			root, err := resolveRoot(h)
 			if err != nil {
 				return err
 			}
@@ -197,9 +305,9 @@ func runSkillInstall(cfg Config, args []string) error {
 	default:
 		// 未指定目标：交互环境让用户选，否则沿用「装到全部已探测宿主」。
 		// --dry-run 也走交互：先选再看落点，比「不给选就预览全部」更符合预期。
-		detected := detectHosts()
+		detected := detectHosts(projectDir)
 		if isInteractive() {
-			picked, customDir, err := promptTargets(buildTargets(detected))
+			picked, customDir, err := promptTargets(buildTargets(detected, scope, projectDir))
 			if err != nil {
 				if err == errUserCancelled {
 					fmt.Println("已取消。")
@@ -216,10 +324,10 @@ func runSkillInstall(cfg Config, args []string) error {
 			}
 		} else {
 			if len(detected) == 0 {
-				return fmt.Errorf("未探测到任何宿主（~/.claude、~/.codex、~/.cursor 均不存在）；请用 --host 指定，或 --dir 直接给目录")
+				return fmt.Errorf("未探测到任何宿主（~/.claude、~/.codex、~/.cursor、~/.kiro、~/.copilot、~/.agents 均不存在）；请用 --host 指定，或 --dir 直接给目录")
 			}
 			for _, h := range detected {
-				root, err := hostSkillRoot(h)
+				root, err := resolveRoot(h)
 				if err != nil {
 					return err
 				}
