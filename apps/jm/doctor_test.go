@@ -14,14 +14,14 @@ import (
 func TestInstallChannel(t *testing.T) {
 	cases := map[string]string{
 		// npm 全局：包在 node_modules 下，Windows 为反斜杠
-		`C:\Users\u\AppData\Roaming\npm\node_modules\@jianmanager\jm\bin\jm.js`: "npm（全局）",
+		`C:\Users\user\AppData\Roaming\npm\node_modules\@jianmanager\jm\bin\jm.js`: "npm（全局）",
 		`/usr/lib/node_modules/@jianmanager/jm/bin/jm`:                         "npm（全局）",
 		// pnpm：实体在 .pnpm 目录
-		`/home/u/.local/share/pnpm/.pnpm/@jianmanager+jm@0.24.0/node_modules/@jianmanager/jm/bin/jm`: "pnpm（全局）",
+		`/home/user/.local/share/pnpm/.pnpm/@jianmanager+jm@0.24.0/node_modules/@jianmanager/jm/bin/jm`: "pnpm（全局）",
 		// 手动安装
-		`/home/u/.local/bin/jm`: "手动安装（~/.local/bin）",
+		`/home/user/.local/bin/jm`: "手动安装（~/.local/bin）",
 		// go install
-		`/home/u/go/bin/jm`: "go install",
+		`/home/user/go/bin/jm`: "go install",
 		// 仓库内构建
 		`/repo/bin/jm`: "手动安装或本地构建",
 	}
