@@ -36,11 +36,11 @@ func TestTokenSourceOf(t *testing.T) {
 	assert.Equal(t, "无", tokenSourceOf(Config{}))
 
 	// 设置环境变量并让 cfg.Token 与之相同：应判为环境变量来源。
-	t.Setenv(envToken, "jmut_env_abc")
-	assert.Equal(t, envToken+" 环境变量", tokenSourceOf(Config{Token: "jmut_env_abc"}))
+	t.Setenv(envToken, "jmut_test_env_abc")
+	assert.Equal(t, envToken+" 环境变量", tokenSourceOf(Config{Token: "jmut_test_env_abc"}))
 
 	// cfg.Token 与环境变量不同：说明来自钥匙串。
-	assert.Equal(t, "系统钥匙串", tokenSourceOf(Config{Token: "jmut_other_xyz"}))
+	assert.Equal(t, "系统钥匙串", tokenSourceOf(Config{Token: "jmut_test_other_xyz"}))
 }
 
 // 告警必须可操作：指出问题且给出下一步命令，而不是只说「有异常」。
@@ -65,8 +65,8 @@ func TestDoctorWarnings(t *testing.T) {
 // 环境变量覆盖要在 doctor 里可见：这是「连的不是我配的地址」的头号原因。
 func TestDoctorEnvOverrides(t *testing.T) {
 	t.Setenv(envURL, "http://from-env")
-	t.Setenv(envToken, "jmut_secret_value_123456")
-	rep := buildDoctorWarnings(Config{BaseURL: "http://from-env", Token: "jmut_secret_value_123456"})
+	t.Setenv(envToken, "jmut_test_secret_value_123456")
+	rep := buildDoctorWarnings(Config{BaseURL: "http://from-env", Token: "jmut_test_secret_value_123456"})
 	joined := strings.Join(rep, "\n")
 	assert.Contains(t, joined, "环境变量覆盖")
 }

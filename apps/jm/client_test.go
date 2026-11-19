@@ -104,7 +104,7 @@ func TestClient_ListInstancesWithNodeQuery(t *testing.T) {
 
 // TestClient_TokenNotInBody Token 只出现在 Authorization，不进 URL/Body。
 func TestClient_TokenNotInBody(t *testing.T) {
-	const secret = "jmat_super_secret_never_log"
+	const secret = "jmat_test_never_log_this_value"
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// URL 与 body 不得含 token
 		assert.NotContains(t, r.URL.String(), secret)
