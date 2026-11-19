@@ -15,12 +15,12 @@ func TestHostSkillRootAllHosts(t *testing.T) {
 		t.Skip("无主目录")
 	}
 	want := map[string]string{
-		"claude":  filepath.Join(home, ".claude", "skills"),
-		"codex":   filepath.Join(home, ".codex", "skills"),
-		"cursor":  filepath.Join(home, ".cursor", "skills"),
-		"kiro":    filepath.Join(home, ".kiro", "skills"),
-		"copilot": filepath.Join(home, ".copilot", "skills"),
-		"agents":  filepath.Join(home, ".agents", "skills"),
+		"claude":    filepath.Join(home, ".claude", "skills"),
+		"codex":     filepath.Join(home, ".codex", "skills"),
+		"cursor":    filepath.Join(home, ".cursor", "skills"),
+		"kiro":      filepath.Join(home, ".kiro", "skills"),
+		"copilot":   filepath.Join(home, ".copilot", "skills"),
+		"agents":    filepath.Join(home, ".agents", "skills"),
 		"narrafork": filepath.Join(home, ".narrafork", "skills"),
 	}
 	for host, exp := range want {
@@ -63,14 +63,14 @@ func TestSkillHostsCoverage(t *testing.T) {
 func TestWorkspaceSkillRootConventions(t *testing.T) {
 	ws := filepath.Join("tmp", "ws")
 	cases := map[string]string{
-		"claude":  filepath.Join(ws, ".claude", "skills"),
-		"codex":   filepath.Join(ws, ".codex", "skills"),
-		"cursor":  filepath.Join(ws, ".cursor", "skills"),
-		"kiro":    filepath.Join(ws, ".kiro", "skills"),
-		"copilot": filepath.Join(ws, ".github", "skills"),
-		"agents":  filepath.Join(ws, ".agents", "skills"),
-		"narrafork":  filepath.Join(ws, ".narrafork", "skills"),
-		"vantaloom":  filepath.Join(ws, ".vantaloom", "skills"),
+		"claude":    filepath.Join(ws, ".claude", "skills"),
+		"codex":     filepath.Join(ws, ".codex", "skills"),
+		"cursor":    filepath.Join(ws, ".cursor", "skills"),
+		"kiro":      filepath.Join(ws, ".kiro", "skills"),
+		"copilot":   filepath.Join(ws, ".github", "skills"),
+		"agents":    filepath.Join(ws, ".agents", "skills"),
+		"narrafork": filepath.Join(ws, ".narrafork", "skills"),
+		"vantaloom": filepath.Join(ws, ".vantaloom", "skills"),
 	}
 	for host, exp := range cases {
 		got, err := workspaceSkillRoot(host, ws)

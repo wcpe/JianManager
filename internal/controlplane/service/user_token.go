@@ -18,9 +18,9 @@ import (
 
 // 用户令牌相关错误（对外统一收敛为 401/403，不泄露细节）。
 var (
-	ErrUserTokenInvalid = errors.New("用户令牌无效")
-	ErrUserTokenRevoked = errors.New("用户令牌已吊销")
-	ErrUserTokenExpired = errors.New("用户令牌已过期")
+	ErrUserTokenInvalid  = errors.New("用户令牌无效")
+	ErrUserTokenRevoked  = errors.New("用户令牌已吊销")
+	ErrUserTokenExpired  = errors.New("用户令牌已过期")
 	ErrUserTokenMismatch = errors.New("用户令牌与用户状态不一致")
 )
 

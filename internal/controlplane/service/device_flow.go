@@ -24,7 +24,7 @@ const (
 
 // 设备授权错误（对外映射为 RFC 8628 的 error 字段）。
 var (
-	ErrDeviceCodeNotFound = errors.New("设备码不存在")
+	ErrDeviceCodeNotFound         = errors.New("设备码不存在")
 	ErrDeviceAuthorizationPending = errors.New("authorization_pending")
 	ErrDeviceSlowDown             = errors.New("slow_down")
 	ErrDeviceAccessDenied         = errors.New("access_denied")
@@ -34,8 +34,8 @@ var (
 
 // DeviceFlowService 设备授权流程服务。
 type DeviceFlowService struct {
-	db       *gorm.DB
-	userTok  *UserTokenService
+	db      *gorm.DB
+	userTok *UserTokenService
 	// pollGuard 记录每个 device_code 的上次轮询时间，用于 slow_down 判定。
 	// 进程内 map 足够：设备码生命周期只有 10 分钟，且 CP 单进程。
 	pollGuard map[string]time.Time
