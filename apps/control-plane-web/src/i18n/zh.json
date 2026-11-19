@@ -7185,5 +7185,20 @@
       "recentEmpty": "还没有下发记录",
       "pushVersions": "期望 v{{desired}} · 基线 v{{base}}"
     }
+  },
+  "logAcqOverride": {
+    "empty": "未配置覆盖。默认按每个实例的规则路径采集；只有日志不在规则位置时才需要在这里指定。",
+    "pickInstance": "选择实例",
+    "instance": "实例",
+    "instanceId": "实例 ID",
+    "logPath": "日志路径",
+    "pathPlaceholder": "相对实例工作目录，如 logs/server.log",
+    "addRow": "添加实例覆盖",
+    "fixBeforeSave": "有未修正的项，修正后才能保存",
+    "duplicateInstance": "这个实例已在上方配置过，提交时只会保留一条。",
+    "instanceRequired": "请选择实例",
+    "pathRequired": "请填写日志路径",
+    "pathMustBeRelative": "必须是相对实例工作目录的路径（不能以 / 或盘符开头）",
+    "pathEscapes": "路径不能跳出实例工作目录（.. 越界）"
   }
 }

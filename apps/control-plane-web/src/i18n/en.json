@@ -7185,5 +7185,20 @@
       "recentEmpty": "No push record yet",
       "pushVersions": "desired v{{desired}} · base v{{base}}"
     }
+  },
+  "logAcqOverride": {
+    "empty": "No overrides. Each instance is collected from its rule path; only set this when logs live elsewhere.",
+    "pickInstance": "Select instance",
+    "instance": "Instance",
+    "instanceId": "Instance ID",
+    "logPath": "Log path",
+    "pathPlaceholder": "Relative to instance work dir, e.g. logs/server.log",
+    "addRow": "Add instance override",
+    "fixBeforeSave": "Fix the invalid rows before saving",
+    "duplicateInstance": "This instance is already configured above; only one entry will be kept.",
+    "instanceRequired": "Select an instance",
+    "pathRequired": "Enter the log path",
+    "pathMustBeRelative": "Must be relative to the instance work dir (no leading / or drive letter)",
+    "pathEscapes": "Path must not escape the instance work dir (..)"
   }
 }
