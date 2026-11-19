@@ -28,13 +28,16 @@ build-worker:
 build-jmctl:
 	go build -o bin/jmctl.exe ./apps/jmctl
 
-# 构建 jm 命令行客户端（FR-564，重构自 FR-385）；jmagent 作为兼容别名保留一个版本周期。
-build-jmagent:
-	go build -o bin/jm.exe ./apps/jmagent
-	go build -o bin/jmagent.exe ./apps/jmagent
+# 构建 jm 命令行客户端。
+#
+# 目录与产物都已统一为 `jm`。`jmagent.exe` 是**兼容别名**，保留一个版本周期后删除
+# （删除时同时移除这里的第二行与 build-jmagent 目标）。
+build-jm:
+	go build -o bin/jm.exe ./apps/jm
+	go build -o bin/jmagent.exe ./apps/jm
 
-# 同一目标的可读别名。
-build-jm: build-jmagent
+# 过渡别名：既有文档/脚本仍可能写 make build-jmagent。
+build-jmagent: build-jm
 
 # 构建前端（FR-283：pnpm workspace，主应用在 apps/control-plane-web）
 build-web:
@@ -151,11 +154,11 @@ dist-bin: dist-bin-full
 # darwin 一并出：macOS 是 `jm` 的主要使用环境之一（钥匙串实现见 internal/platform/keyring）。
 dist-jm:
 	mkdir -p dist
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-windows-amd64.exe ./apps/jmagent
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-linux-amd64 ./apps/jmagent
-	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-darwin-amd64 ./apps/jmagent
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-darwin-arm64 ./apps/jmagent
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-linux-arm64 ./apps/jmagent
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-windows-amd64.exe ./apps/jm
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-linux-amd64 ./apps/jm
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-darwin-amd64 ./apps/jm
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-darwin-arm64 ./apps/jm
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-linux-arm64 ./apps/jm
 
 # 生成 npm 分发包目录（主包 + 5 个平台分包）到 .tmp/jm-npm-build/（FR-567）。
 # 依赖 dist-jm 的产物；加 PUBLISH=1 才会真正推送到 npm。

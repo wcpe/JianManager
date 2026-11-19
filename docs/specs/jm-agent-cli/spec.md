@@ -201,14 +201,14 @@ SKILL.md 必须位于该子目录根部；平铺在 `skills/` 下会与其它技
 
 ## 5. 任务拆分
 
-- [ ] 包改名 `apps/jmagent` → 命令面改为 `jm`（`make build-jm` 产出 `jm`）
-- [ ] `jm config` + `hosts.yml` + `--url`/`JM_URL` 优先级链
-- [ ] `jm api`（含 `--data @file|-`、`--query`、错误映射）
-- [ ] 现有 8 条糖迁移（输出格式不变）
-- [ ] `internal/platform/keyring` 接口 + Windows/macOS/Linux 三实现
-- [ ] `jm auth login/status/logout`（依赖 FR-562 device flow）
-- [ ] 单测：httpmock 断言 `jm api` 请求形态；keyring 用 fake
-- [ ] 真机验收：Windows 上 login → 调用 → logout → token 失效
+- [x] 目录与命令面统一为 `jm`（`apps/jm`，`make build-jm` 产出 `jm`；`jmagent` 留作兼容别名）
+- [x] `jm config` + `hosts.yml` + `--url`/`JM_URL` 优先级链
+- [x] `jm api`（含 `--data @file|-`、`--query`、错误映射）
+- [x] 现有 8 条糖迁移（输出格式不变）
+- [x] `internal/platform/keyring` 接口 + Windows/macOS/Linux 三实现
+- [x] `jm auth login/status/logout`（依赖 FR-562 device flow）
+- [x] 单测：httpmock 断言 `jm api` 请求形态；keyring 用 fake
+- [x] 真机验收：Windows 上 login → 调用 → logout → token 失效
 
 ## 6. 验收要点
 

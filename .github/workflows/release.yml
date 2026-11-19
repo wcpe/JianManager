@@ -430,7 +430,7 @@ jobs:
             ext=""
             [ "$os" = "windows" ] && ext=".exe"
             GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "${LDFLAGS}" \
-              -o "dist/jm-${os}-${arch}${ext}" ./apps/jmagent
+              -o "dist/jm-${os}-${arch}${ext}" ./apps/jm
           done
           ls -l dist/jm-*
 

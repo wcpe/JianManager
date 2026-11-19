@@ -470,7 +470,7 @@ jobs:
           go test ./internal/controlplane/service/ -run 'AgentToken|AgentGate|ActivityByToken|AgentCallLog' -count=1
           go test ./internal/controlplane/router/ -run 'AgentGate|MCP' -count=1
           go test -race ./internal/controlplane/mcp/... -count=1
-          go test ./apps/jmagent/... -count=1
+          go test ./apps/jm/... -count=1
 
   # 工作流契约闸：校验 ci.yml / release.yml 的触发条件、runner 与版本来源不被静默改坏。
   # 这些断言原先只在 release.yml 的 metadata job 里跑，而 release.yml 刻意不挂 PR
