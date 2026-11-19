@@ -4882,6 +4882,10 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 - **描述**: 暂停推进（**不自动回滚**）/ 恢复 / 取消。
 - **请求**: `{ "reason":"..." }`（`pause` 用）
 - **注意**: 暂停只是停止推进，已经在探针上生效的配置不会因此改变。
+- **`resume` 只接受 `paused`**: 熔断落的是 **`failed`（终态）**，不可 Resume——触发熔断的配置
+  很可能就是问题本身，一键续推会把已验证的坏配置扩散到剩余批次。熔断后要推进，应改动配置后重建会话。
+- **进程重启的收口**: 启动时把残留在 `running` 的会话置为 `paused`（`pauseKind=restart`），
+  给运维留一条 Resume 通道。`awaiting_release` 不受影响（它本就是待人处理的静止态）。
 
 ### POST /api/v1/managed-pushes/:id/targets
 
@@ -4905,6 +4909,11 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 - **必填**: `reason` 不可为空；`confirmed` 必须为 `true`（二次确认）。
 - **响应**: 新建的回滚会话。
 - **错误**: 400 `CONFIRM_REQUIRED`（`confirmed` 非 true / `reason` 为空）｜ 409 `PUSH_STATE_INVALID`（源会话未 completed）
+- **重推的是「当时实际发出去的内容」**: 载荷取自源目标下发时留存的 `pushed_payload_json`（**每台各一份**），
+  不按当前配置层重新合并——两次推送之间只要有人改过 global 层，重新合并出的就是一份从未在任何机器上
+  生效过的配置，"回到上一次推送的状态"也就不成立。
+  只复用内容（values/removals）：`configVersion` 是回滚会话新铸的版本、`baseVersion` 是该实例当前真实基线，
+  原样复用旧版本号会让回执永远对不上。
 - **不做自动回滚**: 配置错可能只是"指标不准"，而自动回滚会在没有任何人决策的情况下再次改动全平台。
 
 ### GET /api/v1/managed-matrix
