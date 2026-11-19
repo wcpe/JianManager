@@ -12,7 +12,7 @@ const LoginPage = lazy(() => import('./pages/LoginPage'))
 const SetupPage = lazy(() => import('./pages/SetupPage'))
 const DashboardPage = lazy(() => import('./pages/DashboardPage'))
 const InvitePage = lazy(() => import('./pages/InvitePage'))
-// 设备授权确认页（FR-515 / ADR-104）：CLI 发起登录后，用户在此输入 user_code 确认。
+// 设备授权确认页（FR-562 / ADR-112）：CLI 发起登录后，用户在此输入 user_code 确认。
 const DeviceAuthorizePage = lazy(() => import('./pages/DeviceAuthorizePage'))
 
 /** 认证守卫：未登录时重定向到 /login。 */

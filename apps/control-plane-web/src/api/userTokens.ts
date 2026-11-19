@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /**
- * 用户自助令牌（FR-513/434 / ADR-104）。
+ * 用户自助令牌（FR-560/434 / ADR-112）。
  *
  * 与 `agentTokens.ts` 的区别：这是**人类凭证**（`jmut_`），登录用户即可管理自己的；
  * Agent Token（`jmat_`）是机器凭证，仅平台管理员可签发。
@@ -105,7 +105,7 @@ export function userTokenStatus(t: UserTokenInfo, now: number = Date.now()): 'ac
   return 'active'
 }
 
-/** 设备授权确认（FR-515）：用户在浏览器确认 jm 发起的登录。 */
+/** 设备授权确认（FR-562）：用户在浏览器确认 jm 发起的登录。 */
 export interface DeviceAuthorizePayload {
   userCode: string
   approve: boolean

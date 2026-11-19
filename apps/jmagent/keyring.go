@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/keyring"
 )
 
-// 令牌在系统钥匙串中的存取（FR-518 / ADR-104）。
+// 令牌在系统钥匙串中的存取（FR-565 / ADR-112）。
 //
 // 设计取舍：钥匙串不可用时**不降级为明文文件**，只提示改用 JM_TOKEN。
 // 理由：CLI 令牌等价于 CP 全权访问，静默落盘明文等于把密钥摊在磁盘上。

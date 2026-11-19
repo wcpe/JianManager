@@ -1,6 +1,6 @@
 # 功能规格：用户令牌（user_token）与设备授权登录
 
-> 状态：修订中　·　关联 PRD：FR-513 / FR-514 / FR-515 / FR-516　·　ADR：092（待建）、076（边界沿用）
+> 状态：修订中　·　关联 PRD：FR-560 / FR-561 / FR-562 / FR-563　·　ADR：092（待建）、076（边界沿用）
 
 ## 1. 背景与目标
 
@@ -10,7 +10,7 @@
 
 **不复用 `agent_token` 表**：审计主体必须分离（agent vs user），合并会破坏 ADR-076 决策 5。
 
-## 2. 数据模型（FR-513）
+## 2. 数据模型（FR-560）
 
 ```go
 type UserToken struct {
@@ -57,7 +57,7 @@ type UserToken struct {
 - 用户被降权 → token 自动收窄（不需要重新签发）
 - 用户 `AuthVersion` 递增（改密码/禁用）→ token 全部失效
 
-## 3. 管理 API（FR-514）
+## 3. 管理 API（FR-561）
 
 | Method | Path | 说明 |
 |---|---|---|
@@ -70,7 +70,7 @@ type UserToken struct {
 - 越权访问返回 403（与其他 scope 外统一收敛）
 - 与 `/api/v1/agent/tokens` 完全隔离，不共用 handler
 
-## 4. Device Authorization Grant（FR-515，RFC 8628）
+## 4. Device Authorization Grant（FR-562，RFC 8628）
 
 | Method | Path | 说明 |
 |---|---|---|
@@ -94,14 +94,14 @@ pending ──approve──▶ approved ──(CLI 取走一次)──▶ consum
 - `expires_in`：600s
 - `device_code` 与 `user_code` 都入库，用后即删（或标记 consumed）
 
-### 前端授权页（FR-516 的一部分）
+### 前端授权页（FR-563 的一部分）
 
 - 路由 `/device`（或 `/oauth/device`），未登录先跳登录
 - 展示：user_code、申请方 device_label、将获得的 scope 摘要
 - 两个按钮：授权 / 拒绝
 - 授权成功后调用 `authorize` 并签发 user_token（明文只返回给 CLI 那条通道）
 
-## 5. 前端 Token 管理页（FR-516）
+## 5. 前端 Token 管理页（FR-563）
 
 - 路径 `/settings/tokens`
 - 列表：名称、设备、前缀、scope 摘要、最后使用、过期、状态

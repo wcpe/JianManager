@@ -1,7 +1,7 @@
 # 功能规格：jm 命令行（gh 式）
 
-> 状态：修订中（取代 FR-385 原「jm-agent 8 命令」定位）　·　关联 PRD：FR-385 / FR-513~439　·　ADR：076（沿用）、091
-> 依赖：FR-513（user_token）、FR-515（device flow）
+> 状态：修订中（取代 FR-385 原「jm-agent 8 命令」定位）　·　关联 PRD：FR-385 / FR-560~439　·　ADR：076（沿用）、091
+> 依赖：FR-560（user_token）、FR-562（device flow）
 
 ## 1. 背景与目标
 
@@ -107,7 +107,7 @@ jm config remove staging
 - [ ] `jm api`（含 `--data @file|-`、`--query`、错误映射）
 - [ ] 现有 8 条糖迁移（输出格式不变）
 - [ ] `internal/platform/keyring` 接口 + Windows/macOS/Linux 三实现
-- [ ] `jm auth login/status/logout`（依赖 FR-515 device flow）
+- [ ] `jm auth login/status/logout`（依赖 FR-562 device flow）
 - [ ] 单测：httpmock 断言 `jm api` 请求形态；keyring 用 fake
 - [ ] 真机验收：Windows 上 login → 调用 → logout → token 失效
 

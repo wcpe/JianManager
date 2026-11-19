@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/skill"
 )
 
-// Agent 运维知识静态路由（FR-519 / ADR-103）。
+// Agent 运维知识静态路由（FR-566 / ADR-111）。
 //
 // 双通道设计：仓库根 `skill/` 既是 GitHub 权威源，也由 CP 以匿名静态路由对外提供，
 // 使纯内网（无外网）部署的 agent 也能取到 SKILL.md 与 references。

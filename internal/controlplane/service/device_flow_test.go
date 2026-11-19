@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-515 / RFC 8628：设备授权状态机与一次性取用语义。
+// FR-562 / RFC 8628：设备授权状态机与一次性取用语义。
 
 func newDeviceFlow(t *testing.T) (*DeviceFlowService, *UserTokenService, *model.User) {
 	t.Helper()

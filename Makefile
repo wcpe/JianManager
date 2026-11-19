@@ -28,7 +28,7 @@ build-worker:
 build-jmctl:
 	go build -o bin/jmctl.exe ./apps/jmctl
 
-# 构建 jm 命令行客户端（FR-517，重构自 FR-385）；jmagent 作为兼容别名保留一个版本周期。
+# 构建 jm 命令行客户端（FR-564，重构自 FR-385）；jmagent 作为兼容别名保留一个版本周期。
 build-jmagent:
 	go build -o bin/jm.exe ./apps/jmagent
 	go build -o bin/jmagent.exe ./apps/jmagent

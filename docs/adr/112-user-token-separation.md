@@ -1,4 +1,4 @@
-# ADR-104: 用户令牌与 Agent Token 的凭证分离
+# ADR-112: 用户令牌与 Agent Token 的凭证分离
 
 - **日期**: 2026-11-12
 - **状态**: accepted
@@ -9,7 +9,7 @@
 `apps/jmagent` 原定位是「仿 jmctl 的 Agent 管理 CLI」，认证走 **Agent Token（`jmat_`）**——
 它是为 agent / CI 设计的机器凭证，与人类身份严格分离（ADR-076 决策 1/5）。
 
-但 `jm` 重构为 gh 式（FR-517）后，使用者变成**人**：日常在终端里登录、执行 `jm api`、在服务器上
+但 `jm` 重构为 gh 式（FR-564）后，使用者变成**人**：日常在终端里登录、执行 `jm api`、在服务器上
 查看并按需吊销。Agent Token 不适合承担这个角色：
 
 1. **审计主体错位**：Agent Token 的调用记为 `actor_kind=agent`，人类操作应记为 `user`

@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-513 / ADR-104：用户令牌的签发、校验、交集与吊销。
+// FR-560 / ADR-112：用户令牌的签发、校验、交集与吊销。
 
 // setupUserTokenDB 建内存库并迁移用户令牌相关表。
 func setupUserTokenDB(t *testing.T) *gorm.DB {

@@ -16,7 +16,7 @@ const (
 	CtxUserTokenID = "userTokenId"
 )
 
-// UserTokenAuth 用户令牌鉴权（FR-513 / ADR-104）。
+// UserTokenAuth 用户令牌鉴权（FR-560 / ADR-112）。
 //
 // 设计为 JWTAuth 之前的「可选分流」：
 //   - 只处理 Authorization: Bearer jmut_*

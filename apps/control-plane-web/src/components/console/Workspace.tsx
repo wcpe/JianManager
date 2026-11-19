@@ -321,7 +321,7 @@ export default function Workspace() {
             <Route path="mcp-activity" element={<RequirePlatformAdmin><McpActivityPage /></RequirePlatformAdmin>} />
             {/* 端点无状态化后会话维度视图已无数据源，旧链接重定向到按 Token 聚合的活动视图。 */}
             <Route path="mcp-sessions" element={<Navigate to="/mcp-activity" replace />} />
-            {/* 我的令牌（FR-516）：所有登录用户都能管理自己的 jmut_ 令牌，不加管理员守卫。 */}
+            {/* 我的令牌（FR-563）：所有登录用户都能管理自己的 jmut_ 令牌，不加管理员守卫。 */}
             <Route path="my-tokens" element={<UserTokensPage />} />
             <Route path="agent-call-logs" element={<RequirePlatformAdmin><AgentCallLogsPage /></RequirePlatformAdmin>} />
             <Route path="licenses" element={<RequirePlatformAdmin><LicensesPage /></RequirePlatformAdmin>} />

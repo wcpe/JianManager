@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// FR-519 / ADR-103：知识静态路由的可用性与路径安全。
+// FR-566 / ADR-111：知识静态路由的可用性与路径安全。
 
 // newSkillTestEngine 只挂 skill 路由，隔离其它中间件。
 func newSkillTestEngine() *gin.Engine {

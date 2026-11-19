@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 设备授权流程常量（FR-515 / RFC 8628）。
+// 设备授权流程常量（FR-562 / RFC 8628）。
 const (
 	// DeviceCodeTTL 设备码有效期：用户需要足够时间完成浏览器操作。
 	DeviceCodeTTL = 10 * time.Minute
@@ -32,7 +32,7 @@ var (
 	ErrDeviceCodeConsumed         = errors.New("设备码已被使用")
 )
 
-// DeviceFlowService 设备授权流程服务（FR-515）。
+// DeviceFlowService 设备授权流程服务（FR-562）。
 type DeviceFlowService struct {
 	db       *gorm.DB
 	userTok  *UserTokenService

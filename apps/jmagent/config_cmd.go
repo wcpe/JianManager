@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-// runConfig 分发 `jm config <sub>`（FR-517：多 host 管理）。
+// runConfig 分发 `jm config <sub>`（FR-564：多 host 管理）。
 func runConfig(cfg Config, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("用法: jm config set-url|get-url|list|use|remove <参数>")

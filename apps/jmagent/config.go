@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 配置与环境变量（FR-517 / ADR-104）。
+// 配置与环境变量（FR-564 / ADR-112）。
 //
 // 优先级（高 → 低）：--url / --token 命令行 → JM_URL / JM_TOKEN 环境变量
 //                  → 当前默认 host（配置文件）→ 内置默认值。

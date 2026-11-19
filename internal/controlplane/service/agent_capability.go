@@ -57,7 +57,7 @@ type AgentActionDescriptor struct {
 	HTTPInContract  bool
 	RequiresConfirm bool // FR-396：destructive 操作须服务端精确确认参数
 
-	// Summary 是一句话摘要，供 MCP tool Description 使用（ADR-103）。
+	// Summary 是一句话摘要，供 MCP tool Description 使用（ADR-111）。
 	Summary string
 }
 
@@ -460,7 +460,7 @@ func registerAgentInstanceActions(capability, operation string, actions ...strin
 
 // agentActionFallbackSummary 为未逐条撰写摘要的批量 action 生成可读摘要。
 // 优先取 agentActionSummaries 中的手写文案；缺失时按 action 名与操作等级兜底，
-// 保证 MCP tool 描述与 CLI 帮助不出现空摘要（ADR-103）。
+// 保证 MCP tool 描述与 CLI 帮助不出现空摘要（ADR-111）。
 func agentActionFallbackSummary(action, operation string) string {
 	if s, ok := agentActionSummaries[action]; ok {
 		return s
@@ -513,7 +513,7 @@ func IsAgentKnownCapability(cap string) bool {
 
 // DescribeAgentAction 返回 action 描述；未知 action 返回 false。
 //
-// 摘要在此统一兜底（ADR-103）：批量登记路径（networkDomainActions 等）不逐条写字，
+// 摘要在此统一兜底（ADR-111）：批量登记路径（networkDomainActions 等）不逐条写字，
 // 但下游 MCP 工具描述与 Catalog 契约要求每项都有摘要，故在出口补全而不改登记点。
 func DescribeAgentAction(action string) (AgentActionDescriptor, bool) {
 	d, ok := agentActionCatalog[action]
@@ -644,7 +644,7 @@ func PrincipalCanAccessNode(p *AgentPrincipal, nodeID uint) bool {
 // 供实例分组、群组等「非实例、非节点」目标的 destructive 授权使用：这类资源自身无独立资源类型
 // （descriptor 复用 instance 以便按节点/实例 scope 判定可发现性），其 id 也不是实例 id，
 // 无法按实例目标授权；改按节点 scope 判定（与可发现性口径一致），避免把分组/群组 id 误当实例 id
-// 而导致授权恒拒（FR-515）。
+// 而导致授权恒拒（FR-562）。
 func PrincipalHasNodeScope(p *AgentPrincipal) bool {
 	return p != nil && p.PolicyVersion == AgentPolicyVersionV2 && len(p.ScopedNodeIDs) > 0
 }
@@ -707,7 +707,7 @@ func Authorize(p *AgentPrincipal, action string, target AgentTrustedTarget) (Age
 
 func authorizeCapability(p *AgentPrincipal, d AgentActionDescriptor) error {
 	if p.PolicyVersion == AgentPolicyVersionV2 {
-		// whoami 与知识读取不涉及业务资源，任何有效 Token 均可访问（ADR-103）。
+		// whoami 与知识读取不涉及业务资源，任何有效 Token 均可访问（ADR-111）。
 		if isResourceFreeReadAction(d.Action) {
 			return nil
 		}

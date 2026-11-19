@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// runAuth 分发 `jm auth <sub>`（FR-518）。
+// runAuth 分发 `jm auth <sub>`（FR-565）。
 func runAuth(cfg Config, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("用法: jm auth login|status|logout [--host <url>]")
@@ -320,7 +320,7 @@ func runAuthStatus(cfg Config) error {
 	return nil
 }
 
-// runAuthLogout 本地删除 + 远端吊销（FR-518 决策 5）。
+// runAuthLogout 本地删除 + 远端吊销（FR-565 决策 5）。
 func runAuthLogout(cfg Config) error {
 	if cfg.HostKey == "" {
 		return fmt.Errorf("未确定当前主机，无法登出")

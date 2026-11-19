@@ -48,7 +48,7 @@ func TestRegisteredTools_Set(t *testing.T) {
 	}
 }
 
-// TestToolSpecsMatchCatalog 断言每个工具的 Action 都在 catalog 中登记（ADR-103）。
+// TestToolSpecsMatchCatalog 断言每个工具的 Action 都在 catalog 中登记（ADR-111）。
 //
 // catalog 是 action→capability→scope 的唯一真源（ADR-080 决策 4）。
 // 工具若引用未登记 action，则该工具不可被授权，属于死配置。
@@ -60,7 +60,7 @@ func TestToolSpecsMatchCatalog(t *testing.T) {
 	}
 }
 
-// TestToolSpecsAnnotations 校验标注按 catalog 操作等级派生（ADR-103）。
+// TestToolSpecsAnnotations 校验标注按 catalog 操作等级派生（ADR-111）。
 func TestToolSpecsAnnotations(t *testing.T) {
 	for _, def := range RegisteredTools() {
 		action, ok := toolActionByName(def.Name)

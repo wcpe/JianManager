@@ -17,7 +17,7 @@ type ToolDef struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
-	// Annotations 由 catalog 的 Operation 自动派生（ADR-103），不手写。
+	// Annotations 由 catalog 的 Operation 自动派生（ADR-111），不手写。
 	// 客户端据此在调用破坏性工具前征求用户确认。
 	Annotations map[string]any `json:"annotations,omitempty"`
 }

@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// UserToken 用户级长期令牌（FR-513，见 ADR-104）。
+// UserToken 用户级长期令牌（FR-560，见 ADR-112）。
 //
 // 与 AgentToken 严格分离：AgentToken（jmat_）是机器凭证，由管理员签发供 MCP/CI 使用；
 // UserToken（jmut_）是人类凭证，由用户自助登录获取、可在 Web 上自助吊销。
@@ -33,7 +33,7 @@ type UserToken struct {
 	Capabilities string `gorm:"column:capabilities;type:text" json:"capabilities,omitempty"`
 
 	// AuthVersion 签发时该用户的 AuthVersion 快照。
-	// 用户改密码/禁用时 AuthVersion 递增，令本令牌立即失效（ADR-104 决策 2）。
+	// 用户改密码/禁用时 AuthVersion 递增，令本令牌立即失效（ADR-112 决策 2）。
 	AuthVersion uint `gorm:"column:auth_version;not null;default:0" json:"-"`
 
 	// ExpiresAt 过期时间；到期即校验失败。
@@ -48,7 +48,7 @@ type UserToken struct {
 // TableName 显式指定表名，避免与 AgentToken 混淆。
 func (UserToken) TableName() string { return "user_tokens" }
 
-// DeviceCode 设备授权流程的一次性凭证（FR-515，RFC 8628）。
+// DeviceCode 设备授权流程的一次性凭证（FR-562，RFC 8628）。
 //
 // 三态：pending（等待用户确认）→ approved（已确认，等待 CLI 取走）→ consumed（已取走）。
 // 另有 denied / expired 两个终态。

@@ -36,7 +36,7 @@ const (
 	UserTokenMaxTTL = 365 * 24 * time.Hour
 )
 
-// UserTokenService 用户令牌服务（FR-513 / ADR-104）。
+// UserTokenService 用户令牌服务（FR-560 / ADR-112）。
 //
 // 与 AgentTokenService 的差异：
 //   - 权限 = token scope ∩ 用户当前 RBAC 权限（不能放大）
@@ -168,7 +168,7 @@ type UserTokenPrincipal struct {
 
 // Authenticate 校验明文令牌，返回主体。
 //
-// 校验链（ADR-104）：
+// 校验链（ADR-112）：
 //  1. hash 命中且唯一
 //  2. 未吊销
 //  3. 未过期

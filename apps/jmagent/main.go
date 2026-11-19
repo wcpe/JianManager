@@ -1,4 +1,4 @@
-// Command jm 是 JianManager 的命令行客户端（FR-517，重构自 FR-385 的 jmagent）。
+// Command jm 是 JianManager 的命令行客户端（FR-564，重构自 FR-385 的 jmagent）。
 //
 // 定位对齐 GitHub CLI：
 //   - `jm api` 一条命令覆盖 CP 全部 HTTP 路由，不做子命令逐个映射
@@ -35,7 +35,7 @@ func progName() string {
 // usage 打印命令总览到 stderr。
 func usage() {
 	n := progName()
-	fmt.Fprintf(os.Stderr, `%s — JianManager 命令行客户端（经 CP HTTPS + 用户令牌，见 FR-517 / ADR-104）
+	fmt.Fprintf(os.Stderr, `%s — JianManager 命令行客户端（经 CP HTTPS + 用户令牌，见 FR-564 / ADR-112）
 
 用法:
   %s api <METHOD> <PATH> [--data @file|-] [--query k=v]...   直接调用任意 CP 接口
