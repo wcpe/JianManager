@@ -23,7 +23,7 @@
 
 - 策略真源：`ResolveAction` + 硬拒绝 map
 - HTTP 闸：`router/agent_gate_test.go`（`TestAgentGate_*`）
-- 入口：`apps/jmagent` / `apps/mcp-bridge` 单测 mock 403
+- 入口：`apps/jm` / `apps/mcp-bridge` 单测 mock 403
 
 ## 4. 任务拆分
 

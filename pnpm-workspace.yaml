@@ -5,3 +5,7 @@ packages:
   - "apps/*"
   - "packages/*"
   - "!apps/bot-worker"
+  # jm 的 npm 分发壳（FR-567）：独立于主仓 JS 工作区自管，发布产物由
+  # `make dist-jm-npm` 填充后再 `npm publish`。若纳入 workspace，pnpm 会试图
+  # 安装它并把它当本地包链接，而它实际上是「一次构建、按平台分包发布」的发布清单。
+  - "!packages/jm-npm"

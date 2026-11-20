@@ -108,7 +108,7 @@ internal/controlplane/
 旁路二进制（monorepo `apps/`）：
 
 ```
-apps/jmagent/     # Agent CLI（FR-385）
+apps/jm/          # 人类侧 CLI（原 jmagent；经 CP HTTPS + 用户令牌 jmut_）
 # apps/mcp-bridge/  # 已退役（FR-392）；MCP 改 CP 内嵌 /api/v1/mcp
 apps/jmctl/       # 紧急 daemon CLI（FR-184）
 ```

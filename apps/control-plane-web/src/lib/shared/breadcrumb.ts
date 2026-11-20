@@ -51,6 +51,8 @@ const SEGMENT_DOMAIN: Record<string, string> = {
   licenses: 'nav.auditSettings',
   'agent-tokens': 'nav.agentAccess',
   'mcp-activity': 'nav.agentAccess',
+  // 我的令牌归入身份与访问分组。
+  'my-tokens': 'nav.identityAccess',
   'agent-call-logs': 'nav.agentAccess',
   'artifact-versions': 'nav.systemMaintenance',
   database: 'nav.systemMaintenance',
@@ -94,6 +96,7 @@ const SEGMENT_PAGE: Record<string, string> = {
   licenses: 'licenses.title',
   'agent-tokens': 'nav.agentTokens',
   'mcp-activity': 'nav.mcpActivity',
+  'my-tokens': 'nav.myTokens',
   'agent-call-logs': 'nav.agentCallLogs',
 }
 

@@ -1,0 +1,26 @@
+{
+  "name": "@jianmanager/jm",
+  "version": "0.24.0",
+  "private": false,
+  "description": "JianManager 命令行客户端（jm）：经 CP HTTPS + 用户令牌管理实例与节点。",
+  "bin": {
+    "jm": "bin/jm.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@jianmanager/jm-linux-x64": "0.24.0",
+    "@jianmanager/jm-linux-arm64": "0.24.0",
+    "@jianmanager/jm-darwin-x64": "0.24.0",
+    "@jianmanager/jm-darwin-arm64": "0.24.0",
+    "@jianmanager/jm-win32-x64": "0.24.0"
+  }
+}

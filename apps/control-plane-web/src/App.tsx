@@ -12,6 +12,8 @@ const LoginPage = lazy(() => import('./pages/LoginPage'))
 const SetupPage = lazy(() => import('./pages/SetupPage'))
 const DashboardPage = lazy(() => import('./pages/DashboardPage'))
 const InvitePage = lazy(() => import('./pages/InvitePage'))
+// 设备授权确认页：CLI 发起登录后，用户在此输入 user_code 确认。
+const DeviceAuthorizePage = lazy(() => import('./pages/DeviceAuthorizePage'))
 
 /** 认证守卫：未登录时重定向到 /login。 */
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -61,6 +63,15 @@ function App() {
             <Route path="/setup" element={<SetupPage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/invite" element={<InvitePage />} />
+            {/* 设备授权需已登录（要拿到 JWT 才能确认），故套 AuthGuard。 */}
+            <Route
+              path="/device"
+              element={
+                <AuthGuard>
+                  <DeviceAuthorizePage />
+                </AuthGuard>
+              }
+            />
             <Route
               path="/*"
               element={

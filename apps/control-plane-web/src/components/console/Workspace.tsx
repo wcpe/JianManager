@@ -74,6 +74,8 @@ const SystemUpdatePage = lazy(ROUTE_CHUNKS['/system-update'])
 const AgentTokensPage = lazy(ROUTE_CHUNKS['/agent-tokens'])
 const ApprovalsPage = lazy(ROUTE_CHUNKS['/approvals'])
 const McpActivityPage = lazy(ROUTE_CHUNKS['/mcp-activity'])
+// 我的令牌：用户自助的人类凭证，不走平台管理员守卫。
+const UserTokensPage = lazy(ROUTE_CHUNKS['/my-tokens'])
 const AgentCallLogsPage = lazy(ROUTE_CHUNKS['/agent-call-logs'])
 const LicensesPage = lazy(ROUTE_CHUNKS['/licenses'])
 const TasksPage = lazy(ROUTE_CHUNKS['/tasks'])
@@ -319,6 +321,8 @@ export default function Workspace() {
             <Route path="mcp-activity" element={<RequirePlatformAdmin><McpActivityPage /></RequirePlatformAdmin>} />
             {/* 端点无状态化后会话维度视图已无数据源，旧链接重定向到按 Token 聚合的活动视图。 */}
             <Route path="mcp-sessions" element={<Navigate to="/mcp-activity" replace />} />
+            {/* 我的令牌：所有登录用户都能管理自己的 jmut_ 令牌，不加管理员守卫。 */}
+            <Route path="my-tokens" element={<UserTokensPage />} />
             <Route path="agent-call-logs" element={<RequirePlatformAdmin><AgentCallLogsPage /></RequirePlatformAdmin>} />
             <Route path="licenses" element={<RequirePlatformAdmin><LicensesPage /></RequirePlatformAdmin>} />
             <Route path="*" element={<WorkspaceEmpty />} />

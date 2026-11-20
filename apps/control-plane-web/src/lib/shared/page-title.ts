@@ -33,6 +33,7 @@ const SEGMENT_TITLE_KEYS: Record<string, string> = {
   'system-update': 'nav.systemUpdate',
   'agent-tokens': 'nav.agentTokens',
   'mcp-activity': 'nav.mcpActivity',
+  'my-tokens': 'nav.myTokens',
   'agent-call-logs': 'nav.agentCallLogs',
   licenses: 'licenses.title',
 }

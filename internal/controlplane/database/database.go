@@ -154,6 +154,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.HostProcessSnapshot{},
 		// Agent 专用令牌：与人类 JWT 分离，scope + 写白名单。
 		&model.AgentToken{},
+		// 用户自助令牌：与 Agent Token 分表，人类凭证，权限取交集。
+		&model.UserToken{},
+		// 设备授权一次性码（RFC 8628）。
+		&model.DeviceCode{},
 		// Agent 调用流水：读+写 Ops 与日后 MCP tool。
 		&model.AgentCallLog{},
 		&model.AgentTransferTicket{},
