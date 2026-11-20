@@ -24,17 +24,32 @@ import (
 
 // serverStatus 是汇总结果，便于 JSON 输出与测试断言。
 type serverStatus struct {
-	Version     string         `json:"version"`
-	OS          string         `json:"os"`
-	Arch        string         `json:"arch"`
-	DataRoot    string         `json:"dataRoot"`
-	DataRootOK  bool           `json:"dataRootExists"`
-	Layout      layoutStatus   `json:"layout"`
-	Configs     []configStatus `json:"configs"`
-	Instances   instanceCount  `json:"instances"`
-	DiskUsageMB int64          `json:"diskUsageMb,omitempty"`
-	Binary      string         `json:"binary"`
-	Warnings    []string       `json:"warnings,omitempty"`
+	Version     string          `json:"version"`
+	OS          string          `json:"os"`
+	Arch        string          `json:"arch"`
+	DataRoot    string          `json:"dataRoot"`
+	DataRootOK  bool            `json:"dataRootExists"`
+	Layout      layoutStatus    `json:"layout"`
+	Configs     []configStatus  `json:"configs"`
+	Services    []serviceStatus `json:"services"`
+	Instances   instanceCount   `json:"instances"`
+	DiskUsageMB *int64          `json:"diskUsageMb,omitempty"`
+	Binary      string          `json:"binary"`
+	Warnings    []string        `json:"warnings,omitempty"`
+}
+
+// serviceStatus 是一个组件的运行状态。
+//
+// 来源分两档：优先问 systemd（能拿到 PID 与启动时间，最准），
+// 无 systemd 或非服务方式启动时退回扫进程；两者都无则判为未运行。
+type serviceStatus struct {
+	Name    string `json:"name"`
+	Unit    string `json:"unit,omitempty"`
+	Running bool   `json:"running"`
+	PID     int    `json:"pid,omitempty"`
+	Uptime  string `json:"uptime,omitempty"`
+	Source  string `json:"source"` // systemd | process | none
+	Note    string `json:"note,omitempty"`
 }
 
 // layoutStatus 记录标准目录是否存在——排查「数据跑哪去了」的第一手信息。
@@ -84,6 +99,7 @@ func runServer(args []string) error {
 func runServerStatus(args []string) error {
 	dataDir := ""
 	asJSON := false
+	withDisk := false
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--data-dir":
@@ -96,12 +112,14 @@ func runServerStatus(args []string) error {
 			dataDir = strings.TrimPrefix(args[i], "--data-dir=")
 		case args[i] == "--json":
 			asJSON = true
+		case args[i] == "--disk":
+			withDisk = true
 		default:
-			return fmt.Errorf("未知参数 %q；用法: jmctl server status [--data-dir DIR] [--json]", args[i])
+			return fmt.Errorf("未知参数 %q；用法: jmctl server status [--data-dir DIR] [--disk] [--json]", args[i])
 		}
 	}
 
-	st := collectServerStatus(dataDir)
+	st := collectServerStatus(dataDir, withDisk)
 
 	if asJSON {
 		return printJSONValue(st)
@@ -112,9 +130,10 @@ func runServerStatus(args []string) error {
 
 // collectServerStatus 采集全部信息。
 //
-// 数据根解析失败不视为致命错误：那本身就是最需要报告的信息，
-// 因此照常输出其余字段，并把原因记进 Warnings。
-func collectServerStatus(dataDir string) serverStatus {
+// withDisk 控制是否统计磁盘占用：那一步要递归整个数据根，而数据根里可能躺着
+// 上万个小文件（世界存档、jar、备份）。应急场景下命令卡住比少一个数字更糟，
+// 因此默认关闭，由 --disk 显式开启。
+func collectServerStatus(dataDir string, withDisk bool) serverStatus {
 	st := serverStatus{
 		Version: version.Version,
 		OS:      runtime.GOOS,
@@ -157,10 +176,14 @@ func collectServerStatus(dataDir string) serverStatus {
 		}
 	}
 
-	st.DiskUsageMB = 0
-	if st.DataRootOK {
-		st.DiskUsageMB = dirSizeMB(root.Base())
+	st.DiskUsageMB = nil
+	if withDisk && st.DataRootOK {
+		mb := dirSizeMB(root.Base())
+		st.DiskUsageMB = &mb
 	}
+
+	// 组件运行状态：优先问 systemd，退回扫进程。
+	st.Services = detectServices()
 
 	if !st.DataRootOK {
 		st.Warnings = append(st.Warnings, "数据根不存在："+st.DataRoot+"（尚未初始化，或 --data-dir 指错了）")
@@ -185,8 +208,10 @@ func printServerStatus(st serverStatus) {
 	fmt.Printf("版本:     %s (%s/%s)\n", st.Version, st.OS, st.Arch)
 	fmt.Printf("可执行:   %s\n", orDash(st.Binary))
 	fmt.Printf("数据根:   %s", orDash(st.DataRoot))
-	if st.DataRootOK {
-		fmt.Printf(" (%.1f MB)\n", float64(st.DiskUsageMB))
+	if st.DiskUsageMB != nil {
+		fmt.Printf(" (%.1f MB)\n", float64(*st.DiskUsageMB))
+	} else if st.DataRootOK {
+		fmt.Printf(" (用 --disk 统计占用)\n")
 	} else {
 		fmt.Printf(" [不存在]\n")
 	}
@@ -203,6 +228,27 @@ func printServerStatus(st serverStatus) {
 		}
 	}
 
+	fmt.Printf("服务:\n")
+	for _, s := range st.Services {
+		if s.Running {
+			extra := ""
+			if s.PID > 0 {
+				extra = fmt.Sprintf(" (PID %d", s.PID)
+				if s.Uptime != "" {
+					extra += ", 已运行 " + s.Uptime
+				}
+				extra += ")"
+			}
+			fmt.Printf("  ✓ %-14s 运行中%s%s\n", s.Name, extra, sourceTag(s))
+		} else {
+			line := fmt.Sprintf("  · %-14s 未运行", s.Name)
+			if s.Note != "" {
+				line += " — " + s.Note
+			}
+			fmt.Println(line)
+		}
+	}
+
 	if st.Layout.Servers {
 		fmt.Printf("实例:     共 %d 个，存活 %d 个\n", st.Instances.Total, st.Instances.Alive)
 	}
@@ -212,6 +258,18 @@ func printServerStatus(st serverStatus) {
 		for _, w := range st.Warnings {
 			fmt.Printf("  · %s\n", w)
 		}
+	}
+}
+
+// sourceTag 标注状态来源，让人知道这个判断有多可靠。
+func sourceTag(s serviceStatus) string {
+	switch s.Source {
+	case "systemd":
+		return fmt.Sprintf("  [systemd: %s]", s.Unit)
+	case "process":
+		return "  [扫进程]"
+	default:
+		return ""
 	}
 }
 

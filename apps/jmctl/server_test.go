@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ func TestCollectServerStatus_StandardLayout(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(root, f), []byte("{}"), 0o644))
 	}
 
-	st := collectServerStatus(root)
+	st := collectServerStatus(root, false)
 
 	assert.Equal(t, root, st.DataRoot)
 	assert.True(t, st.DataRootOK)
@@ -37,7 +38,7 @@ func TestCollectServerStatus_StandardLayout(t *testing.T) {
 
 // 数据根不存在时要明确点出来，而不是静默给出全 false。
 func TestCollectServerStatus_MissingRoot(t *testing.T) {
-	st := collectServerStatus(filepath.Join(t.TempDir(), "not-created"))
+	st := collectServerStatus(filepath.Join(t.TempDir(), "not-created"), false)
 
 	assert.False(t, st.DataRootOK)
 	assert.False(t, st.Layout.Etc)
@@ -57,7 +58,7 @@ func TestCollectServerStatus_OnlyControlPlane(t *testing.T) {
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(root, "etc/control-plane.yml"), []byte("{}"), 0o644))
 
-	st := collectServerStatus(root)
+	st := collectServerStatus(root, false)
 
 	byName := map[string]bool{}
 	for _, c := range st.Configs {
@@ -76,7 +77,7 @@ func TestCollectServerStatus_NoInstances(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "var/servers"), 0o755))
 
-	st := collectServerStatus(root)
+	st := collectServerStatus(root, false)
 	assert.Equal(t, 0, st.Instances.Total)
 	assert.Equal(t, 0, st.Instances.Alive)
 }
@@ -110,4 +111,70 @@ func TestDirSizeMB_TolerantToErrors(t *testing.T) {
 
 	// 指向不存在的目录不应 panic。
 	assert.Equal(t, int64(0), dirSizeMB(filepath.Join(root, "nope")))
+}
+
+// 磁盘统计默认关闭：这一步要递归整个数据根，而生产数据根可能有上万个小文件。
+// 应急场景下命令卡住比少一个数字更糟，故必须显式 --disk 才做。
+func TestCollectServerStatus_DiskIsOptIn(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "big.bin"), make([]byte, 2*1024*1024), 0o644))
+
+	// 默认：不统计。
+	st := collectServerStatus(root, false)
+	assert.Nil(t, st.DiskUsageMB, "默认不应统计磁盘占用")
+
+	// 显式开启：有值且至少 2 MB。
+	st = collectServerStatus(root, true)
+	require.NotNil(t, st.DiskUsageMB)
+	assert.GreaterOrEqual(t, *st.DiskUsageMB, int64(2))
+}
+
+// 服务探测：每个组件都必须给出结论与来源，不能留空。
+//
+// 本机跑测试时 systemd 未必存在，因此只断言「结构完整」而非具体状态，
+// 这样用例在 Linux CI 与 Windows 开发机上都稳定。
+func TestDetectServices_Structure(t *testing.T) {
+	svcs := detectServices()
+
+	require.Len(t, svcs, len(components), "每个组件都应有一条结论")
+	names := map[string]bool{}
+	for _, s := range svcs {
+		names[s.Name] = true
+		assert.NotEmpty(t, s.Source, "%s 必须标注来源", s.Name)
+		if s.Running {
+			assert.Positive(t, s.PID, "%s 运行中时应有 PID", s.Name)
+		} else {
+			assert.NotEmpty(t, s.Note, "%s 未运行时应说明查过什么", s.Name)
+		}
+	}
+	assert.True(t, names["control-plane"])
+	assert.True(t, names["worker"])
+}
+
+// 进程名比对跨平台：去掉路径与 .exe 后缀。
+func TestBinaryBase(t *testing.T) {
+	cases := map[string]string{
+		"/opt/jianmanager/bin/control-plane":    "control-plane",
+		`C:\Program Files\JM\control-plane.exe`: "control-plane",
+		"worker":                                "worker",
+		"worker.exe":                            "worker",
+		"/proc/self/exe":                        "exe",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, binaryBase(in), "输入: %s", in)
+	}
+}
+
+// tasklist CSV 解析要能处理带引号与空字段。
+func TestSplitCSVLine(t *testing.T) {
+	assert.Equal(t, []string{"a", "1"}, splitCSVLine(`"a",1`))
+	assert.Equal(t, []string{"x"}, splitCSVLine("x"))
+	assert.Equal(t, []string{"a", "", "c"}, splitCSVLine("a,,c"))
+}
+
+// 时长的粗粒度渲染。
+func TestHumanizeDuration(t *testing.T) {
+	assert.Equal(t, "3d2h", humanizeDuration(74*time.Hour))
+	assert.Equal(t, "5h30m", humanizeDuration(5*time.Hour+30*time.Minute))
+	assert.Equal(t, "12m", humanizeDuration(12*time.Minute))
 }
