@@ -121,6 +121,7 @@ func resolvePrefix(insts []instanceInfo, prefix string) (instanceInfo, error) {
 
 // runList 实现 `jmctl list`：扫描并打印本机全部 daemon 实例（非交互）。
 func runList(args []string) error {
+	const jmctlName = "jmctl"
 	fs := newFlagSet("list")
 	pidDirFlag := fs.String("pid-dir", "", "daemon PID 目录（默认数据根下 var/servers）")
 	if err := fs.Parse(args); err != nil {
@@ -140,14 +141,39 @@ func runList(args []string) error {
 		return nil
 	}
 
-	fmt.Printf("PID 目录: %s\n", pidDir)
-	fmt.Printf("%-36s  %-6s  %-10s  %-10s  %s\n", "UUID", "存活", "WrapperPID", "JavaPID", "工作目录")
+	// 合并 Worker 写的实例清单：PID 文件只有寻址信息，没有实例名与业务状态。
+	// 清单缺失时（旧版 Worker 或刚升级）降级为只显示 UUID，不报错。
+	idx := loadInstanceIndex(pidDir)
+	names := idx.byUUID()
+
+	fmt.Printf("PID 目录: %s\n\n", pidDir)
+	fmt.Printf("%-36s  %-20s  %-10s  %-8s  %s\n", "UUID", "实例名", "状态", "存活", "工作目录")
 	for _, in := range insts {
 		alive := "否"
 		if in.Alive {
 			alive = "是"
 		}
-		fmt.Printf("%-36s  %-6s  %-10d  %-10d  %s\n", in.UUID, alive, in.WrapperPID, in.JavaPID, in.WorkDir)
+		name, state := "-", "-"
+		if e, ok := names[in.UUID]; ok {
+			if e.Name != "" {
+				name = e.Name
+			}
+			if e.State != "" {
+				state = e.State
+			}
+		}
+		fmt.Printf("%-36s  %-20s  %-10s  %-8s  %s\n", in.UUID, name, state, alive, in.WorkDir)
 	}
+
+	// 一份可直接照做的下一步，解决「agent 连上来不知道能干什么」。
+	fmt.Printf(`
+下一步:
+  %s attach <uuid 前缀>     进入控制台（Ctrl+C 优雅停服）
+  %s stop <uuid 前缀>       优雅停服
+  %s server status          查看部署概况（目录 / 配置 / 服务状态）
+
+要从 Agent 远程管理（启动 / 重启 / 指标）请用 MCP：
+  jm token create --name <名称>   生成 Agent 令牌并打印配置片段
+`, jmctlName, jmctlName, jmctlName)
 	return nil
 }

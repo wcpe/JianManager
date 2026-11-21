@@ -48,6 +48,7 @@ func usage() {
   %s config set-url|get-url|list        管理多个 CP 主机
   %s skill install                      安装 Agent 运维知识到宿主
   %s doctor                             诊断环境（版本 / 路径 / 钥匙串 / 配置）
+  %s token create|list                  签发 Agent 令牌并打印 MCP 配置
 
   高频命令:
   %s whoami                             当前身份
@@ -63,7 +64,7 @@ func usage() {
   JM_URL / JM_TOKEN                     优先级低于对应命令行选项
 
 运行 %s <命令> --help 查看该命令的全部选项。
-`, n, n, n, n, n, n, n, n, n, n, n)
+`, n, n, n, n, n, n, n, n, n, n, n, n)
 }
 
 // subcommandUsage 返回子命令专属的帮助正文；未知子命令返回空串。
@@ -270,6 +271,8 @@ func main() {
 		runErr = runDoctor(cfg, rest)
 	case "skill":
 		runErr = runSkill(cfg, rest)
+	case "token":
+		runErr = runToken(cfg, rest)
 	case "whoami":
 		runErr = runWhoami(newClient(cfg), cfg, rest)
 	case "list":

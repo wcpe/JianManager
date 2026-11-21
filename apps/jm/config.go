@@ -299,6 +299,12 @@ var subcommandFlags = map[string]struct{}{
 	"--from":    {},
 	"--scope":   {},
 	"--project": {},
+	// token create 的参数：透传给 runToken 解释。
+	"--node":           {},
+	"--instance":       {},
+	"--capability":     {},
+	"--ttl-days":       {},
+	"--policy-version": {},
 }
 
 // isSubcommandFlag 判定是否为已知子命令选项（含 --key=value 形式）。
