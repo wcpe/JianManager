@@ -15,7 +15,7 @@
     "lint": "pnpm -r lint"
   },
   "dependencies": {
-    "@astryxdesign/core": "^0.6.3",
+    "@astryxdesign/core": "^0.7.14",
     "@astryxdesign/theme-neutral": "^0.6.3",
     "@stylexjs/stylex": "^0.19.1"
   },
