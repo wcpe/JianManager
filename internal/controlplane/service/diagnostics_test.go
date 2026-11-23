@@ -6,7 +6,6 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
@@ -22,8 +21,7 @@ func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) 
 
 func newDiagTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
+	db := openTestSQLite(t)
 	require.NoError(t, db.AutoMigrate(&model.Node{}))
 	return db
 }

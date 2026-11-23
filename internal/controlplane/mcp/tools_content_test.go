@@ -14,22 +14,22 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// fr397ReadTools 只读内容工具（instance.read 可见）。
-var fr397ReadTools = []string{
+// catalogReadTools 只读内容工具（instance.read 可见）。
+var catalogReadTools = []string{
 	"file_list", "file_check_access", "file_read_text", "file_versions", "file_diff",
 	"config_discover", "config_read", "config_cross_check", "config_versions", "config_diff",
 	"plugin_list",
 }
 
-// fr397ContentTools 内容写工具（instance.content 可见）。
-var fr397ContentTools = []string{
+// catalogContentTools 内容写工具（instance.content 可见）。
+var catalogContentTools = []string{
 	"file_write_text", "file_rename", "file_chmod", "file_delete", "file_rollback",
 	"file_issue_transfer_ticket",
 	"plugin_deploy_from_asset", "plugin_toggle", "plugin_delete",
 }
 
-// fr397ConfigureTools 配置写工具（instance.configure 可见）。
-var fr397ConfigureTools = []string{"config_write_text", "config_write_fields", "config_rollback"}
+// catalogConfigureTools 配置写工具（instance.configure 可见）。
+var catalogConfigureTools = []string{"config_write_text", "config_write_fields", "config_rollback"}
 
 func toolNameSet(defs []ToolDef) map[string]bool {
 	out := make(map[string]bool, len(defs))
@@ -39,9 +39,9 @@ func toolNameSet(defs []ToolDef) map[string]bool {
 	return out
 }
 
-func TestFR397_ToolsRegisteredWithSchema(t *testing.T) {
+func TestToolsRegisteredWithSchema(t *testing.T) {
 	names := toolNameSet(RegisteredTools())
-	all := append(append(append([]string{}, fr397ReadTools...), fr397ContentTools...), fr397ConfigureTools...)
+	all := append(append(append([]string{}, catalogReadTools...), catalogContentTools...), catalogConfigureTools...)
 	for _, n := range all {
 		assert.True(t, names[n], "应注册工具 %s", n)
 	}
@@ -55,17 +55,17 @@ func TestFR397_ToolsRegisteredWithSchema(t *testing.T) {
 	}
 }
 
-func TestFR397_ToolsForPrincipal_CapabilityMatrix(t *testing.T) {
+func TestToolsForPrincipal_CapabilityMatrix(t *testing.T) {
 	readOnly := &service.AgentPrincipal{
 		PolicyVersion:     service.AgentPolicyVersionV2,
 		ScopedInstanceIDs: []uint{1},
 		Capabilities:      []string{service.AgentCapabilityInstanceRead},
 	}
 	names := toolNameSet(ToolsForPrincipal(readOnly))
-	for _, n := range fr397ReadTools {
+	for _, n := range catalogReadTools {
 		assert.True(t, names[n], "instance.read 应可见 %s", n)
 	}
-	for _, n := range append(append([]string{}, fr397ContentTools...), fr397ConfigureTools...) {
+	for _, n := range append(append([]string{}, catalogContentTools...), catalogConfigureTools...) {
 		assert.False(t, names[n], "instance.read 不应可见写类 %s", n)
 	}
 
@@ -75,10 +75,10 @@ func TestFR397_ToolsForPrincipal_CapabilityMatrix(t *testing.T) {
 		Capabilities:      []string{service.AgentCapabilityInstanceContent},
 	}
 	names = toolNameSet(ToolsForPrincipal(content))
-	for _, n := range fr397ContentTools {
+	for _, n := range catalogContentTools {
 		assert.True(t, names[n], "instance.content 应可见 %s", n)
 	}
-	for _, n := range fr397ConfigureTools {
+	for _, n := range catalogConfigureTools {
 		assert.False(t, names[n], "instance.content 不应可见 %s", n)
 	}
 
@@ -88,10 +88,10 @@ func TestFR397_ToolsForPrincipal_CapabilityMatrix(t *testing.T) {
 		Capabilities:      []string{service.AgentCapabilityInstanceConfigure},
 	}
 	names = toolNameSet(ToolsForPrincipal(configure))
-	for _, n := range fr397ConfigureTools {
+	for _, n := range catalogConfigureTools {
 		assert.True(t, names[n], "instance.configure 应可见 %s", n)
 	}
-	for _, n := range fr397ContentTools {
+	for _, n := range catalogContentTools {
 		assert.False(t, names[n], "instance.configure 不应可见 %s", n)
 	}
 
@@ -103,7 +103,7 @@ func TestFR397_ToolsForPrincipal_CapabilityMatrix(t *testing.T) {
 		WriteAllowlist:    []string{service.AgentWriteInstanceLife, service.AgentWriteNodeMaintenance},
 	}
 	names = toolNameSet(ToolsForPrincipal(v1))
-	for _, n := range append(append(append([]string{}, fr397ReadTools...), fr397ContentTools...), fr397ConfigureTools...) {
+	for _, n := range append(append(append([]string{}, catalogReadTools...), catalogContentTools...), catalogConfigureTools...) {
 		assert.False(t, names[n], "V1 Token 不应可见 %s", n)
 	}
 }
@@ -111,10 +111,19 @@ func TestFR397_ToolsForPrincipal_CapabilityMatrix(t *testing.T) {
 // setupContentToolsDeps 建库 + 实例 + V2 Token，返回可授权的 deps 与 principal。
 func setupContentToolsDeps(t *testing.T) (ToolDeps, *service.AgentPrincipal, uint) {
 	t.Helper()
+	// 本组用例测的是工具自身逻辑（精确确认/scope/参数校验），
+	// 而审批是它前面的一道闸——旁路它，才能测到后面的行为。
+	WithApprovalBypassForTest(t)
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.AgentToken{}, &model.Instance{}, &model.Node{}))
+	// 内容运维里的 file_write_text / file_delete / file_rollback / config_write_text
+	// 等已进入审批名单。本组用例验证的是**工具自身的精确确认语义**（confirmPath 等），
+	// 因此必须装配审批服务，否则只会撞在「未装配（失败关闭）」上而测不到原意图。
+	require.NoError(t, db.AutoMigrate(
+		&model.AgentToken{}, &model.Instance{}, &model.Node{},
+		&model.ApprovalTicket{}, &model.ApprovalReceipt{},
+	))
 	t.Cleanup(func() {
 		if sqlDB, e := db.DB(); e == nil && sqlDB != nil {
 			_ = sqlDB.Close()
@@ -142,10 +151,10 @@ func setupContentToolsDeps(t *testing.T) (ToolDeps, *service.AgentPrincipal, uin
 	require.NoError(t, err)
 	p, err := agentSvc.Authenticate(plain)
 	require.NoError(t, err)
-	return ToolDeps{Agent: agentSvc}, p, inst.ID
+	return ToolDeps{Agent: agentSvc, Approval: service.NewApprovalService(db)}, p, inst.ID
 }
 
-func TestFR397_TextSizeGuard(t *testing.T) {
+func TestTextSizeGuard(t *testing.T) {
 	deps, p, instID := setupContentToolsDeps(t)
 	oversize := strings.Repeat("a", mcpTextContentMaxBytes+1)
 
@@ -163,7 +172,7 @@ func TestFR397_TextSizeGuard(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "512KiB")
 }
 
-func TestFR397_BinaryReadRejected(t *testing.T) {
+func TestBinaryReadRejected(t *testing.T) {
 	// 二进制内容不得经 MCP 返回，须引导票据下载。
 	res := buildReadTextResult("plugins/foo.jar", []byte("PK\x03\x04\x00\x00binary"))
 	require.True(t, res.IsError)
@@ -181,7 +190,7 @@ func TestFR397_BinaryReadRejected(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "你好世界")
 }
 
-func TestFR397_DangerConfirm(t *testing.T) {
+func TestDangerConfirm(t *testing.T) {
 	deps, p, instID := setupContentToolsDeps(t)
 
 	// 缺确认
@@ -211,7 +220,7 @@ func TestFR397_DangerConfirm(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "confirmName")
 }
 
-func TestFR397_PathTraversalRejected(t *testing.T) {
+func TestPathTraversalRejected(t *testing.T) {
 	deps, p, instID := setupContentToolsDeps(t)
 	for _, name := range []string{"file_list", "file_read_text"} {
 		res := CallTool(context.Background(), deps, p, name, map[string]any{
@@ -222,7 +231,7 @@ func TestFR397_PathTraversalRejected(t *testing.T) {
 	}
 }
 
-func TestFR397_RequiredPathRejectsWorkDirRoot(t *testing.T) {
+func TestRequiredPathRejectsWorkDirRoot(t *testing.T) {
 	deps, p, instID := setupContentToolsDeps(t)
 	for _, path := range []string{"", ".", "./", ".\\"} {
 		res := CallTool(context.Background(), deps, p, "file_read_text", map[string]any{
@@ -238,7 +247,7 @@ func TestFR397_RequiredPathRejectsWorkDirRoot(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "工作目录根")
 }
 
-func TestFR397_ConfigToolsRejectNonConfigPath(t *testing.T) {
+func TestConfigToolsRejectNonConfigPath(t *testing.T) {
 	deps, p, instID := setupContentToolsDeps(t)
 	res := CallTool(context.Background(), deps, p, "config_read", map[string]any{
 		"id": float64(instID), "path": "plugins/unsafe.jar",
@@ -247,7 +256,7 @@ func TestFR397_ConfigToolsRejectNonConfigPath(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "配置文件")
 }
 
-func TestFR397_ScopeOutsideConverges(t *testing.T) {
+func TestScopeOutsideConverges(t *testing.T) {
 	deps, p, instID := setupContentToolsDeps(t)
 	res := CallTool(context.Background(), deps, p, "file_list", map[string]any{
 		"id": float64(instID + 999), "path": "",
@@ -256,7 +265,7 @@ func TestFR397_ScopeOutsideConverges(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "拒绝")
 }
 
-func TestFR397_TicketToolRequiresTransferService(t *testing.T) {
+func TestTicketToolRequiresTransferService(t *testing.T) {
 	deps, p, instID := setupContentToolsDeps(t)
 	res := CallTool(context.Background(), deps, p, "file_issue_transfer_ticket", map[string]any{
 		"id": float64(instID), "direction": "upload", "path": "plugins/foo.jar",

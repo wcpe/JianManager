@@ -15,7 +15,7 @@ function makeWrapper() {
   return ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
 }
 
-describe('usePlatformObservabilityOverview 轮询（FR-402）', () => {
+describe('usePlatformObservabilityOverview 轮询', () => {
   afterEach(() => {
     focusManager.setFocused(true)
     vi.useRealTimers()

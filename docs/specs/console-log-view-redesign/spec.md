@@ -4,6 +4,13 @@
 - 关联：ADR-086（输出/输入分离）、ADR-067（会话保活）、ADR-081（终端经 CP 中转）、FR-345（停机日志回放）、FR-150（日志中心）
 - 目标版本：v0.22.0
 
+> **数据源变更（2026-10-29）**：§4 描述的上溯实现基于 CP `logs` 表与 `/logs` 游标接口，
+> 二者均已删除。现由 `apps/control-plane-web/src/lib/console-history.ts` 的 `fetchHistoryCursorPage`
+> 改读 `GET /api/v1/logs/federation`（同步改造：后端字段是 **snake_case `next_cursor`**，
+> 曾误读 `nextCursor` 导致游标恒为 null、上溯翻一页即静默停住，已修）。
+> §4 中描述的接缝冻结、prepend 防跳动、实例切换重置等**不变量不变**，只换了数据源。
+> 当前形态见 [ARCHITECTURE §10.1 日志体系全景](../ARCHITECTURE.md)。
+
 ## 1. 行模型与解析器（FR-415 核心，三条 FR 共用）
 
 ### 1.1 行模型
@@ -126,7 +133,7 @@ interface LogLine {
 | 层 | 范围 | 取法 |
 |---|---|---|
 | 内存环形缓冲 | 最新 5000 行 | 瞬时，无请求 |
-| 数据库活日志 | 14 天 / 512MB（`LogStoreConfig`） | `/logs` 游标分页，已有 `idx_logs_instance_time` |
+| 数据库活日志 | ~~14 天 / 512MB（`LogStoreConfig`）~~ **已下线**（2026-10-29） | ~~`/logs` 游标分页~~ → 现为 VL 联邦 `next_cursor` |
 | 归档 NDJSON | 超保留期，`data/var/log/*.ndjson` | **本批不做**（YAGNI） |
 
 日志是**全量实时落库**（`log_ingest.go` 异步缓冲批量 INSERT），不是只在崩溃时抓——回溯有数据源。

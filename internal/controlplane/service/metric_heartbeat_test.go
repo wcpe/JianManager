@@ -1,10 +1,15 @@
 package service
 
 import (
+	"log"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -113,14 +118,192 @@ func TestMetric_IngestHeartbeat_ProbeUnavailableWritesNull(t *testing.T) {
 	require.Nil(t, findSeries(instSeries, model.MetricInstHeapUsed, ""))
 }
 
+// TestMetric_IngestHeartbeat_PlayersUnavailableWritesNull 直探来源可用但**在线人数缺测**时
+// 落 NULL 断点而非伪造 0（Query 有响应但缺 numplayers 的场景）。
+// 注意：兼容回退刻意**不含 Query**（复审 N1）——Query 可响应而缺 numplayers，回退会重新
+// 引入「伪造 0」；故 Query-only 且未置 players_online_available 时仍写 NULL。
+func TestMetric_IngestHeartbeat_PlayersUnavailableWritesNull(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:   "inst-1",
+			QueryAvailable: true, // 来源可用
+			SlpAvailable:   false,
+			PlayersOnline:  0, // 但 numplayers 缺测（Worker 明确置 false）
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players, "仍写一条断点序列")
+	require.Len(t, players.Points, 1)
+	require.Nil(t, players.Points[0].Avg, "缺测写 NULL，绝不写成 0 在线")
+}
+
+// TestMetric_IngestHeartbeat_PlayersAvailableFromDirectProbe 直探明确给出在线人数时落真实值。
+func TestMetric_IngestHeartbeat_PlayersAvailableFromDirectProbe(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:           "inst-1",
+			SlpAvailable:           true,
+			PlayersOnline:          5,
+			PlayersOnlineAvailable: true,
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players)
+	require.NotNil(t, players.Points[0].Avg)
+	require.Equal(t, 5.0, *players.Points[0].Avg)
+	// 探针不可用 → TPS 仍断点。
+	tps := findSeries(instSeries, model.MetricInstTPS, "")
+	require.NotNil(t, tps)
+	require.Nil(t, tps.Points[0].Avg)
+}
+
+// TestMetric_IngestHeartbeat_PlayersMaxLandsSeries 人数上限可用时落 inst_players_max。
+// 侧栏「当前/最大人数」依赖这条序列——批量指标接口只能读到存好的时序，心跳不落就永远没有。
+func TestMetric_IngestHeartbeat_PlayersMaxLandsSeries(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:           "inst-1",
+			SlpAvailable:           true,
+			PlayersOnline:          16,
+			PlayersOnlineAvailable: true,
+			MaxPlayers:             50,
+			MaxPlayersAvailable:    true,
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	playersMax := findSeries(instSeries, model.MetricInstPlayersMax, "")
+	require.NotNil(t, playersMax, "上限可用时落 inst_players_max 序列")
+	require.NotNil(t, playersMax.Points[0].Avg)
+	require.Equal(t, 50.0, *playersMax.Points[0].Avg)
+	// 同一拍在线人数与上限并存，前端才能拼出「16/50」。
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players)
+	require.Equal(t, 16.0, *players.Points[0].Avg)
+}
+
+// TestMetric_IngestHeartbeat_PlayersMaxUnavailableWritesNull 上限缺测时写 NULL 断点，
+// **不做**在线人数那条「探针/SLP 可用就回退」的兼容判定——上限不像在线人数在三源里都必带，
+// 回退会重新引入「伪造上限」（例如把 0 当成「上限 0 人」）。
+func TestMetric_IngestHeartbeat_PlayersMaxUnavailableWritesNull(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:           "inst-1",
+			SlpAvailable:           true, // 就连 SLP 可用也不回退
+			PlayersOnline:          5,
+			PlayersOnlineAvailable: true,
+			MaxPlayers:             0, // 未置可用位：视为缺测，不写 0
+			MaxPlayersAvailable:    false,
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	playersMax := findSeries(instSeries, model.MetricInstPlayersMax, "")
+	require.NotNil(t, playersMax, "仍写一条断点序列")
+	require.Len(t, playersMax.Points, 1)
+	require.Nil(t, playersMax.Points[0].Avg, "上限缺测写 NULL，绝不写 0")
+}
+
+// TestMetric_IngestHeartbeat_PlayersAvailableLegacySlpSample 中间版本 Worker（有直探、置 SlpAvailable
+// 与真实 PlayersOnline，但缺 players_online_available）仍落真实值而非 NULL（复审 N1）：
+// SLP 命中的实例在线人数被误判为缺测会污染全网总在线合计与 bot 容量采样。
+func TestMetric_IngestHeartbeat_PlayersAvailableLegacySlpSample(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:  "inst-1",
+			SlpAvailable:  true, // 直探命中 SLP
+			PlayersOnline: 7,    // SLP 协议必带字段，真实值
+			// PlayersOnlineAvailable 缺省 false（中间版本 Worker 尚未置该位）
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players)
+	require.NotNil(t, players.Points[0].Avg, "SLP 可用时在线人数是协议必带真值，不得写 NULL")
+	require.Equal(t, 7.0, *players.Points[0].Avg)
+}
+
+// TestMetric_IngestHeartbeat_PlayersAvailableLegacyProbeSample 旧 Worker 不置 players_online_available
+// 但探针可用时仍落点（向后兼容，避免升级期曲线整段断掉）。
+func TestMetric_IngestHeartbeat_PlayersAvailableLegacyProbeSample(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:   "inst-1",
+			ProbeAvailable: true,
+			PlayersOnline:  9,
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players)
+	require.NotNil(t, players.Points[0].Avg)
+	require.Equal(t, 9.0, *players.Points[0].Avg)
+}
+
 func TestMetric_IngestHeartbeat_ProcessTop(t *testing.T) {
 	svc := newMetricSvc(t)
 	require.NoError(t, svc.db.AutoMigrate(&model.Node{}, &model.Instance{}))
+	base := time.Now().UTC().Add(-30 * time.Second)
+	node := model.Node{UUID: "node-1", Name: "node-1", Status: model.NodeStatusOnline, LastHeartbeat: &base}
+	require.NoError(t, svc.db.Create(&node).Error)
 	require.NoError(t, svc.db.Create(&model.Instance{
-		UUID: "inst-1", Name: "survival", NodeID: 1, Type: model.InstanceTypeGeneric,
+		UUID: "inst-1", Name: "survival", NodeID: node.ID, Status: model.InstanceStatusRunning, Type: model.InstanceTypeGeneric,
 		ProcessType: model.ProcessTypeDirect, StartCommand: "sleep",
 	}).Error)
-	base := metricBase()
 
 	require.NoError(t, svc.ingestHeartbeatAt(&workerpb.HeartbeatRequest{
 		NodeUuid: "node-1",
@@ -152,7 +335,7 @@ func TestMetric_QueryProcessTop_UsesLatestSamplePerInstance(t *testing.T) {
 		{InstanceUuid: "inst-b", Pid: 20, Name: "java", CpuPercent: 30, SampledAtUnixMs: base.Add(10 * time.Second).UnixMilli()},
 	}, base))
 
-	got, err := svc.QueryProcessTop(ProcessTopQuery{NodeUUID: "node-1", Sort: "cpu", Limit: 10})
+	got, err := svc.QueryProcessTop(ProcessTopQuery{NodeUUID: "node-1", At: base.Add(30 * time.Second), Sort: "cpu", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	require.Equal(t, int32(20), got[0].PID)
@@ -284,6 +467,106 @@ func TestMetric_OverviewExcludesStaleOnlineNode(t *testing.T) {
 	require.Equal(t, 1, got.Totals.OnlineNodeCount)
 	require.InDelta(t, 40.0, got.Totals.CPUPct, 1e-6)
 	require.Equal(t, int64(1024)*1024*1024, got.Totals.MemUsedBytes)
+}
+
+// TestMetric_OverviewTrendQueryCountIsConstant （N-8）总览聚合曲线的查询条数必须与序列数
+// （≈实例数）**无关**：原实现逐序列查点位（raw 档每序列还多发一条 COUNT），
+// 而 `/metrics/overview` 被总览页每 10s 轮询一次，序列数会线性放大成持续往返成本。
+func TestMetric_OverviewTrendQueryCountIsConstant(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	measure := func(seriesCount int) int {
+		var queries []string
+		cb := &gorm.Config{
+			Logger: logger.New(log.New(&querySink{out: &queries}, "", 0), logger.Config{
+				LogLevel: logger.Info, IgnoreRecordNotFoundError: true,
+			}),
+		}
+		db2, err := gorm.Open(sqlite.Open("file:"+t.Name()+strconv.Itoa(seriesCount)+"?mode=memory&cache=shared"), cb)
+		require.NoError(t, err)
+
+		// 关闭底层连接（共享内存库在最后一个连接关闭后才释放，见 testdb_test.go）。
+		if sqlDB, derr := db2.DB(); derr == nil {
+			t.Cleanup(func() { _ = sqlDB.Close() })
+		}
+		require.NoError(t, db2.AutoMigrate(&model.MetricSeries{}, &model.MetricSampleRaw{},
+			&model.MetricRollup5m{}, &model.MetricRollup1h{}, &model.Node{}, &model.Instance{}))
+		svc2 := NewMetricService(db2)
+		for i := 0; i < seriesCount; i++ {
+			uuid := "uuid-ov" + strconv.Itoa(i)
+			rankSeedInstance(t, svc2, uuid, "ov"+strconv.Itoa(i))
+			require.NoError(t, svc2.Ingest([]Sample{
+				instSampleAt("node-1", uuid, model.MetricInstPlayersOnline, "count", now, float64(i)),
+			}))
+		}
+		queries = queries[:0]
+		_, err = svc2.Overview(now.Add(-365*24*time.Hour), now, "1h")
+		require.NoError(t, err)
+		return len(queries)
+	}
+
+	small := measure(4)
+	large := measure(40)
+	require.Equal(t, small, large,
+		"聚合曲线的查询条数不得随序列数增长（%d 序列 %d 条 vs %d 序列 %d 条）", 4, small, 40, large)
+	require.LessOrEqual(t, large, 12, "总览应为常数条 SQL（约 7 条），不得 N+1")
+}
+
+// TestMetric_AggregateTrendMatchesPerSeriesSemantics （N-8）单条聚合 SQL 必须与
+// 原「逐序列取桶均值 → 跨序列合并」语义一致，且在 5m/1h 档与 raw 档都正确。
+func TestMetric_AggregateTrendMatchesPerSeriesSemantics(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	require.NoError(t, svc.db.AutoMigrate(&model.Instance{}))
+	rankSeedInstance(t, svc, "uuid-t1", "t1")
+	rankSeedInstance(t, svc, "uuid-t2", "t2")
+
+	// 两条序列在同一 1 分钟桶（raw 档对外桶）内各有两个样本 → 代表值分别是各自均值。
+	require.NoError(t, svc.Ingest([]Sample{
+		instSampleAt("node-1", "uuid-t1", model.MetricInstPlayersOnline, "count", base.Add(1*time.Second), 10),
+		instSampleAt("node-1", "uuid-t1", model.MetricInstPlayersOnline, "count", base.Add(2*time.Second), 20),
+		instSampleAt("node-1", "uuid-t2", model.MetricInstPlayersOnline, "count", base.Add(3*time.Second), 4),
+		instSampleAt("node-1", "uuid-t2", model.MetricInstPlayersOnline, "count", base.Add(4*time.Second), 8),
+		// 缺测样本（NULL）不参与：不得把桶代表值拉低。
+		instSampleAt("node-1", "uuid-t2", model.MetricInstPlayersOnline, "count", base.Add(5*time.Second), 0),
+	}))
+	require.NoError(t, svc.db.Model(&model.MetricSampleRaw{}).
+		Where("ts = ? AND value IS NOT NULL", base.Add(5*time.Second)).
+		Update("value", nil).Error, "把最后一条改成缺测")
+
+	from, to := base.Add(-time.Minute), base.Add(time.Minute)
+
+	// sum=true：跨序列求和 → (10+20)/2 + (4+8)/2 = 15 + 6 = 21
+	tr, err := svc.aggregateTrend(model.MetricScopeInstance, model.MetricInstPlayersOnline, "count",
+		from, to, "raw", true)
+	require.NoError(t, err)
+	require.Len(t, tr.Points, 1)
+	require.InDelta(t, 21.0, *tr.Points[0].Avg, 1e-9, "桶内先取各序列均值，再跨序列求和")
+	require.Equal(t, base, tr.Points[0].TS.UTC(), "点位时间取桶起点（1 分钟桶）")
+
+	// sum=false：跨序列求均值 → (15 + 6)/2 = 10.5
+	trAvg, err := svc.aggregateTrend(model.MetricScopeInstance, model.MetricInstPlayersOnline, "count",
+		from, to, "raw", false)
+	require.NoError(t, err)
+	require.Len(t, trAvg.Points, 1)
+	require.InDelta(t, 10.5, *trAvg.Points[0].Avg, 1e-9, "跨序列取均值而非求和")
+
+	// 跨桶：不同 1 分钟桶必须分成两个点（桶对齐基于 strftime 换算，不是 MIN(ts) 截断）。
+	require.NoError(t, svc.Ingest([]Sample{
+		instSampleAt("node-1", "uuid-t1", model.MetricInstPlayersOnline, "count", base.Add(2*time.Minute), 7),
+	}))
+	tr2, err := svc.aggregateTrend(model.MetricScopeInstance, model.MetricInstPlayersOnline, "count",
+		from, to.Add(3*time.Minute), "raw", true)
+	require.NoError(t, err)
+	require.Len(t, tr2.Points, 2, "不同桶应分成两个点位")
+	require.Equal(t, base, tr2.Points[0].TS.UTC())
+	require.Equal(t, base.Add(2*time.Minute), tr2.Points[1].TS.UTC())
+	require.InDelta(t, 7.0, *tr2.Points[1].Avg, 1e-9)
+
+	// 无数据：返回空点位而非报错。
+	empty, err := svc.aggregateTrend(model.MetricScopeInstance, model.MetricInstPlayersOnline, "count",
+		base.Add(24*time.Hour), base.Add(25*time.Hour), "raw", true)
+	require.NoError(t, err)
+	require.Empty(t, empty.Points)
 }
 
 func findOverviewTrend(ov OverviewResult, metricKey string) *OverviewTrend {

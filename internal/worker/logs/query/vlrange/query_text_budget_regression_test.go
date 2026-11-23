@@ -1,0 +1,422 @@
+package vlrange
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/query"
+	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
+)
+
+// queryLongScope 构造一个「谓词很长」的只读范围。
+//
+// **契约变更（2026-11-02 简化投递路径）**：查询不再渲染 `projection_generation`，
+// 因此原先「617 个超长代次名撑爆查询」的前提消失了。这里改用**多个来源**
+// （每个都带超长 generation 名）来制造同样规模的谓词，继续验证
+// 「超长/超多 scope 不得突破批准 VL 默认 16KiB 硬界，且分片后结果完整合并」。
+//
+// 这是本组用例真正守护的东西，与「代次」这个具体维度无关。
+func queryLongScope() (query.AuthoritativeRange, []string) {
+	sources := make([]catalog.SourceProjection, 617)
+	ids := make([]string, 617)
+	for i := range sources {
+		id := fmt.Sprintf("src-%03d-%s", i, strings.Repeat("s", 55))
+		ids[i] = id
+		sources[i] = catalog.SourceProjection{
+			SourceGenerationRef: catalog.SourceGenerationRef{LogSourceID: id, SourceGeneration: "s1"},
+			ClosedVisibleSeq:    1000,
+		}
+	}
+	rng := query.AuthoritativeRange{Key: catalog.PartitionKey{StorageNamespace: "text-budget", UTCDay: "2026-09-22"}, Owner: catalog.OwnerHot, ClosedVisibleSeq: 1000,
+		Projection: &catalog.PublishedProjection{SourceProjections: sources}}
+	return rng, []string{ids[0], ids[308], ids[616]}
+}
+
+func TestQueryTextBudgetLargeScopesSearchStatsFieldsFacets(t *testing.T) {
+	rng, visible := queryLongScope()
+	var maxQuery, wireBytes, requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		// 2026-11-05：Fields 改走官方 /select/logsql/field_names（不再从返回行猜字段），
+		// 夹具必须同时支持这个端点，否则 Fields 会拿到非 200 而失败。
+		if strings.HasSuffix(r.URL.Path, "/select/logsql/field_names") {
+			_, _ = w.Write([]byte(`{"values":[{"value":"instance_id","hits":3},` +
+				`{"value":"level","hits":3},{"value":"_msg","hits":3}]}`))
+			return
+		}
+		text := r.Form.Get("query")
+		n := int64(len(text) + len(r.Form.Get("extra_filters")))
+		requests.Add(1)
+		for old := maxQuery.Load(); n > old && !maxQuery.CompareAndSwap(old, n); old = maxQuery.Load() {
+		}
+		if n > 16<<10 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("search.maxQueryLen=16384"))
+			return
+		}
+		selected := make([]string, 0, 3)
+		for _, source := range visible {
+			// 夹具按「查询文本里出现的来源名」判定该行是否被选中（简化后不再用代次名）。
+			if strings.Contains(text, "log_source_id:in(") || strings.Contains(text, strconv.Quote(source)) {
+				selected = append(selected, source)
+			}
+		}
+		// 2026-11-05：Facets 改走官方 /select/logsql/field_values（不再借 Stats 管道）。
+		// 它必须放在上面「选中集合 + 预算统计」之后：这样请求文本仍然参与
+		// maxQuery 统计与 16KiB 判定，「分片后不超预算」这个断言才仍然成立。
+		if strings.HasSuffix(r.URL.Path, "/select/logsql/field_values") {
+			_, _ = w.Write([]byte(`{"values":[{"value":"INFO","hits":` + strconv.Itoa(len(selected)) + `}]}`))
+			return
+		}
+		var body strings.Builder
+		if strings.Contains(text, " | stats") {
+			if strings.Contains(text, " by (level)") {
+				fmt.Fprintf(&body, "{\"level\":\"INFO\",\"_jm_count\":%d}\n", len(selected))
+			} else {
+				fmt.Fprintf(&body, "{\"_jm_count\":%d}\n", len(selected))
+			}
+		} else {
+			for i, source := range selected {
+				fmt.Fprintf(&body, "{\"_time\":\"2026-09-22T12:00:0%dZ\",\"event_id\":%q,\"log_source_id\":%q,\"source_generation\":\"s1\",\"record_end\":10,\"level\":\"INFO\",\"instance_id\":\"1\"}\n", i, source, source)
+			}
+		}
+		wireBytes.Add(int64(body.Len()))
+		_, _ = w.Write([]byte(body.String()))
+	}))
+	t.Cleanup(srv.Close)
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+	q := query.RangeQuery{ClosedVisibleSeq: 1000, Budget: query.Budget{Limit: 100, MaxBytes: 1 << 20}}
+	search, err := client.Search(context.Background(), rng, q)
+	require.NoError(t, err, "617个物理代次不能突破批准VL默认16KiB硬界")
+	require.Len(t, search.Items, 3)
+	stats, err := client.Stats(context.Background(), rng, q)
+	require.NoError(t, err)
+	var count uint64
+	for _, point := range stats.Points {
+		count += point.Count
+	}
+	require.EqualValues(t, 3, count, "按不重叠物理谓词分片后必须完整合并逻辑统计")
+	fields, err := client.Fields(context.Background(), rng, q)
+	require.NoError(t, err)
+	require.Contains(t, fields.Fields, "instance_id")
+	facets, err := client.Facets(context.Background(), rng, q, []string{"level"}, 10)
+	require.NoError(t, err)
+	require.Len(t, facets.Values, 1)
+	require.EqualValues(t, 3, facets.Values[0].Count)
+	require.LessOrEqual(t, maxQuery.Load(), int64(physicalMaxQueryBytes))
+	require.Greater(t, requests.Load(), int64(4), "统计分片必须走真实多请求，不能靠提高VL上限")
+	wireBytes.Store(0)
+	q.Budget.MaxBytes = 40
+	partial, err := client.Stats(context.Background(), rng, q)
+	require.NoError(t, err)
+	require.LessOrEqual(t, partial.Bytes, uint64(40))
+	require.Contains(t, partial.CoverageReasons, query.ReasonBudgetExceeded, "跨片总字节见底必须partial，不能每片复制额度")
+}
+
+func TestQueryTextBudgetLargeMergedSourceSetIsSplit(t *testing.T) {
+	var requests, maxQuery atomic.Int64
+	ranges := make([]query.AuthoritativeRange, 300)
+	for i := range ranges {
+		source := fmt.Sprintf("source-%03d-%s", i, strings.Repeat("x", 90))
+		ranges[i] = query.AuthoritativeRange{Key: catalog.PartitionKey{StorageNamespace: source, UTCDay: "2026-09-22"}, Owner: catalog.OwnerHot, ClosedVisibleSeq: 10,
+			Projection: &catalog.PublishedProjection{SourceProjections: []catalog.SourceProjection{{SourceGenerationRef: catalog.SourceGenerationRef{LogSourceID: source, SourceGeneration: "s1"}, ProjectionGenerations: []string{"p1"}, ClosedVisibleSeq: 10}}}}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		text := r.Form.Get("query")
+		n := int64(len(text) + len(r.Form.Get("extra_filters")))
+		requests.Add(1)
+		for old := maxQuery.Load(); n > old && !maxQuery.CompareAndSwap(old, n); old = maxQuery.Load() {
+		}
+		if n > 16<<10 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for i, rng := range ranges {
+			if !strings.Contains(text, strconv.Quote(rng.Key.StorageNamespace)) {
+				continue
+			}
+			fmt.Fprintf(w, "{\"_time\":%q,\"event_id\":%q,\"log_source_id\":%q,\"source_generation\":\"s1\",\"projection_generation\":\"p1\",\"record_end\":10}\n", time.Date(2026, 9, 22, 12, 0, 0, i, time.UTC).Format(time.RFC3339Nano), strconv.Itoa(i), rng.Key.StorageNamespace)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+	result, err := client.SearchMerged(context.Background(), ranges, query.RangeQuery{Budget: query.Budget{Limit: 1000, MaxBytes: 1 << 20}})
+	require.NoError(t, err)
+	require.Len(t, result.Items, len(ranges))
+	for i := 1; i < len(result.Items); i++ {
+		require.Negative(t, query.CompareSortKey(query.SortKeyOf(result.Items[i-1]), query.SortKeyOf(result.Items[i])), "物理来源分片必须恢复全局冻结复合排序")
+	}
+	require.True(t, result.Exhausted)
+	require.Empty(t, result.CoverageReasons)
+	require.LessOrEqual(t, maxQuery.Load(), int64(physicalMaxQueryBytes))
+	require.Greater(t, requests.Load(), int64(1))
+}
+
+func TestQueryTextBudgetOversizedUserFilterRejectedBeforeHTTP(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	t.Cleanup(srv.Close)
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+	rng := query.AuthoritativeRange{Key: catalog.PartitionKey{StorageNamespace: "source", UTCDay: "2026-09-22"}, ClosedVisibleSeq: 10}
+	_, err = client.Search(context.Background(), rng, query.RangeQuery{ClosedVisibleSeq: 10, Filter: strings.Repeat("中", 6000)})
+	require.Error(t, err)
+	require.Zero(t, calls.Load(), "不可安全拆分的用户语法按UTF-8实际字节在本地明确拒绝")
+}
+
+func TestQueryTextBudgetSearchFallbackKeepsExplicitPrefix(t *testing.T) {
+	rng, generations := queryLongScope()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "{\"_time\":\"2026-09-22T12:00:00Z\",\"event_id\":\"after-fixed-prefix\",\"log_source_id\":\"source\",\"source_generation\":\"s1\",\"projection_generation\":%q,\"record_end\":900}\n", generations[0])
+	}))
+	t.Cleanup(srv.Close)
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+	result, err := client.Search(context.Background(), rng, query.RangeQuery{ClosedVisibleSeq: 700, Budget: query.Budget{MaxBytes: 1 << 20}})
+	require.NoError(t, err)
+	require.Empty(t, result.Items, "长query切换为粗筛后，不能以range最新水位冲掉请求固定前缀")
+	require.True(t, result.Exhausted)
+}
+
+func TestQueryTextBudgetFinalBoundaryQueryDoesNotBypassHardGuard(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		require.NoError(t, r.ParseForm())
+		require.LessOrEqual(t, len(r.Form.Get("query"))+len(r.Form.Get("extra_filters")), physicalMaxQueryBytes)
+		for i := 0; i < 2; i++ {
+			fmt.Fprintf(w, "{\"_time\":\"2026-09-22T12:00:00Z\",\"event_id\":\"%d\",\"log_source_id\":\"source\",\"record_end\":1}\n", i)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+	rng := query.AuthoritativeRange{Key: catalog.PartitionKey{StorageNamespace: "source", UTCDay: "2026-09-22"}, ClosedVisibleSeq: 10}
+	q := query.RangeQuery{ClosedVisibleSeq: 10, Budget: query.Budget{Limit: 1, MaxBytes: 1 << 20}}
+	q.Filter = strings.Repeat("a", physicalMaxQueryBytes-len(searchQuery(rng, q)))
+	result, err := client.Search(context.Background(), rng, q)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, calls.Load(), "边界组扩大limit的额外字节必须在最终发送前重新验证")
+	require.False(t, result.Exhausted)
+	require.Empty(t, result.Items, "未完整读取的并列组不能成为游标锚点")
+	require.Contains(t, result.CoverageReasons, query.ReasonBudgetExceeded)
+}
+
+func TestQueryTextBudgetFanoutSharedAcrossShardsAndFacets(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte("{\"level\":\"INFO\",\"_jm_count\":1}\n"))
+	}))
+	t.Cleanup(srv.Close)
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+	rng, _ := queryLongScope()
+	result, err := client.Stats(context.Background(), rng, query.RangeQuery{ClosedVisibleSeq: 1000, Budget: query.Budget{MaxFanout: 2, MaxBytes: 1 << 20}})
+	require.ErrorIs(t, err, query.ErrRangeQueryBudget)
+	require.EqualValues(t, 2, calls.Load(), "所有物理分片共享一次fanout预算")
+	require.Greater(t, result.Bytes, uint64(0))
+	calls.Store(0)
+	rng.Projection = nil
+	_, err = client.Facets(context.Background(), rng, query.RangeQuery{ClosedVisibleSeq: 1000, Budget: query.Budget{MaxFanout: 1}}, []string{"level", "stream"}, 10)
+	require.ErrorIs(t, err, query.ErrRangeQueryBudget)
+	require.EqualValues(t, 1, calls.Load(), "不同facet维度不能分别重置fanout")
+}
+
+func TestQueryTextBudgetDisjointScopeTermsCollapseOverlappingEvidence(t *testing.T) {
+	rng, _ := queryLongScope()
+	// 重复同一个 scope（水位不同）——分片必须去重，不能重复计数。
+	scope := rng.Projection.SourceProjections[0]
+	scope.ClosedVisibleSeq = 400
+	rng.Projection.SourceProjections = append(rng.Projection.SourceProjections, scope)
+	q := query.RangeQuery{ClosedVisibleSeq: 700}
+	terms := disjointScopeTerms(rng, q)
+	// **契约变更（2026-11-02）**：原子按 (来源, 来源代次) 拆，不再含投影代次。
+	// 617 个来源 ⇒ 617 个互斥谓词（重复的 scope 被去重合并，取较大水位）。
+	require.Len(t, terms, 617, "重叠证据不能使物理统计分片重复计数")
+	for _, term := range terms {
+		require.Contains(t, term, "record_end:<=")
+	}
+	source := "来源\\\"\n\t"
+	rng.Projection.SourceProjections[0].LogSourceID = source
+	terms = disjointScopeTerms(rng, q)
+	require.Contains(t, strings.Join(terms, " OR "), "log_source_id:="+strconv.Quote(source), "控制字符和引号须按最终LogsQL文本计算")
+	rng.Projection.SourceProjections = []catalog.SourceProjection{{ClosedVisibleSeq: 0}}
+
+	// 零水位（seq=0）= 「没有封窗信息」，不得渲染成 `record_end:<=0`（2026-11-05 订正）。
+	//
+	// 原断言把 `... AND record_end:<=0` 当成了期望值——那是把「零水位当零上界」在
+	// **第五处**位置锁死。同一份输入进 `selectorQuery` 时不加上界（`if cvs > 0`），
+	// 两处不等价就是本事故的同源形态：超长查询一旦走进分片路径，每个分片恒返 0 行，
+	// Stats 全零却报 `StatsExact`。
+	//
+	// 空字段仍必须渲染成精确谓词（不能当作无约束）——这一点保留。
+	require.Equal(t, []string{`(log_source_id:="" AND source_generation:="")`}, disjointScopeTerms(rng, q),
+		"空字段是精确谓词（不可当无约束），但零水位不得拼 record_end 上界")
+
+	// 反向上界：非零水位一个字都不能少。
+	rng.Projection.SourceProjections = []catalog.SourceProjection{{ClosedVisibleSeq: 400}}
+	require.Equal(t, []string{`(log_source_id:="" AND source_generation:="" AND record_end:<=400)`}, disjointScopeTerms(rng, q),
+		"非零水位必须继续渲染 record_end 上界（封窗语义）")
+}
+
+func TestQueryTextBudgetHTTPShardsShareWholeRequestDeadline(t *testing.T) {
+	for _, operation := range []string{"search", "stats", "facets"} {
+		t.Run(operation, func(t *testing.T) {
+			// **契约变更（2026-11-02 简化投递路径）**：查询不再含 `projection_generation`。
+			// 旧夹具：search 用一个短代次（不制造大查询）；stats/facets 用 8 个 2100 字符的
+			// 超长代次 —— **总量略超 16KiB 但每片可切**，所以会分片、第二片超时后得到
+			// LOG_CANCELLED。现在改用同样形状：8 个来源、每个 2100 字符。
+			// （若用单个超长来源，单原子就超界 ⇒ LOG_BUDGET_EXCEEDED，与要测的路径不同。）
+			count := 1
+			nameLen := len("deadline-source")
+			if operation != "search" {
+				count, nameLen = 8, 2100
+			}
+			sources := make([]catalog.SourceProjection, count)
+			for i := range sources {
+				id := "deadline-source"
+				if nameLen > len(id) {
+					id = fmt.Sprintf("deadline-%d-%s", i, strings.Repeat("s", nameLen))
+				}
+				sources[i] = catalog.SourceProjection{
+					SourceGenerationRef: catalog.SourceGenerationRef{LogSourceID: id, SourceGeneration: "s1"},
+					ClosedVisibleSeq:    1000,
+				}
+			}
+			rng := query.AuthoritativeRange{
+				Key:   catalog.PartitionKey{StorageNamespace: "text-budget", UTCDay: "2026-09-22"},
+				Owner: catalog.OwnerHot, ClosedVisibleSeq: 1000,
+				Projection: &catalog.PublishedProjection{SourceProjections: sources},
+			}
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) > 1 {
+					<-r.Context().Done()
+					return
+				}
+				if operation != "search" {
+					_, _ = w.Write([]byte("{\"level\":\"INFO\",\"_jm_count\":1}\n"))
+					return
+				}
+				for i := 0; i < 2; i++ {
+					fmt.Fprintf(w, "{\"_time\":\"2026-09-22T12:00:00Z\",\"event_id\":\"%d\",\"log_source_id\":%q,\"source_generation\":\"s1\",\"record_end\":10}\n", i, sources[0].LogSourceID)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
+			require.NoError(t, err)
+			client, err := New(vl)
+			require.NoError(t, err)
+			cat := catalog.New(nil)
+			record := catalog.NewStableRecord(rng.Key, catalog.OwnerHot, 1, "hot-1")
+			record.PublishedProjection = rng.Projection
+			record.PublishedProjection.ManifestVersion = "deadline"
+			record.PublishedProjection.CoverageComplete = true
+			record.PublishedProjection.QueryLocationDirID = "hot-1"
+			record.PublishedProjection.QueryGeneration = 1
+			require.NoError(t, cat.PublishProjection(nil, record))
+			planner := query.NewPlanner(cat, nil)
+			t.Cleanup(func() { require.NoError(t, planner.Close()) })
+			var rangeClient query.RangeClient = client
+			if operation == "search" {
+				// 该夹具专门进入单 range 页边界补查，合并粗筛路径由独立回归覆盖。
+				rangeClient = &queryCountingRange{inner: client}
+			}
+			svc := query.NewService(planner, rangeClient, "http-deadline")
+			req := query.QueryRequest{AuthorizedTargets: []string{rng.Key.String()}, Budget: query.Budget{Limit: 1, TimeoutMS: 100, MaxBytes: 1 << 20}}
+			var queryErr *query.QueryError
+			var coverage query.Coverage
+			switch operation {
+			case "search":
+				response := svc.Search(context.Background(), req)
+				queryErr, coverage = response.Err, response.Coverage
+				require.Empty(t, response.NextCursor)
+				require.False(t, response.Exhausted)
+			case "stats":
+				response := svc.Stats(context.Background(), req, nil)
+				queryErr, coverage = response.Err, response.Coverage
+				require.NotEqual(t, query.StatsExact, response.Quality.StatsQuality)
+			case "facets":
+				response := svc.Facets(context.Background(), req, []string{"level"}, 10)
+				queryErr, coverage = response.Err, response.Coverage
+			}
+			require.NotNil(t, queryErr)
+			require.Equal(t, query.ErrCodeCancelled, queryErr.Code)
+			require.False(t, coverage.Complete)
+			require.Contains(t, coverage.PartialReasons, query.ReasonCancelled)
+			require.EqualValues(t, 2, calls.Load(), "实际首片/边界片后整请求到期，不得为后续片续期或发出第三次HTTP")
+		})
+	}
+}
+
+func TestRealVLQueryTextBudget617Generations(t *testing.T) {
+	ctx, _, _, hot := queryApprovedVL(t)
+	client, err := New(hot)
+	require.NoError(t, err)
+	rng, _ := queryLongScope()
+	// **契约变更（2026-11-02 简化投递路径）**：查询不再含 `projection_generation`，
+	// 每个来源写一条即可（旧夹具是每个代次一条）。
+	sources := rng.Projection.SourceProjections
+	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
+	rng.Key.UTCDay = day.Format("2006-01-02")
+	var body strings.Builder
+	for i, src := range sources {
+		event := queryPhysicalEvent(src.LogSourceID, "s1", uint64(10+i), day.Add(12*time.Hour+time.Duration(i)*time.Second), fmt.Sprintf("长scope原文-%d", i))
+		row := map[string]any{"_time": event.EventTimeUTC, "_msg": event.Message, "event_id": event.EventID,
+			"log_source_id": event.Source.LogSourceID, "source_generation": event.Source.SourceGeneration,
+			"parser_version": event.Source.ParserVersion, "record_start": event.Record.Start, "record_end": event.Record.End,
+			"ingest_time_utc": event.IngestTimeUTC, "level": event.Level, "stream": event.Stream,
+			"canonical_content_hash": event.CanonicalHash}
+		encoded, encodeErr := json.Marshal(row)
+		require.NoError(t, encodeErr)
+		body.Write(encoded)
+		body.WriteByte('\n')
+	}
+	_, err = hot.InsertJSONLines(ctx, []byte(body.String()))
+	require.NoError(t, err)
+	_, err = hot.Post(ctx, "/internal/force_flush", nil)
+	require.NoError(t, err)
+	q := query.RangeQuery{ClosedVisibleSeq: 1000, Budget: query.Budget{Limit: 1000, MaxBytes: 1 << 20}}
+	result, err := client.Search(ctx, rng, q)
+	require.NoError(t, err)
+	require.Len(t, result.Items, len(sources))
+	require.True(t, result.Exhausted)
+	stats, err := client.Stats(ctx, rng, q)
+	require.NoError(t, err)
+	var count uint64
+	for _, point := range stats.Points {
+		count += point.Count
+	}
+	require.EqualValues(t, len(sources), count)
+	facets, err := client.Facets(ctx, rng, q, []string{"level"}, 10)
+	require.NoError(t, err)
+	require.Len(t, facets.Values, 1)
+	require.EqualValues(t, len(sources), facets.Values[0].Count)
+	t.Logf("批准VL默认16KiB硬界未调高，%d 个超长 scope 的 Search/Stats/Facets 均完整返回，身份哈希=%s", len(sources), queryIdentityDigest(result.Items))
+}

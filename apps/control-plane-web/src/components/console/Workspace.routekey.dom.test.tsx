@@ -32,8 +32,8 @@ vi.mock('@/pages/ClientPublishPage', async () => {
   }
 })
 
-/**
- * 路由过渡容器 key 回归（FR-191/250 发布向导）：同一路由页内仅 query 变化（如 `?step=` 步骤切换）
+/** 
+ * 路由过渡容器 key 回归（250 发布向导）：同一路由页内仅 query 变化（如 `?step=` 步骤切换）
  * 不得 remount 路由子树，否则页内本地状态（发布向导 drafts）被清空、向导过不了第一步。
  * 根因：Workspace 的 route-transition 容器 key 一度含 location.search。
  */

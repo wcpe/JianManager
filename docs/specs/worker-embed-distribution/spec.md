@@ -31,3 +31,13 @@
 - [x] 单测：内嵌命中物化不出网 / 版本不匹配跳过 / 未嵌平台走远程 / 未装配降级 / 清单指纹错位拒收（5 例全绿；service 不隐式读 go:embed，main 显式装配，测试与构建环境解耦）
 - [ ] **真机**：断 GitHub（或直接无外网）+ 空缓存 → 一键安装 Windows 节点成功（下载来自内嵌物化，不出网）
 - [x] 系统更新页 Worker 缓存列表可区分来源（缓存元数据 `sourceUrl=embedded://cp-binary` 经既有 ListWorkerAssets 透出）
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-278 CP 内嵌 Worker 二进制（一键安装/升级不依赖 GitHub）
+
+**需求补充**：构建期把 windows/linux amd64 Worker 二进制 go:embed 进 CP（make dist / CI 两阶段：先 worker 后 CP，体积 +~43MB），`/worker-assets` 端点解析顺序改为 内嵌（版本=CP 自身）> 本地缓存 > 远程 feed 兜底——离线/内网/国内网络/本地构建开发版的一键安装与节点升级全程不出网，CP↔Worker 版本强一致（真机复现：安装请求因 GitHub TLS 超时 + 远程无本地构建版本 release 而必然失败）（feat，需 spec + ADR-062 修订 ADR-059 分发来源）→ `docs/specs/worker-embed-distribution/spec.md`
+
+**交付状态**：✅ 已交付@v0.15.0·真机验收（内嵌下发 sha 逐字节对上、embedded://、装机升级零 GitHub 外呼）

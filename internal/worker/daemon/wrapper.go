@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,10 +36,10 @@ type WrapperConfig struct {
 	AutoRestart  bool              `json:"auto_restart"`
 	PIDDir       string            `json:"pid_dir"`
 	StartTimeout time.Duration     `json:"start_timeout"` // Java 启动到首字节输出的等待（0=不限）
-	// ProbePort 透传到 PID 记录，使 Worker 重启恢复后心跳继续自采该实例 ServerProbe 指标（FR-060）。
+	// ProbePort 透传到 PID 记录，使 Worker 重启恢复后心跳继续自采该实例 ServerProbe 指标。
 	ProbePort int `json:"probe_port,omitempty"`
 	// GracefulStopTimeoutSeconds 优雅停止后等待进程自行退出的上限（秒，CP 从平台设置
-	// graceful_stop.timeout 取生效值后于启动时下发，FR-063）。>0 时 wrapper 用它做超时强杀兜底；
+	// graceful_stop.timeout 取生效值后于启动时下发）。>0 时 wrapper 用它做超时强杀兜底；
 	// 0=未指定，回退环境变量/默认。值在启动时定型，故对设置变更后「新启动」的实例生效。
 	GracefulStopTimeoutSeconds int `json:"graceful_stop_timeout_seconds,omitempty"`
 }
@@ -46,28 +47,42 @@ type WrapperConfig struct {
 // 环境变量键名约定。Worker spawn wrapper 时写入这些变量。
 const (
 	EnvWrapperConfig = "JM_DAEMON_WRAPPER_CONFIG" // JSON 编码的 WrapperConfig
+	// javaHomeKey 是 JAVA_HOME 变量名。合成实例环境时须先剥离基线里继承的同名键，再按实例绑定注入，
+	// 避免实例的 Java 运行时被 Worker 自身环境决定（真机事故 2026-10-09，见 composeEnv 注释）。
+	javaHomeKey = "JAVA_HOME"
 )
 
 // controlCommand 是 Worker 通过 ChannelControl 下发的控制命令。
-// 约定 payload 为 "stop" / "kill" / "ping" 文本。
+// 约定 payload 为 "stop" / "kill" / "ping" / "disable_restart" / "enable_restart" 文本。
 const (
 	CtrlStop = "stop"
 	CtrlKill = "kill"
 	CtrlPing = "ping"
+	// CtrlDisableRestart 由 Worker 在崩溃熔断时下发：令 wrapper 永久停止自动重启
+	// （粘性，不复位），使熔断对「Worker 无法直接触及的 wrapper 内重启」也生效。
+	// 版本互不炸：老 wrapper 收到未知控制命令只记日志忽略，不影响既有链路。
+	CtrlDisableRestart = "disable_restart"
+	// CtrlEnableRestart 是 CtrlDisableRestart 的对称复位帧（终验 Major）：
+	// 人工解除熔断（ReleaseCircuitBreaker）时下发，清掉 autoRestartOff，使 wrapper 恢复自动重启。
+	// 否则「熔断解除」对仍在托管运行中 Java 的 wrapper 只是一句空话——Java 下次崩溃仍被 wrapper 拒绝重启。
+	// 同样版本互不炸：老 wrapper 收到未知命令只记日志忽略。
+	CtrlEnableRestart = "enable_restart"
 )
 
-// ControlStop / ControlKill / ControlPing 是导出的控制命令常量，
-// 供 daemonStrategy 跨包引用。
+// ControlStop / ControlKill / ControlPing / ControlDisableRestart / ControlEnableRestart 是导出的
+// 控制命令常量，供 daemonStrategy 跨包引用。
 const (
-	ControlStop = CtrlStop
-	ControlKill = CtrlKill
-	ControlPing = CtrlPing
+	ControlStop           = CtrlStop
+	ControlKill           = CtrlKill
+	ControlPing           = CtrlPing
+	ControlDisableRestart = CtrlDisableRestart
+	ControlEnableRestart  = CtrlEnableRestart
 )
 
 // Wrapper 是 daemon wrapper 子进程的运行体。
 // 它作为 Java 进程的父进程，负责：启动/重启 Java、监听 socket、
 // 与 Worker 双向帧通信（转发 stdio + 接收控制命令）、维护 PID 文件。
-// 参见 ADR-003: 守护进程 Wrapper 模式。
+// 守护进程 Wrapper 模式。
 type Wrapper struct {
 	cfg     WrapperConfig
 	pidFile *PIDFile
@@ -84,6 +99,50 @@ type Wrapper struct {
 	crashCount    int
 	fastCrashes   int       // 连续「快速崩溃」（启动后很快退出）计数
 	javaStartedAt time.Time // 本次 Java 启动时刻，用于判断是否快速崩溃
+	// autoRestartOff 是崩溃熔断下发的「永久停止自动重启」粘性开关：
+	// 一旦置位，javaWait 不再重启 Java（收到帧时若确无 Java 在跑则 wrapper 立即收摊退出）。
+	// 与 cfg.AutoRestart 分开记账，避免与启动期配置快照相互覆盖。
+	autoRestartOff bool
+	// javaStarting 标记「startJava 已发起、javaCmd 尚未登记」的窗口。
+	// 熔断禁用帧据此判断是否有 Java 启动在飞，避免把正在启动的 Java 变成无人托管的孤儿。
+	javaStarting bool
+	// stopDeferred / stopDeferredForce：启动窗口内到达的 stop/kill 暂存于此。
+	//
+	// 同样是为了「不留孤儿 Java」：stopJava 在该窗口看到 javaCmd 为 nil，若照「空闲即收摊」
+	// 处理就会 signalClose，startJava 随后拉起的 Java 无人托管（真机实测：stop 后 wrapper
+	// 退出、Java 仍在跑并占着实例工作目录，Worker 侧却显示已停止）。force 位取「或」，
+	// 保证 stop 之后再收到 kill 仍是强杀语义。
+	stopDeferred      bool
+	stopDeferredForce bool
+
+	// connMu 序列化对 workerConn 的**帧编码与关闭**。
+	//
+	// 为什么必须（Windows 真机验收发现，比客户端侧 writeMu 更深一层）：
+	//  1. 帧写入不互斥 → 坏帧：Frame.Encode 分 5 次 Write，workerConn 由多个 goroutine 共享
+	//     （stdout/stderr 两条 io.Copy、心跳 pong、退出事件），两次 Encode 交错即坏帧，
+	//     Worker 解码失败关闭连接——与 process 侧 daemonStrategy.writeMu 同一不变量。
+	//  2. Close 与在飞重叠 I/O 竞态 → Go runtime fatal：npipe 的每次 Write/Read 各带独立
+	//     overlapped 事件，由等待 goroutine WaitForSingleObject 收尾；此时对同一连接
+	//     CloseHandle 会令等待方拿到已失效/被复用的句柄（wait_failed errno=6、
+	//     preemptM duplicatehandle failed 等 fatal 已实测）。故所有关闭路径也必须持
+	//     connMu：锁释放在飞 Encode 必然已返回，Close 不再击中在飞 I/O。
+	//  3. 双重 Close 同一连接：acceptLoop 替换旧连接与 readLoop 退出兜底两条路径都会关
+	//     同一连接——句柄值可能已被 OS 复用，二次 CloseHandle 会关错对象。由 managedConn
+	//     的 closeOnce 保证每个连接恰好关闭一次。
+	connMu sync.Mutex
+}
+
+// managedConn 包装 worker 连接：Close 恰好执行一次。
+// 参见 Wrapper.connMu 注释第 3 点（双重 CloseHandle 的句柄复用危害）。
+type managedConn struct {
+	netConn
+	closeOnce sync.Once
+}
+
+func (m *managedConn) Close() error {
+	var err error
+	m.closeOnce.Do(func() { err = m.netConn.Close() })
+	return err
 }
 
 // netConn 别名避免直接依赖 net（便于测试替换）。
@@ -119,6 +178,21 @@ const (
 )
 
 func (w *Wrapper) run(ready chan<- struct{}) error {
+	// 先把自身迁出 Worker 的 systemd 单元 cgroup（见 cgroup.go：2026-10-01「每次重启拖倒全部实例」
+	// 事故的根因是 KillMode=control-group 对整个单元 cgroup 发 SIGTERM，setsid 逃不出 cgroup）。
+	//
+	// 位置是硬约束：必须在 startJava 之前——子进程 fork 时继承父进程当时的 cgroup，先迁后生才能让
+	// java（及 sh -c 包裹）一并落在隔离目录内，一起免疫单元级 SIGTERM。迁移失败只告警、保持原状。
+	if dir, err := EscapeWorkerUnitCgroup(w.cfg.InstanceUUID); err != nil {
+		slog.Warn("daemon 子树迁出 Worker 单元 cgroup 失败，保持原有 cgroup（重启系统单元时会被连坐）",
+			"instanceId", w.cfg.InstanceUUID, "error", err)
+	} else if dir != "" {
+		slog.Info("daemon 子树已迁出 Worker 单元 cgroup（重启单元不再连坐）",
+			"instanceId", w.cfg.InstanceUUID, "cgroup", dir)
+		// 正常退出时回收自己的隔离目录；被强杀（kill -9）时留空壳，由 Worker 启动清扫兜底。
+		defer RemoveDaemonCgroupDir(w.cfg.InstanceUUID)
+	}
+
 	ln, err := Listen(w.addr)
 	if err != nil {
 		return fmt.Errorf("wrapper 监听失败 %s: %w", w.addr, err)
@@ -149,27 +223,14 @@ func (w *Wrapper) run(ready chan<- struct{}) error {
 
 	// 持续接受 Worker 连接：Worker 重启后可 reconnect。
 	// 每次接受后替换旧连接并启动读循环处理控制帧。
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				slog.Info("wrapper Accept 退出", "instanceId", w.cfg.InstanceUUID, "error", err)
-				return
-			}
-			w.mu.Lock()
-			// 关闭旧连接（若存在），避免并发写
-			if w.workerConn != nil {
-				_ = w.workerConn.Close()
-			}
-			w.workerConn = conn
-			w.mu.Unlock()
-			slog.Info("wrapper 接受 Worker 连接", "instanceId", w.cfg.InstanceUUID)
-			go w.readLoop(conn)
-		}
-	}()
+	go w.acceptLoop(ln)
 
 	// 启动 Java
 	if err := w.startJava(); err != nil {
+		if errors.Is(err, errAutoRestartSuppressed) {
+			// 启动临界区内即被判禁用/关闭（启动期 autoRestartOff 为 false，理论不可达）——静默收摊。
+			return nil
+		}
 		return fmt.Errorf("启动 Java 失败: %w", err)
 	}
 
@@ -178,21 +239,91 @@ func (w *Wrapper) run(ready chan<- struct{}) error {
 	return nil
 }
 
+// acceptRetryInterval 是 Accept 出错后的重试间隔。
+const acceptRetryInterval = 100 * time.Millisecond
+
+// isClosed 报告 wrapper 是否已关闭。
 func (w *Wrapper) isClosed() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.closed
 }
 
+// writeFrameTo 在持 connMu 互斥下对指定连接整体编码一帧。
+// 所有对 workerConn 的帧写入都必须经此路径（不变量见 Wrapper.connMu 注释）。
+func (w *Wrapper) writeFrameTo(conn netConn, f *Frame) error {
+	w.connMu.Lock()
+	defer w.connMu.Unlock()
+	return f.Encode(conn)
+}
+
+// closeWorkerConn 关闭指定连接，持 connMu 保证不与在飞的 Encode（重叠 I/O）竞态；
+// managedConn.closeOnce 保证每个连接恰好 CloseHandle 一次（无论从哪条路径调用）。
+func (w *Wrapper) closeWorkerConn(conn netConn) {
+	w.connMu.Lock()
+	defer w.connMu.Unlock()
+	_ = conn.Close()
+}
+
+func (w *Wrapper) acceptLoop(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if w.isClosed() {
+				slog.Info("wrapper Accept 退出（关闭中）", "instanceId", w.cfg.InstanceUUID)
+				return
+			}
+			slog.Warn("wrapper Accept 出错，稍后重试（接受循环不得终止）",
+				"instanceId", w.cfg.InstanceUUID, "error", err, "retryIn", acceptRetryInterval)
+			select {
+			case <-time.After(acceptRetryInterval):
+			case <-w.closing:
+				return
+			}
+			continue
+		}
+		// 包装为 managedConn：readLoop 兜底与替换路径都会尝试关闭，
+		// closeOnce 保证恰好 CloseHandle 一次（见 Wrapper.connMu 注释第 3 点）。
+		mc := &managedConn{netConn: conn}
+		w.mu.Lock()
+		old := w.workerConn
+		w.workerConn = mc
+		w.mu.Unlock()
+		// 旧连接的关闭必须在登记新连接之后、持 connMu 执行：等待在飞的
+		// Encode 返回后再 CloseHandle，避免关掉重叠 I/O 正在使用的句柄。
+		if old != nil {
+			w.closeWorkerConn(old)
+		}
+		slog.Info("wrapper 接受 Worker 连接", "instanceId", w.cfg.InstanceUUID)
+		go w.readLoop(mc)
+	}
+}
+
+// errAutoRestartSuppressed 表示 startJava 在临界区内发现「wrapper 已关闭 / 自动重启已被熔断禁用」，
+// 因而未拉起 Java（终验 Low #5）。调用方据此静默收摊，不按启动失败告警。
+var errAutoRestartSuppressed = errors.New("wrapper 已关闭或自动重启已被禁用")
+
 // startJava 启动 Java 进程并写入 java pid。
 func (w *Wrapper) startJava() error {
 	w.mu.Lock()
+	// 终验 Low #5：在**同一临界区**内复核 closed/autoRestartOff 后再标记 javaStarting，
+	// 消除 javaWait 复核点（判 autoRestartOff）与 startJava 取锁之间的窄 TOCTOU：
+	// 否则该窗口内到达的 CtrlDisableRestart 会看到 javaCmd==nil && !javaStarting（判「空闲」而
+	// 立即收摊退出），紧接着 startJava 却把 Java 拉起 → wrapper 已退出、Java 无人托管的孤儿。
+	// 临界区内二者互斥：要么禁用先置位（此处直接放弃启动），要么 javaStarting 先置位
+	// （disableAutoRestart 见其非空闲而保持托管，待 Java 退出后由 javaWait 拦下重启）。
+	if w.closed || w.autoRestartOff {
+		w.mu.Unlock()
+		return errAutoRestartSuppressed
+	}
 	w.state = StateStarting
+	w.javaStarting = true
 	w.mu.Unlock()
 
 	cmd := buildJavaCmd(w.cfg)
 	javaStdin, err := cmd.StdinPipe()
 	if err != nil {
+		w.finishJavaStarting()
 		w.setState(StateCrashed)
 		return fmt.Errorf("创建 Java stdin 管道失败: %w", err)
 	}
@@ -202,6 +333,7 @@ func (w *Wrapper) startJava() error {
 	cmd.Stderr = &wrapperOutput{w: w, stream: ChannelStderr}
 
 	if err := cmd.Start(); err != nil {
+		w.finishJavaStarting()
 		w.setState(StateCrashed)
 		return fmt.Errorf("Java 启动失败: %w", err)
 	}
@@ -210,6 +342,7 @@ func (w *Wrapper) startJava() error {
 	w.javaCmd = cmd
 	w.javaStdin = javaStdin
 	w.state = StateRunning
+	w.javaStarting = false
 	javaPID := cmd.Process.Pid
 	w.mu.Unlock()
 
@@ -230,6 +363,10 @@ func (w *Wrapper) startJava() error {
 		slog.Warn("更新 PID 文件 java pid 失败", "error", err)
 	}
 	slog.Info("Java 已启动", "instanceId", w.cfg.InstanceUUID, "javaPid", javaPID)
+
+	// 启动窗口内到达的 stop/kill 在此补发（见 stopJava 注释）。必须先于 javaWait 启动：
+	// 补发会把 state 置为 StateStopping，javaWait 据此判「主动停止」而不误判崩溃重启。
+	w.applyDeferredStop()
 
 	// 记录启动时刻并等待 Java 退出（用于快速崩溃判定）
 	w.mu.Lock()
@@ -261,7 +398,7 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 		return
 	}
 
-	// 非正常退出：把退出码/信号/时长经控制通道上抛 Worker，供其组装崩溃快照（FR-313）。
+	// 非正常退出：把退出码/信号/时长经控制通道上抛 Worker，供其组装崩溃快照。
 	// Worker 未连接（重启窗口等）时丢弃——快照是诊断增强，不阻塞崩溃处理主线。
 	w.emitExitEvent(cmd.ProcessState, time.Since(startedAt))
 
@@ -286,7 +423,17 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 		return
 	}
 
-	if !w.cfg.AutoRestart || w.isClosed() {
+	// 双开防线：自动重启前确认自己仍是该实例的当前 wrapper。PID 记录已被新 wrapper 接管，
+	// 说明本进程已脱离平台控制（socket 被抢，从此收不到任何控制帧），此时再拉起 Java 只会
+	// 造出一个平台无法寻址的第二个进程——真机现象：手动 stop 之后 daemon 又把进程自动拉起过
+	// 一次（短暂启动后退出）。放弃重启并收摊，把实例让给新 wrapper。
+	if !w.ownsPIDRecord() {
+		slog.Warn("PID 记录已由新的 wrapper 接管，放弃自动重启并退出", "instanceId", w.cfg.InstanceUUID)
+		w.signalClose()
+		return
+	}
+
+	if !w.cfg.AutoRestart || w.isAutoRestartOff() || w.isClosed() {
 		w.signalClose()
 		return
 	}
@@ -301,14 +448,72 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 	if w.isClosed() {
 		return
 	}
+	// 退避等待期间可能收到「禁用自动重启」控制帧（崩溃熔断）——必须在真正拉起前复核，
+	// 否则熔断只阻止「下一次」重启、本次仍会拉起一个注定要崩的 Java。
+	if w.isAutoRestartOff() {
+		slog.Warn("自动重启已被禁用（实例崩溃熔断），wrapper 收摊退出", "instanceId", w.cfg.InstanceUUID)
+		w.signalClose()
+		return
+	}
 	if err := w.startJava(); err != nil {
-		slog.Error("wrapper 重启 Java 失败", "instanceId", w.cfg.InstanceUUID, "error", err)
+		// 复核点是尽力而为的提前退出；真正的护栏在 startJava 临界区内（消除 TOCTOU）。
+		if errors.Is(err, errAutoRestartSuppressed) {
+			slog.Warn("自动重启在启动临界区内被禁用，wrapper 收摊退出", "instanceId", w.cfg.InstanceUUID)
+		} else {
+			slog.Error("wrapper 重启 Java 失败", "instanceId", w.cfg.InstanceUUID, "error", err)
+		}
 		w.signalClose()
 	}
 }
 
+// disableAutoRestart 处理崩溃熔断下发的禁用自动重启指令。
+//
+// 语义：置位后 wrapper 不再自动重启 Java。若此刻确实没有 Java 在跑也没有启动在飞
+// （崩溃退避窗口），立即收摊退出，使实例稳定停在 CRASHED 而不空占进程；否则保持托管
+// （不打断正在启动/运行的服务），由 javaWait 在其退出后的复核点拦下自动重启。
+//
+// 复位只经对称的 enableAutoRestart（CtrlEnableRestart）——人工解除熔断时下发；
+// 状态变化（崩溃/停止）本身不会复位该标志。
+func (w *Wrapper) disableAutoRestart() {
+	w.mu.Lock()
+	w.autoRestartOff = true
+	idle := w.javaCmd == nil && !w.javaStarting
+	w.mu.Unlock()
+	slog.Warn("wrapper 收到禁用自动重启（崩溃熔断）", "instanceId", w.cfg.InstanceUUID, "idle", idle)
+	if idle {
+		w.signalClose()
+	}
+}
+
+// enableAutoRestart 处理熔断人工解除时下发的对称复位帧：清掉粘性 autoRestartOff，
+// 使 wrapper 恢复「Java 退出按 cfg.AutoRestart 自动重启」的行为（Java 仍在跑时不打断服务，
+// 待其下次退出后按策略重启）。幂等。
+func (w *Wrapper) enableAutoRestart() {
+	w.mu.Lock()
+	was := w.autoRestartOff
+	w.autoRestartOff = false
+	w.mu.Unlock()
+	if was {
+		slog.Info("wrapper 收到恢复自动重启（熔断人工解除）", "instanceId", w.cfg.InstanceUUID)
+	}
+}
+
+// finishJavaStarting 清除「Java 启动在飞」标记（startJava 失败路径）。
+func (w *Wrapper) finishJavaStarting() {
+	w.mu.Lock()
+	w.javaStarting = false
+	w.mu.Unlock()
+}
+
+// isAutoRestartOff 报告是否已被熔断禁用自动重启。
+func (w *Wrapper) isAutoRestartOff() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.autoRestartOff
+}
+
 // emitExitEvent 把被托管进程的非正常退出现场（退出码/信号/时长）作为事件帧发给已连接的
-// Worker（FR-313）。无连接或编码/写失败仅记日志丢弃：崩溃快照是尽力而为的诊断信息。
+// Worker。无连接或编码/写失败仅记日志丢弃：崩溃快照是尽力而为的诊断信息。
 func (w *Wrapper) emitExitEvent(ps *os.ProcessState, uptime time.Duration) {
 	exitCode, sig := ExitInfo(ps)
 	fr, err := EncodeExitEventFrame(ExitEvent{
@@ -328,7 +533,7 @@ func (w *Wrapper) emitExitEvent(ps *os.ProcessState, uptime time.Duration) {
 		slog.Debug("Worker 未连接，退出事件丢弃", "instanceId", w.cfg.InstanceUUID, "exitCode", exitCode)
 		return
 	}
-	if err := fr.Encode(conn); err != nil {
+	if err := w.writeFrameTo(conn, fr); err != nil {
 		slog.Warn("发送退出事件失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 	}
 }
@@ -352,10 +557,10 @@ func (w *Wrapper) signalClose() {
 
 // readLoop 处理 Worker 下发的帧：stdin 数据 / 控制命令。
 func (w *Wrapper) readLoop(conn netConn) {
-	// 连接断开后释放 server 侧句柄：Windows 上残留句柄会阻碍同名管道重建
-	// （Access denied）。兜底路径：readLoop 退出即关（此处）、Accept 替换旧连接时
-	// 关旧连接、wrapper 进程退出后由 OS 回收剩余句柄。
-	defer func() { _ = conn.Close() }()
+	// 连接断开后释放引用：Windows 上残留句柄会阻碍同名管道重建（Access denied）。
+	// 关闭经 closeWorkerConn：持 connMu 等在飞 Encode 返回后再关，且由 managedConn 的
+	// closeOnce 保证同一句柄只 CloseHandle 一次（acceptLoop 替换路径可能已关过）。
+	defer w.closeWorkerConn(conn)
 	for {
 		fr, err := Decode(conn)
 		if err != nil {
@@ -389,16 +594,20 @@ func (w *Wrapper) handleControl(cmd string) {
 		slog.Info("wrapper 收到 kill", "instanceId", w.cfg.InstanceUUID)
 		w.stopJava(true)
 	case CtrlPing:
-		// 心跳：回写控制响应
+		// 心跳：回写控制响应（经 writeFrameTo 与其他帧写入互斥）
 		w.mu.Lock()
 		conn := w.workerConn
 		w.mu.Unlock()
 		if conn != nil {
 			resp := &Frame{Header: Header{Channel: ChannelControl, Type: TypeResponse}, Payload: []byte("pong")}
-			if err := resp.Encode(conn); err != nil {
+			if err := w.writeFrameTo(conn, resp); err != nil {
 				slog.Debug("回写 wrapper 心跳响应失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 			}
 		}
+	case CtrlDisableRestart:
+		w.disableAutoRestart()
+	case CtrlEnableRestart:
+		w.enableAutoRestart()
 	default:
 		slog.Warn("wrapper 收到未知控制命令", "cmd", cmd)
 	}
@@ -410,16 +619,27 @@ func (w *Wrapper) handleControl(cmd string) {
 // 让其保存世界并输出完整停止日志；Java 自行退出后由 javaWait 善后 signalClose。
 // 这样终端能看到「Stopping the server / Saving worlds」等停止日志，而非被瞬间杀掉。
 // 超时仍未退出则强杀兜底，避免 wrapper 永不退出。
+//
+// 启动窗口（javaStarting=true、javaCmd 尚未登记）内的 stop/kill **不得**立即收摊退出：
+// startJava 随后拉起的 Java 会无人托管（孤儿进程占端口与工作目录，Worker 侧却显示已停止）。
+// 该请求暂存为 stopDeferred，由 startJava 在 javaCmd 登记后补发本方法（见 applyDeferredStop）。
 func (w *Wrapper) stopJava(force bool) {
 	w.mu.Lock()
 	cmd := w.javaCmd
 	stdin := w.javaStdin
 	w.state = StateStopping
-	w.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
+		if w.javaStarting {
+			w.stopDeferred = true
+			w.stopDeferredForce = w.stopDeferredForce || force
+			w.mu.Unlock()
+			return
+		}
+		w.mu.Unlock()
 		w.signalClose()
 		return
 	}
+	w.mu.Unlock()
 
 	if force {
 		w.forceKill(cmd)
@@ -464,6 +684,23 @@ func (w *Wrapper) stopJava(force bool) {
 	}()
 }
 
+// applyDeferredStop 补发启动窗口内到达的 stop/kill（见 stopJava 注释）。
+// javaCmd 登记完成即调用一次；无暂存请求时为空操作。
+func (w *Wrapper) applyDeferredStop() {
+	w.mu.Lock()
+	deferred := w.stopDeferred
+	deferredForce := w.stopDeferredForce
+	w.stopDeferred = false
+	w.stopDeferredForce = false
+	w.mu.Unlock()
+	if !deferred {
+		return
+	}
+	slog.Info("启动窗口内收到停止请求，Java 拉起后立即执行停止（不留孤儿进程）",
+		"instanceId", w.cfg.InstanceUUID, "force", deferredForce)
+	w.stopJava(deferredForce)
+}
+
 // forceKill 强制终止被托管进程整棵进程树，委托平台实现 killProcessTree
 // （Linux 杀进程组 kill -pgid、Windows taskkill /T）——杜绝 sh -c / cmd.exe 派生的
 // 孙进程残留持有 stdout 管道致 cmd.Wait 永久阻塞、wrapper 在 stop 后不退出。
@@ -471,11 +708,34 @@ func (w *Wrapper) forceKill(cmd *exec.Cmd) {
 	killProcessTree(cmd)
 }
 
+// cleanupPIDFile 退出清理：仅当 PID 记录仍指向本 wrapper 时才删除 PID 文件与 socket 文件。
+//
+// 归属校验不可省：wrapper 与实例不是一对一（快速 stop→start 会换新 wrapper，旧 wrapper 可能
+// 晚于新 wrapper 才退出）。旧 wrapper 若无条件清理，会把新 wrapper 刚写入的 PID 记录与它正在
+// 监听的 socket 一并抹掉——新实例从此既无法被 PID 文件发现（WaitForPriorExit 误判「上一代已
+// 清理」直接放行），也无法按路径拨通，控制通道形同失联。
 func (w *Wrapper) cleanupPIDFile() {
+	if rec, err := w.pidFile.ReadRecord(); err == nil && rec.WrapperPID > 0 && rec.WrapperPID != os.Getpid() {
+		slog.Warn("PID 记录已属于新的 wrapper，跳过清理以免破坏其 PID 文件与 socket",
+			"instanceId", w.cfg.InstanceUUID, "recordWrapperPid", rec.WrapperPID, "selfPid", os.Getpid())
+		return
+	}
 	if err := w.pidFile.Remove(); err != nil {
 		slog.Warn("删除 PID 文件失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 	}
 	RemoveSocket(w.addr)
+}
+
+// ownsPIDRecord 报告本 wrapper 是否仍是该实例 PID 记录的主人。
+//
+// 记录缺失/不可读、或记录里没有 wrapper pid 时一律按「是」处理：归属校验只用于识别
+// 「已被新 wrapper 明确接管」这一确定情形，不改变既有的自动重启行为。
+func (w *Wrapper) ownsPIDRecord() bool {
+	rec, err := w.pidFile.ReadRecord()
+	if err != nil {
+		return true
+	}
+	return rec.WrapperPID == 0 || rec.WrapperPID == os.Getpid()
 }
 
 // wrapperOutput 把 Java 的 stdout/stderr 作为帧转发给已连接的 Worker。
@@ -490,7 +750,10 @@ func (o *wrapperOutput) Write(p []byte) (int, error) {
 	o.w.mu.Unlock()
 	if conn != nil {
 		f := &Frame{Header: Header{Channel: o.stream, Type: TypeData}, Payload: append([]byte(nil), p...)}
-		if err := f.Encode(conn); err != nil {
+		// 必须经 writeFrameTo：stdout/stderr 两条 io.Copy 并发转发，且与心跳/退出事件
+		// 共享连接——不加互斥时两次 Encode 的分段 Write 会交错成坏帧，并可与连接关闭竞态
+		// （Windows 重叠 I/O 句柄失效，runtime fatal）。
+		if err := o.w.writeFrameTo(conn, f); err != nil {
 			slog.Debug("转发 Java 输出到 Worker 失败", "instanceId", o.w.cfg.InstanceUUID, "error", err)
 		}
 	}
@@ -499,7 +762,7 @@ func (o *wrapperOutput) Write(p []byte) (int, error) {
 
 // buildJavaCmd 构造 Java 进程命令。跨平台：Windows 用 cmd.exe /c，其他用 sh -c。
 func buildJavaCmd(cfg WrapperConfig) *exec.Cmd {
-	writeEnvFile(cfg) // FR-344：物化自定义启动 env 到 <workDir>/.env（供查看；实际注入仍走 composeEnv）
+	writeEnvFile(cfg) // 物化自定义启动 env 到 <workDir>/.env（供查看；实际注入仍走 composeEnv）
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("cmd.exe", "/c", cfg.StartCommand)
@@ -512,7 +775,7 @@ func buildJavaCmd(cfg WrapperConfig) *exec.Cmd {
 	return cmd
 }
 
-// writeEnvFile 把实例自定义启动环境变量物化为 <workDir>/.env（FR-344，KEY=VALUE 行 + 生成头注释）。
+// writeEnvFile 把实例自定义启动环境变量物化为 <workDir>/.env（KEY=VALUE 行 + 生成头注释）。
 // 供用户在文件管理器/终端查看；源真值仍是 instance.EnvVars（控制台「环境变量」页签编辑），
 // 本文件启动时按当前配置重写（单向生成物）。best-effort：写失败只记日志、不阻塞启动。
 func writeEnvFile(cfg WrapperConfig) {
@@ -520,7 +783,7 @@ func writeEnvFile(cfg WrapperConfig) {
 		return
 	}
 	var b strings.Builder
-	b.WriteString("# 由 JianManager 生成（FR-344）：实例自定义启动环境变量。\n")
+	b.WriteString("# 由 JianManager 生成：实例自定义启动环境变量。\n")
 	b.WriteString("# 编辑请用控制台「环境变量」页签；本文件启动时按配置重写。\n")
 	keys := make([]string, 0, len(cfg.EnvVars))
 	for k := range cfg.EnvVars {
@@ -538,8 +801,14 @@ func writeEnvFile(cfg WrapperConfig) {
 
 // composeEnv 合成进程环境：基线 (os.Environ) + JAVA_HOME + PATH 前置 + 实例 EnvVars。
 // 与 internal/worker/process.ComposeEnv 行为一致，本地复制以避免 daemon ↔ process 包循环依赖。
+//
+// 一致性要求（真机事故 2026-10-09）：基线里**继承**的 JAVA_HOME 必须先剥离，再按 cfg.JavaHome 注入；
+// 实例 EnvVars 也须移除基线同名键（此前只 append，与 process 版并不一致）。否则实例的 Java 运行时
+// 会被 Worker 自身环境决定——真机 Worker 继承了 `~/.sdkman/candidates/java/current` 软链，该软链被
+// 切到 Java 8 后，Paper 1.20 实例全部启动即崩。
 func composeEnv(base []string, cfg WrapperConfig) []string {
 	out := append([]string(nil), base...)
+	out = dropEnvKey(out, javaHomeKey)
 
 	javaBin := cfg.JDKBinPath
 	if javaBin == "" && cfg.JavaHome != "" {
@@ -551,7 +820,7 @@ func composeEnv(base []string, cfg WrapperConfig) []string {
 	}
 
 	if cfg.JavaHome != "" {
-		out = append(out, "JAVA_HOME="+cfg.JavaHome)
+		out = append(out, javaHomeKey+"="+cfg.JavaHome)
 	}
 	if javaBin != "" {
 		replaced := false
@@ -567,9 +836,24 @@ func composeEnv(base []string, cfg WrapperConfig) []string {
 		}
 	}
 	for k, v := range cfg.EnvVars {
+		// 同名键移除基线旧值，确保子进程实际生效的是实例 env。
+		out = dropEnvKey(out, k)
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+// dropEnvKey 返回剔除所有键为 key 的条目后的切片（原地复用底层数组）。
+// 环境数组里出现重复键时，Go os/exec 只保留**最后**一个，故「先剔除、再追加」可确保
+// 实例侧的值是唯一且最终生效的那个，不受基线继承值影响。
+func dropEnvKey(env []string, key string) []string {
+	kept := env[:0]
+	for _, kv := range env {
+		if name, _, ok := splitEnvKey(kv); !ok || name != key {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
 }
 
 func splitEnvKey(kv string) (key, value string, ok bool) {
@@ -605,15 +889,23 @@ func resolveStopCommand(cfg string) string {
 	return defaultStopCommand
 }
 
-// resolveGracefulStopTimeout 返回优雅停止超时，按优先级解析：
-//  1. 启动时下发的 config 值（CP 从平台设置 graceful_stop.timeout 取生效值，FR-063）；
-//  2. 环境变量（供测试/集成缩短）；
-//  3. 默认值。
+// resolveGracefulStopTimeout 返回本 wrapper 实例的优雅停止超时（见包级同名函数说明）。
 //
 // config 值在实例启动时定型，故设置变更只对其后「新启动」的实例生效，已运行实例保留启动时的值。
 func (w *Wrapper) resolveGracefulStopTimeout() time.Duration {
-	if w.cfg.GracefulStopTimeoutSeconds > 0 {
-		return time.Duration(w.cfg.GracefulStopTimeoutSeconds) * time.Second
+	return resolveGracefulStopTimeout(w.cfg.GracefulStopTimeoutSeconds)
+}
+
+// resolveGracefulStopTimeout 按优先级解析优雅停止超时：
+//  1. 启动时下发的 config 值（CP 从平台设置 graceful_stop.timeout 取生效值）；
+//  2. 环境变量（供测试/集成缩短）；
+//  3. 默认值。
+//
+// 同时供 prior_exit.go 推导「等待上一代进程退出」的预算（PriorExitBudget）：预算必须覆盖
+// 这里的强杀兜底，否则旧进程正在正常关服就会被误判超时并被拒绝启动（假失败）。
+func resolveGracefulStopTimeout(cfgSeconds int) time.Duration {
+	if cfgSeconds > 0 {
+		return time.Duration(cfgSeconds) * time.Second
 	}
 	if v := os.Getenv(envGracefulStopTimeout); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {

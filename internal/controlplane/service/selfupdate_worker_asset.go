@@ -20,7 +20,7 @@ import (
 	"github.com/wcpe/JianManager/internal/version"
 )
 
-// WorkerAssetSourceEmbedded 是内嵌物化缓存条目的 sourceUrl 取值（FR-278/ADR-062），
+// WorkerAssetSourceEmbedded 是内嵌物化缓存条目的 sourceUrl 取值，
 // 系统更新页缓存列表据此区分来源（内嵌物化 / 远程拉取 / 手动放置）。
 const WorkerAssetSourceEmbedded = "embedded://cp-binary"
 
@@ -36,11 +36,13 @@ const (
 	WorkerAssetPurposeUpgrade = "upgrade"
 	// WorkerAssetPurposeInstall 表示 token 用于节点安装。
 	WorkerAssetPurposeInstall = "install"
+	// WorkerAssetPurposeLogVL binds a short-lived package URL to one Worker.
+	WorkerAssetPurposeLogVL = "log_vl"
 
 	workerAssetTokenTTL = 10 * time.Minute
 )
 
-// WorkerAssetCacheEntry 描述 CP 本地 Worker 二进制缓存条目（FR-190）。
+// WorkerAssetCacheEntry 描述 CP 本地 Worker 二进制缓存条目。
 type WorkerAssetCacheEntry struct {
 	Version   string    `json:"version"`
 	OS        string    `json:"os"`
@@ -65,7 +67,7 @@ type WorkerAssetTokenScope struct {
 }
 
 // EnsureWorkerAsset 确保与当前 CP 版本一致的目标平台 Worker 二进制已缓存。
-// 解析顺序（ADR-062 修订 ADR-059）：本地缓存（有效）> 内嵌物化 > 远程 feed——
+// 解析顺序：本地缓存（有效）> 内嵌物化 > 远程 feed——
 // 安装/升级同版本 Worker 的主链路在 CP 内嵌资产在位时全程不出网。
 func (s *SelfUpdateService) EnsureWorkerAsset(ctx context.Context, goos, goarch string) (*WorkerAssetCacheEntry, error) {
 	if err := validateWorkerAssetPart(goos); err != nil {
@@ -81,7 +83,7 @@ func (s *SelfUpdateService) EnsureWorkerAsset(ctx context.Context, goos, goarch 
 			return entry, nil
 		}
 	}
-	// ② 内嵌物化：CP 自带与自身版本一致的 Worker（FR-278）。
+	// ② 内嵌物化：CP 自带与自身版本一致的 Worker。
 	if entry, err := s.materializeEmbeddedWorkerAsset(goos, goarch); err != nil {
 		return nil, err
 	} else if entry != nil {
@@ -95,7 +97,7 @@ func (s *SelfUpdateService) EnsureWorkerAsset(ctx context.Context, goos, goarch 
 	return s.ensureWorkerAssetFromArtifact(ctx, feed.Version, goos, goarch, art)
 }
 
-// materializeEmbeddedWorkerAsset 把内嵌 Worker 二进制物化进 ADR-059 缓存目录。
+// materializeEmbeddedWorkerAsset 把内嵌 Worker 二进制物化进缓存目录。
 // 未内嵌 / 版本与 CP 不一致 / 平台缺失返回 (nil, nil) 交由远程兜底；写盘或校验失败返回错误。
 func (s *SelfUpdateService) materializeEmbeddedWorkerAsset(goos, goarch string) (*WorkerAssetCacheEntry, error) {
 	manifest := s.embeddedWorkerManifest()
@@ -141,7 +143,7 @@ func (s *SelfUpdateService) materializeEmbeddedWorkerAsset(goos, goarch string) 
 	return nil, nil
 }
 
-// SetEmbeddedWorkerSource 注入内嵌 Worker 资产源（FR-278/ADR-062 依赖注入点，与 SetHTTPClient 同族）。
+// SetEmbeddedWorkerSource 注入内嵌 Worker 资产源（依赖注入点，与 SetHTTPClient 同族）。
 // 由 main 装配 cpembed 真实现；**未注入时视为无内嵌**（直接走缓存/远程链路）——go:embed 内容随
 // 构建环境（是否跑过 make embed-worker）而变，service 层不隐式读取，测试行为与构建环境解耦。
 func (s *SelfUpdateService) SetEmbeddedWorkerSource(
@@ -471,11 +473,11 @@ func normalizeWorkerAssetScope(scope *WorkerAssetTokenScope) error {
 	if scope.Purpose == "" {
 		return errors.New("Worker 资产 token purpose 不能为空")
 	}
-	if scope.Purpose != WorkerAssetPurposeUpgrade && scope.Purpose != WorkerAssetPurposeInstall {
+	if scope.Purpose != WorkerAssetPurposeUpgrade && scope.Purpose != WorkerAssetPurposeInstall && scope.Purpose != WorkerAssetPurposeLogVL {
 		return fmt.Errorf("Worker 资产 token purpose 无效: %s", scope.Purpose)
 	}
-	if scope.Purpose == WorkerAssetPurposeUpgrade && strings.TrimSpace(scope.NodeUUID) == "" {
-		return errors.New("Worker 升级 token 必须绑定节点 UUID")
+	if (scope.Purpose == WorkerAssetPurposeUpgrade || scope.Purpose == WorkerAssetPurposeLogVL) && strings.TrimSpace(scope.NodeUUID) == "" {
+		return errors.New("Worker 资产 token 必须绑定节点 UUID")
 	}
 	return nil
 }

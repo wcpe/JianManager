@@ -7,14 +7,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // ProbeSnapshot 是从 ServerProbe `/metrics` 解析出的服务器运维指标子集。
 //
 // ServerProbe（第三方监控探针，作 git 子模块引入）以 Prometheus exposition 文本在
 // `/metrics` 暴露 TPS/MSPT/JVM/线程/世界等指标；Worker 周期抓取本机端点并解析为本快照，
-// 取代此前基于 RCON `list`/`tps` 文本解析的粗指标（FR-022）。
+// 取代此前基于 RCON `list`/`tps` 文本解析的粗指标。
 type ProbeSnapshot struct {
 	TPS           float64              // serverprobe_tps{window="1m"}
 	MSPTAvgMillis float64              // serverprobe_mspt_seconds{quantile="avg"} 转毫秒
@@ -25,6 +24,34 @@ type ProbeSnapshot struct {
 	SystemCPULoad float64              // serverprobe_system_cpu_load（0~1，<0 表示不可用）
 	UptimeSeconds float64              // serverprobe_uptime_seconds
 	Worlds        map[string]WorldStat // 按世界名聚合的世界负载
+
+	// GC：cumulative counter，跨收集器（gc 标签）求和。不直接当曲线用，CP 侧据相邻差推导速率。
+	GCCountTotal int64   // Σ serverprobe_gc_count_total{gc=...}
+	GCTimeMillis float64 // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000（秒→毫秒）
+
+	// Bridge 桥自身的中转指标（本通道）；nil = 探针没上报（老探针）。
+	//
+	// 不能把 nil 当 0：“没丢”与“不知道有没丢”在运维上完全相反。
+	Bridge *BridgeSnapshot
+}
+
+// BridgeSnapshot 是插件桥（ServerProbe ↔ JM）自身的运行状态。
+//
+// 与 ProbeSnapshot 其它字段的区别：那些描述「服务器在干什么」，这个描述
+// 「中转通道承不承得住」。通道堵了业务可能一切正常、但事件发不出去，
+// 所以必须独立观测，不能混进 TPS/堆里。
+//
+// 计数全为**累计值**：探针上报间隔可变，在探针侧算速率会把间隔变化
+// 误读成流量变化；差分交给 CP（心跳节奏固定）。
+type BridgeSnapshot struct {
+	ReliableQueue          int32 // 可靠事件队列深度（帧）
+	BestEffortQueue        int32 // 可丢事件队列深度（帧）
+	ReliableRejectedTotal  int64 // 可靠事件因队列满被拒累计
+	BestEffortDroppedTotal int64 // 可丢事件被丢累计
+	ReceiptRejectedTotal   int64 // 命令回执被拒累计（回执被拒 → JM 误判业务失败）
+	SpillDroppedTotal      int64 // 已受理但被落盘缓冲挤掉累计（仅 spill 开启时非零）
+	WriteFailuresTotal     int64 // 写出失败累计
+	WriteTimeoutsTotal     int64 // 写超时累计
 }
 
 // WorldStat 单个世界的负载（serverprobe_world_*{world="..."}）。
@@ -53,7 +80,9 @@ func ScrapeServerProbe(host string, port int, token string) (*ProbeSnapshot, err
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	// HTTP 客户端超时取共享契约值（internal/platform/directprobe）：它同时被心跳采集预算
+	// 计入「单实例同源串行最坏」，两处必须是同一个数（复审 NEW-ISSUE A）。
+	client := &http.Client{Timeout: probeScrapeTimeoutCap}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ServerProbe /metrics 抓取失败: %w", err)
@@ -73,6 +102,8 @@ func ScrapeServerProbe(host string, port int, token string) (*ProbeSnapshot, err
 // 纯函数、无 IO，便于对真实 /metrics 样本穷举测试。
 func parseServerProbeMetrics(text string) *ProbeSnapshot {
 	snap := &ProbeSnapshot{Worlds: map[string]WorldStat{}}
+	// gcTimeVariant 记录 GC 耗时首个命中的指标命名变体（见下方 S2 说明）。
+	gcTimeVariant := ""
 	sc := bufio.NewScanner(strings.NewReader(text))
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
@@ -111,6 +142,24 @@ func parseServerProbeMetrics(text string) *ProbeSnapshot {
 			snap.SystemCPULoad = s.value
 		case "serverprobe_uptime_seconds":
 			snap.UptimeSeconds = s.value
+		case "serverprobe_gc_count_total":
+			// GC 事件计数（counter），按 gc 收集器标签累加求和。
+			snap.GCCountTotal += int64(s.value)
+		case "serverprobe_gc_time_seconds_total":
+			// GC 耗时（counter，秒），按 gc 收集器标签累加并转毫秒。
+			if gcTimeVariant == "" || gcTimeVariant == s.name {
+				snap.GCTimeMillis += s.value * 1000
+				gcTimeVariant = s.name
+			}
+		case "serverprobe_gc_time_millis_total", "serverprobe_gc_time_ms_total":
+			// 探针以毫秒暴露耗时的变体命名，直接累加。
+			// S2：耗时命名有多个变体，同一份 exposition 只会暴露其中一种。
+			// 记录首个命中的变体，同变体的多收集器行继续累加，异变体行一律忽略——
+			// 避免「未来多命名并存」时把同一份耗时重复累加、成倍放大 GC 占用。
+			if gcTimeVariant == "" || gcTimeVariant == s.name {
+				snap.GCTimeMillis += s.value
+				gcTimeVariant = s.name
+			}
 		case "serverprobe_world_loaded_chunks":
 			w := snap.Worlds[s.labels["world"]]
 			w.LoadedChunks = int64(s.value)

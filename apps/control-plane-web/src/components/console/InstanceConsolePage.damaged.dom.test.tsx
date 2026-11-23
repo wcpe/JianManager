@@ -11,7 +11,7 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import InstanceConsolePage from './InstanceConsolePage'
 
-describe('InstanceConsolePage 损毁与重建契约（FR-342）', () => {
+describe('InstanceConsolePage 损毁与重建契约', () => {
   beforeEach(() => {
     loginMockUser()
   })

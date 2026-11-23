@@ -4,7 +4,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// configToolSpecs 配置域工具（FR-397）：复用 ConfigService，版本机制由 service 内部维护。
+// configToolSpecs 配置域工具：复用 ConfigService，版本机制由 service 内部维护。
 var configToolSpecs = []toolSpec{
 	{
 		Def: ToolDef{

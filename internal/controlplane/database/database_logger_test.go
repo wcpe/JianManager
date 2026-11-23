@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/config"
 )
 
-// TestGormLogger_FollowsDebugToggle 验证 FIX-7：GORM SQL 日志跟随 FR-225 调试开关——
+// TestGormLogger_FollowsDebugToggle 验证 FIX-7：GORM SQL 日志跟随调试开关——
 // 级别映射正确，且非调试静默 / 调试打印 SQL、运行时切换即时生效。
 //
 // 对旧实现（硬编码 logger.Info）此测试会失败：非调试模式仍会打印 SELECT。

@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-373：文件/目录权限元数据、写前探测、单 path 非递归 chmod、中文诊断。
+// 文件/目录权限元数据、写前探测、单 path 非递归 chmod、中文诊断。
 // 口径相对 Worker 进程有效用户；不 chown、不递归、不 root。
 
 // pathAccess 一次探测结果（纯数据，供 List/Browse/Check 复用）。
@@ -224,7 +224,7 @@ func fillBrowseDirEntryPerm(e *workerpb.BrowseDirEntry, absPath string) {
 	e.Group = a.Group
 }
 
-// CheckPathAccess 探测路径访问能力（FR-373）。
+// CheckPathAccess 探测路径访问能力。
 func (s *Server) CheckPathAccess(_ context.Context, req *workerpb.CheckPathAccessRequest) (*workerpb.CheckPathAccessResponse, error) {
 	abs, errMsg := s.resolvePermPath(req.InstanceUuid, req.Path)
 	if errMsg != "" {
@@ -245,7 +245,7 @@ func (s *Server) CheckPathAccess(_ context.Context, req *workerpb.CheckPathAcces
 	}, nil
 }
 
-// ChmodPath 单 path 非递归 chmod（FR-373）。
+// ChmodPath 单 path 非递归 chmod。
 func (s *Server) ChmodPath(_ context.Context, req *workerpb.ChmodPathRequest) (*workerpb.ChmodPathResponse, error) {
 	abs, errMsg := s.resolvePermPath(req.InstanceUuid, req.Path)
 	if errMsg != "" {

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1170,11 +1171,65 @@ func fleetStoppedRequest(botID, suffix string) *workerpb.ApplyBotBatchRequest {
 	}
 }
 
+// requireNodeForGRPCTest 确认环境里有**满足最低版本**的 node，否则 skip。
+//
+// 与 bot 包的 requireNode 同一判据：只查 LookPath 不够——机器上装了 20.x 时
+// 守卫不会 skip，整个包会变红，而报错点与开发者改动无关。
+// 最低版本取自 bot.MinimumNodeVersion（与 noderesolver 内部用的是同一个常量），
+// 不在测试里另写一份“22.13.0”。
 func requireNodeForGRPCTest(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("node"); err != nil {
+	path, err := exec.LookPath("node")
+	if err != nil {
 		t.Skip("测试环境无 node，跳过 Bot RPC 子进程测试")
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	if err != nil {
+		t.Skipf("无法探测 node 版本（%v），跳过 Bot RPC 子进程测试", err)
+	}
+	if !nodeVersionAtLeast(strings.TrimSpace(string(out)), bot.MinimumNodeVersion) {
+		t.Skipf("node 版本 %q 低于要求的 %s，跳过 Bot RPC 子进程测试",
+			strings.TrimSpace(string(out)), bot.MinimumNodeVersion)
+	}
+}
+
+// nodeVersionAtLeast 按 “vX.Y.Z” 形态比版本（忽略 -pre/+build 后缀）。
+func nodeVersionAtLeast(raw, minimum string) bool {
+	parse := func(s string) ([3]int, bool) {
+		s = strings.TrimPrefix(strings.TrimSpace(s), "v")
+		if cut := strings.IndexAny(s, "-+"); cut >= 0 {
+			s = s[:cut]
+		}
+		parts := strings.Split(s, ".")
+		if len(parts) != 3 {
+			return [3]int{}, false
+		}
+		var out [3]int
+		for i, p := range parts {
+			n, err := strconv.Atoi(p)
+			if err != nil || n < 0 {
+				return [3]int{}, false
+			}
+			out[i] = n
+		}
+		return out, true
+	}
+	got, ok := parse(raw)
+	if !ok {
+		return false
+	}
+	want, ok := parse(minimum)
+	if !ok {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if got[i] != want[i] {
+			return got[i] > want[i]
+		}
+	}
+	return true
 }
 
 func writeGRPCTestBotWorker(t *testing.T, content string) string {

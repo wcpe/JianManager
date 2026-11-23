@@ -1,8 +1,10 @@
 package service
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +19,12 @@ func setupAgentCallLogDB(t *testing.T) *gorm.DB {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.AgentCallLog{}))
 	return db
 }
@@ -126,6 +134,25 @@ func TestAgentCallLog_RecordTruncatesErrorAndStripsToken(t *testing.T) {
 	require.NoError(t, db.Where("action = ?", "b").First(&row2).Error)
 	assert.NotContains(t, row2.Error, "jmat_abcsecret")
 	assert.Contains(t, row2.Error, "脱敏")
+}
+
+// TestAgentCallLog_RecordTruncatesMultibyteError 超长中文错误文案按字符边界截断。
+//
+// 与 Action 同源：按字节切会把多字节字符切成两半得到非法 UTF-8，MySQL 严格模式整行
+// 拒收，截断这个兜底自己就失效了（错误文案多为中文，512 字节边界极易落在字符中间）。
+func TestAgentCallLog_RecordTruncatesMultibyteError(t *testing.T) {
+	db := setupAgentCallLogDB(t)
+	svc := NewAgentCallLogService(db)
+
+	// 600 个汉字 = 1800 字节 / 600 字符，必然越过 512 这条边界。
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 1, TokenName: "t", Action: "a", Success: false,
+		Error: strings.Repeat("错", 600),
+	}))
+	var row model.AgentCallLog
+	require.NoError(t, db.First(&row).Error)
+	assert.True(t, utf8.ValidString(row.Error), "截断不得切出非法 UTF-8")
+	assert.Equal(t, agentCallErrorMaxLen, utf8.RuneCountInString(row.Error), "应截到字符上限")
 }
 
 func TestAgentCallLog_RecordCapability(t *testing.T) {

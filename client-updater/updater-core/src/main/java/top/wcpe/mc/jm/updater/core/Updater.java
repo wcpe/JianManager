@@ -4,10 +4,10 @@ import java.io.IOException;
 import java.nio.file.Path;
 
 /**
- * reconcile 编排（FR-090 / FR-256 简化后）：拉 manifest → 单实例锁 → reconcile → 记录版本。
+ * reconcile 编排：拉 manifest → 单实例锁 → reconcile → 记录版本。
  *
- * <p>FR-256 起：去掉验签（信任靠 HTTPS + 拉取密钥鉴权）、防降级（回滚靠服务端改版本号）、
- * CAS LRU 清理（CasCache 已删）、core 自更新（上移到楔子，FR-258）。仍保留：单实例锁、
+ * <p>简化后：去掉验签（信任靠 HTTPS + 拉取密钥鉴权）、防降级（回滚靠服务端改版本号）、
+ * CAS LRU 清理（CasCache 已删）、core 自更新（上移到楔子）。仍保留：单实例锁、
  * 文件级 reconcile（增量/减量）、端点不可达 fail-static 带本地版本放行。
  *
  * <p>协作者（{@link Transport} / 路径）由构造注入，使核心逻辑可在临时目录端到端测试，
@@ -25,10 +25,10 @@ final class Updater {
     private final Path gameDir;
     private final Path stateDir;
     private final Transport transport;
-    /** 是否展示更新进度窗口（FR-099）；测试/headless/ctx 关闭时为 false。 */
+    /** 是否展示更新进度窗口；测试/headless/ctx 关闭时为 false。 */
     private final boolean progressUiEnabled;
 
-    /** 装配（含 FR-099 进度窗）。 */
+    /** 装配（含进度窗）。 */
     Updater(Path gameDir, Transport transport, boolean progressUiEnabled) {
         this.gameDir = gameDir.toAbsolutePath().normalize();
         this.stateDir = this.gameDir.resolve(".jm-updater");
@@ -58,7 +58,7 @@ final class Updater {
     }
 
     private int runInternal(Logger log) {
-        // 单实例并发锁：单 gameDir 仅一个 updater 改目录（契约 FR-090）。
+        // 单实例并发锁：单 gameDir 仅一个 updater 改目录（契约 §6）。
         SingleInstanceLock lock;
         try {
             lock = SingleInstanceLock.tryAcquire(stateDir);
@@ -111,7 +111,7 @@ final class Updater {
                 return FAIL_STATIC;
             }
 
-            // 4. 记录本次版本供遥测上报（FR-094 fromVersion/toVersion 基准；FR-256 已去防降级，不再据此拒绝低版本）。
+            // 4. 记录本次版本供遥测上报（fromVersion/toVersion 基准；已去防降级，不再据此拒绝低版本）。
             try {
                 StateStore.load(stateDir).recordVersion(manifest.version);
             } catch (IOException e) {

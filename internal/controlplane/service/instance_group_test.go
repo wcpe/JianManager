@@ -14,6 +14,12 @@ func newGroupTreeTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Instance{},
 		&model.InstanceGroupNode{},
@@ -132,11 +138,17 @@ func TestInstanceGroup_MembersMNAndDedupCount(t *testing.T) {
 	tree, err := svc.Tree()
 	require.NoError(t, err)
 	counts := map[uint]int{}
+	direct := map[uint][]uint{}
 	for _, n := range tree {
 		counts[n.ID] = n.InstanceCount
+		direct[n.ID] = n.MemberInstanceIDs
 	}
 	require.Equal(t, 2, counts[root.ID])
 	require.Equal(t, 2, counts[leaf.ID])
+
+	// 树视图同时透出「直接挂载」成员 id（非子树），供列表页 groupTree 维度一次取数。
+	require.ElementsMatch(t, []uint{i1.ID}, direct[root.ID])
+	require.ElementsMatch(t, []uint{i1.ID, i2.ID}, direct[leaf.ID])
 
 	// 移除成员
 	require.NoError(t, svc.RemoveMembers(leaf.ID, []uint{i2.ID}))

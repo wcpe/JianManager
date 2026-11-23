@@ -22,6 +22,7 @@
 1. **上个版本 `vX.Y.Z` 打 tag 之后立刻**：`sdd-release-version` 把 `version.go` bump 到下一目标的 `-dev`（例：发完 `0.14.0` → 立即置 `0.15.0-dev`），**重新打开开发窗口**。
 2. **开发期间目标版本号需上调**（如中途合入破坏性变更，MINOR→MAJOR）：直接改 `-dev` 前面的 `X.Y.Z`，无需其他动作。降级目标（把已宣布的下一版号往回改）不允许。
 3. **正式发布时**：`sdd-release-version` 去掉 `-dev` 后缀 → 裸 `X.Y.Z`，打 tag `vX.Y.Z`，随后**再 bump 到下一个 `-dev`**。tag 提交本身是唯一携带裸 `X.Y.Z` 的提交。
+4. **发版前置条件（红线）**：第 3 步的改版本号与打 tag **必须在该提交的远程 CI 全绿之后**才执行；CI 未绿（含 flake 导致的红）时禁止创建任何发版 commit 与 tag。判定依据为远程 CI 结论，**本地测试全绿不能替代**。详见 `gate-merge.md` §发版红线。
 
 ## 与既有规则的对齐（不新增矛盾）
 
@@ -37,3 +38,4 @@
 - 任何时刻 `git describe` / `version.Version` 报的版本，要么是「已 tag 的裸 `X.Y.Z`」，要么是「带 `-dev` 的下一目标版」，**不存在第三种**。
 - Code Review / 发版门禁（`gate-merge.md`）核对：`version.go`、CHANGELOG `[Unreleased]` 目标、PRD `✅ 已交付@` 版本号三者对同一个 `X.Y.Z`。
 - 发现 `version.go` 停留在已发布的裸版本号（如已 tag `v0.14.0` 后仍写 `0.14.0`）即为漂移，必须补 `-dev`。
+- 发版前确认基线提交的远程 CI 结论为 `success`；本地测试结果不作为发版依据（见 `gate-merge.md` §发版红线）。

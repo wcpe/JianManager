@@ -3,7 +3,7 @@ package top.wcpe.mc.jm.updater.core;
 import java.util.Locale;
 
 /**
- * core 侧玩家面向文案 i18n（FR-099 进度窗口）。
+ * core 侧玩家面向文案 i18n（进度窗口）。
  *
  * <p>按 {@code user.language} 选中/英（其余回退英文），与 wedge {@code Messages} 同构。
  * 数字格式（字节/速度/时长）用 {@link Locale#US} 保证小数点稳定，不随系统区域变。

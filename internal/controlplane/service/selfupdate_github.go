@@ -18,8 +18,8 @@ var ErrUpdateRateLimited = errors.New("GitHub API 限流，请稍后重试或配
 // defaultGitHubAPIBase 是 GitHub REST API 默认基址；测试经 SelfUpdateConfig.GitHubAPIBase 覆盖。
 const defaultGitHubAPIBase = "https://api.github.com"
 
-// prereleaseTag 是滚动预发布的固定 tag 名（FR-182，见 ADR-042，由 ADR-036 §3 的 nightly 改名而来）。
-// 与 FR-173 发布管线 .github/workflows/release.yml 的预发布 tag 强耦合，须保持一致。
+// prereleaseTag 是滚动预发布的固定 tag 名（由 nightly 改名而来）。
+// 与发布管线 .github/workflows/release.yml 的预发布 tag 强耦合，须保持一致。
 const prereleaseTag = "latest"
 
 // githubReqTimeout 是单次 GitHub API / checksums 请求的整体超时。
@@ -59,7 +59,7 @@ func (s *SelfUpdateService) apiBase() string {
 	return defaultGitHubAPIBase
 }
 
-// parseAssetName 按 ADR-036 §1 命名 <component>-<os>-<arch>[.exe] 反解资产名。
+// parseAssetName 按命名 <component>-<os>-<arch>[.exe] 反解资产名。
 // component ∈ {control-plane, worker}；windows 目标带 .exe、其余无后缀。
 // 不符契约（如 checksums.txt、未知组件、非法后缀）返回 ok=false。
 func parseAssetName(name string) (component, goos, goarch string, ok bool) {
@@ -103,7 +103,7 @@ func parseAssetName(name string) (component, goos, goarch string, ok bool) {
 	return component, goos, goarch, true
 }
 
-// parseChecksums 解析 ADR-036 §2 的 checksums.txt：每行 <sha256(小写)>␠␠<filename>。
+// parseChecksums 解析 checksums.txt：每行 <sha256(小写)>␠␠<filename>。
 // 容忍空行与额外空格；返回 filename→sha256（sha 归一为小写）。
 func parseChecksums(text string) map[string]string {
 	out := make(map[string]string)
@@ -124,7 +124,7 @@ func parseChecksums(text string) map[string]string {
 	return out
 }
 
-// fetchGitHubRelease 据 channel 读 GitHub Releases API，组装等价归一 *Feed（FR-175，见 ADR-036 §7）。
+// fetchGitHubRelease 据 channel 读 GitHub Releases API，组装等价归一 *Feed。
 // stable→/releases/latest（天然排除 prerelease/draft）；prerelease→/releases/tags/nightly。
 // sha256 取自 release 的 checksums.txt 资产；无 checksums.txt 报错（不允许裸下载）。
 func (s *SelfUpdateService) fetchGitHubRelease(ctx context.Context) (*Feed, error) {
@@ -138,7 +138,7 @@ func (s *SelfUpdateService) fetchGitHubRelease(ctx context.Context) (*Feed, erro
 
 	var endpoint string
 	if s.channel() == "prerelease" {
-		// 滚动预发布固定 tag 由 nightly 改名为 latest（FR-182，见 ADR-042，取代 ADR-036 §7 命名）。
+		// 滚动预发布固定 tag 由 nightly 改名为 latest（取代命名）。
 		// 注意与 stable 的 /releases/latest 不同：此处是名为 latest 的 tag（/releases/tags/latest）。
 		endpoint = fmt.Sprintf("%s/repos/%s/releases/tags/%s", s.apiBase(), repo, prereleaseTag)
 	} else {

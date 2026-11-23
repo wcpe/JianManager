@@ -7,7 +7,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 运行态心跳体（FR-265）：只含粗粒度运行态，不含密钥与机器码。 */
+/** 运行态心跳体：只含粗粒度运行态，不含密钥与机器码。 */
 class RuntimeHeartbeatTest {
 
     @Test

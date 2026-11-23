@@ -47,8 +47,8 @@ func writeTarGz(t *testing.T, path string, entries []tar.Header, contents map[st
 }
 
 // TestUntarGz_PreservesSymlinks Node 官方 tar.gz 的 bin/npm、bin/corepack 是相对符号链接，
-// 解压必须保留（FR-299 缺陷真机复现：symlink 条目被静默丢弃，bin/ 只剩 node，
-// corepack/npm 不可用，FR-306 包管理器无从激活）。
+// 解压必须保留（缺陷真机复现：symlink 条目被静默丢弃，bin/ 只剩 node，
+// corepack/npm 不可用包管理器无从激活）。
 func TestUntarGz_PreservesSymlinks(t *testing.T) {
 	if !symlinkSupported(t) {
 		t.Skip("环境不支持创建符号链接（Windows 非开发者模式），跳过")
@@ -73,7 +73,7 @@ func TestUntarGz_PreservesSymlinks(t *testing.T) {
 	link := filepath.Join(dest, "top", "bin", "corepack")
 	st, err := os.Lstat(link)
 	if err != nil {
-		t.Fatalf("bin/corepack 符号链接丢失（FR-299 缺陷）: %v", err)
+		t.Fatalf("bin/corepack 符号链接丢失（缺陷）: %v", err)
 	}
 	if st.Mode()&os.ModeSymlink == 0 {
 		t.Fatal("bin/corepack 应为符号链接")

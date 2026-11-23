@@ -14,13 +14,13 @@ import (
 const (
 	CtxAgentPrincipal = "agentPrincipal"
 	CtxActorKind      = "actorKind" // "user" | "agent"
-	// CtxAgentClient 解析后的调用方（mcp|jmagent|curl|unknown），FR-390。
+	// CtxAgentClient 解析后的调用方（mcp|jmagent|curl|unknown）。
 	CtxAgentClient = "agentClient"
 	// CtxAgentCallStart 请求开始时间，供流水 latency_ms。
 	CtxAgentCallStart = "agentCallStart"
 )
 
-// HeaderAgentClient 客户端自报标识头（FR-390 约定）。
+// HeaderAgentClient 客户端自报标识头（约定）。
 const HeaderAgentClient = "X-JM-Agent-Client"
 
 // AgentAuth 可选：若 Bearer 以 jmat_ 开头则走 Agent Token 鉴权，成功后注入 principal 并跳过 JWT。
@@ -56,7 +56,7 @@ func AgentAuth(agentSvc *service.AgentTokenService) gin.HandlerFunc {
 		c.Set(CtxUserID, p.TokenID)
 		c.Set(CtxUsername, "agent:"+p.Name)
 		c.Set(CtxRole, 0)
-		// FR-390：client 标识 + 计时起点（仅成功鉴权后）
+		// client 标识 + 计时起点（仅成功鉴权后）
 		c.Set(CtxAgentClient, service.NormalizeAgentClient(c.GetHeader(HeaderAgentClient)))
 		c.Set(CtxAgentCallStart, time.Now())
 		c.Next()

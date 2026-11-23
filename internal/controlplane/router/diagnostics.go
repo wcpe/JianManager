@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// DiagnosticsHandler 连通性测试路由（FR-229）：出站 HTTP 可达性 + 节点存活探测，仅平台管理员。
+// DiagnosticsHandler 连通性测试路由：出站 HTTP 可达性 + 节点存活探测，仅平台管理员。
 // 注册在 admin 组——出站 HTTP 测试可让 CP 请求任意 URL（SSRF 面），限平台管理员降低滥用。
 type DiagnosticsHandler struct {
 	svc *service.DiagnosticsService

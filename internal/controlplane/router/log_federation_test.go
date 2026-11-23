@@ -1,0 +1,745 @@
+package router
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+
+	"github.com/wcpe/JianManager/internal/controlplane/logcoord"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
+)
+
+// F-009：writeFederationError HTTP 状态映射回归（不得回落 500）。
+func TestWriteFederationError_HTTPStatusMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{"authz → 403", fmt.Errorf("%w: principal mismatch", logcoord.ErrViewAuthz), http.StatusForbidden, "FORBIDDEN"},
+		{"reuse mismatch → 409 VIEW_STALE", fmt.Errorf("%w: filter mismatch", logcoord.ErrViewReuseMismatch), http.StatusConflict, "VIEW_STALE"},
+		{"view not found → 400", errors.New("logcoord: view not found: x"), http.StatusBadRequest, "INVALID_REQUEST"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			writeFederationError(c, tc.err)
+			assert.Equal(t, tc.wantStatus, w.Code)
+			assert.Contains(t, w.Body.String(), tc.wantCode)
+			assert.NotEqual(t, http.StatusInternalServerError, w.Code)
+		})
+	}
+}
+
+// F-008/F-007/F-010 集成：View 复用时条件变化 → 409；跨主体 viewId → 403。
+// 必须在构造 Router 前注入 testLogCoord（禁止 t.Skip 绕过）。
+func TestLogFederation_ViewReuseHTTPStatus(t *testing.T) {
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+	}}
+	w1 := &fedWorker{
+		items: []logcoord.Event{{
+			EventID: "e1", LogSourceID: "s", SourceGeneration: "g",
+			EventTimeUTC: "2026-09-20T12:00:00Z", Level: "info", Message: "hello",
+		}},
+		targets: []logcoord.WorkerTargetResult{{
+			TargetID: "inst:1",
+			State:    logcoord.CoverageSuccess,
+		}},
+	}
+	dialer := &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}}
+	coord := logcoord.New(resolver, dialer)
+	// F-010：先注入再 setup，路由才会挂载联邦端点。
+	r, _ := setupFederationRouter(t, coord)
+	adminToken := getAdminToken(t, r)
+
+	w := makeRequest(r, "GET", "/api/v1/logs/federation/search?instanceId=1", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "federation search must be mounted, body=%s", w.Body.String())
+	body := parseJSON(t, w)
+	viewObj, _ := body["view"].(map[string]interface{})
+	viewID, _ := viewObj["view_id"].(string)
+	require.NotEmpty(t, viewID)
+
+	// 固定查询范围变化必须由客户端显式创建新视图；快路径也不能静默放宽旧视图校验。
+	w2 := makeRequest(r, "GET", "/api/v1/logs/federation/search?instanceId=1&viewId="+viewID+"&from=2020-01-01T00:00:00Z&to=2020-01-02T00:00:00Z", nil, adminToken)
+	require.Equal(t, http.StatusConflict, w2.Code, "body=%s", w2.Body.String())
+	body2 := parseJSON(t, w2)
+	require.Equal(t, "VIEW_STALE", body2["error"])
+
+	// 伪造其他主体创建的 view 再带当前 token 复用 → 403
+	foreign, err := coord.CreateView(context.Background(), logcoord.Query{
+		AuthorizedTargetIDs: []string{"inst:1"},
+		PrincipalKey:        "user:999|role:0|targets:other",
+		PermissionScope:     "scoped|role:x|auth:0|nodes:0|targets:0",
+		Budget:              logcoord.QueryBudget{Limit: 10},
+	})
+	require.NoError(t, err)
+	w3 := makeRequest(r, "GET", "/api/v1/logs/federation/search?instanceId=1&viewId="+foreign.ViewID, nil, adminToken)
+	require.Equal(t, http.StatusForbidden, w3.Code, "body=%s", w3.Body.String())
+	assert.Contains(t, fmt.Sprint(parseJSON(t, w3)["error"]), "FORBIDDEN")
+}
+
+// F-008：PermissionScope 摘要稳定且随权限/目标变化。
+func TestFederationPermissionScopeDigest(t *testing.T) {
+	a := &service.UserAccess{UserID: 1, Role: 10, RoleKey: "admin", AuthVersion: 0, IsPlatformAdmin: true, Nodes: map[string]struct{}{"log.read": {}}}
+	b := &service.UserAccess{UserID: 1, Role: 10, RoleKey: "admin", AuthVersion: 1, IsPlatformAdmin: true, Nodes: map[string]struct{}{"log.read": {}}}
+	sa := federationPermissionScope(a, []string{"inst:1"})
+	sb := federationPermissionScope(b, []string{"inst:1"})
+	assert.NotEmpty(t, sa)
+	assert.NotEqual(t, sa, sb, "AuthVersion change must change scope digest")
+	assert.Equal(t, sa, federationPermissionScope(a, []string{"inst:1"}))
+}
+
+// fedResolver 静态目标注册表：忽略入参，返回固定目标（HTTP 层授权收敛后的目标集合）。
+type fedResolver struct {
+	targets []logcoord.TargetInfo
+}
+
+func (f *fedResolver) Resolve(_ context.Context, _ []string) ([]logcoord.TargetInfo, error) {
+	return append([]logcoord.TargetInfo(nil), f.targets...), nil
+}
+
+// fedWorker 单 Worker 可编程日志查询面。
+type fedWorker struct {
+	items   []logcoord.Event
+	targets []logcoord.WorkerTargetResult
+	trunc   bool
+	unsup   bool
+	fail    string
+	searchN int
+	// statsN/facetN/streamN 记录聚合 RPC 次数：聚合类同参缓存命中时不得增长（CP-8 回归）。
+	statsN  int
+	facetN  int
+	streamN int
+	// lastFilter 记录最近一次 Search 收到的过滤表达式，供断言结构化筛选是否已组合下发。
+	lastFilter string
+	// lastTargets 记录最近一次 Search 的授权目标，确认高级表达式不能扩大 scope。
+	lastTargets []string
+	// lastFacetLimit 记录最近一次 Facets 收到的每维上限，供断言 CP 侧钳制是否生效。
+	// DimensionLimit 是 uint32：用户传负值未钳制时会溢出成 4294967295，
+	// 使下游裁剪与 Truncated 标记一并失效（本地裁剪是 field_values 的唯一体积闸）。
+	lastFacetLimit uint32
+	// quality 覆盖 Search 上报的质量；nil 表示按真实 Worker 的默认值上报 exact/exact。
+	// 真实 Worker 在 planner 中始终给出这两个维度（internal/worker/logs/query/planner.go），
+	// 零值等价于「Worker 未上报质量」，会被 fail-closed 的导出闸门正确阻断——
+	// 需要模拟该情形的用例显式置为 &logcoord.Quality{}。
+	quality *logcoord.Quality
+}
+
+func (w *fedWorker) OpenView(ctx context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerSearchResponse, error) {
+	resp, err := w.Search(ctx, req)
+	if resp != nil {
+		resp.ViewID = "worker-view-test"
+	}
+	return resp, err
+}
+
+func (w *fedWorker) Search(_ context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerSearchResponse, error) {
+	w.searchN++
+	w.lastFilter = req.Filter
+	w.lastTargets = append([]string(nil), req.TargetIDs...)
+	quality := logcoord.Quality{
+		DuplicateQuality: logcoord.DupExact,
+		StatsQuality:     logcoord.StatsQExact,
+	}
+	if w.quality != nil {
+		quality = *w.quality
+	}
+	// 真实 Worker 在空引用首屏也会创建视图，替身必须返回实际可复用的引用。
+	viewID := req.ViewID
+	if viewID == "" {
+		viewID = "worker-view-test"
+	}
+	return &logcoord.WorkerSearchResponse{
+		ViewID:      viewID,
+		Items:       append([]logcoord.Event(nil), w.items...),
+		Targets:     append([]logcoord.WorkerTargetResult(nil), w.targets...),
+		Exhausted:   !w.trunc,
+		Truncated:   w.trunc,
+		Unsupported: w.unsup,
+		Error:       w.fail,
+		Quality:     quality,
+	}, nil
+}
+
+func (w *fedWorker) Tail(ctx context.Context, req logcoord.WorkerSearchRequest, _ string) (*logcoord.WorkerSearchResponse, error) {
+	return w.Search(ctx, req)
+}
+
+func (w *fedWorker) Fields(_ context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerFieldsResponse, error) {
+	return &logcoord.WorkerFieldsResponse{ViewID: req.ViewID, Fields: []string{"level", "stream"},
+		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...)}, nil
+}
+
+func (w *fedWorker) Stats(_ context.Context, req logcoord.WorkerSearchRequest, _ []string, _ string) (*logcoord.WorkerStatsResponse, error) {
+	w.statsN++
+	return &logcoord.WorkerStatsResponse{
+		ViewID:  req.ViewID,
+		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...),
+	}, nil
+}
+
+func (w *fedWorker) Facets(_ context.Context, req logcoord.WorkerSearchRequest, _ []string, dimensionLimit uint32) (*logcoord.WorkerFacetsResponse, error) {
+	w.facetN++
+	w.lastFacetLimit = dimensionLimit
+	return &logcoord.WorkerFacetsResponse{
+		ViewID:  req.ViewID,
+		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...),
+	}, nil
+}
+
+// Streams / StreamFieldNames / StreamFieldValues 是 WorkerClient 新增能力。
+//
+// 本替身只建模「老 Worker 不支持 streams」这一路：返回 Unsupported，
+// 与生产上混版节点的行为一致（CP 会归入「本次不提供该能力」而不是报错）。
+// streamN 同样参与同参缓存断言：缓存命中时不得增长。
+func (w *fedWorker) Streams(_ context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerStreamsResponse, error) {
+	w.streamN++
+	return &logcoord.WorkerStreamsResponse{ViewID: req.ViewID, Unsupported: true,
+		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...)}, nil
+}
+
+func (w *fedWorker) StreamFieldNames(_ context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerStreamFieldNamesResponse, error) {
+	w.streamN++
+	return &logcoord.WorkerStreamFieldNamesResponse{ViewID: req.ViewID, Unsupported: true,
+		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...)}, nil
+}
+
+func (w *fedWorker) StreamFieldValues(_ context.Context, req logcoord.WorkerSearchRequest, field string) (*logcoord.WorkerStreamFieldValuesResponse, error) {
+	w.streamN++
+	return &logcoord.WorkerStreamFieldValuesResponse{ViewID: req.ViewID, Field: field, Unsupported: true,
+		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...)}, nil
+}
+
+// fedDialer workerID → client。
+type fedDialer struct {
+	clients map[string]logcoord.WorkerClient
+	fail    map[string]error
+}
+
+func (d *fedDialer) Dial(_ context.Context, workerID string) (logcoord.WorkerClient, error) {
+	if err, ok := d.fail[workerID]; ok && err != nil {
+		return nil, err
+	}
+	c, ok := d.clients[workerID]
+	if !ok {
+		return nil, fmt.Errorf("unknown worker %s", workerID)
+	}
+	return c, nil
+}
+
+func fedSuccess(id, workerID, cvs, gen string) logcoord.WorkerTargetResult {
+	return logcoord.WorkerTargetResult{
+		TargetID:          id,
+		State:             logcoord.CoverageSuccess,
+		ClosedVisibleSeq:  cvs,
+		CatalogGeneration: gen,
+	}
+}
+
+func fedEvent(id, source, gen string, start uint64, eventTime, level, msg string) logcoord.Event {
+	return logcoord.Event{
+		EventID:          id,
+		LogSourceID:      source,
+		SourceGeneration: gen,
+		RecordStart:      start,
+		RecordEnd:        start + 1,
+		EventTimeUTC:     eventTime,
+		Level:            level,
+		Message:          msg,
+	}
+}
+
+// setupFederationRouter 构建带 logcoord 联邦端点的测试路由（经 testLogCoord 注入）。
+func setupFederationRouter(t *testing.T, coord *logcoord.Coordinator) (*gin.Engine, *gorm.DB) {
+	t.Helper()
+	testLogCoord = coord
+	t.Cleanup(func() { testLogCoord = nil })
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	return r, db
+}
+
+func TestLogFederation_Search_PartialCoverageJSON(t *testing.T) {
+	on, off := "inst:1", "inst:2"
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: on, WorkerID: "w-on", Readiness: logcoord.ReadyOnline},
+		{ID: off, WorkerID: "w-off", Readiness: logcoord.ReadyOffline, HistoricalHolder: true},
+	}}
+	wOn := &fedWorker{
+		items: []logcoord.Event{
+			fedEvent("e1", "src-on", "g", 1, "2026-09-20T12:00:00Z", "INFO", "ok line"),
+		},
+		targets: []logcoord.WorkerTargetResult{
+			fedSuccess(on, "w-on", "src-on/g:1", "1"),
+		},
+	}
+	dialer := &fedDialer{
+		clients: map[string]logcoord.WorkerClient{"w-on": wOn},
+		fail:    map[string]error{"w-off": errors.New("tunnel closed")},
+	}
+	coord := logcoord.New(resolver, dialer)
+
+	r, _ := setupFederationRouter(t, coord)
+	adminToken := getAdminToken(t, r)
+
+	w := makeRequest(r, "GET", "/api/v1/logs/federation/search?limit=50", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	body := parseJSON(t, w)
+	cov, ok := body["coverage"].(map[string]interface{})
+	require.True(t, ok, "coverage missing: %v", body)
+	assert.Equal(t, false, cov["complete"], "partial coverage must not claim complete")
+	// Pending 只后置完整性复核，实际水位与已经观察到的 success/offline 必须保留。
+	assert.Equal(t, true, cov["pending"], "快路径必须标识尚未完成完整性复核: %v", body)
+	targets, _ := cov["targets"].([]interface{})
+	require.Len(t, targets, 2, "pending 不能隐藏已经观察到的逐目标失败")
+	states := map[string]string{}
+	for _, v := range targets {
+		target := v.(map[string]interface{})
+		states[target["target_id"].(string)] = target["state"].(string)
+	}
+	require.Equal(t, "success", states[on])
+	require.Equal(t, "offline", states[off])
+	assert.NotContains(t, fmt.Sprint(body["notes"]), "pending", "pending 绝不入 notes ✗")
+
+	// 即便首屏部分失败，成功 Worker 的实际快照向量也必须固定，失败路不得伪造水位。
+	view, _ := body["view"].(map[string]interface{})
+	require.NotNil(t, view)
+	vector, hasCVS := view["closed_visible_seq"].(map[string]interface{})
+	require.True(t, hasCVS, "首屏必须保存实际读取水位: %v", view)
+	assert.Equal(t, "src-on/g:1", vector[on])
+	assert.NotContains(t, vector, off)
+	assert.Empty(t, body["next_cursor"], "未知 Worker 范围不能推进游标")
+
+	items, _ := body["items"].([]interface{})
+	assert.NotEmpty(t, items)
+}
+
+func TestLogFederation_Export_IncompleteNoArtifact(t *testing.T) {
+	on, off := "inst:1", "inst:2"
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: on, WorkerID: "w-on", Readiness: logcoord.ReadyOnline},
+		{ID: off, WorkerID: "w-off", Readiness: logcoord.ReadyNotReady},
+	}}
+	wOn := &fedWorker{
+		items: []logcoord.Event{
+			fedEvent("e1", "src-on", "g", 1, "2026-09-20T12:00:00Z", "INFO", "partial"),
+		},
+		targets: []logcoord.WorkerTargetResult{
+			fedSuccess(on, "w-on", "src-on/g:1", "1"),
+		},
+	}
+	dialer := &fedDialer{
+		clients: map[string]logcoord.WorkerClient{"w-on": wOn},
+		fail:    map[string]error{"w-off": errors.New("not ready")},
+	}
+	coord := logcoord.New(resolver, dialer)
+
+	r, _ := setupFederationRouter(t, coord)
+	adminToken := getAdminToken(t, r)
+
+	w := makeRequest(r, "POST", "/api/v1/logs/federation/export", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	// 不完整导出：JSON incomplete 标记，无成功附件
+	assert.NotContains(t, w.Header().Get("Content-Type"), "application/x-ndjson")
+	assert.Empty(t, w.Header().Get("Content-Disposition"))
+
+	body := parseJSON(t, w)
+	assert.Equal(t, true, body["export_incomplete"])
+	assert.Nil(t, body["artifact"], "incomplete export must not deliver artifact")
+	reasons, _ := body["incomplete_reasons"].([]interface{})
+	assert.NotEmpty(t, reasons)
+}
+
+func TestLogFederation_Export_BlocksUnresolvedQuality(t *testing.T) {
+	// partial → duplicate_quality=unresolved → export 阻断
+	on, off := "inst:1", "inst:2"
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: on, WorkerID: "w-on", Readiness: logcoord.ReadyOnline},
+		{ID: off, WorkerID: "w-off", Readiness: logcoord.ReadyOnline},
+	}}
+	wOn := &fedWorker{
+		items: []logcoord.Event{
+			fedEvent("e1", "src-on", "g", 1, "2026-09-20T12:00:00Z", "INFO", "ok"),
+		},
+		targets: []logcoord.WorkerTargetResult{
+			fedSuccess(on, "w-on", "src-on/g:1", "1"),
+		},
+	}
+	wOff := &fedWorker{
+		// partial 覆盖 → quality unresolved
+		targets: []logcoord.WorkerTargetResult{{
+			TargetID: off,
+			State:    logcoord.CoveragePartial,
+			Reasons:  []string{"worker_truncated"},
+		}},
+	}
+	dialer := &fedDialer{
+		clients: map[string]logcoord.WorkerClient{"w-on": wOn, "w-off": wOff},
+	}
+	coord := logcoord.New(resolver, dialer)
+
+	r, _ := setupFederationRouter(t, coord)
+	adminToken := getAdminToken(t, r)
+
+	w := makeRequest(r, "POST", "/api/v1/logs/federation/export", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code)
+	body := parseJSON(t, w)
+	assert.Equal(t, true, body["export_incomplete"])
+	assert.Nil(t, body["artifact"])
+}
+
+// M-3 回归（HTTP 出口）：Worker 未上报质量时不得交付成功附件。
+//
+// 缺陷形态：nil 的 LogQuality 经适配层解析为 unspecified，而导出闸门只拦
+// unresolved/conflict/partial/unavailable ⇒ 放行，HTTP 层于是返回 NDJSON 附件。
+// 覆盖完整并不代表质量已知：没有任何来源断言过这份导出可信，必须 fail-closed。
+func TestLogFederation_Export_BlocksUnspecifiedQuality(t *testing.T) {
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+	}}
+	unspecified := logcoord.Quality{}
+	w1 := &fedWorker{
+		items: []logcoord.Event{
+			fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "INFO", "hello"),
+		},
+		targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+		quality: &unspecified, // 模拟 Worker 未上报 LogQuality
+	}
+	coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+	r, _ := setupFederationRouter(t, coord)
+	adminToken := getAdminToken(t, r)
+
+	w := makeRequest(r, "POST", "/api/v1/logs/federation/export?limit=100", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.NotContains(t, w.Header().Get("Content-Type"), "application/x-ndjson",
+		"质量未指定时不得返回 NDJSON 成功附件")
+
+	body := parseJSON(t, w)
+	assert.Equal(t, true, body["export_incomplete"])
+	assert.Nil(t, body["artifact"])
+}
+
+func TestLogFederation_Unauthorized403_NoToken(t *testing.T) {
+	coord := logcoord.New(&fedResolver{}, &fedDialer{})
+	r, _ := setupFederationRouter(t, coord)
+
+	// 验收项 10「权限覆盖**全部**端点、越权无侧信道」：
+	// 这里逐个列出 7 个端点（原来只列了 4 个）——路由虽挂在同一 `permRead("log.read")` 组下，
+	// 但「组挂对了」与「每个端点都真的在组里」是两件事：有人把某个 handler 挪到组外
+	// 注册就会漏掉，而只测 4 个端点的用例抓不到。
+	for _, tc := range []struct{ method, path string }{
+		{"GET", "/api/v1/logs/federation"},
+		{"GET", "/api/v1/logs/federation/search"},
+		{"GET", "/api/v1/logs/federation/tail"},
+		{"GET", "/api/v1/logs/federation/stats"},
+		{"GET", "/api/v1/logs/federation/fields"},
+		{"GET", "/api/v1/logs/federation/facets?dimensions=level"},
+		{"POST", "/api/v1/logs/federation/export"},
+	} {
+		w := makeRequest(r, tc.method, tc.path, nil, "")
+		assert.Equal(t, http.StatusUnauthorized, w.Code, "%s %s", tc.method, tc.path)
+	}
+}
+
+func TestLogFederation_Unauthorized403_NoLogRead(t *testing.T) {
+	coord := logcoord.New(&fedResolver{targets: []logcoord.TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+	}}, &fedDialer{clients: map[string]logcoord.WorkerClient{
+		"w1": &fedWorker{targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "1", "1")}},
+	}})
+	r, db := setupFederationRouter(t, coord)
+
+	// 无 log.read 节点的成员 → RequireAnyPerm 403
+	authz := service.NewAuthzService(db)
+	empty, err := service.NewUserService(db).Create("fed_noperm", "password123", model.RoleMember, model.UserStatusActive)
+	require.NoError(t, err)
+	emptyRole, err := authz.Permissions().CreateRole("fed-empty", "none", nil)
+	require.NoError(t, err)
+	require.NoError(t, authz.Permissions().BindUserRole(empty.ID, emptyRole.ID))
+	tok := loginUserToken(t, r, "fed_noperm", "password123")
+
+	w := makeRequest(r, "GET", "/api/v1/logs/federation/search", nil, tok)
+	require.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
+	body := parseJSON(t, w)
+	assert.Equal(t, "FORBIDDEN", body["error"])
+}
+
+func TestLogFederation_Unauthorized403_CrossInstanceScope(t *testing.T) {
+	coord := logcoord.New(&fedResolver{targets: []logcoord.TargetInfo{
+		{ID: "inst:99", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+	}}, &fedDialer{clients: map[string]logcoord.WorkerClient{
+		"w1": &fedWorker{targets: []logcoord.WorkerTargetResult{fedSuccess("inst:99", "w1", "1", "1")}},
+	}})
+	r, db := setupFederationRouter(t, coord)
+
+	authz := service.NewAuthzService(db)
+	// 有 log.read 但无可访问实例，请求任意 instanceId → 403
+	member, err := service.NewUserService(db).Create("fed_lonely", "password123", model.RoleMember, model.UserStatusActive)
+	require.NoError(t, err)
+	role, err := authz.Permissions().CreateRole("fed-log-read", "", []string{"log.read"})
+	require.NoError(t, err)
+	require.NoError(t, authz.Permissions().BindUserRole(member.ID, role.ID))
+	tok := loginUserToken(t, r, "fed_lonely", "password123")
+
+	w := makeRequest(r, "GET", "/api/v1/logs/federation/search?instanceId=99", nil, tok)
+	require.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
+}
+
+func TestLogFederation_AdminSearchOK_WithKeywordAndLimits(t *testing.T) {
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+	}}
+	w1 := &fedWorker{
+		items: []logcoord.Event{
+			fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "INFO", "needle in haystack"),
+		},
+		targets: []logcoord.WorkerTargetResult{
+			fedSuccess("inst:1", "w1", "src/g:1", "1"),
+		},
+	}
+	coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+	r, _ := setupFederationRouter(t, coord)
+	adminToken := getAdminToken(t, r)
+
+	w := makeRequest(r, "GET", "/api/v1/logs/federation/search?keyword=needle&limit=10&onlineOnly=false", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code)
+	body := parseJSON(t, w)
+	cov := body["coverage"].(map[string]interface{})
+	// pending 只标记快照水位未固化，不得把全部目标 success 的观测覆盖改成失败。
+	assert.Equal(t, true, cov["pending"])
+	assert.Equal(t, true, cov["complete"])
+	items := body["items"].([]interface{})
+	require.Len(t, items, 1)
+	assert.Equal(t, "e1", items[0].(map[string]interface{})["event_id"])
+}
+
+func TestLogFederation_StatsAndFacets_AdminOK(t *testing.T) {
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+	}}
+	w1 := &fedWorker{
+		targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+	}
+	coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+	r, _ := setupFederationRouter(t, coord)
+	adminToken := getAdminToken(t, r)
+
+	w := makeRequest(r, "GET", "/api/v1/logs/federation/stats?groupBy=level&timeBucket=1m", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	body := parseJSON(t, w)
+	assert.Contains(t, body, "coverage")
+	assert.Contains(t, body, "view")
+
+	w = makeRequest(r, "GET", "/api/v1/logs/federation/facets?dimensions=level&dimensionLimit=10", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	body = parseJSON(t, w)
+	assert.Contains(t, body, "dimensions")
+
+	w = makeRequest(r, "GET", "/api/v1/logs/federation/fields", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	body = parseJSON(t, w)
+	assert.ElementsMatch(t, []interface{}{"level", "stream"}, body["fields"])
+
+	w = makeRequest(r, "GET", "/api/v1/logs/federation/tail?mode=FOLLOW_LIVE", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	body = parseJSON(t, w)
+	assert.Equal(t, false, body["exhausted"])
+	cov := body["coverage"].(map[string]interface{})
+	assert.Equal(t, "OPEN", cov["enumeration_state"])
+}
+
+func TestLogFederation_Export_CompleteSuccessAttachment(t *testing.T) {
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+	}}
+	w1 := &fedWorker{
+		items: []logcoord.Event{
+			fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "INFO", "hello"),
+		},
+		targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+	}
+	coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+	r, _ := setupFederationRouter(t, coord)
+	adminToken := getAdminToken(t, r)
+
+	w := makeRequest(r, "POST", "/api/v1/logs/federation/export?limit=100", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.Contains(t, w.Header().Get("Content-Type"), "application/x-ndjson")
+	assert.Contains(t, w.Header().Get("Content-Disposition"), "attachment")
+	assert.Contains(t, w.Body.String(), `"e1"`)
+}
+
+// TestLogFederation_LevelFilterReachesWorker 守护「按级别筛选」这一既有能力。
+//
+// 背景：经典 /logs 路径支持 level 筛选（log.go 的 buildFilter），而联邦路径成为默认
+// 数据源后，若不在 CP 侧把它组合进 filter 表达式，用户在联邦视图点「错误」不会有任何
+// 反应——同一界面两条路径行为不一致。wire 契约只有单一 filter 字段，故结构化 level
+// 必须在 CP 侧组合下发。
+func TestLogFederation_LevelFilterReachesWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		level  string
+		expect string
+	}{
+		{"小写转大写", "error", "level:ERROR"},
+		{"已是大小写混写", "Warn", "level:WARN"},
+		{"与关键字组合", "info", "level:INFO"},
+		{"含 OR 的关键词须加括号", "error", "level:ERROR"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w1 := &fedWorker{
+				items:   []logcoord.Event{fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "ERROR", "boom")},
+				targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+			}
+			resolver := &fedResolver{targets: []logcoord.TargetInfo{
+				{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+			}}
+			coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+			r, _ := setupFederationRouter(t, coord)
+			token := getAdminToken(t, r)
+
+			reqURL := "/api/v1/logs/federation/search?limit=100&level=" + tc.level
+			if tc.name == "与关键字组合" {
+				reqURL += "&keyword=needle"
+			}
+			// 含 OR 的关键词：LogsQL 中 AND 优先级高于 OR，必须给 keyword 加括号，
+			// 否则 keyword 的 OR 分支会绕过级别约束（实测 4 条 vs 期望 2 条）。
+			if tc.name == "含 OR 的关键词须加括号" {
+				reqURL += "&keyword=" + url.QueryEscape("a OR b")
+			}
+			w := makeRequest(r, "GET", reqURL, nil, token)
+			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+			assert.Contains(t, w1.lastFilter, tc.expect,
+				"结构化 level 必须组合进 filter 表达式并下发到 Worker")
+			if tc.name == "与关键字组合" {
+				assert.Contains(t, w1.lastFilter, "needle", "关键字与级别应同时保留")
+			}
+			if tc.name == "含 OR 的关键词须加括号" {
+				assert.Equal(t, "(a OR b) AND level:"+strings.ToUpper(tc.level), w1.lastFilter,
+					"keyword 必须被括号包裹，否则 OR 分支会绕过级别约束")
+			}
+		})
+	}
+}
+
+// TestLogFederation_LevelFilterRejectsNonWhitelist 守护注入面：level 来自用户输入，
+// 只允许契约登记的四个级别，非法值一律忽略而不得进入查询表达式。
+func TestLogFederation_LevelFilterRejectsNonWhitelist(t *testing.T) {
+	for _, bad := range []string{"error' OR '1'='1", "*", "ERROR;DROP TABLE", "trace"} {
+		t.Run(bad, func(t *testing.T) {
+			w1 := &fedWorker{
+				items:   []logcoord.Event{fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "INFO", "hi")},
+				targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+			}
+			resolver := &fedResolver{targets: []logcoord.TargetInfo{
+				{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+			}}
+			coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+			r, _ := setupFederationRouter(t, coord)
+			token := getAdminToken(t, r)
+
+			w := makeRequest(r, "GET", "/api/v1/logs/federation/search?limit=100&level="+url.QueryEscape(bad), nil, token)
+			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+			assert.NotContains(t, w1.lastFilter, "level:", "非法 level 不得进入表达式")
+			assert.NotContains(t, w1.lastFilter, "DROP", "非法 level 不得进入表达式")
+		})
+	}
+}
+
+// TestLogFederation_SourceFilterReachesWorker 验证来源筛选按前缀推导下发到 Worker。
+//
+// 事件结构只有 log_source_id（形如 inst:<实例ID>/<流>），前端下拉取值域为
+// instance/control_plane/worker；此前联邦路由完全不读 source 参数，用户选择无任何反应。
+func TestLogFederation_SourceFilterReachesWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		source   string
+		wantTerm string
+	}{
+		{name: "实例类", source: "instance", wantTerm: `log_source_id:"inst:"`},
+		{name: "节点类", source: "worker", wantTerm: `log_source_id:"node:"`},
+		{name: "平台类在联邦面无源", source: "control_plane", wantTerm: `log_source_id:"control_plane:"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w1 := &fedWorker{
+				items:   []logcoord.Event{fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "INFO", "hi")},
+				targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+			}
+			resolver := &fedResolver{targets: []logcoord.TargetInfo{
+				{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+			}}
+			coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+			r, _ := setupFederationRouter(t, coord)
+			token := getAdminToken(t, r)
+
+			w := makeRequest(r, "GET", "/api/v1/logs/federation/search?limit=100&source="+tc.source, nil, token)
+			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+			assert.Contains(t, w1.lastFilter, tc.wantTerm, "来源须推导为 log_source_id 前缀下发")
+		})
+	}
+}
+
+// TestLogFederation_SourceAndLevelCombined 验证来源与级别同时存在时二者都进表达式，
+// 且含 OR 的关键词被括号包裹（AND 优先级高于 OR，否则约束会被绕过）。
+func TestLogFederation_SourceAndLevelCombined(t *testing.T) {
+	w1 := &fedWorker{
+		items:   []logcoord.Event{fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "ERROR", "boom")},
+		targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+	}
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+	}}
+	coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+	r, _ := setupFederationRouter(t, coord)
+	token := getAdminToken(t, r)
+
+	w := makeRequest(r, "GET",
+		"/api/v1/logs/federation/search?limit=100&source=instance&level=error&keyword="+url.QueryEscape("a OR b"),
+		nil, token)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	f := w1.lastFilter
+	assert.Contains(t, f, `log_source_id:"inst:"`, "来源须进表达式")
+	assert.Contains(t, f, "level:ERROR", "级别须进表达式")
+	assert.Contains(t, f, "(a OR b)", "含 OR 的关键词须加括号，否则 AND 约束被绕过")
+}
+
+// TestLogFederation_SourceFilterRejectsNonWhitelist 验证非法来源值不进入表达式（防注入）。
+func TestLogFederation_SourceFilterRejectsNonWhitelist(t *testing.T) {
+	for _, bad := range []string{"inst:1", "*", `instance" OR "1"="1`, "instance;DROP", "unKNOWN"} {
+		t.Run(bad, func(t *testing.T) {
+			w1 := &fedWorker{
+				items:   []logcoord.Event{fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "INFO", "hi")},
+				targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+			}
+			resolver := &fedResolver{targets: []logcoord.TargetInfo{
+				{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+			}}
+			coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+			r, _ := setupFederationRouter(t, coord)
+			token := getAdminToken(t, r)
+
+			w := makeRequest(r, "GET", "/api/v1/logs/federation/search?limit=100&source="+url.QueryEscape(bad), nil, token)
+			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+			assert.NotContains(t, w1.lastFilter, "log_source_id:", "非法 source 不得进入表达式")
+			assert.NotContains(t, w1.lastFilter, "DROP", "非法 source 不得进入表达式")
+		})
+	}
+}

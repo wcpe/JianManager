@@ -18,6 +18,12 @@ func newPortsTestDB(t *testing.T) *gorm.DB {
 	// 内存库（共享缓存，按测试名隔离），避免 Windows 上 sqlite 文件在清理时被占用。
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Instance{}))
 	return db
 }
@@ -34,7 +40,7 @@ func TestAllocPortsForNode(t *testing.T) {
 	db := newPortsTestDB(t)
 
 	// 空节点：取各范围起点
-	p1, err := allocPortsForNode(db, 1)
+	p1, err := allocPortsForNode(db, 1, true)
 	require.NoError(t, err)
 	require.Equal(t, 25565, p1.ServerPort)
 	require.Equal(t, p1.ServerPort, p1.QueryPort) // query 约定等于 server
@@ -42,13 +48,13 @@ func TestAllocPortsForNode(t *testing.T) {
 
 	// 落库后再分配应跳过已占用端口
 	require.NoError(t, db.Create(mkInstance("a", 1, p1)).Error)
-	p2, err := allocPortsForNode(db, 1)
+	p2, err := allocPortsForNode(db, 1, true)
 	require.NoError(t, err)
 	require.Equal(t, 25566, p2.ServerPort)
 	require.Equal(t, 29941, p2.ProbePort) // p1 占了 29940，跳到 29941
 
 	// 不同节点独立计数
-	p3, err := allocPortsForNode(db, 2)
+	p3, err := allocPortsForNode(db, 2, true)
 	require.NoError(t, err)
 	require.Equal(t, 25565, p3.ServerPort)
 
@@ -56,9 +62,31 @@ func TestAllocPortsForNode(t *testing.T) {
 	inst := mkInstance("b", 1, p2)
 	require.NoError(t, db.Create(inst).Error)
 	require.NoError(t, db.Delete(inst).Error)
-	p4, err := allocPortsForNode(db, 1)
+	p4, err := allocPortsForNode(db, 1, true)
 	require.NoError(t, err)
 	require.Equal(t, 25566, p4.ServerPort) // p2 的端口被回收
+}
+
+// TestAllocPortsForNode_ProbeInapplicable：探针不适用（代理/通用二进制/Beacon）时不分配
+// 探针端口（ProbePort 恒 0），但仍分配 server/query；不占用的探针端口可被后续 MC 实例取用。
+func TestAllocPortsForNode_ProbeInapplicable(t *testing.T) {
+	db := newPortsTestDB(t)
+
+	p, err := allocPortsForNode(db, 1, false)
+	require.NoError(t, err)
+	require.Equal(t, 25565, p.ServerPort, "server 端口照常分配")
+	require.Equal(t, p.ServerPort, p.QueryPort, "query 约定等于 server")
+	require.Zero(t, p.ProbePort, "探针不适用时不分配探针端口")
+
+	// 不适用实例不写 probe_port，探针端口仍空置：后续 MC 实例取到探针起点。
+	require.NoError(t, db.Create(&model.Instance{
+		Name: "bin", NodeID: 1, Type: model.InstanceTypeGeneric, Role: model.InstanceRoleUniversal,
+		ProcessType: model.ProcessTypeDaemon, StartCommand: "x",
+		ServerPort: p.ServerPort, QueryPort: p.QueryPort,
+	}).Error)
+	probe, err := allocProbePortForNode(db, 1)
+	require.NoError(t, err)
+	require.Equal(t, 29940, probe, "探针端口未被不适用实例占用，仍从起点分配")
 }
 
 func TestAllocProbePortForNode(t *testing.T) {

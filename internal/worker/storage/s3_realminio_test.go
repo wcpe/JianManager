@@ -12,7 +12,7 @@ import (
 )
 
 // TestS3_RealMinIO 用真实 MinIO（SigV4 强校验）端到端验证 storage 传输后端的
-// 上传/下载/删除与 Probe 探测，覆盖 FR-152 盲区：此前 s3 测试均用 httptest 假服务器，
+// 上传/下载/删除与 Probe 探测，覆盖盲区：此前 s3 测试均用 httptest 假服务器，
 // 仅断言 Authorization 前缀而不做签名校验，无法证明手写 SigV4 能被真实 S3 接受。
 //
 // 由环境变量门控，不影响常规 CI：

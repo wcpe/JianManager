@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
+.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test test-plain e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -50,14 +50,13 @@ embed-web:
 	mkdir -p internal/controlplane/embed/dist
 	cp -r apps/control-plane-web/dist/* internal/controlplane/embed/dist/
 
-# 同步 Worker 一键安装脚本内嵌副本（FR-080，见 ADR-020 §2 CP 静态托管）。
-# canonical 真源在 scripts/install-worker.{sh,ps1}（随发布分发 / 手动拷贝）；本目标把它们复制到
-# CP 内嵌目录，go:embed 在 go build 时拉入二进制，使 `curl <cp>/install-worker.sh` 可拉。
-# 内嵌副本已入库（保证 fresh checkout 即可 build），install_scripts_test 守护两者字节一致防漂移。
+# Worker 一键安装脚本（FR-080，见 ADR-020 §2 CP 静态托管）。
+#
+# **脚本只有一份**：scripts/embed/install-worker.{sh,ps1}，由同目录的 embed.go 直接 go:embed。
+# 没有「复制到别处再嵌入」这一步——那样改了真源忘同步会让内嵌的悄悄变成旧版。
+# 本目标保留为空，只是为了不让 `make build` / `make dist-prep` 的依赖链断掉。
 embed-install-scripts:
-	mkdir -p internal/controlplane/embed/install-scripts
-	cp scripts/install-worker.sh internal/controlplane/embed/install-scripts/install-worker.sh
-	cp scripts/install-worker.ps1 internal/controlplane/embed/install-scripts/install-worker.ps1
+	@echo "embed-install-scripts: 无需操作（脚本与嵌入同目录，只有一份）"
 
 # 构建客户端 OTA 更新器两件套 jar 并注入 CP 内嵌目录（FR-107 运营方接入指引，可选）。
 # 需 client-updater 可构建（toolchain 解析 Java 8）。不跑此目标时 CP 不捆绑更新器 jar，
@@ -162,9 +161,24 @@ vet:
 lint:
 	golangci-lint run
 
-# Go 测试
+# Go 测试（竞态检测）
+#
+# 注意：`internal/controlplane/router` 包在 `-race` 下必然超时（实测非 race 全包 316s，
+# race 插桩约放大 10 倍 → 约 53 分钟，远超 go test 默认 10m 上限；主因是该包 837 处
+# setupTestRouter*/setupTestDB 调用点、每次 AutoMigrate 115 个模型，属既有规模问题）。
+# 故门禁经 scripts/go-test-race.sh 分两组跑：常规包用默认时限、router 包单独放宽
+# （RACE_TIMEOUT，默认 60m）。直接 `go test -race ./...` 会在该包上失败。
 test:
-	go test -race ./...
+	scripts/go-test-race.sh all
+
+# Go 测试（非 race 全量）
+#
+# release 门禁用的 `go test ./...` 没有显式时限；实测 `internal/controlplane/router` 在 Windows
+# 真机**单独**跑 480–520s，已逼近 go test 默认 10m 上限，与其它重包并行时直接包级超时
+# （`panic: test timed out after 10m0s`——超时会把该包里真正的用例失败一并掩盖）。
+# 故此处与 race 门禁同口径分组：core 用默认时限、router 单独放宽（ROUTER_TIMEOUT，默认 25m）。
+test-plain:
+	scripts/go-test.sh all
 
 # E2E 端到端测试（需启动真实 CP + Worker 进程）
 # 全链路用例（FR-043）会 spawn 真实 bot-worker(Node) 并让真实 Bot 进服，
@@ -172,9 +186,9 @@ test:
 e2e: build-bot
 	go test -tags=e2e -run TestE2E ./internal/e2e/ -v -timeout 240s
 
-# Go 测试覆盖率
+# Go 测试覆盖率（router 包同样需放宽时限，见 test 目标说明）
 test-cover:
-	go test -race -cover ./...
+	RACE_TIMEOUT=60m scripts/go-test-race.sh all
 
 # 前端类型检查 + lint
 lint-web:

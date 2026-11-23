@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-388 Agent 可证安全闸：契约枚举 + 运维面 HTTP ≥30 断言
+// Agent 可证安全闸：契约枚举 + 运维面 HTTP ≥30 断言
 // （scope 外 / 写白名单外 / 硬拒绝 / 吊销 / 过期 / 无 token / 并发拒绝）。
 
 func setupAgentGate(t *testing.T) (db *gorm.DB, r *gin.Engine, adminJWT string, node *model.Node, inst *model.Instance) {
@@ -105,7 +105,7 @@ func TestAgentGate_HardDeny_AllRejected(t *testing.T) {
 		err := service.ResolveAction(p, action, 1, 1)
 		assert.ErrorIs(t, err, service.ErrAgentForbidden, "硬拒绝应 deny: %s", action)
 	}
-	// 额外点名 FR-388 矩阵必验项
+	// 额外点名矩阵必验项
 	for _, action := range []string{
 		service.AgentHardDenyUserWrite,
 		service.AgentHardDenyInstanceKill,
@@ -345,7 +345,7 @@ func TestAgentGate_ContractMatrix_ResolveAction(t *testing.T) {
 	}
 }
 
-// TestAgentGate_AssertionCountFloor 汇总本文件可证断言下限（文档化 FR-388 ≥30）。
+// TestAgentGate_AssertionCountFloor 汇总本文件可证断言下限（文档化≥30）。
 func TestAgentGate_AssertionCountFloor(t *testing.T) {
 	// 契约 10 + 硬拒绝 list≥12 + 点名 9 + scope 外 7 + empty scope 2 + write 白名单 5 + life-only 2
 	// + 吊销/过期 2 + missing token 3 + admin CRUD 2 + 并发 16 + 矩阵约 10*3

@@ -1,8 +1,12 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// ListFiles 列出实例工作目录下的文件（FR-373：附权限元数据）。
+// ListFiles 列出实例工作目录下的文件（：附权限元数据）。
 func (s *Server) ListFiles(ctx context.Context, req *workerpb.ListFilesRequest) (*workerpb.ListFilesResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
@@ -45,7 +49,20 @@ func (s *Server) ListFiles(ctx context.Context, req *workerpb.ListFilesRequest) 
 	return &workerpb.ListFilesResponse{Files: files}, nil
 }
 
+// readFileMaxBytes ReadFile 整读的服务端硬上限（在线编辑器护标）。
+const readFileMaxBytes = 10 * 1024 * 1024
+
+// readFileTailHardMaxBytes ReadFile 尾部窗口的服务端硬上限。
+//
+// 尾部窗口是给「持续追写的日志」在线预览用的，调用方只需要看到最后几行；
+// 再大的窗口对浏览器渲染没有意义，反而把整份大文件搬回 CP。调用方无法用放大
+// tail_bytes 绕过本上限（生效上限 = min(tail_bytes, 本值)）。
+const readFileTailHardMaxBytes = 512 * 1024
+
 // ReadFile 读取文件内容。
+//
+// req.TailBytes>0 时只读文件末尾窗口并按行对齐（丢弃首行残段），用于大日志在线预览：
+// 返回的 truncated=true 表示内容不是从文件开头起的完整正文。
 func (s *Server) ReadFile(ctx context.Context, req *workerpb.ReadFileRequest) (*workerpb.ReadFileResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
@@ -57,17 +74,167 @@ func (s *Server) ReadFile(ctx context.Context, req *workerpb.ReadFileRequest) (*
 		return nil, err
 	}
 
+	if req.TailBytes > 0 {
+		return readFileTail(path, req.TailBytes)
+	}
+
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("%s", formatPermError("读取", err))
 	}
 
-	const maxSize = 10 * 1024 * 1024
-	if len(content) > maxSize {
-		content = content[:maxSize]
+	totalSize := int64(len(content))
+	truncated := false
+	if len(content) > readFileMaxBytes {
+		content = content[:readFileMaxBytes]
+		truncated = true
 	}
 
-	return &workerpb.ReadFileResponse{Content: content}, nil
+	return &workerpb.ReadFileResponse{Content: content, Truncated: truncated, TotalSize: totalSize}, nil
+}
+
+// readFileTail 读取 path 末尾 tailBytes 字节并按行对齐。
+//
+// 为何按行对齐：直接按字节切出来的首行通常是半个行，看起来像日志损坏。
+// 丢掉首个残行后，调用方拿到的是完整行集合（空文件/单行无换行的极短文件除外：
+// 这种情形无法对齐，就原样返回切出来的内容，不丢弃数据）。
+func readFileTail(path string, tailBytes int64) (*workerpb.ReadFileResponse, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s", formatPermError("读取", err))
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("%s", formatPermError("读取", err))
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("%s 是目录，不能按文件读取", path)
+	}
+
+	return readFileTailWindow(f, info.Size(), tailBytes)
+}
+
+// readFileTailWindow 从已取得大小的文件快照读取有界尾部。
+// reader 与大小分开传入，以保持 Stat 后文件仍可能被轮转截短的真实语义可回归验证。
+func readFileTailWindow(f io.ReaderAt, totalSize, tailBytes int64) (*workerpb.ReadFileResponse, error) {
+	if tailBytes > readFileTailHardMaxBytes {
+		tailBytes = readFileTailHardMaxBytes
+	}
+	offset := totalSize - tailBytes
+	if offset < 0 {
+		offset = 0
+	}
+
+	buf := make([]byte, totalSize-offset)
+	n, readErr := f.ReadAt(buf, offset)
+	if readErr != nil && readErr != io.EOF {
+		return nil, fmt.Errorf("%s", formatPermError("读取", readErr))
+	}
+	// ReadAt may observe a concurrent copytruncate after Stat. Only the bytes actually read
+	// belong in the response; the rest of the preallocated buffer is zero-filled and must not
+	// escape as NUL bytes.
+	buf = buf[:n]
+
+	// 只有当我们确实不是从文件开头读起时，才需要处理「首行残段」。
+	truncated := offset > 0
+	if truncated {
+		// If the byte immediately before offset is a newline, offset is already at a line
+		// boundary and the first returned line is complete. Otherwise discard the partial line.
+		var previous [1]byte
+		previousN, previousErr := f.ReadAt(previous[:], offset-1)
+		if previousErr != nil && previousErr != io.EOF {
+			return nil, fmt.Errorf("%s", formatPermError("读取", previousErr))
+		}
+		if previousN == 1 && previous[0] != '\n' {
+			if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
+				buf = buf[idx+1:]
+			}
+		}
+	}
+
+	return &workerpb.ReadFileResponse{Content: buf, Truncated: truncated, TotalSize: totalSize}, nil
+}
+
+// hashFileHardMaxBytes HashFile 的**服务端硬上限**（M-3）。
+//
+// 为什么服务端必须自己兜底：`HashFileRequest.MaxBytes` 是 CP→Worker 的可变参数，
+// 语义写在 proto 注释里而无服务端下限保护；未来任何调用方传 0（= 不限）或超大值，
+// Worker 都会无界读盘。ReadFile 有写死的 10MiB 截断兜底，本 RPC 原先没有对应硬上限。
+//
+// 取 512MiB：与 CP 侧 `binaryDiskDigestMaxBytes`（service/binary_version.go）同量级，
+// 即「正常调用方的上限就是它能接受的最大值」，再大的一律按超限处理而不去读盘。
+const hashFileHardMaxBytes = 512 * 1024 * 1024
+
+// HashFile 计算实例工作目录内某文件的 SHA-256（§2.5 版本漂移检测）。
+//
+// 独立于 ReadFile 的原因：ReadFile 有 10MiB 截断，对二进制做摘要会得到「前 10MiB 的
+// 摘要」这种看似成功实则错误的结论；且为校验把整个文件搬回 CP 纯属浪费带宽。
+// 本 RPC 在 Worker 本地流式读盘算哈希，返回的是完整文件的真实摘要。
+//
+// max_bytes>0 时超限直接返回 too_large（不计算）：调用方（版本视图巡检）用它避免
+// 每次查询都去读一个数 GB 的文件。**服务端另有硬上限**（hashFileHardMaxBytes）：
+// 调用方传 0 或超大值时按硬上限处理，不信任调用方上限（M-3）。
+// 读盘错误不返回 gRPC error，而是落在 error 字段，
+// 让 CP 能把「文件不在/没权限」当成漂移信息呈现，而不是一次失败查询。
+func (s *Server) HashFile(ctx context.Context, req *workerpb.HashFileRequest) (*workerpb.HashFileResponse, error) {
+	inst, exists := s.manager.GetInstance(req.InstanceUuid)
+	if !exists {
+		return nil, fmt.Errorf("实例 %s 不存在", req.InstanceUuid)
+	}
+
+	path := filepath.Join(inst.WorkDir, req.Path)
+	if err := validateNonRootPath(inst.WorkDir, path); err != nil {
+		return nil, err
+	}
+
+	// Lstat 而非 Stat（M-3）：不跟随符号链接，避免实例工作目录内的 `link -> /etc/shadow`
+	// 这类把戏让「读工作目录内文件」越出工作目录（只读，危害有限，但属防御纵深缺口）。
+	// 与同包 binary_ops.go 的「节点本地文件必须是常规文件」判定同口径。
+	// 注意：文件不存在时 Lstat 也返回 err，与原先 Stat 的错误分支一致。
+	info, err := os.Lstat(path)
+	if err != nil {
+		return &workerpb.HashFileResponse{Error: formatPermError("读取", err)}, nil
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		// 显式拒绝符号链接：本 RPC 只对工作目录内的**常规文件**做摘要。
+		return &workerpb.HashFileResponse{Error: "目标是符号链接，不接受（避免读到工作目录外的文件）"}, nil
+	}
+	if info.IsDir() {
+		return &workerpb.HashFileResponse{Error: "目标是目录，不是文件"}, nil
+	}
+
+	// 生效上限 = min(调用方上限, 服务端硬上限)：调用方传 0/超大值时不放宽。
+	limit := int64(req.MaxBytes)
+	if limit <= 0 || limit > hashFileHardMaxBytes {
+		limit = hashFileHardMaxBytes
+	}
+	if info.Size() > limit {
+		return &workerpb.HashFileResponse{TooLarge: true, SizeBytes: info.Size()}, nil
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return &workerpb.HashFileResponse{Error: formatPermError("读取", err)}, nil
+	}
+	// 只读文件句柄：Close 失败无补救动作（fd 由 runtime 兜底回收），显式忽略以满足 errcheck。
+	defer func() { _ = file.Close() }()
+
+	// O_NOFOLLOW 无法经 os.Open 表达，且路径已拒绝符号链接；此处再校验一次句柄指向的
+	// 仍是常规文件（覆盖「Lstat 之后、Open 之前被换成符号链接」的 TOCTOU 窗口）。
+	if fh, serr := file.Stat(); serr != nil || !fh.Mode().IsRegular() {
+		return &workerpb.HashFileResponse{Error: "目标不是常规文件（可能被并发替换）"}, nil
+	}
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return &workerpb.HashFileResponse{Error: formatPermError("读取", err)}, nil
+	}
+	return &workerpb.HashFileResponse{
+		Sha256:    hex.EncodeToString(hasher.Sum(nil)),
+		SizeBytes: info.Size(),
+	}, nil
 }
 
 // WriteFile 写入文件内容。

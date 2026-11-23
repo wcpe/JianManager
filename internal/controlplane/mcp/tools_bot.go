@@ -9,11 +9,11 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-398：普通 Bot 舰队工具。
+// 普通 Bot 舰队工具。
 // 说明：本文件与 tools_loadtest*.go 自带执行器分发与危险确认实现，
-// 待 FR-396 的 toolSpec.Exec / RequiresConfirm 骨架合入后可整体收敛为一份。
+// 待的 toolSpec.Exec / RequiresConfirm 骨架合入后可整体收敛为一份。
 
-// botToolExec 是 Bot 域工具执行器签名，等价 FR-396 规划中的 toolSpec.Exec。
+// botToolExec 是 Bot 域工具执行器签名，等价规划中的 toolSpec.Exec。
 type botToolExec func(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult
 
 // BotLoadExecutor 抽象压测运行的启停与重试，便于 MCP 契约测试注入替身。
@@ -23,7 +23,7 @@ type BotLoadExecutor interface {
 	RetryFailed(ctx context.Context, sessionID uint, req service.BotLoadRetryRequest) (*service.BotLoadRetryResult, error)
 }
 
-// botDomainExecutors 汇总本 FR 全部工具执行器。
+// botDomainExecutors 汇总全部 Bot 域工具执行器。
 func botDomainExecutors() map[string]botToolExec {
 	all := make(map[string]botToolExec, 24)
 	for name, exec := range botToolExecutors() {
@@ -44,7 +44,7 @@ func botDomainExec(name string) (botToolExec, bool) {
 	return exec, ok
 }
 
-// botSendCommandSuccessText 是 ADR-075 规定的命令发送成功文案。
+// botSendCommandSuccessText 是规定的命令发送成功文案。
 // 成功边界止于 bot.chat 调用未同步抛错，绝不宣称服务器已接受或业务已生效。
 func botSendCommandSuccessText() string {
 	return "已发送（bot.chat 调用成功）；不代表服务器已接受或业务已生效"
@@ -100,7 +100,7 @@ func botToolSpecs() []toolSpec {
 		{
 			Def: ToolDef{
 				Name: "bot_send_command",
-				// ADR-075：工具描述必须写明成功边界，防 Agent 误报业务成功。
+				// 工具描述必须写明成功边界，防 Agent 误报业务成功。
 				Description: "向 Bot 下发聊天/命令。成功仅表示 bot.chat 调用成功，不代表服务器已接受或业务已生效；" +
 					"如需确认业务效果请另行观测服务器状态（须具备 bot.manage 能力）",
 				InputSchema: objectSchema(map[string]any{
@@ -226,7 +226,7 @@ func execBotSetBehavior(_ context.Context, deps ToolDeps, p *service.AgentPrinci
 	return toolOK(map[string]any{"ok": true, "botId": bot.ID, "behavior": behavior})
 }
 
-// execBotSendCommand 下发命令；返回文案严格遵循 ADR-075 的发送边界。
+// execBotSendCommand 下发命令；返回文案严格遵循发送边界。
 func execBotSendCommand(_ context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult {
 	bot, result, ok := authorizeBotTarget(deps, p, action, args)
 	if !ok {

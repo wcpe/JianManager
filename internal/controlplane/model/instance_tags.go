@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// EnvTagPrefix 是「环境维度」复用 Tags 字段的约定前缀（FR-047）。
+// EnvTagPrefix 是「环境维度」复用 Tags 字段的约定前缀。
 // 不新增独立字段/迁移：环境用 `env:dev` / `env:test` / `env:prod` 形式的标签表达，
 // 一个实例至多取首个 env 标签作为其环境，其余 env 标签忽略（避免歧义）。
 const EnvTagPrefix = "env:"

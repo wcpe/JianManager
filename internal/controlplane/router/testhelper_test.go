@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,15 +29,26 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/internal/platform/httpclient"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// testArtifactReconcile 最近一次 setupTestRouterWithPool 构造的对账服务（FR-349）——
+// testArtifactReconcile 最近一次 setupTestRouterWithPool 构造的对账服务——
 // 对账执行需注入假 BlobStore（SetStoreFactory），路由测试串行执行下按引用注入安全。
 var testArtifactReconcile *service.ArtifactReconcileService
 
+// testQQBind 最近一次 setupTestRouter 构造的 QQ 扫码绑定服务——绑定端点测试
+// 需把上游域名指向假服务端（SetBaseURL），路由测试串行执行下按引用注入安全。
+var testQQBind *service.QQBindService
+
 // setupTestDB 创建临时 SQLite 数据库（磁盘文件，每测试独立目录）并运行自动迁移。
-// 通过 t.Cleanup 确保测试结束时关闭数据库连接并删除临时目录。
+// 目录用 `t.TempDir()`：testing 框架把落点定为 `os.MkdirTemp(os.Getenv("GOTMPDIR"), ...)`，
+// 而 `GOTMPDIR` 为空时 `os.MkdirTemp("", ...)` 会走 `os.TempDir()`——后者**每次调用都读**
+// `TMPDIR`（无缓存）。本包 `main_test.go` 的 `TestMain` 在 `m.Run()` 之前把 `TMPDIR`
+// /`GOTMPDIR` 指向进程级临时根，故此处创建的所有用例目录都落在那个可整体删除的根之下，
+// 由 testing 框架在用例结束时自动清理；即使测试进程被杀或 panic 也不会在 /tmp 里留下
+// 孤儿目录——启动时的 `sweepStaleTestRoots` 会自愈收掉上一次的遗留根（详见 main_test.go）。
+// 此前用 os.MkdirTemp("") + t.Cleanup 组合，中断即残留 jm-testdb-* 目录。
 //
 // 为什么不用 mode=memory&cache=shared：共享缓存内存库的并发写走表锁语义，
 // 报 SQLITE_LOCKED（"database table is locked (6)"），busy_timeout 对其无效
@@ -47,12 +59,22 @@ var testArtifactReconcile *service.ArtifactReconcileService
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	gin.DefaultWriter = io.Discard
-	dir, err := os.MkdirTemp("", "jm-testdb-")
-	if err != nil {
-		t.Fatalf("创建测试数据库目录失败: %v", err)
-	}
+	dir := t.TempDir()
+	// 为何显式指定 synchronous(NORMAL)（2026-11-10）：
+	//
+	// 驱动（glebarez/sqlite）默认把 synchronous 置为 **FULL**，而 SQLite 官方在 WAL 模式下
+	// 推荐的正是 NORMAL。FULL 的代价是每次提交都 fsync WAL（本包实测单次 AutoMigrate
+	// **1075ms**，改 NORMAL 后 **78ms**，快 13.8 倍）。
+	//
+	// 这不是“为了快而牺牲安全”：WAL+NORMAL 仍然保证**数据库一致性**（不丢事务、不损坏库），
+	// 只可能在**掉电**时丢掉最后几个已提交事务——对测试库无意义（进程结束即删）。
+	//
+	// 为何必须改：本包 `setupTestDB` 被 **522 个用例**各调一次，每次都完整跑 AutoMigrate。
+	// FULL 下 522 × 1.07s ≈ **560s**，与 `go test` 默认超时 **600s** 只差 40s 余量——
+	// 机器 I/O 稍有波动即整包超时（实测：同一份代码在 12 次跑中均为 94~108s，
+	// 第13 次因宿主 I/O 压力升到 600s 撞线）。改 NORMAL 后约 **40s**，余量充足。
 	dsn := "file:" + filepath.ToSlash(filepath.Join(dir, "test.db")) +
-		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Discard,
 	})
@@ -67,14 +89,66 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		if sqlDB != nil {
 			sqlDB.Close()
 		}
-		os.RemoveAll(dir)
 	})
 	return db
 }
 
-// setupTestRouter 创建配置好所有服务的测试路由引擎。
+// newTestSnapshotService 建测试用快照服务（复用测试路由的备份与实例服务）。
+func newTestSnapshotService(db *gorm.DB, pool *cpgrpc.ClientPool, instanceSvc *service.InstanceService) *service.SnapshotService {
+	svc := service.NewSnapshotService(db, service.NewBackupService(db, pool), instanceSvc)
+	// 测试里同步执行快照创建：否则后台 goroutine 会跨过 t.Cleanup 继续写数据根/回写状态，
+	// 表现为 `TempDir cleanup: directory not empty` 或 `sql: database is closed`。
+	// 生产不置位（HTTP 仍立即返回 202 + 任务中心看进度）。
+	svc.SetForceSyncCreateForTest(true)
+	return svc
+}
+
+// newTestBinaryVersionService 建测试用二进制版本服务（ProvisionService 供制品解析与绑定读写）。
+func newTestBinaryVersionService(db *gorm.DB, pool *cpgrpc.ClientPool, instanceSvc *service.InstanceService) *service.BinaryVersionService {
+	return service.NewBinaryVersionService(db, service.NewProvisionService(db, pool, instanceSvc, nil, nil))
+}
+
+// setupTestRouter 创建配置好所有服务的测试路由引擎（真实服务装配；无 Worker 连接）。
 func setupTestRouter(db *gorm.DB) *gin.Engine {
 	return setupTestRouterWithPool(db, cpgrpc.NewClientPool())
+}
+
+// assistantOrDefault 返回调用方指定的 AI 服务，未指定时用默认（宽松出站）装配。
+func assistantOrDefault(provided *service.AssistantService, db *gorm.DB) *service.AssistantService {
+	if provided != nil {
+		return provided
+	}
+	return newTestAssistantService(db)
+}
+
+// newTestAssistantService 装配可用的 AI 配置服务。
+//
+// 用 dev 加密器（测试不碰生产密钥）与放行私网的受保护出站——测试服务跑在
+// 127.0.0.1 上的 httptest，不放行回环则探测类用例永远被准入拦住，
+// 那样测到的只是「准入生效」，测不到被测逻辑本身。
+func newTestAssistantService(db *gorm.DB) *service.AssistantService {
+	enc, _, err := service.ResolveKeyEncryptor("", true, "")
+	if err != nil {
+		enc = nil
+	}
+	svc := service.NewAssistantService(db, enc)
+	svc.SetEgress(httpclient.NewGuard(httpclient.GuardOptions{
+		AllowInsecure: true,
+		AllowPrivate:  []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")},
+	}))
+	_ = svc.EnsureSetting()
+	return svc
+}
+
+// setupTestRouterWithBeacon 同 setupTestRouter，但装配 Beacon 拉取服务：
+// pullEnabled=false 时模拟「配了端点未开能力」，endpoint 指向不可达地址以覆盖失败路径。
+func setupTestRouterWithBeacon(db *gorm.DB, endpoint string, pullEnabled bool) *gin.Engine {
+	client := service.NewBeaconClient(service.BeaconClientConfig{
+		Endpoint: endpoint, PullEnabled: pullEnabled,
+	})
+	beaconSync := service.NewBeaconSyncService(db, client, service.BeaconSyncConfig{})
+	beaconSync.SetAuditService(service.NewAuditService(db))
+	return setupTestRouterWithOptions(db, cpgrpc.NewClientPool(), beaconSync)
 }
 
 type testImmediateBotLoadRunner struct{}
@@ -104,6 +178,26 @@ func connectDeleteTestWorker(pool *cpgrpc.ClientPool, nodeUUID string) {
 // setupTestRouterWithPool 同 setupTestRouter，但使用调用方提供的连接池，
 // 便于用 SetWorkerClientForTest 注入 fake Worker 测试经 gRPC 委托的路径。
 func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
+	return setupTestRouterWithOptions(db, pool, nil)
+}
+
+// setupTestRouterWithOptions 是测试路由装配的真身：beaconSync 为 nil 时 /beacon/topology
+// 端点不注册（等价「未部署 Beacon」，用于验证未配置协同时平台其余功能不受影响）。
+func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *service.BeaconSyncService) *gin.Engine {
+	return setupTestRouterFull(db, pool, beaconSync, nil)
+}
+
+// setupTestRouterWithAssistantOverride 与 setupTestRouterWithOptions 等价，
+// 但可覆盖 AI 配置服务。
+//
+// 默认装配用宽松出站（放行 http 与回环），让探测类用例能打 httptest；
+// 需要验证「严格准入拒绝明文 http」的用例则传入自己的严格实例。
+// assistant 为 nil 时用默认装配。
+func setupTestRouterWithAssistantOverride(db *gorm.DB, assistant *service.AssistantService) *gin.Engine {
+	return setupTestRouterFull(db, cpgrpc.NewClientPool(), nil, assistant)
+}
+
+func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *service.BeaconSyncService, assistant *service.AssistantService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	jwtCfg := config.JWTConfig{
 		Secret:     "test-secret-key-for-testing",
@@ -117,24 +211,30 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	configSvc := service.NewConfigService(db, pool)
 	nodeSvc := service.NewNodeService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
-	// 测试环境无 Worker 连接：禁用后台异步委托。否则 Stop/Start 等同步转换后，
-	// delegateToWorker 会因节点不可达把状态异步覆盖为 CRASHED，且可能在用例结束
-	// 关闭 DB 后仍写库——这正是 TestNode_Drain_StopsRunning 整包跑偶发失败的根因。
-	instanceSvc.Shutdown()
-	// 回填实例服务，供节点排空（drain）测试复用实例停止逻辑（FR-048）。
+	// 测试环境无 Worker 连接：走委托旁路。否则 Stop/Start 等同步转换后，delegateToWorker 会因
+	// 节点不可达把状态异步覆盖为 CRASHED，且可能在用例结束关闭 DB 后仍写库——这正是
+	// TestNode_Drain_StopsRunning 整包跑偶发失败的根因。
+	// 用委托旁路而非 Shutdown：后者会把服务置为「正在关闭」，使随后的生命周期请求明确报错。
+	instanceSvc.SetDelegateBypassForTest(true)
+	// 回填实例服务，供节点排空（drain）测试复用实例停止逻辑。
 	nodeSvc.SetInstanceService(instanceSvc)
-	// 制品库需要数据根；测试用临时根，进程退出后由 OS 回收。
+	// 制品库需要数据根；测试用临时根，落在本包的进程级 TMPDIR（见 main_test.go
+	// 的 TestMain）之下，随整棵根在包退出时统一回收。
 	root, _ := dataroot.Init(filepath.Join(os.TempDir(), "jm-test-"+strconv.FormatInt(time.Now().UnixNano(), 10)))
 	assetSvc := service.NewAssetService(db, root)
 	backupStorageSvc := service.NewBackupStorageService(db, pool)
 	backupStorageSvc.SetDataRoot(root)
-	// 制品存储渠道（FR-347）：dev 加密器 + 内置本机存储 seed，令渠道端点可测。
+	// QQ 扫码绑定：密钥落盘目录同样用临时数据根，避免测试写到真实 data/etc。
+	qqBindSvc := service.NewQQBindService(nil)
+	qqBindSvc.SetDataRoot(root)
+	testQQBind = qqBindSvc
+	// 制品存储渠道：dev 加密器 + 内置本机存储 seed，令渠道端点可测。
 	artifactStorageSvc := service.NewArtifactStorageChannelService(db, root)
 	if enc, _, err := service.ResolveKeyEncryptor("", true, ""); err == nil {
 		artifactStorageSvc.SetKeyEncryptor(enc)
 	}
 	_ = artifactStorageSvc.EnsureBuiltin()
-	// 制品对账（FR-349）：不 Start（测试不跑定期调度循环）；执行走假 store——
+	// 制品对账：不 Start（测试不跑定期调度循环）；执行走假 store——
 	// 测试经包级 testArtifactReconcile.SetStoreFactory 注入（串行测试安全）。
 	artifactReconcileSvc := service.NewArtifactReconcileService(db, artifactStorageSvc)
 	testArtifactReconcile = artifactReconcileSvc
@@ -146,94 +246,130 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	botLoadPreflight := service.NewBotLoadPreflightService(db, botLoadCapacity, botLoadReservations, botLoadSigner, nil)
 	botLoadExecution := service.NewGRPCBotLoadExecutionService(db, botLoadCapacity, botLoadReservations, botLoadSigner, pool, testImmediateBotLoadRunner{}, nil)
 	botLoadExecution.SetRunIntentService(service.NewBotLoadRunIntentService(db))
-	// 运行时资产聚合 + 强制刷新（FR-301）：注入 JDK 同步器，令 refresh 端点可测
+	// 运行时资产聚合 + 强制刷新：注入 JDK 同步器，令 refresh 端点可测
 	// （配合 SetWorkerClientForTest 注入 fake Worker）。
 	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
 	runtimeAssetsSvc.SetJDKSync(service.NewJDKService(db, pool))
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
 	instanceBatchSvc.SetInstanceService(instanceSvc)
+	// 457/458：配置源明面化 / 滚动编排 / 配置基线，供对应端点测试装配。
+	configSourceSvc := service.NewConfigSourceService(db, instanceSvc, configSvc)
+	configSvc.SetInlinePortProvider(func(instanceID uint) map[string]string {
+		return configSourceSvc.InlinePropValues(instanceID, []string{"server-port", "query.port"})
+	})
+	instanceRollingSvc := service.NewInstanceRollingService(db, instanceBatchSvc)
+	configBaselineSvc := service.NewConfigBaselineService(db, configSvc)
 	authSvc := service.NewAuthService(db, jwtCfg)
 	authSvc.SetPasswordCostForTest(bcrypt.MinCost)
 	userSvc := service.NewUserService(db)
 	userSvc.SetPasswordCostForTest(bcrypt.MinCost)
+	// AI 助手两层服务共用同一个 AssistantService 实例（Phase D）：
+	// 对话运行时靠它解析凭据与构造出站适配器，测试里两者共用才能让
+	// 「配置页建供应商/模型 → 提交一轮对话」真正走通。
+	testAssistantSvc := assistantOrDefault(assistant, db)
 	svcs := &Services{
-		Auth:                  authSvc,
-		User:                  userSvc,
-		Group:                 groupSvc,
-		Node:                  nodeSvc,
-		NodeRepair:            service.NewNodeRepairService(db),
-		Instance:              instanceSvc,
-		InstanceBatch:         instanceBatchSvc,
-		InstanceGroup:         service.NewInstanceGroupService(db),
-		NodeRuntime:           service.NewNodeRuntimeService(db, pool),
-		ProbeUpdate:           service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),
-		Terminal:              service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
-		File:                  fileSvc,
-		FileVersion:           fileVersionSvc,
-		Plugin:                service.NewPluginService(db, pool, assetSvc),
-		Config:                configSvc,
-		Bot:                   botSvc,
-		BotStressSession:      service.NewBotStressSessionService(db, botSvc),
-		BotLoadCapacity:       botLoadCapacity,
-		BotLoadPreflight:      botLoadPreflight,
-		BotLoadExecution:      botLoadExecution,
-		BotLoadReport:         service.NewBotLoadReportService(db),
-		BotLoadMetrics:        service.NewBotLoadMetricSampler(db, nil),
-		BotLoadProjection:     service.NewBotLoadProjectionService(db),
-		Alert:                 service.NewAlertService(db),
-		AlertChannel:          service.NewAlertChannelService(db),
-		Schedule:              service.NewScheduleService(db),
-		Backup:                service.NewBackupService(db, pool),
-		BackupStorage:         backupStorageSvc,
-		ArtifactStorage:       artifactStorageSvc,
-		ArtifactReconcile:     artifactReconcileSvc,
-		Template:              service.NewTemplateService(db),
-		Audit:                 service.NewAuditService(db),
-		Authz:                 authzSvc,
-		Settings:              service.NewSettingsService(db, &config.Config{}),
-		ClientChannel:         service.NewClientChannelService(db),
-		ClientVersion:         service.NewClientVersionService(db, assetSvc, service.NewClientChannelService(db)),
-		ClientDistSecurity:    service.NewClientDistSecurityService(db, service.NewClientChannelService(db), service.NewClientVersionService(db, assetSvc, service.NewClientChannelService(db))),
-		ClientIPGuard:         service.NewClientIPGuardService(db),
-		Business:              service.NewBusinessService(db, pool),
-		BusinessEvent:         service.NewBusinessEventService(db),
+		Auth:            authSvc,
+		User:            userSvc,
+		Group:           groupSvc,
+		Node:            nodeSvc,
+		Instance:        instanceSvc,
+		InstanceBatch:   instanceBatchSvc,
+		InstanceGroup:   service.NewInstanceGroupService(db),
+		BeaconSync:      beaconSync,
+		NodeRuntime:     service.NewNodeRuntimeService(db, pool),
+		ProbeUpdate:     service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),
+		Terminal:        service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
+		File:            fileSvc,
+		FileVersion:     fileVersionSvc,
+		Plugin:          service.NewPluginService(db, pool, assetSvc),
+		Config:          configSvc,
+		ConfigSource:    configSourceSvc,
+		InstanceRolling: instanceRollingSvc,
+		ConfigBaseline:  configBaselineSvc,
+		ConfigFile:      service.NewConfigFileService(db),
+		ConfigAdopt:     service.NewConfigAdoptService(db, service.NewConfigFileService(db), configSvc),
+		// 配置分批灰度与交付编排：生产 main.go 必装；测试此前漏装，导致
+		// /config-deliveries 全部端点 404——“越权被拒”类断言会因为 404≠201
+		// 而**假绿**（根本没走到 handler）。这里按生产同构装配。
+		ConfigDelivery: service.NewConfigDeliveryService(db, pool, service.NewConfigFileService(db),
+			service.NewConfigActivationService(db, nil), service.NewAuditService(db)),
+		// 玩家治理：生产 main.go 必装这两个服务；测试此前漏装，导致 /players、/bans、
+		// /instances/:id/whitelist、/players/matrix 一律 500，相关权限与作用域用例根本跑不起来。
+		Player:            service.NewPlayerService(db, pool),
+		PlayerEvent:       service.NewPlayerEventService(pool, db),
+		Bot:               botSvc,
+		BotStressSession:  service.NewBotStressSessionService(db, botSvc),
+		BotLoadCapacity:   botLoadCapacity,
+		BotLoadPreflight:  botLoadPreflight,
+		BotLoadExecution:  botLoadExecution,
+		BotLoadReport:     service.NewBotLoadReportService(db),
+		BotLoadMetrics:    service.NewBotLoadMetricSampler(db, nil),
+		BotLoadProjection: service.NewBotLoadProjectionService(db),
+		Alert:             service.NewAlertService(db),
+		AlertChannel:      service.NewAlertChannelService(db),
+		QQDiscovery:       service.NewQQDiscoveryService(db, nil),
+		QQBind:            qqBindSvc,
+		Schedule:          service.NewScheduleService(db),
+		Backup:            service.NewBackupService(db, pool),
+		BackupStorage:     backupStorageSvc,
+		ArtifactStorage:   artifactStorageSvc,
+		ArtifactReconcile: artifactReconcileSvc,
+		Template:          service.NewTemplateService(db),
+		Audit:             service.NewAuditService(db),
+		Authz:             authzSvc,
+		Settings:          service.NewSettingsService(db, &config.Config{}),
+		Assistant:         testAssistantSvc,
+		// 对话运行时（Phase D）：不 Start（测试不跑启动回收循环），
+		// 用例只经 HTTP 端点驱动，回收逻辑由 service 包自己的用例覆盖。
+		AssistantChat:      service.NewAssistantChatService(db, testAssistantSvc),
+		ClientChannel:      service.NewClientChannelService(db),
+		ClientVersion:      service.NewClientVersionService(db, assetSvc, service.NewClientChannelService(db)),
+		ClientDistSecurity: service.NewClientDistSecurityService(db, service.NewClientChannelService(db), service.NewClientVersionService(db, assetSvc, service.NewClientChannelService(db))),
+		ClientIPGuard:      service.NewClientIPGuardService(db),
+		Business:           service.NewBusinessService(db, pool),
+		// 桥能力接入：桥状态 / 主题订阅 / 业务域状态。
+		Bridge:            service.NewBridgeService(db, pool),
+		BusinessBatch:     newTestBusinessBatchService(db, pool),
+		BusinessReconcile: service.NewBusinessReconcileService(db, service.NewBusinessService(db, pool)),
+		BusinessStream:    service.NewBusinessStreamService(db, nil),
+		// 位点账本查询：只读位点，与 BusinessStream 同组鉴权。
+		BusinessCursor:        service.NewBusinessCursorService(db, service.BusinessCursorRetentionDays),
 		Asset:                 assetSvc,
 		ArtifactVersion:       service.NewArtifactVersionService(db, assetSvc),
 		RuntimeAssets:         runtimeAssetsSvc,
 		Storage:               service.NewStorageService(db, root),
-		Log:                   service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
 		Metric:                service.NewMetricService(db),
 		PlatformObservability: service.NewPlatformObservabilityService(db),
 		DBBrowse:              service.NewDBBrowseService(db),
 		SelfUpdate:            service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{}, root),
 		ServerState:           service.NewServerStateService(db, pool),
 		CrashSnapshot:         service.NewCrashSnapshotService(db),
-		ImportServer:          service.NewImportServerService(db, pool, instanceSvc),
-		// Agent Token 策略真源（FR-384/388）：测试路由需挂 agent 管理/运维面。
+		// 实例整机快照与二进制版本管理：B-2 权限门禁测试需要真实路由。
+		Snapshot:      newTestSnapshotService(db, pool, instanceSvc),
+		BinaryVersion: newTestBinaryVersionService(db, pool, instanceSvc),
+		ImportServer:  service.NewImportServerService(db, pool, instanceSvc),
+		// Agent Token 策略真源（388）：测试路由需挂 agent 管理/运维面。
 		AgentToken: service.NewAgentTokenService(db),
-		// Agent 调用流水（FR-390）：Ops 读+写记流水；Token 列表 callCount24h。
+		// Agent 调用流水：Ops 读+写记流水；Token 列表 callCount24h。
 		AgentCallLog: service.NewAgentCallLogService(db),
+		// 对外只读统计契约：六组 /stats/* 端点。
+		Stats: service.NewStatsService(db),
 	}
-	// Agent 流式传输票据（FR-397）：密钥与生产同样从主密钥域分离派生。
+	// Agent 流式传输票据：密钥与生产同样从主密钥域分离派生。
 	transferSecret := service.DeriveAgentTransferTicketSecret([]byte(jwtCfg.Secret))
 	if tickets, err := service.NewAgentTransferTicketService(transferSecret, svcs.AgentToken, nil); err == nil {
 		svcs.AgentTransfer = tickets
 	}
-	// CP 内嵌 MCP（FR-389）：测试挂载会话管理器（小并发便于超限用例）。
+	// CP 内嵌 MCP（无状态化）：只需 SSE 传输连接登记。
 	agentTok := svcs.AgentToken
-	logSvc := svcs.Log
-	sess := mcp.NewSessionManager(mcp.Config{
-		IdleTimeout:         time.Hour,
-		AbsoluteTimeout:     24 * time.Hour,
-		MaxGlobalSessions:   32,
-		MaxSessionsPerToken: 4,
-	})
-	svcs.MCP = mcp.NewHandler(sess, agentTok, mcp.ToolDeps{
-		Instance: instanceSvc,
-		Node:     nodeSvc,
-		Log:      logSvc,
+	svcs.MCP = mcp.NewHandler(mcp.NewSSEConnRegistry(), mcp.ToolDeps{
+		Instance: svcs.Instance,
+		Node:     svcs.Node,
+		// 实例日志走联邦查询（真源在 Worker 的 VL）。测试未注入协调器时
+		// agent_get_instance_logs 返回「日志服务不可用」——与未配置时的行为一致。
+		LogCoord: svcs.LogCoord,
 		Agent:    agentTok,
-	}, svcs.Audit, svcs.AgentCallLog)
+	}, svcs.AgentCallLog)
 	return Setup(svcs, jwtCfg.Secret)
 }
 

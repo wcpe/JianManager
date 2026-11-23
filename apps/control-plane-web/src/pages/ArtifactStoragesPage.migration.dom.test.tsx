@@ -55,8 +55,8 @@ function migrationPayload(overrides: {
   }
 }
 
-/**
- * 存量迁移 UI（FR-348）：迁移入口/确认模态发起、在途进度卡与入口禁用、
+/** 
+ * 存量迁移 UI：迁移入口/确认模态发起、在途进度卡与入口禁用、
  * 失败明细模态与重新发起、409 用后端 message 呈现。
  */
 describe('ArtifactStoragesPage 存量迁移（mock）', () => {

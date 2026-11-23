@@ -16,6 +16,12 @@ func newTriggersTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.AlertRule{}, &model.AlertEvent{}, &model.AlertChannel{}, &model.Instance{}))
 	return db
 }
@@ -136,4 +142,28 @@ func TestPlayerEventSubtype(t *testing.T) {
 	assert.Equal(t, "cross_server", playerEventSubtype("cross_server"))
 	assert.Equal(t, "", playerEventSubtype("heartbeat"))
 	assert.Equal(t, "", playerEventSubtype("connected"))
+}
+
+// TestTriggers_LogKeywordIndependentOfStorage 锁定一个**仍然成立且更重要**的不变量：
+//
+// 关键字告警消费的是实例事件流（`InstanceEvent` stdout/stderr，见 consumeInstanceEvents），
+// 与“日志存在哪”完全无关。
+//
+// 历史（已失效的前提）：本测试原名 `...UnaffectedByCutover`，参数化验证「cutover 开关
+// 不影响告警」。2026-10-29 删除 CP `logs` 表与 LogCutover 后，那个变量已不存在；
+// 但**该不变量本身反而更关键**了——因为日志存储路径整个换掉了（CP 表 → VL 联邦），
+// 一旦告警意外取决于存储，这次改造就会静默停掉告警。故保留并改写为直接验证。
+func TestTriggers_LogKeywordIndependentOfStorage(t *testing.T) {
+	db := newTriggersTestDB(t)
+	tr := NewAlertEventTriggers(db, NewAlertDispatcher(db), nil, nil)
+	require.NoError(t, db.Create(&model.Instance{Name: "smp", UUID: "uuid-1"}).Error)
+	require.NoError(t, db.Create(&model.AlertRule{
+		Name: "oom", Enabled: true, TriggerType: model.AlertTriggerLogKeyword, Keyword: "OutOfMemoryError",
+	}).Error)
+
+	tr.handleLogLine(InstanceEvent{InstanceUUID: "uuid-1", Type: "stderr", Data: "java.lang.OutOfMemoryError: Java heap space"})
+
+	var count int64
+	db.Model(&model.AlertEvent{}).Count(&count)
+	require.EqualValues(t, 1, count, "关键字告警必须照常触发（它消费事件流，与日志存储路径无关）")
 }

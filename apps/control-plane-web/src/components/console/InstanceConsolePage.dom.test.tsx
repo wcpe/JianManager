@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import * as logFederationApi from '@/api/logFederation'
+import { http, HttpResponse } from 'msw'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
@@ -19,7 +21,7 @@ function collectKillRequests() {
   return { paths, stop: () => server.events.removeListener('request:start', listener) }
 }
 
-/** FR-269：服务器统一控制台 mock-api 原型。 */
+/** 服务器统一控制台 mock-api 原型。 */
 describe('InstanceConsolePage', () => {
   beforeEach(() => {
     loginMockUser()
@@ -28,7 +30,7 @@ describe('InstanceConsolePage', () => {
   it('渲染服务器状态条、固定分区和概览 KPI', async () => {
     renderWithProviders(<InstanceConsolePage instanceId={1} />)
 
-    // 瘦身顶栏（FR-412）：标题只留实例名，「服务器控制台 /」前缀与副标题已删；
+    // 瘦身顶栏：标题只留实例名，「服务器控制台 /」前缀与副标题已删；
     // 「打开终端」按钮亦删（控制台就是一个页签，无需重复入口）。
     expect(await screen.findByRole('heading', { name: 'survival-1' })).toBeInTheDocument()
     expect(screen.getByText('运行')).toBeInTheDocument()
@@ -43,14 +45,51 @@ describe('InstanceConsolePage', () => {
     expect(screen.getAllByText('CPU')).toHaveLength(2)
     expect(screen.getAllByText('内存')).toHaveLength(2)
     expect(screen.getAllByText('TPS').length).toBeGreaterThan(0)
-    // 三卡合流（FR-423）：「最近事件 / 关注事项 / 崩溃诊断」并为一条「动态与告警」流。
+    // 三卡合流：「最近事件 / 关注事项 / 崩溃诊断」并为一条「动态与告警」流。
     expect(screen.getByText('动态与告警')).toBeInTheDocument()
     expect(screen.queryByText('最近事件')).toBeNull()
     expect(screen.queryByText('关注事项')).toBeNull()
-    expect(screen.getByText('运行日志预览')).toBeInTheDocument()
+    expect(screen.getByText('最近日志')).toBeInTheDocument()
   })
 
-  it('Tab 重组（FR-413）：环境变量并入文件配置分段，?tab=env 旧深链仍落到该分段', async () => {
+  it('最近日志正文只出现一次，动态区保留状态和崩溃诊断。', async () => {
+    server.use(http.get('*/api/v1/logs/federation', () => HttpResponse.json({
+      sourceTag: 'federated',
+      federatedReady: true,
+      items: [{ id: 12345, level: 'info', message: 'overview startup ready', event_time_utc: new Date().toISOString() }],
+      coverage: { complete: true, targets: [] },
+    })))
+    renderWithProviders(<InstanceConsolePage instanceId={1} />)
+    expect(await screen.findAllByText('overview startup ready')).toHaveLength(1)
+    expect(screen.getByText('动态与告警')).toBeInTheDocument()
+    expect(screen.getByText('运行状态正常')).toBeInTheDocument()
+    expect(await screen.findByTestId('crash-diagnostics')).toBeInTheDocument()
+  })
+
+  it('最近日志复用联邦查询的有界一小时快照，未选概览时禁用，入口保留实例范围。', async () => {
+    const user = userEvent.setup()
+    const query = vi.spyOn(logFederationApi, 'useLogsFederation')
+    try {
+      renderWithProviders(<InstanceConsolePage instanceId={1} />, { route: '/instances/1?tab=players' })
+      await screen.findByRole('heading', { name: 'survival-1' })
+      expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ instanceId: 1, limit: 40 }), { enabled: false, refetchInterval: false })
+
+      await user.click(screen.getByRole('tab', { name: '概览' }))
+      expect(query).toHaveBeenLastCalledWith(expect.any(Object), { enabled: true, refetchInterval: false })
+      const params = query.mock.calls.at(-1)![0]
+      expect(Date.parse(String(params.to)) - Date.parse(String(params.from))).toBe(3_600_000)
+      expect(Date.parse(String(params.to))).toBeLessThanOrEqual(Date.now())
+      expect(screen.getByRole('link', { name: /查看日志/ })).toHaveAttribute('href', '/logs?instanceId=1')
+      expect(screen.getByTestId('overview-latest-logs')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('tab', { name: '玩家' }))
+      expect(query).toHaveBeenLastCalledWith(expect.any(Object), { enabled: false, refetchInterval: false })
+    } finally {
+      query.mockRestore()
+    }
+  })
+
+  it('Tab 重组：环境变量并入文件配置分段，?tab=env 旧深链仍落到该分段', async () => {
     const user = userEvent.setup()
     renderWithProviders(<InstanceConsolePage instanceId={1} />, { route: '/instances/1?tab=env' })
 
@@ -82,7 +121,7 @@ describe('InstanceConsolePage', () => {
     expect(screen.getByRole('tab', { name: '概览' })).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('强杀必须经危险操作确认框，确认后才发 kill 请求（FR-059）', async () => {
+  it('强杀必须经危险操作确认框，确认后才发 kill 请求', async () => {
     // DangerConfirm scope=group 要求 role>=1（loginMockUser 的 token 解不出 role）。
     useAuthStore.setState({ role: 1, isAuthenticated: true })
     const user = userEvent.setup()
@@ -104,7 +143,7 @@ describe('InstanceConsolePage', () => {
     }
   })
 
-  it('取消危险操作确认框不发 kill 请求（FR-059）', async () => {
+  it('取消危险操作确认框不发 kill 请求', async () => {
     useAuthStore.setState({ role: 1, isAuthenticated: true })
     const user = userEvent.setup()
     const spy = collectKillRequests()

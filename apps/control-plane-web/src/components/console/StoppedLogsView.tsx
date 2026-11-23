@@ -1,85 +1,75 @@
-import { useEffect, useRef } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useState } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
-import { Copy, History } from 'lucide-react'
-import { useLogs } from '@/api/logs'
-import { copyToClipboard } from '@/lib/clipboard'
-import { cn } from '@jianmanager/ui'
+import { StoppedLogsView as StoppedLogsViewImpl } from '@/components/views/console/StoppedLogsView'
+import { useLogsFederation } from '@/api/logFederation'
+import type { LogEntry } from '@/lib/console/console-log-types'
 
 /**
- * 停机/未运行实例的历史日志回放（FR-345）：从 DB 拉该实例最近日志只读展示，替代空白「实例未运行」占位。
- * 令关服过程/崩溃现场在停机态仍可见（DB 持久，重连/切页签/刷新不丢），并链到完整历史（搜索/时间筛选/导出）。
+ * 停机日志回放的应用接线层。
  *
- * FR-417 补复制按钮：这里正是「服务器起不来，把关服/崩溃日志发给别人看」的现场，
- * 而原先只能鼠标拖选——300 行日志靠拖选是最难受的场景之一。
+ * 视图本体是受控视图（见 components/views）；本层取数、把复制回执接回 toast，
+ * 并注入「完整历史」的路由链接。对外 props 与原实现一致，调用点零改动。
+ *
+ * **数据源（2026-10-29）**：CP `logs` 表已下线，改为 VL 联邦 `GET /logs/federation`
+ * （按 instanceId 收敛目标）。`useLogs` 走的是已删除的 `/logs` 接口，留在这里会永远空。
  */
 export default function StoppedLogsView({ instanceId, status }: { instanceId: number; status: string }) {
-  const { t } = useTranslation()
-  const { data, isLoading } = useLogs({ instanceId, source: 'instance', pageSize: 300 })
-  // 后端按 time DESC 返回（最新在前）；正序展示（旧→新）贴近终端，最新在底部。
-  const entries = data?.items ? data.items.slice().reverse() : []
-  const bodyRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    // 加载后滚到底部（最新日志），贴近终端体验。
-    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight
-  }, [entries.length])
-
-  // 复制走统一入口（含 HTTP 非安全上下文的 execCommand 兜底），成功/失败都给回执。
-  const copyAll = async () => {
-    if (entries.length === 0) {
-      toast.error(t('instanceDetail.consoleCopyNothing'))
-      return
-    }
-    const ok = await copyToClipboard(entries.map((entry) => entry.message).join('\n'))
-    if (ok) toast.success(t('common.copied'))
-    else toast.error(t('common.copyFailed'))
+  // limit=300 与旧实现的 pageSize=300 对齐，保持「一屏能看到的内容量」不变。
+  const history = useLogsFederation({ instanceId, limit: 300 })
+  const { data, isLoading, isError, error, refetch } = history
+  /**
+   * 失败态判定。
+   *
+   * `useLogsFederation` 会把 403/500/超时/连接失败**不抛错**而是返回一个 `degraded` 的降级信袋
+   * （它服务的是日志中心：那里降级后还有平台/历史日志可看）。但本视图拿降级信封没有任何意义——
+   * 它没有别的数据源可退，只能得到 `items=[]`。
+   *
+   * 旧实现只看 `isError`，于是 403/500/超时全被渲染成「暂无历史日志」——把「无权读取」
+   * 和「服务挂了」谎报成「这台实例从来没输出过」。
+   */
+  const degraded = data?.degraded === true
+  const failed = isError || degraded
+  const failure = isError ? (error as unknown) : data?.failure
+  const statusCode = (failure as { response?: { status?: number } } | null)?.response?.status
+  const errorCode = (failure as { code?: string } | null)?.code
+  const errorKey = !failed ? null
+    : statusCode === 403 ? 'instanceDetail.historyForbidden'
+      : errorCode === 'ECONNABORTED' || errorCode === 'ETIMEDOUT' ? 'instanceDetail.historyTimeout'
+        : 'instanceDetail.historyLoadError'
+  /**
+   * 刷新失败时保留上一次成功的行。
+   *
+   * 失败响应里 `items` 恒为空，若直接拿它渲染，一次瞬时 500 就会把刚看到的关服现场抹成空白。
+   */
+  const [lastGoodEntries, setLastGoodEntries] = useState<LogEntry[]>([])
+  const [lastGoodKey, setLastGoodKey] = useState<string | null>(null)
+  const items = Array.isArray(data?.response.items) ? (data.response.items as LogEntry[]) : []
+  const successEntries = !failed && !isLoading ? items : null
+  // 幂等比较：`items` 每次渲染都是新数组，不能拿引用比（那样每渲一次都 setState ⇒ 无限重渲）。
+  const successKey = successEntries && successEntries.length > 0
+    ? `${successEntries.length}|${successEntries[successEntries.length - 1]?.time}|${successEntries[successEntries.length - 1]?.message}`
+    : null
+  if (successKey !== null && successKey !== lastGoodKey) {
+    setLastGoodKey(successKey)
+    setLastGoodEntries(successEntries ?? [])
   }
+  const entries = successEntries ?? lastGoodEntries
 
   return (
-    // h-full：FR-415 起本视图与命令栏同处一个 flex 列中，不撑满就会在自己下方留一大片空白。
-    <div className="flex h-full min-h-[400px] flex-col rounded-lg bg-[#1a1b26]">
-      <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-1.5 text-xs">
-        <span className="truncate text-gray-300">{t('instanceDetail.stoppedShowingHistory', { status })}</span>
-        <div className="flex shrink-0 items-center gap-3">
-          <button
-            type="button"
-            onClick={() => void copyAll()}
-            className="flex items-center gap-1 text-gray-400 hover:text-gray-100"
-          >
-            <Copy className="size-3" />
-            {t('instanceDetail.consoleCopyLogs')}
-          </button>
-          <a href={`/logs?instanceId=${instanceId}`} className="text-blue-400 hover:underline">
-            {t('instanceDetail.viewFullHistory')}
-          </a>
-        </div>
-      </div>
-      <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto p-2 font-mono text-xs leading-relaxed text-gray-300">
-        {isLoading ? (
-          <p className="text-gray-500">{t('common.loading')}</p>
-        ) : entries.length === 0 ? (
-          // 空态居中卡片：原先一行灰字吊在左上角， pane 大半空白显得像坏了。
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-            <div className="grid size-10 place-items-center rounded-full bg-white/[0.04] text-gray-500">
-              <History className="size-4.5" />
-            </div>
-            <p className="max-w-72 text-xs leading-relaxed text-gray-500">{t('instanceDetail.noHistoryLogs')}</p>
-          </div>
-        ) : (
-          entries.map((e) => (
-            <div
-              key={e.id}
-              className={cn(
-                'whitespace-pre-wrap break-all',
-                e.level === 'error' && 'text-red-400',
-                e.level === 'warn' && 'text-amber-400',
-              )}
-            >
-              {e.message}
-            </div>
-          ))
-        )}
-      </div>
-    </div>
+    <StoppedLogsViewImpl
+      instanceId={instanceId}
+      status={status}
+      entries={entries}
+      isLoading={isLoading}
+      errorKey={errorKey}
+      onRetry={() => void refetch()}
+      onNotify={(kind, message) => (kind === 'success' ? toast.success(message) : toast.error(message))}
+      renderLink={({ to, className, children }) => (
+        <Link to={to} className={className}>
+          {children}
+        </Link>
+      )}
+    />
   )
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestWriteEnvFile 物化自定义启动 env 到 <workDir>/.env（FR-344）：按 KEY=VALUE 行排序写入，含生成头注释。
+// TestWriteEnvFile 物化自定义启动 env 到 <workDir>/.env：按 KEY=VALUE 行排序写入，含生成头注释。
 func TestWriteEnvFile(t *testing.T) {
 	dir := t.TempDir()
 	writeEnvFile(WrapperConfig{WorkDir: dir, EnvVars: map[string]string{"FOO": "bar", "ABC": "123"}})

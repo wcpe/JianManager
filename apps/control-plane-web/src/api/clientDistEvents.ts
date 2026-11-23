@@ -1,144 +1,27 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 客户端分发拉取/下载明细事件（FR-093 追踪 + FR-249/FR-265 观测）。
+/** 
+ * 客户端分发拉取/下载明细事件（追踪观测）。
  * 机器码/IP 客户端可伪造、不可信，仅追踪统计。`errCode` 成功事件为空、失败事件填语义错误码。
  */
-export interface ClientDistEvent {
-  id: number
-  channelId: string
-  machineId: string
-  playerName?: string
-  coreVersion?: string
-  ip: string
-  /** manifest | artifact。 */
-  kind: string
-  version: number
-  artifactSha: string
-  bytes: number
-  /** HTTP 状态码（200/206/304/401/404/503…）。 */
-  status: number
-  /** 语义错误码（FR-249）：成功为空；失败如 INVALID_CLIENT_KEY/NO_LATEST_VERSION/ARTIFACT_NOT_FOUND/SIGN_KEY_NOT_CONFIGURED。 */
-  errCode: string
-  /** 可读错误原因（FR-265）。 */
-  errReason?: string
-  /** 请求方法与脱敏路径（不含 query）。 */
-  method?: string
-  path?: string
-  /** 响应 ETag 快捷列。 */
-  etag?: string
-  durationMs: number
-  createdAt: string
-}
 
-/** 分发事件检索过滤（FR-249）：空/undefined 字段不约束。 */
-export interface ClientDistEventFilter {
-  channelId?: string
-  machineId?: string
-  ip?: string
-  /** manifest | artifact。 */
-  kind?: string
-  /** 成功/失败维度：success（0<status<400）| failure（status>=400）| 空（全部）。 */
-  outcome?: 'success' | 'failure' | ''
-  errCode?: string
-  version?: number
-  limit?: number
-  /** 平台管理员端点门控；非管理员不发起请求。 */
-  enabled?: boolean
-}
-
-export interface ClientDistEventSearchFilter extends ClientDistEventFilter {
-  artifactSha?: string
-  runtimeVersion?: number
-  coreVersion?: string
-  platform?: string
-  lag?: number
-  page?: number
-  pageSize?: number
-}
-
-export interface ClientDistEventPage {
-  items: ClientDistEvent[]
-  page: number
-  pageSize: number
-  total: number
-}
-
-export interface ClientDistEventDetail extends ClientDistEvent {
-  requestBody: string
-  responseBody: string
-  requestHeaders: Record<string, string>
-  responseHeaders: Record<string, string>
-}
-
-export interface ClientDistRealtimeSummary {
-  manifestPulls: number
-  artifactPulls: number
-  errorRequests: number
-  activeMachines: number
-}
-
-export interface ClientDistRatePoint {
-  ts: string
-  manifest: number
-  artifact: number
-  error: number
-}
-
-export interface ClientDistRecentError {
-  id: number
-  time: string
-  channelId: string
-  kind: string
-  target: string
-  ip: string
-  status: number
-  errCode: string
-}
-
-export interface StatsIP {
-  ip: string
-  count: number
-}
-
-export interface ClientDistRealtime {
-  summary1h: ClientDistRealtimeSummary
-  requestRate24h: ClientDistRatePoint[]
-  recentErrors: ClientDistRecentError[]
-  topIps1h: StatsIP[]
-}
-
-export interface ClientDistErrorCount {
-  errCode: string
-  count: number
-}
-
-export interface ClientDistFailureSample {
-  id: number
-  time: string
-  channelId: string
-  kind: string
-  errCode: string
-  errReason: string
-  status: number
-  ip: string
-  machineId: string
-}
-
-export interface ClientDistErrorSummary {
-  from: string
-  to: string
-  topErrors: ClientDistErrorCount[]
-  samples: ClientDistFailureSample[]
-}
-
-/** 分页检索分发事件（FR-265），支持运行态维度联动过滤。 */
+ /** 
+  * 客户端分发事件契约已回迁应用侧，双侧共用；对外保留原导出名，调用点无需改动。
+  */
+ export type { ClientDistEvent, ClientDistEventFilter, ClientDistEventSearchFilter, ClientDistEventPage, ClientDistEventDetail, ClientDistRealtimeSummary, ClientDistRatePoint, ClientDistRecentError, ClientDistRealtime, ClientDistErrorCount, ClientDistFailureSample, ClientDistErrorSummary } from '@/lib/client-dist/client-dist-events-contracts'
+// StatsIP 由统计契约定义（此前本文件有一份重复定义，已去重）；对外仍从本模块可用。
+export type { StatsIP } from '@/lib/client-dist/client-dist-stats-contracts'
+import type { ClientDistEventSearchFilter, ClientDistEventPage, ClientDistEventDetail, ClientDistRealtime, ClientDistErrorSummary } from '@/lib/client-dist/client-dist-events-contracts'
+/** 分页检索分发事件，支持运行态维度联动过滤。 */
 export function useClientDistEventSearch(filter: ClientDistEventSearchFilter) {
   const {
     channelId,
     machineId,
     ip,
+    range,
+    from,
+    to,
     kind,
     outcome,
     errCode,
@@ -158,6 +41,9 @@ export function useClientDistEventSearch(filter: ClientDistEventSearchFilter) {
       channelId ?? 'all',
       machineId ?? '',
       ip ?? '',
+      range ?? '',
+      from ?? '',
+      to ?? '',
       kind ?? 'all',
       outcome ?? 'all',
       errCode ?? '',
@@ -176,6 +62,9 @@ export function useClientDistEventSearch(filter: ClientDistEventSearchFilter) {
           channelId,
           machineId,
           ip,
+          range,
+          from,
+          to,
           kind,
           outcome,
           errCode,
@@ -209,7 +98,16 @@ export function useClientDistEventDetail(id: number | null, enabled = true) {
   })
 }
 
-/** 查询错误码 TopN 与最近失败样例（FR-357）。 */
+/**
+ * 近实时面板的轮询间隔（R35）。
+ *
+ * 实时监控/错误摘要此前只有 `staleTime` 到期判定，不是定时请求：
+ * 用户把这一页挂在前台不动，数字就永远停在打开那一刻——而页面上写的是「近 1h」「近 24h」。
+ * 30s 的取值与告警列表（alerts.ts）同一量级：足够看出趋势，又不会把 CP 当成采样点。
+ */
+export const CLIENT_DIST_REALTIME_REFETCH_MS = 30_000
+
+/** 查询错误码 TopN 与最近失败样例。 */
 export function useClientDistErrorSummary(params: { channelId?: string; range: string; enabled?: boolean }) {
   const { channelId, range, enabled = true } = params
   return useQuery({
@@ -221,11 +119,14 @@ export function useClientDistErrorSummary(params: { channelId?: string; range: s
       return data
     },
     enabled,
+    // 标签页在后台时不轮询：切回来由 focus 触发一次刷新即可。
+    refetchInterval: enabled ? CLIENT_DIST_REALTIME_REFETCH_MS : false,
+    refetchIntervalInBackground: false,
     retry: false,
   })
 }
 
-/** 查询近实时分发请求聚合（FR-265）。 */
+/** 查询近实时分发请求聚合（R35：带 30s 轮询，页面前台停留时数字会自己走）。 */
 export function useClientDistRealtime(params: { channelId?: string; enabled?: boolean }) {
   const { channelId, enabled = true } = params
   return useQuery({
@@ -237,6 +138,8 @@ export function useClientDistRealtime(params: { channelId?: string; enabled?: bo
       return data
     },
     enabled,
+    refetchInterval: enabled ? CLIENT_DIST_REALTIME_REFETCH_MS : false,
+    refetchIntervalInBackground: false,
     retry: false,
   })
 }

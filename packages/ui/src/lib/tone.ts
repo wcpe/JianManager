@@ -1,5 +1,5 @@
-/**
- * 语义色调 → 图标块样式（FR-163）。
+/** 
+ * 语义色调 → 图标块样式。
  * 统一卡片原语（Panel/StatCard）的图标块取色：主色走淡染 accent，状态色走 12% 底 + 状态前景。
  */
 import type { StatusLevel } from './threshold'

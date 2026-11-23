@@ -38,6 +38,11 @@ func newBotActionResultHarness(t *testing.T) *botActionResultHarness {
 	dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared", t.Name(), botActionResultDBSequence.Add(1))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+
+	// 关闭底层连接（共享内存库在最后一个连接关闭后才释放，见 testdb_test.go）。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{}, &model.Instance{}, &model.BotStressSession{},
 		&model.BotLoadBatch{}, &model.Bot{}, &model.BotLoadActionResult{},
@@ -98,7 +103,7 @@ func TestActionResultService_StartUpsertsRunningWithoutDuplicating(t *testing.T)
 	require.Equal(t, int64(1), count)
 }
 
-// TestActionResultService_SyncsCommandCheckpointOnTerminal FR-369：命令编排终态回写 checkpoint。
+// TestActionResultService_SyncsCommandCheckpointOnTerminal：命令编排终态回写 checkpoint。
 func TestActionResultService_SyncsCommandCheckpointOnTerminal(t *testing.T) {
 	h := newBotActionResultHarness(t)
 	actionRunID := "00000000-0000-0000-0000-000000000352"

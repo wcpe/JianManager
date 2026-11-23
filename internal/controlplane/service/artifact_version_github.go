@@ -36,7 +36,7 @@ type GitHubReleaseArtifactProvider struct {
 	apiBase string
 }
 
-// SetTokenProvider 注入运行时令牌读取器（FR-063 设置面板 github.token），
+// SetTokenProvider 注入运行时令牌读取器（设置面板 github.token），
 // 优先于构造时的基线令牌；读不到（空）时回退基线，行为与改造前一致。
 func (p *GitHubReleaseArtifactProvider) SetTokenProvider(fn func() string) {
 	if p == nil {

@@ -1,10 +1,10 @@
-/**
- * FR-369 通用 Bot 命令编排：Bot Worker 本地集中 scheduler。
+/** 
+ *通用 Bot 命令编排：Bot Worker 本地集中 scheduler。
  *
  * 单一职责：每个 scheduleRunId 由一个本地 scheduler 统一管理 occurrence 计划；
  *  - 每个 occurrence 有唯一 actionRunId（CP 冻结，本地不再生成）；
  *  - 集中计时器：所有未开始 occurrence 按 plannedAtUnixMs 升序维护，单一 setTimeout 等待下个到期；
- *  - 调用 bot.chat 同步抛错即失败，未抛错即成功（ADR-075）；
+ *  - 调用 bot.chat 同步抛错即失败，未抛错即成功；
  *  - V1 固定重试：bot.chat 同步抛错最多 3 次尝试，固定退避 250ms/500ms，其他错误不重试；
  *  - 取消幂等：未开始 occurrence 立即写 cancelled；正在执行的同步 bot.chat 不强制中断，完成后停。
  */

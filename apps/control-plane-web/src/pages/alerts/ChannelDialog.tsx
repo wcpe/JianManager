@@ -1,39 +1,10 @@
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  useCreateAlertChannel,
-  useUpdateAlertChannel,
-  type AlertChannelInfo,
-  type ChannelConfig,
-} from '@/api/alerts'
-import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import {
-  ScrollableDialogBody,
-  scrollableDialogContentClass,
-} from '@jianmanager/ui/components/scrollable-dialog'
-import { Button } from '@jianmanager/ui/components/button'
-import { Checkbox } from '@jianmanager/ui/components/checkbox'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
-import {
-  channelUsesURL,
-  channelIsTelegram,
-  channelIsEmail,
-  channelIsInApp,
-  isEnvRef,
-} from './alert-helpers'
+import { toast } from 'sonner'
+import { ChannelDialogView } from '@/components/views/alerts/ChannelDialogView'
+import { useCreateAlertChannel, useUpdateAlertChannel, type AlertChannelInfo } from '@/api/alerts'
+import { usePermissionsStore } from '@/stores/permissions'
+import { QQBindDialog } from './QQBindDialog'
+import { QQConnectivityPanel } from './QQConnectivityPanel'
 
 interface ChannelDialogProps {
   /** 编辑目标；null 表示创建。 */
@@ -41,199 +12,34 @@ interface ChannelDialogProps {
   onClose: () => void
 }
 
-const CHANNEL_TYPES = ['inapp', 'webhook', 'email', 'dingtalk', 'wecom', 'feishu', 'discord', 'telegram'] as const
-
-/** 解析后端 config JSON 串为对象，容错为空。 */
-function parseConfig(raw: string | undefined): ChannelConfig {
-  if (!raw) return {}
-  try {
-    return JSON.parse(raw) as ChannelConfig
-  } catch {
-    return {}
-  }
-}
-
-/** 通知通道创建/编辑对话框（FR-085）。凭证字段强制 ${ENV} 引用并前端预校验。 */
+/**
+ * 通知通道创建/编辑对话框（取数容器）。
+ *
+ * 表单状态、字段校验与渲染已回迁应用侧（迁包已撤销）；此处只保留
+ * 创建/更新 mutation 调用与 QQ 扫码弹窗绑定，视图侧经回调注入。
+ */
 export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
   const { t } = useTranslation()
   const create = useCreateAlertChannel()
   const update = useUpdateAlertChannel()
-  const isEdit = !!channel
-  const initialCfg = parseConfig(channel?.config)
-
-  const [type, setType] = useState(channel?.type ?? 'inapp')
-  const [name, setName] = useState(channel?.name ?? '')
-  const [enabled, setEnabled] = useState(channel?.enabled ?? true)
-  const [cfg, setCfg] = useState<ChannelConfig>(initialCfg)
-
-  const nameError = name.trim() === '' ? t('validation.required') : ''
-
-  // 凭证字段（URL/token/password）强制 ${ENV} 引用；非凭证字段（chatId/host/from/to）明文。
-  const urlError =
-    channelUsesURL(type) && (cfg.url ?? '').trim() !== '' && !isEnvRef(cfg.url ?? '') ? t('alerts.envRefRequired') : ''
-  const urlMissing = channelUsesURL(type) && (cfg.url ?? '').trim() === '' ? t('validation.required') : ''
-  const tokenMissing = channelIsTelegram(type) && (cfg.token ?? '').trim() === '' ? t('validation.required') : ''
-  const tokenError =
-    channelIsTelegram(type) && (cfg.token ?? '').trim() !== '' && !isEnvRef(cfg.token ?? '') ? t('alerts.envRefRequired') : ''
-  const chatMissing = channelIsTelegram(type) && (cfg.chatId ?? '').trim() === '' ? t('validation.required') : ''
-  const hostMissing = channelIsEmail(type) && (cfg.host ?? '').trim() === '' ? t('validation.required') : ''
-  const portMissing = channelIsEmail(type) && !cfg.port ? t('validation.required') : ''
-  const toMissing = channelIsEmail(type) && (cfg.to ?? '').trim() === '' ? t('validation.required') : ''
-  const passwordError =
-    channelIsEmail(type) && (cfg.password ?? '').trim() !== '' && !isEnvRef(cfg.password ?? '') ? t('alerts.envRefRequired') : ''
-
-  const hasError = !!(nameError || urlError || urlMissing || tokenMissing || tokenError || chatMissing || hostMissing || portMissing || toMissing || passwordError)
-
-  const set = (patch: Partial<ChannelConfig>) => setCfg((c) => ({ ...c, ...patch }))
-
-  const handleSubmit = async () => {
-    if (hasError) return
-    const body = { name, type, enabled, config: cfg }
-    if (isEdit && channel) {
-      await update.mutateAsync({ id: channel.id, ...body })
-    } else {
-      await create.mutateAsync(body)
-    }
-    onClose()
-  }
+  // 接入状态区要读网关状态与已发现群，两者都需 alert.manage；无权限时不渲染区块，
+  // 也就不会发出注定 403 的请求。
+  const canManage = usePermissionsStore((s) => s.hasPerm('alert.manage'))
 
   return (
-    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
-        <DialogHeader>
-          <DialogTitle>{isEdit ? t('alerts.editChannel') : t('alerts.createChannel')}</DialogTitle>
-        </DialogHeader>
-
-        <ScrollableDialogBody className="space-y-3">
-          <div>
-            <FieldLabel required>{t('alerts.channelName')}</FieldLabel>
-            <input
-              className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive"
-              value={name}
-              aria-invalid={!!nameError}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <FieldError error={nameError} />
-          </div>
-
-          <div>
-            <FieldLabel>{t('alerts.channelType')}</FieldLabel>
-            <Select value={type} onValueChange={(v) => setType(v)}>
-              <SelectTrigger className="w-full mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CHANNEL_TYPES.map((ct) => (
-                  <SelectItem key={ct} value={ct}>
-                    {t(`alerts.channel_${ct}`, ct)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {channelIsInApp(type) && <p className="text-sm text-muted-foreground">{t('alerts.inappHint')}</p>}
-
-          {channelUsesURL(type) && (
-            <div>
-              <FieldLabel required>{t('alerts.channelUrl')}</FieldLabel>
-              <input
-                className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive font-mono text-sm"
-                placeholder="${JM_DINGTALK_WEBHOOK}"
-                value={cfg.url ?? ''}
-                aria-invalid={!!(urlError || urlMissing)}
-                onChange={(e) => set({ url: e.target.value })}
-              />
-              <FieldError error={urlError || urlMissing} />
-              <p className="text-xs text-muted-foreground mt-1">{t('alerts.envRefHint')}</p>
-            </div>
-          )}
-
-          {channelIsTelegram(type) && (
-            <>
-              <div>
-                <FieldLabel required>{t('alerts.telegramToken')}</FieldLabel>
-                <input
-                  className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive font-mono text-sm"
-                  placeholder="${JM_TELEGRAM_TOKEN}"
-                  value={cfg.token ?? ''}
-                  aria-invalid={!!(tokenMissing || tokenError)}
-                  onChange={(e) => set({ token: e.target.value })}
-                />
-                <FieldError error={tokenMissing || tokenError} />
-                <p className="text-xs text-muted-foreground mt-1">{t('alerts.envRefHint')}</p>
-              </div>
-              <div>
-                <FieldLabel required>{t('alerts.telegramChatId')}</FieldLabel>
-                <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!chatMissing} value={cfg.chatId ?? ''} onChange={(e) => set({ chatId: e.target.value })} />
-                <FieldError error={chatMissing} />
-              </div>
-            </>
-          )}
-
-          {channelIsEmail(type) && (
-            <>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="col-span-2">
-                  <FieldLabel required>{t('alerts.smtpHost')}</FieldLabel>
-                  <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!hostMissing} value={cfg.host ?? ''} onChange={(e) => set({ host: e.target.value })} />
-                  <FieldError error={hostMissing} />
-                </div>
-                <div>
-                  <FieldLabel required>{t('alerts.smtpPort')}</FieldLabel>
-                  <input type="number" className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!portMissing} placeholder="587" value={cfg.port ?? ''} onChange={(e) => set({ port: Number(e.target.value) })} />
-                  <FieldError error={portMissing} />
-                </div>
-              </div>
-              <div>
-                <FieldLabel>{t('alerts.smtpUsername')}</FieldLabel>
-                <input className="w-full mt-1 p-2 border rounded" value={cfg.username ?? ''} onChange={(e) => set({ username: e.target.value })} />
-              </div>
-              <div>
-                <FieldLabel>{t('alerts.smtpPassword')}</FieldLabel>
-                <input
-                  className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive font-mono text-sm"
-                  placeholder="${JM_SMTP_PASSWORD}"
-                  value={cfg.password ?? ''}
-                  aria-invalid={!!passwordError}
-                  onChange={(e) => set({ password: e.target.value })}
-                />
-                <FieldError error={passwordError} />
-                <p className="text-xs text-muted-foreground mt-1">{t('alerts.envRefHint')}</p>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <FieldLabel>{t('alerts.smtpFrom')}</FieldLabel>
-                  <input className="w-full mt-1 p-2 border rounded" value={cfg.from ?? ''} onChange={(e) => set({ from: e.target.value })} />
-                </div>
-                <div>
-                  <FieldLabel required>{t('alerts.smtpTo')}</FieldLabel>
-                  <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!toMissing} placeholder="a@x.com, b@x.com" value={cfg.to ?? ''} onChange={(e) => set({ to: e.target.value })} />
-                  <FieldError error={toMissing} />
-                </div>
-              </div>
-            </>
-          )}
-
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox checked={enabled} onCheckedChange={(v) => setEnabled(v === true)} aria-label={t('alerts.enabled')} />
-            {t('alerts.enabled')}
-          </label>
-        </ScrollableDialogBody>
-
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose}>
-            {t('common.cancel')}
-          </Button>
-          <Button
-            type="button"
-            disabled={hasError || create.isPending || update.isPending}
-            onClick={handleSubmit}
-          >
-            {t('common.save')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ChannelDialogView
+      channel={channel}
+      onClose={onClose}
+      submitting={create.isPending || update.isPending}
+      onSubmit={async (body) => {
+        if (channel) await update.mutateAsync({ id: channel.id, ...body })
+        else await create.mutateAsync(body)
+      }}
+      onBindFilled={() => toast.success(t('alerts.qqBindDone'))}
+      renderBindDialog={({ onClose: closeBind, onBound }) => (
+        <QQBindDialog onClose={closeBind} onBound={onBound} />
+      )}
+      renderQQStatus={() => (canManage ? <QQConnectivityPanel /> : null)}
+    />
   )
 }

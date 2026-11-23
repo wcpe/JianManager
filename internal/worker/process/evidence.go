@@ -1,0 +1,228 @@
+package process
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"time"
+
+	"github.com/wcpe/JianManager/internal/worker/daemon"
+)
+
+// ③ 状态真源收敛：CP 在「心跳清单缺失」时向 Worker 拉取进程侧证据，
+// 由「是否真的还在跑」二次确认，避免「面板 STOPPED 而进程在跑」的通道抖动误判。
+
+// evidenceSocketProbeTimeout 单次 daemon socket 探活超时。
+const evidenceSocketProbeTimeout = 500 * time.Millisecond
+
+// InstanceEvidence 单个实例的进程侧证据（③）。
+type InstanceEvidence struct {
+	UUID string
+	// Running 是主判据：进程/容器侧证据是否显示该实例仍在运行。
+	Running bool
+	// RootPID 证据来源根进程 PID（0=未知）。
+	RootPID int
+	// ProcessAlive 受管进程（wrapper 或 Java 或 direct 根进程）存活。
+	ProcessAlive bool
+	// SocketReachable daemon socket 可达（daemon 模式）。
+	SocketReachable bool
+	// ContainerRunning docker 容器在跑（docker 模式）。
+	ContainerRunning bool
+	// Detail 证据摘要（供 CP statusReason）。
+	Detail string
+}
+
+// ProbeInstanceEvidence 返回一批实例的进程侧证据（③）。
+// 对每个实例：优先用内存表策略的实时 PID；内存表无该实例（Worker 曾硬崩）时回退 PID 文件 / 容器名探测。
+func (m *Manager) ProbeInstanceEvidence(uuids []string) []InstanceEvidence {
+	out := make([]InstanceEvidence, 0, len(uuids))
+	for _, uuid := range uuids {
+		if uuid == "" {
+			continue
+		}
+		out = append(out, m.probeOneEvidence(uuid))
+	}
+	return out
+}
+
+func (m *Manager) probeOneEvidence(uuid string) InstanceEvidence {
+	ev := InstanceEvidence{UUID: uuid}
+
+	m.mu.RLock()
+	inst, inTable := m.instances[uuid]
+	var processType ProcessType
+	var strategy IProcessCommand
+	// adoptedPID 非 0 表示这是“就地收养”的外部进程（不是平台 spawn 的，没有 strategy）。
+	// 它必须参与存活判定，否则收养就会被健康巡检当成假死而复盖回 STOPPED——
+	// 真机实测：收养成功后 30s 内状态又变回 STOPPED，而 java 一直在跑。
+	var adoptedPID int
+	if inTable {
+		processType = inst.processType
+		strategy = inst.strategy
+		adoptedPID = inst.AdoptedPID
+	}
+	pidDir := m.pidDir
+	m.mu.RUnlock()
+
+	// 就地收养实例：直接以被收养的 PID 作为存活证据。
+	//
+	// 这条判断必须排在下面的 switch 之前：收养来的进程没有 strategy（不是平台 spawn 的），
+	// 走 ProcessTypeDaemon 分支会得到 RootPID=0 → 去拨 wrapper socket（那条根本不存在于
+	// 外部启动的进程），最后轮到 Running=false。于是“进程活得好好的，平台也认领了它，
+	// 但巡检每 30s 就把它标成假死”——这正是收养闭环里最容易漏掉的一环。
+	//
+	// 只读、不发信号、不拨 socket：活着就是活着，死了就如实报 dead（不替外部管理器做决定）。
+	if adoptedPID > 0 {
+		alive := daemon.IsPIDAlive(adoptedPID)
+		ev.RootPID = adoptedPID
+		ev.ProcessAlive = alive
+		ev.Running = alive
+		if alive {
+			ev.Detail = "就地收养的外部进程存活"
+		} else {
+			ev.Detail = fmt.Sprintf("就地收养的外部进程 pid=%d 已退出", adoptedPID)
+		}
+		return ev
+	}
+
+	// 内存表中无该实例时按证据来源推断模式：优先 daemon PID 文件，其次 docker 容器名。
+	if !inTable {
+		if ev2, ok := m.probeDaemonEvidence(uuid, pidDir); ok {
+			return ev2
+		}
+		running, _ := dockerContainerRunning(context.Background(), containerNamePrefix+uuid)
+		ev.ContainerRunning = running
+		ev.Running = running
+		if running {
+			ev.Detail = "容器在跑（内存表无该实例）"
+		}
+		return ev
+	}
+
+	switch processType {
+	case ProcessTypeDaemon:
+		base := InstanceEvidence{UUID: uuid}
+		if strategy != nil {
+			if pid := strategy.GetPID(); pid > 0 {
+				base.RootPID = pid
+				base.ProcessAlive = daemon.IsPIDAlive(pid)
+			}
+		}
+		if base.RootPID <= 0 {
+			if daemonEv, ok := m.probeDaemonEvidence(uuid, pidDir); ok {
+				base = daemonEv
+			}
+		}
+		// 仅当进程存活证据不足时才拨号探活 socket 兜底。
+		//
+		// 生产事故（2026-09-27）：wrapper 的 Accept 循环「接受新连接即关闭旧 workerConn」，
+		// 而本探针是一次性拨号即关。巡检每轮（含 CP 心跳缺失时的证据复核）都调用本函数，
+		// 于是在进程已确认存活时仍探活，等于每轮都把 Worker 的控制长连接踢掉——readLoop
+		// 退出后 d.conn 仍指向已关闭的 socket，后续 instance_send_command 恒返回
+		// "write ...: broken pipe"，实测 12 个实例全部中招，只能靠重启 Worker 短暂恢复
+		// （重启后下一轮巡检又将其踢掉）。证据采集是只读操作，不得有这类副作用。
+		if !base.ProcessAlive {
+			base.SocketReachable = probeSocketReachable(daemon.SocketAddr(pidDir, uuid), evidenceSocketProbeTimeout)
+		}
+		base.Running = base.ProcessAlive || base.SocketReachable
+		base.Detail = evidenceDetail(base)
+		return base
+	case ProcessTypeDocker:
+		running, _ := dockerContainerRunning(context.Background(), containerNamePrefix+uuid)
+		ev.ContainerRunning = running
+		ev.Running = running
+		if running {
+			ev.Detail = "容器在跑"
+		}
+		return ev
+	default: // direct（或未知）
+		if strategy != nil {
+			if pid := strategy.GetPID(); pid > 0 {
+				ev.RootPID = pid
+				ev.ProcessAlive = daemon.IsPIDAlive(pid)
+			}
+		}
+		ev.Running = ev.ProcessAlive
+		if ev.ProcessAlive {
+			ev.Detail = "direct 根进程存活"
+		}
+		return ev
+	}
+}
+
+// probeDaemonEvidence 从 PID 文件推断 daemon 实例进程侧证据。PID 文件不存在返回 ok=false。
+func (m *Manager) probeDaemonEvidence(uuid, pidDir string) (InstanceEvidence, bool) {
+	pidPath := filepath.Join(pidDir, uuid+".pid")
+	rec, err := daemon.NewPIDFile(pidPath).ReadRecord()
+	if err != nil {
+		return InstanceEvidence{}, false
+	}
+	ev := InstanceEvidence{UUID: uuid}
+	if rec.WrapperPID > 0 && daemon.IsPIDAlive(rec.WrapperPID) {
+		ev.ProcessAlive = true
+		ev.RootPID = rec.WrapperPID
+	} else if rec.JavaPID > 0 && rec.JavaPID != rec.WrapperPID && daemon.IsPIDAlive(rec.JavaPID) {
+		// wrapper 死、Java 活：证据仍显示在跑（周期扫描负责处置）。
+		ev.ProcessAlive = true
+		ev.RootPID = rec.JavaPID
+	}
+	// 进程存活（wrapper 或 Java PID）已足够判定「仍在运行」；仅在缺乏进程证据、且本 Worker
+	// 尚未持有该实例的控制长连接时才拨号探 socket（拨号会替换长连接，见 probeOneEvidence 说明）。
+	if !ev.ProcessAlive && !m.controlConnected(uuid) {
+		ev.SocketReachable = probeSocketReachable(daemon.SocketAddr(pidDir, uuid), evidenceSocketProbeTimeout)
+	}
+	ev.Running = ev.ProcessAlive || ev.SocketReachable
+	ev.Detail = evidenceDetail(ev)
+	return ev, true
+}
+
+// controlConnected 报告 Worker 是否已持有该实例的 wrapper 控制长连接。
+//
+// 用途：wrapper 的 Accept 循环「接受新连接即关闭旧 workerConn」（见 wrapper.go），因此**只要本
+// Worker 手上还有长连接，任何一次性拨号探活都会把它踢掉**——readLoop 退出后 d.conn 仍指向已关闭
+// 的 socket，随后 console 命令（instance_send_command）恒报 broken pipe。证据采集必须无副作用，
+// 故有此长连接时一律不拨号。
+func (m *Manager) controlConnected(uuid string) bool {
+	m.mu.RLock()
+	inst, ok := m.instances[uuid]
+	var strategy IProcessCommand
+	if ok {
+		strategy = inst.strategy
+	}
+	m.mu.RUnlock()
+	if strategy == nil {
+		return false
+	}
+	d, ok := strategy.(*daemonStrategy)
+	return ok && d.controlConnected()
+}
+
+func evidenceDetail(ev InstanceEvidence) string {
+	switch {
+	case ev.ProcessAlive && ev.SocketReachable:
+		return "进程存活且 socket 可达"
+	case ev.ProcessAlive:
+		return "进程存活"
+	case ev.SocketReachable:
+		return "socket 可达"
+	default:
+		return "无存活证据"
+	}
+}
+
+// probeSocketReachable 对 daemon socket 做有界探活（拨通即视为可达）。空地址恒 false。
+//
+// （F9）：改用带超时的 Dial（daemon.DialTimeout）——此前无超时 Dial 放在 goroutine 里，
+// 超时返回后该 goroutine 仍在阻塞拨号（Unix socket accept 队列打满等），造成 goroutine 泄漏。
+// 现由 DialTimeout 保证拨号在 timeout 内返回，无需额外 goroutine。
+func probeSocketReachable(addr string, timeout time.Duration) bool {
+	if addr == "" {
+		return false
+	}
+	conn, err := daemon.DialTimeout(addr, timeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}

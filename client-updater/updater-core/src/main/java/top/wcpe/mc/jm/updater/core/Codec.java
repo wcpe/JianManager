@@ -27,7 +27,7 @@ final class Codec {
     }
 
     /**
-     * 流式解码制品（FR-257）：返回解码后的 InputStream，调用方边读边写盘（64KB 缓冲），
+     * 流式解码制品：返回解码后的 InputStream，调用方边读边写盘（64KB 缓冲），
      * 不再全量读进 byte[]。{@code none} 原样返回源流；{@code zstd} 包一层 {@link ZstdInputStream}
      * （zstd-jni 原生支持流式解压）。调用方负责关闭返回的流（会连带关闭源流）。
      */

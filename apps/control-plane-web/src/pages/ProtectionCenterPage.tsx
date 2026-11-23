@@ -5,9 +5,10 @@ import { useClientStats } from '@/api/clientStats'
 import { useClientDistErrorSummary, useClientDistRealtime } from '@/api/clientDistEvents'
 import { useClientRuntimeOverview } from '@/api/clientRuntimeStates'
 import { useClientChannels } from '@/api/clientChannels'
-import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import {
   Select,
   SelectContent,
@@ -16,25 +17,24 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
-import ClientDistExportButton from '@/components/ClientDistExportButton'
-import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
-import { ObsTimeRangePicker } from '@/components/client-dist/ObsTimeRangePicker'
-import type { ObsWindow } from '@/components/client-dist/obs-window'
-import { DEFAULT_SEG_BY_TAB, isOpsTab, normalizeOpsTab, resolveOpsSeg, type OpsSeg, type OpsTab } from '@/lib/client-dist-ops-tab'
+import ClientDistExportButton from '@/components/client-dist/ClientDistExportButton'
+import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist/client-dist-query'
+import { ObsTimeRangePicker } from '@/components/views/client-dist/ObsTimeRangePicker'
+import type { ObsWindow } from '@/lib/metrics/obs-window'
+import { DEFAULT_SEG_BY_TAB, isOpsTab, normalizeOpsTab, resolveOpsSeg } from '@/lib/client-dist/client-dist-ops-tab'
+import type { OpsSeg, OpsTab } from '@/lib/client-dist/client-dist-ops-tab'
 import ClientDistLogsTab from '@/components/client-dist/ClientDistLogsTab'
 import OpsOverviewTab from '@/components/client-dist/OpsOverviewTab'
-import OpsStatisticsTab from '@/components/client-dist/OpsStatisticsTab'
-import OpsRealtimeTab from '@/components/client-dist/OpsRealtimeTab'
+import { OpsStatisticsTab } from '@/components/views/client-dist/OpsStatisticsTab'
+import { OpsRealtimeTab } from '@/components/views/client-dist/OpsRealtimeTab'
 import OpsClientsTab from '@/components/client-dist/OpsClientsTab'
 import { EventsTab } from '@/components/client-dist/SecurityEventsTab'
 import { ProfilesTab } from '@/components/client-dist/SecurityProfilesTab'
 import { IpAnalysisTab, PlayerAnalysisTab } from '@/components/client-dist/SecurityAnalysisTabs'
 import { ActionsTab } from '@/components/client-dist/SecurityActionsTab'
 import { GroupsTab } from '@/components/client-dist/SecurityGroupsTab'
-import { OPS_ALL_CHANNELS, rangeForSpan, toApiRange, toStatsDays, type RuntimeLink } from '@/components/client-dist/ops-shared'
-import { type MetricRange } from '@jianmanager/ui'
-
-const ROLE_PLATFORM_ADMIN = 10
+import { OPS_ALL_CHANNELS, rangeForSpan, toApiRange, toStatsDays } from '@/components/views/client-dist/OpsShared'
+import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
 /** Tab 内分档切换器（次要分段控件，写回 `seg`）。 */
 function SegSwitcher({
@@ -58,10 +58,13 @@ function SegSwitcher({
   )
 }
 
-/**
- * 页面 B「客户端分发运维」外壳（FR-430 / ADR-088）。
+/** 
+ * 页面 B「客户端分发运维」外壳。
  * 7 Tab（总览/统计/实时监控/全量日志/机器·客户端/画像/处置）；旧安全页 8 Tab 收敛进其中 4 个（`seg` 分档）。
- * `data-page="client-dist-ops"`；查询级 `enabled: isPlatformAdmin` 纵深防御（路由守卫见 Workspace）。
+ * `data-page="client-dist-ops"`；查询级 `enabled: canReadOps` 纵深防御（路由守卫见 Workspace）。
+ *
+ * 页面访问不再硬判平台管理员（R29）：频道/分发运维权限可以委派给自定义角色，
+ * 这里与路由层、后端 requireNodes 用同一套节点判定（平台管理员 hasPerm 恒 true）。
  *
  * 安全侧 6 个 Tab 已抽为独立组件（`components/client-dist/Security*`），本文件仅保留外壳与分档切换。
  */
@@ -69,7 +72,7 @@ export default function ProtectionCenterPage() {
   const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const query = readClientDistQuery(searchParams)
-  const isPlatformAdmin = useAuthStore((s) => s.role) === ROLE_PLATFORM_ADMIN
+  const canReadOps = usePermissionsStore((s) => s.hasPerm('dist.ops.read') || s.hasPerm('dist.ops.write'))
 
   const normalized = normalizeOpsTab(searchParams.get('tab'), 'security')
   const tab: OpsTab = normalized.tab
@@ -84,15 +87,19 @@ export default function ProtectionCenterPage() {
     setSearchParams(updateClientDistQuery(searchParams, { seg: value === fallback ? null : value }), { replace: true })
   }
 
-  // FR-425：时间窗 = URL from/to（自定义）优先，否则本地预设档。
-  const [range, setRange] = useState<MetricRange>('7d')
+  // 时间窗 = URL from/to（自定义）优先，否则本地预设档。
+  //
+  // 状态类型用分发观测端点自己的枚举（string）而非 MetricRange：选择器可选「近 180 天」（`180d`），
+  // 而 MetricRange 只到 `1y`。以前硬转 MetricRange，`180d` 在换算函数里落到 default 变 `7d`
+  // （R30：选 180 天实际只查 7 天）。现在原值直达下游，换算函数同时认两套枚举。
+  const [range, setRange] = useState<string>('7d')
   const customWindow: ObsWindow | null = query.from && query.to ? { from: query.from, to: query.to } : null
   const obsWindow: ObsWindow = customWindow ?? { range: toApiRange(range) }
-  const effRange: MetricRange = customWindow ? (rangeForSpan(customWindow.from, customWindow.to) ?? range) : range
+  const effRange: string = customWindow ? (rangeForSpan(customWindow.from, customWindow.to) ?? range) : range
   const setTimeWindow = (w: ObsWindow) => {
     if ('range' in w) {
       setSearchParams(updateClientDistQuery(searchParams, { from: null, to: null }), { replace: true })
-      setRange(w.range as MetricRange)
+      setRange(w.range)
       return
     }
     setSearchParams(updateClientDistQuery(searchParams, { from: w.from, to: w.to }), { replace: true })
@@ -102,6 +109,8 @@ export default function ProtectionCenterPage() {
   const channelId = query.channelId
   const channel = channelId ?? OPS_ALL_CHANNELS
 
+  // 下钻联动上下文：`runtimeLinkExtra` 只承载「不在 URL 键集内」的运行态维度
+  // （platform/coreVersion/runtimeVersion/lag），URL 四键（machineId/version/errCode/ip）以查询串为真源。
   const [runtimeLinkExtra, setRuntimeLinkExtra] = useState<RuntimeLink>({})
   const runtimeLink: RuntimeLink = {
     ...runtimeLinkExtra,
@@ -110,13 +119,26 @@ export default function ProtectionCenterPage() {
     errCode: query.errCode,
     ip: query.ip,
   }
+  /** 
+   * 下钻到全量日志（点分布桶 / 点机器「看日志」）。
+   *
+   * 语义是「**以本次为准**」而不是「在本页历史上下钻里的累加」——连续点两个不同维度
+   * （先点平台分布、再点某机器「看日志」）时，后一次必须丢弃前一次留下的过滤条件，
+   * 否则请求会被双重过滤；结果分布「全部」（`onLink({})`）也必须能清空全部联动条件。
+   *
+   * 故此处两点与常见的「合并 patch」写法相反：
+   * - 四个 URL 键**全部显式**写入，缺省用 `null`（删除）而非 `undefined`——`updateClientDistQuery`
+   *   对 `undefined` 的语义是「保留旧值」，用它就等于沿用上一次的过滤条件；
+   * - 非 URL 维度的 `runtimeLinkExtra` 整体**替换**（而非展开合并），使上一次的 platform/lag 等不再残留。
+   */
   const openLogsWithLink = (link: RuntimeLink) => {
-    setRuntimeLinkExtra((prev) => ({ ...prev, ...link }))
+    const { machineId, version, errCode, ip, ...extra } = link
+    setRuntimeLinkExtra(extra)
     setSearchParams(updateClientDistQuery(searchParams, {
-      machineId: link.machineId,
-      version: link.version,
-      errCode: link.errCode,
-      ip: link.ip,
+      machineId: machineId ?? null,
+      version: version ?? null,
+      errCode: errCode ?? null,
+      ip: ip ?? null,
       tab: 'logs',
       type: 'request',
     }), { replace: true })
@@ -131,17 +153,17 @@ export default function ProtectionCenterPage() {
     }), { replace: true })
   }
 
-  const statsQuery = useClientStats(channelId, toStatsDays(effRange), { enabled: isPlatformAdmin && (tab === 'overview' || tab === 'statistics') })
-  const realtimeQuery = useClientDistRealtime({ channelId, enabled: isPlatformAdmin && tab === 'monitor' })
+  const statsQuery = useClientStats(channelId, toStatsDays(effRange), { enabled: canReadOps && (tab === 'overview' || tab === 'statistics') })
+  const realtimeQuery = useClientDistRealtime({ channelId, enabled: canReadOps && tab === 'monitor' })
   const runtimeQuery = useClientRuntimeOverview({
     channelId,
     range: toApiRange(effRange),
-    enabled: isPlatformAdmin && (tab === 'overview' || tab === 'clients'),
+    enabled: canReadOps && (tab === 'overview' || tab === 'clients'),
   })
   const errorSummaryQuery = useClientDistErrorSummary({
     channelId,
     range: toApiRange(effRange),
-    enabled: isPlatformAdmin && (tab === 'monitor' || tab === 'statistics'),
+    enabled: canReadOps && (tab === 'monitor' || tab === 'statistics'),
   })
 
   const channelHref = buildClientDistHref('/client-channels', searchParams, { tab: 'stats' })
@@ -161,20 +183,26 @@ export default function ProtectionCenterPage() {
   )
 
   return (
-    <div data-page="client-dist-ops" className="jm-page-stack space-y-4">
-      <div className="jm-page-header flex-wrap">
-        <h1 className="jm-page-title">{t('nav.clientDistOps')}</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          {isPlatformAdmin && channelPicker}
-          {isPlatformAdmin && <ObsTimeRangePicker value={obsWindow} onChange={setTimeWindow} />}
-          {isPlatformAdmin && <ClientDistExportButton kind="stats-summary" filters={{ channelId, range: toApiRange(effRange) }} />}
-          <Button asChild size="sm" variant="outline"><Link to={channelHref}>{t('clientDistOps.openChannelWorkbench')}</Link></Button>
-        </div>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语。
+    // data-page 保持 `client-dist-ops` 原值——e2e 就绪信号依赖它，且它与本页路由
+    // （旧 security 重定向到客户端分发运维）的语义一致，不因组件名是「保护中心」而改名。
+    <PageShell data-page="client-dist-ops">
+      <PageHeader
+        title={t('nav.clientDistOps')}
+        description={t('clientDistOps.subtitle')}
+        actions={
+          <>
+            {canReadOps && channelPicker}
+            {canReadOps && <ObsTimeRangePicker value={obsWindow} onChange={setTimeWindow} />}
+            {canReadOps && <ClientDistExportButton kind="stats-summary" filters={{ channelId, range: toApiRange(effRange) }} />}
+            <Button asChild size="sm" variant="outline"><Link to={channelHref}>{t('clientDistOps.openChannelWorkbench')}</Link></Button>
+          </>
+        }
+      />
 
-      {!isPlatformAdmin ? (
+      {!canReadOps ? (
         <Panel>
-          <p className="py-10 text-center text-sm text-muted-foreground">{t('clientDistOps.adminOnly')}</p>
+          <p className="py-10 text-center text-sm text-muted-foreground">{t('clientDistOps.noPermission')}</p>
         </Panel>
       ) : (
         <Tabs value={tab} onValueChange={setTab} className="space-y-4">
@@ -216,7 +244,7 @@ export default function ProtectionCenterPage() {
           </TabsContent>
 
           <TabsContent value="logs" className="space-y-4">
-            <ClientDistLogsTab channelId={channelId} range={toApiRange(effRange)} enabled={isPlatformAdmin} link={runtimeLink} onClearLink={clearRuntimeLink} />
+            <ClientDistLogsTab channelId={channelId} window={obsWindow} enabled={canReadOps} link={runtimeLink} onClearLink={clearRuntimeLink} />
           </TabsContent>
 
           <TabsContent value="clients" className="space-y-4">
@@ -256,6 +284,6 @@ export default function ProtectionCenterPage() {
           </TabsContent>
         </Tabs>
       )}
-    </div>
+    </PageShell>
   )
 }

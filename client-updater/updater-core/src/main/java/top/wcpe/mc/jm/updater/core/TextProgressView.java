@@ -3,7 +3,7 @@ package top.wcpe.mc.jm.updater.core;
 import java.util.Locale;
 
 /**
- * 文本进度（FR-099 headless / 降级路径）：节流写日志（控制台 + updater.log），不弹窗。
+ * 文本进度（headless / 降级路径）：节流写日志（控制台 + updater.log），不弹窗。
  *
  * <p>服务端驱动 / 无显示环境用此，绝不因无 GUI 报错或阻断。
  */

@@ -143,7 +143,7 @@ func TestAuditService_ListPage_ReturnsEnvelope(t *testing.T) {
 	assert.Equal(t, "1", page.Items[1].TargetID)
 }
 
-// TestAuditService_RecordResult_FailurePersistsFalse 失败记录的 success=false 必须真实落库（FR-321）。
+// TestAuditService_RecordResult_FailurePersistsFalse 失败记录的 success=false 必须真实落库。
 // 回归锁定：Success 是 bool 零值，默认 Create 会被 `default:true` tag 吃掉（零值列不进
 // INSERT → 落库变 true），失败记录静默变成功——真机首验即中招。
 func TestAuditService_RecordResult_FailurePersistsFalse(t *testing.T) {

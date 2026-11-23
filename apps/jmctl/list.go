@@ -22,7 +22,7 @@ type instanceInfo struct {
 	Alive      bool   // wrapper 进程是否存活（IsPIDAlive 探测）
 }
 
-// resolvePIDDir 解析 daemon PID 文件目录，与 Worker 实际写入路径对齐（ADR-010 / ADR-041 §1）。
+// resolvePIDDir 解析 daemon PID 文件目录，与 Worker 实际写入路径对齐。
 //
 // Worker 把 <uuid>.pid 写到「服务器工作目录根」= 数据根下 var/servers（process.Manager 的
 // pidDir 即 serversDir，见 cmd/worker/main.go）。jmctl 据此发现实例，故按以下优先级解析：

@@ -2,8 +2,8 @@ import { HttpResponse } from 'msw'
 import { db } from './db'
 import type { Session, User } from './handlers/domains/auth'
 
-/**
- * 鉴权中间件（FR-197）。受保护 handler 首行调用：
+/** 
+ * 鉴权中间件。受保护 handler 首行调用：
  *   const denied = requireAuth(info); if (denied) return denied
  * 校验 Authorization: Bearer <token> 是否对应一个有效 session（login 时写入）。
  * 公共端点（/auth/login、/auth/refresh、/setup/*）不调用。

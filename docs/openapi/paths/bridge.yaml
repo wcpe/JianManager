@@ -1,0 +1,208 @@
+paths:
+  /instances/{id}/bridge/status:
+    get:
+      tags: [bridge]
+      summary: 查询探针桥状态
+      description: |
+        返回探针与本机 Worker 之间的连接状态与线路健康度。
+
+        用于排障：
+        - 探针是否在线
+        - 是否频繁重连（网络不稳）
+        - 队列是否积压（背压）
+        - 是否有丢弃（可靠事件不应丢弃）
+      operationId: getBridgeStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 实例 ID
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 桥状态
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/BridgeStatus'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '404':
+          $ref: '../components/common.yaml#/NotFound'
+
+  /instances/{id}/bridge/subscription:
+    put:
+      tags: [bridge]
+      summary: 设置事件主题订阅
+      description: |
+        控制探针上报哪些事件，减少上行流量。
+
+        ## 语义
+
+        - **未设置过订阅**：探针全量上报（兼容现状）
+        - **设置订阅后**：只上报匹配 `topics` / `domains` 的事件
+          **+ 所有非业务事件**（connected / heartbeat / bridge_status 等）
+
+        非业务事件不受过滤影响，否则平台会失去连接状态感知。
+
+        ## 幂等
+
+        重复 PUT 会覆盖之前的订阅（不是追加）。传空数组表示"订阅全部"。
+      operationId: setBridgeSubscription
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas.yaml#/SubscriptionRequest'
+      responses:
+        '200':
+          description: 订阅已生效
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  applied:
+                    type: boolean
+                  topics:
+                    type: array
+                    items:
+                      type: string
+                  domains:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '409':
+          description: 探针未连接（`PROBE_UNAVAILABLE`）
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ProbeUnavailableError'
+
+  /instances/{id}/business/status:
+    get:
+      tags: [bridge]
+      summary: 查询实例已注册的业务域
+      description: |
+        返回该实例探针上注册的所有业务域及其健康状态。
+
+        ## 用途
+
+        运维面板据此展示「这台服装了哪些业务插件、哪些可用、哪些降级」，
+        不必登录服务器翻日志。
+
+        ## 平台只渲染，不解释
+
+        - 返回的是探针上报的原始状态
+        - `manifestDigest` 只是指纹，平台不解析 manifest 内容
+        - 不按 `domain` 做业务语义归类
+
+        ## 缓存
+
+        TTL 30 秒。探针不可达时返回最后已知状态并置 `stale: true`
+        （比返回空更有用）。
+      operationId: getBusinessStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 域状态
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/BusinessStatus'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '404':
+          $ref: '../components/common.yaml#/NotFound'
+
+  /instances/business/status/batch:
+    post:
+      tags: [bridge]
+      summary: 批量查询多个实例的业务域状态
+      description: |
+        一次查询最多 **50** 个实例的域状态，用于列表页的「业务插件」汇总列。
+
+        ## 为什么需要批量
+
+        每行各发一次单实例请求会把探针打满——每次查询未命中缓存时都是一次真实的
+        探针往返。批量接口在服务端做并发控制（默认 8）并复用同一份 30s 缓存。
+
+        ## 逐实例独立成败
+
+        某实例不存在或调用方无权访问时，该条标 `notFound=true`，**其余实例正常返回**。
+        整批失败没有意义——面板要的就是"哪些有数据"。
+
+        ## 存在性隐藏
+
+        `notFound` **不区分**「不存在」与「无权访问」，与单实例接口同一口径。
+        否则调用方能靠批量接口枚举出自己无权访问的实例 ID 是否存在。
+
+        ## 结果顺序
+
+        返回与 `instanceIds` **等长同序**（去重后），便于调用方按下标对应。
+      operationId: getBusinessStatusBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [instanceIds]
+              properties:
+                instanceIds:
+                  type: array
+                  items:
+                    type: integer
+                  maxItems: 50
+                  description: 实例 ID 列表。服务端会去重保序。
+                  examples:
+                    - [1, 2, 3]
+      responses:
+        '200':
+          description: 逐实例结果（与入参等长同序）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      required: [instanceId, notFound]
+                      properties:
+                        instanceId:
+                          type: integer
+                        notFound:
+                          type: boolean
+                          description: 实例不存在或调用方无权访问（两者刻意不区分）
+                        status:
+                          $ref: '../components/schemas.yaml#/BusinessStatus'
+        '400':
+          description: |
+            超过单次上限（`BATCH_TOO_LARGE`，响应含 `maxCount`）
+            或请求体非法（`INVALID_REQUEST`）
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ErrorBase'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '403':
+          $ref: '../components/common.yaml#/Forbidden'

@@ -1,0 +1,542 @@
+package catalog
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"sync"
+)
+
+// JournalEntry 是迁移 journal 的追加项（append-only）。
+// 不写入 Worker 业务 SQLite；持久化可选 FileStore。
+type JournalEntry struct {
+	Seq uint64       `json:"seq"`
+	Key PartitionKey `json:"key"`
+	// Record is the complete post-transition state for new journal entries.
+	// Legacy entries without it remain readable through their individual fields.
+	Record *Record `json:"record,omitempty"`
+	// Records is a single-line atomic batch for all logical namespaces sharing
+	// one physical VictoriaLogs UTC-day partition.
+	Records []*Record `json:"records,omitempty"`
+	// LeaseDelta 仅变更读租约，不改变发布 CAS 使用的记录修订。
+	LeaseDelta *LeaseDelta `json:"lease_delta,omitempty"`
+	// DayMigration 保存物理日固定批次及物理步骤进度。
+	DayMigration *PhysicalDayMigration `json:"day_migration,omitempty"`
+	// State 是本条 journal 记录的迁移状态（幂等重放目标）。
+	State MigrationState `json:"state"`
+	// FromState 变更前状态，便于失败恢复定位。
+	FromState MigrationState `json:"from_state,omitempty"`
+	// Owner/Generation/DirID 记录变更后的权威/路由意图。
+	Owner      Owner  `json:"owner,omitempty"`
+	Generation uint64 `json:"generation,omitempty"`
+	DirID      string `json:"dir_id,omitempty"`
+	// AuthorityCommit 为 true 表示 OWNER_SWITCHED 原子提交已持久化。
+	AuthorityCommit bool `json:"authority_commit,omitempty"`
+	// JournalComplete 为 true 表示该分区 journal 进入完成标记。
+	JournalComplete bool `json:"journal_complete,omitempty"`
+	// Detail 可观测说明。
+	Detail string `json:"detail,omitempty"`
+	// AtUnixMilli 追加时间（可观测，不参与权威判定）。
+	AtUnixMilli         int64                `json:"at_unix_ms,omitempty"`
+	PublishedProjection *PublishedProjection `json:"published_projection,omitempty"`
+	WriteRoute          WriteRoute           `json:"write_route,omitempty"`
+	Dirs                []PhysicalDir        `json:"dirs,omitempty"`
+	ResidualDirs        []PhysicalDir        `json:"residual_dirs,omitempty"`
+	RecoveryRequired    bool                 `json:"recovery_required,omitempty"`
+	PartialReasons      []string             `json:"partial_reasons,omitempty"`
+}
+
+// Journal 是 append-only 迁移 journal。
+type Journal interface {
+	// Append 追加一条记录；seq 必须严格递增（由实现分配或校验）。
+	Append(entry JournalEntry) error
+	// Entries 返回某分区的全部 journal 项（按 seq 升序）。
+	Entries(key PartitionKey) []JournalEntry
+	// Snapshot 返回当前全部 journal 项。
+	Snapshot() []JournalEntry
+	// LastSeq 返回全局最大 seq。
+	LastSeq() uint64
+}
+
+// Store 是可选的 journal 文件持久化接口（JSONL 等）。
+// 明确不是 SQLite 业务库。
+type Store interface {
+	AppendEntry(entry JournalEntry) error
+	LoadEntries() ([]JournalEntry, error)
+}
+
+// LeaseStoreProvider 是可选的「我能给租约旁路文件一个路径」能力。
+//
+// # 为什么需要它（2026-11-05 生产事故）
+//
+// `NewJournalWithStore` 原本用**具体类型断言** `store.(*JSONLFileStore)` 来决定租约
+// 旁路文件的路径（`<journal>.leases`）。只要在中间加一层包装（比如 `BatchedStore`
+// 攒批层），断言就失败，而失败分支写的是 `leases.unavailable = true` —— 接着
+// `leaseDeltaLog.loadLocked()` 返错，`Catalog` 的查询租约准入全线拒绝，**整个查询面
+// 挂掉**。事故形态：部署后所有 target 都是
+// `catalog: query lease admission rejected: custom journal has no durable lease store`。
+//
+// 教训不是「忘了实现某个方法」，而是**把能力判断写成了具体类型判断**：
+// 装饰一层（无论多薄、语义多无关）就会静默降级。所以改成接口：
+// 「能不能给我一个租约文件路径」是能力，跟我是哪个具体类型无关。
+//
+// 实现者只需返回 `(path, true)`；不想提供就走默认（未实现本接口），
+// 此时租约退化为进程内内存态（见 `NewJournalWithStore` 的降级说明）。
+type LeaseStoreProvider interface {
+	// LeaseStorePath 返回租约旁路文件的路径。true 表示可持久化。
+	LeaseStorePath() (string, bool)
+}
+
+// MemJournal 是线程安全的内存 append-only journal。
+type MemJournal struct {
+	mu      sync.RWMutex
+	entries []JournalEntry
+	byKey   map[PartitionKey][]int
+	nextSeq uint64
+	leases  *leaseDeltaLog
+}
+
+// NewMemJournal 创建空的内存 journal。
+func NewMemJournal() *MemJournal {
+	return &MemJournal{byKey: make(map[PartitionKey][]int), leases: &leaseDeltaLog{}}
+}
+
+// Append 追加 journal 项。实现分配单调 seq；若调用方指定 seq，必须大于当前 last。
+func (j *MemJournal) Append(entry JournalEntry) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if entry.Seq == 0 {
+		j.nextSeq++
+		entry.Seq = j.nextSeq
+	} else {
+		if entry.Seq <= j.nextSeq && j.nextSeq != 0 {
+			return fmt.Errorf("%w: got %d last %d", ErrJournalOrder, entry.Seq, j.nextSeq)
+		}
+		if entry.Seq <= j.nextSeq {
+			return fmt.Errorf("%w: got %d last %d", ErrJournalOrder, entry.Seq, j.nextSeq)
+		}
+		j.nextSeq = entry.Seq
+	}
+	idx := len(j.entries)
+	j.entries = append(j.entries, entry)
+	indexed := make(map[PartitionKey]bool)
+	if entry.Key.StorageNamespace != "" {
+		j.byKey[entry.Key] = append(j.byKey[entry.Key], idx)
+		indexed[entry.Key] = true
+	}
+	for _, rec := range entry.Records {
+		if rec != nil && !indexed[rec.Key] {
+			j.byKey[rec.Key] = append(j.byKey[rec.Key], idx)
+			indexed[rec.Key] = true
+		}
+	}
+	return nil
+}
+
+// Entries 返回分区 journal 副本。
+func (j *MemJournal) Entries(key PartitionKey) []JournalEntry {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	idxs := j.byKey[key]
+	out := make([]JournalEntry, 0, len(idxs))
+	for _, i := range idxs {
+		out = append(out, j.entries[i])
+	}
+	return out
+}
+
+// Snapshot 返回全部 journal 项副本。
+func (j *MemJournal) Snapshot() []JournalEntry {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	out := make([]JournalEntry, len(j.entries))
+	copy(out, j.entries)
+	return out
+}
+
+// LastSeq 返回当前最大 seq。
+func (j *MemJournal) LastSeq() uint64 {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.nextSeq
+}
+
+// JSONLFileStore 是可选文件持久化：每行一条 JSON journal entry，只追加。
+type JSONLFileStore struct {
+	mu   sync.Mutex
+	path string
+}
+
+// NewJSONLFileStore 打开（必要时创建）路径上的 JSONL journal 文件。
+func NewJSONLFileStore(path string) (*JSONLFileStore, error) {
+	if path == "" {
+		return nil, fmt.Errorf("%w: journal file path required", ErrInvalidState)
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("catalog: mkdir journal dir: %w", err)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: open journal file: %w", err)
+	}
+	_ = f.Close()
+	return &JSONLFileStore{path: path}, nil
+}
+
+// AppendEntry 追加一行 JSON。
+//
+// 每次调用都是「open + write + Sync + close」——在机械盘上单条写入的代价几乎全在
+// Sync 的寻道。因此**攒批场景应改用 `AppendEntries`**（见 `BatchedStore`）：
+// 它把 N 条合并成一次 open + 一次 Sync。
+func (s *JSONLFileStore) AppendEntry(entry JournalEntry) error {
+	return s.AppendEntries([]JournalEntry{entry})
+}
+
+// AppendEntries 一次 open + 一次 Sync 追加**多条**（BatchedStore 的批量落盘入口）。
+//
+// 语义与逐条调用 `AppendEntry` 等价（同样的行格式、同样的顺序），差别只是 I/O 次数：
+// N 条从 N 次 open/N 次 Sync 降为 1 次。这正是把 2026-10-30 那个「每批投递都要付的
+// 寻道开销」真正摊薄的地方。
+//
+// 空入参直接返回 nil（不碰盘）。
+//
+// 可用性是**全有或全无**的近似：单次 write 失败则整批报错，而已写出的前缀留在文件里
+// ——行的 JSON 自描述，重放时逐行解析，前缀完整即可用；只有**最后一行**可能被截断
+// （见 `LoadEntries` 对截断尾巴的容忍）。这正是追加日志的正常形态，不需要额外事务。
+func (s *JSONLFileStore) AppendEntries(entries []JournalEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("catalog: open journal file: %w", err)
+	}
+	defer f.Close()
+	buf := make([]byte, 0, 512*len(entries))
+	for _, entry := range entries {
+		b, marshalErr := json.Marshal(entry)
+		if marshalErr != nil {
+			// 先不动盘：一条也无法序列化就整批放弃，避免写出半个批次。
+			return fmt.Errorf("catalog: marshal journal entry: %w", marshalErr)
+		}
+		buf = append(buf, b...)
+		buf = append(buf, '\n')
+	}
+	if _, err := f.Write(buf); err != nil {
+		return fmt.Errorf("catalog: write journal entries: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("catalog: sync journal entries: %w", err)
+	}
+	return nil
+}
+
+// LoadEntries 读取全部 journal 项。
+//
+// ## 容忍**末行截断**，其余损坏一律报错（2026-11-05）
+//
+// 追加日志在崩溃/断电时天然会留下**写了一半的末行**（write 返回之前进程死了）。
+// 旧实现逐行 `json.Unmarshal` 并对**任何**解码失败直接返回错误 ⇒ 一旦启用文件
+// journal，一次崩溃就会让**下次启动直接失败**（`NewJournalWithStore` 把错误上抛，
+// 装配层只能拒启）。这条在纯内存形态下永远不会触发，所以一直没暴露，但它是
+// 「重新启用持久化」的必经门槛。
+//
+// 判据（严格区分两种尾巴）：
+//   - **末行**解码失败 ⇒ 视为崩溃残留，跳过并 WARN（前缀完整可用，这正是追加日志的
+//     设计语义：已 Sync 过的行一定是完整行）；
+//   - **非末行**解码失败 ⇒ 真损坏（中间出现坏行意味着文件被改写/被别的写者踩过）
+//     ⇒ 仍然报错，判据不放宽。
+func (s *JSONLFileStore) LoadEntries() ([]JournalEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := os.Open(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("catalog: read journal file: %w", err)
+	}
+	defer f.Close()
+	var out []JournalEntry
+	sc := bufio.NewScanner(f)
+	// journal 单行不应巨大；放大 buffer 防御异常 detail。
+	buf := make([]byte, 0, 64*1024)
+	sc.Buffer(buf, 1024*1024)
+	// 记录上一条坏行的行号；只有当坏行是**最后一条**时才容忍。
+	// 做法：先把行读进内存列表（行数=1217 量级，与既有全量重放同档），
+	// 这样能确定「是否末行」而不用两次扫盘。
+	var lines [][]byte
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		// Scanner 复用底层数组，必须拷贝。
+		dup := make([]byte, len(line))
+		copy(dup, line)
+		lines = append(lines, dup)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: scan journal file: %w", err)
+	}
+	for i, line := range lines {
+		var e JournalEntry
+		if decodeErr := json.Unmarshal(line, &e); decodeErr != nil {
+			if i == len(lines)-1 {
+				// 崩溃残留的末行：跳过它，前缀照常重放。
+				slog.Warn("journal 末行不完整（崩溃残留），已跳过；前缀照常重放",
+					"path", s.path, "line", i+1, "bytes", len(line), "error", decodeErr.Error())
+				break
+			}
+			return nil, fmt.Errorf("catalog: decode journal line %d: %w", i+1, decodeErr)
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// JournalWithStore 组合内存 journal 与可选文件 store：每次 Append 同步写 store。
+type JournalWithStore struct {
+	mu     sync.Mutex
+	mem    *MemJournal
+	store  Store
+	leases *leaseDeltaLog
+}
+
+// NewJournalWithStore 创建带可选持久化的 journal。store 为 nil 时退化为纯内存。
+//
+// **2026-10-06 修复（确定性启动失败 ✗✗）**：文件行序可能不是 seq 序（现场重启后
+// `got 33726 last 33787` 每次必现 —— 崩溃残留尾／两个写者先后共文件都会造成行序≠逻辑序），
+// 旧实现按行序逐条重放 ⇒ 直接拒绝 ⇒ 启动判"增量对账不可信" ⇒ 回退整窗重发 ⇒ 单源 175 万
+// 事件整窗物化，把 60 源平台拖死 ✗。修法：**先按 seq 归并再重放** ——
+//   - 乱序可容忍 ✓（按 seq 升序应用，与应用顺序的真实语义一致 ✓）；
+//   - 同 seq 且内容完全相同 ⇒ 视为精确重复，跳过 ✓；
+//   - 同 seq 但内容不同 ⇒ **真损坏，仍拒绝** ✗（判据不放宽）；
+//   - seq==0 ⇒ 写入器不可能产生（Append 必先分配 seq）⇒ 拒绝 ✗。
+//
+// 发现乱序时显式告警（可见，不静默 ✗）。
+func NewJournalWithStore(store Store) (*JournalWithStore, error) {
+	j := &JournalWithStore{mem: NewMemJournal(), store: store, leases: &leaseDeltaLog{}}
+	if store != nil {
+		// 能力判断，不是类型判断（见 LeaseStoreProvider 的注释：
+		// 用具体类型断言曾导致一次生产事故——加一层攒批包装就全线拒查）。
+		if provider, ok := store.(LeaseStoreProvider); ok {
+			if path, ok := provider.LeaseStorePath(); ok && path != "" {
+				j.leases.path = path
+			} else {
+				j.leases.degraded = true
+			}
+		} else {
+			j.leases.degraded = true
+		}
+		if j.leases.degraded {
+			// **降级而不是拒绝**（见 journal.go 顶部的取舍说明）：
+			// 租约是短生命周期的运行时状态，丢了只是旧视图失效，不该阻断查询。
+			slog.Warn("journal 存储未提供租约旁路文件：查询租约退化为进程内内存态" +
+				"（重启后旧视图 ID 自然失效，不影响查询可用性）")
+		}
+	}
+	if store == nil {
+		return j, nil
+	}
+	entries, err := store.LoadEntries()
+	if err != nil {
+		return nil, err
+	}
+	outOfOrder := false
+	for i := 1; i < len(entries); i++ {
+		if entries[i].Seq < entries[i-1].Seq {
+			outOfOrder = true
+			break
+		}
+	}
+	sort.SliceStable(entries, func(i, k int) bool { return entries[i].Seq < entries[k].Seq })
+	maxSeq := uint64(0)
+	for _, e := range entries {
+		if e.Seq == 0 {
+			return nil, fmt.Errorf("%w: journal entry with zero seq", ErrJournalOrder)
+		}
+		if e.Seq > maxSeq {
+			maxSeq = e.Seq
+		}
+	}
+	merged := make([]JournalEntry, 0, len(entries))
+	seen := make(map[uint64]struct{}, len(entries))
+	renumbered := 0
+	for _, e := range entries {
+		if _, dup := seen[e.Seq]; dup {
+			// 同 seq：先判精确重复（跳过 ✓）；再判"同 seq 异内容" —— 现场形态＝**两个写者
+			// 各自分配序号**（一个长期在跑的旧实例 + 新实例共用一个文件 ✗），两条都可能是
+			// 真实状态迁移 ⇒ **不丢任何一条**：把后位置者改判到全局尾部（seq = maxSeq+1），
+			// 并显式告警（可见，不静默 ✗）。seq 仅为应用次序序号，改判不改变条目内容语义 ✓。
+			if n := len(merged); n > 0 && dupEqual(merged, e) {
+				continue
+			}
+			maxSeq++
+			e.Seq = maxSeq
+			renumbered++
+		}
+		seen[e.Seq] = struct{}{}
+		merged = append(merged, e)
+	}
+	// **必须再按 seq 重排一次**：改判把冲突条目排到全局尾部（seq=maxSeq+1），但它是**按原位置
+	// 插回 merged** 的 ✗ ⇒ 结果会乱序（如 [1A, 3(改判), 2B]）⇒ 顺序重放必再撞 ErrJournalOrder ✗✗
+	//（2026-10-06 第 7 窗实测：修复后仍报 `got 33727 last 34492`，真因即此 ✓）。
+	sort.SliceStable(merged, func(i, k int) bool { return merged[i].Seq < merged[k].Seq })
+	for _, e := range merged {
+		if err := j.mem.Append(e); err != nil {
+			return nil, fmt.Errorf("catalog: replay journal store: %w", err)
+		}
+	}
+	if outOfOrder || renumbered > 0 {
+		slog.Warn("journal 重放已归并/改判（正常重启不得再因此拒启）",
+			"entries", len(merged), "out_of_order", outOfOrder, "renumbered", renumbered)
+	}
+	return j, nil
+}
+
+// dupEqual 判断 e 是否与 merged 中"同 seq 的最新一条"内容完全相同（精确重复 ⇒ 可跳过 ✓）。
+func dupEqual(merged []JournalEntry, e JournalEntry) bool {
+	for i := len(merged) - 1; i >= 0; i-- {
+		if merged[i].Seq == e.Seq {
+			return reflect.DeepEqual(merged[i], e)
+		}
+		if merged[i].Seq < e.Seq {
+			break
+		}
+	}
+	return false
+}
+
+// Append 写入内存并同步到 store（若有）。
+func (j *JournalWithStore) Append(entry JournalEntry) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	last := j.mem.LastSeq()
+	if entry.Seq != 0 && entry.Seq <= last {
+		return fmt.Errorf("%w: got %d last %d", ErrJournalOrder, entry.Seq, last)
+	}
+	if entry.Seq == 0 {
+		entry.Seq = last + 1
+	}
+	// 先持久化，再进入内存视图（崩溃时宁可 journal 少也不出现假完成）。
+	if j.store != nil {
+		if err := j.store.AppendEntry(entry); err != nil {
+			return err
+		}
+	}
+	return j.mem.Append(entry)
+}
+
+// Entries implements Journal.
+func (j *JournalWithStore) Entries(key PartitionKey) []JournalEntry {
+	return j.mem.Entries(key)
+}
+
+// Snapshot implements Journal.
+func (j *JournalWithStore) Snapshot() []JournalEntry {
+	return j.mem.Snapshot()
+}
+
+// LastSeq implements Journal.
+func (j *JournalWithStore) LastSeq() uint64 {
+	return j.mem.LastSeq()
+}
+
+// ReplayJournal 将分区 journal 重放到幂等逻辑状态（不改变权威，除非 entry.AuthorityCommit）。
+// 返回是否检测到冲突 generation。
+func ReplayJournal(rec *Record, entries []JournalEntry) (conflict string) {
+	if rec == nil {
+		return ""
+	}
+	var lastAuth *JournalEntry
+	for _, e := range entries {
+		if e.LeaseDelta != nil || (e.DayMigration != nil && len(e.Records) == 0 && e.Record == nil) {
+			continue
+		}
+		fullRecord := false
+		if len(e.Records) > 0 {
+			matched := false
+			for _, candidate := range e.Records {
+				if candidate != nil && candidate.Key == rec.Key {
+					*rec = *candidate.Clone()
+					e.Owner, e.Generation, e.DirID = candidate.Owner, candidate.Generation, candidate.OwnerDirID
+					e.State, e.JournalComplete = candidate.MigrationState, candidate.JournalComplete
+					fullRecord = true
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		} else if e.Key != rec.Key {
+			continue
+		}
+		if e.Record != nil {
+			*rec = *e.Record.Clone()
+			// 完整 Record 是新版 journal 的权威后状态；同步填充旧格式兼容字段，
+			// 避免 AuthorityCommit 将缺省顶层字段误判为一次“切到空权威”。
+			e.Owner, e.Generation, e.DirID = e.Record.Owner, e.Record.Generation, e.Record.OwnerDirID
+			e.State, e.JournalComplete = e.Record.MigrationState, e.Record.JournalComplete
+			fullRecord = true
+		}
+		if e.JournalComplete {
+			rec.JournalComplete = true
+		}
+		if e.Seq > rec.JournalLastSeq {
+			rec.JournalLastSeq = e.Seq
+		}
+		if e.State != "" {
+			// 幂等：只接受契约内状态。
+			if IsHappyPath(e.State) || IsFailure(e.State) {
+				rec.MigrationState = e.State
+			}
+		}
+		if e.AuthorityCommit {
+			// 冲突：同一 journal 流中出现互相矛盾的权威提交。
+			validSwitch := lastAuth != nil && e.State == StateOwnerSwitched && e.FromState == StateAttachedStaging &&
+				e.Generation == lastAuth.Generation+1
+			// 仅目录轮换（owner 与 generation 均未变、只有 owner_dir_id 变化）＝同 owner 的**物理位置刷新**
+			// （整窗重发会新建 hot-projection-NN 目录）✗，不构成权威切换冲突。
+			// 现网实证（离线对着 journal 复算）：inst:207 的 2026-10-04/05 两分区正因此被判
+			// CONFLICT_GENERATION（13 个日分区全部 recovery_required、全量窗 partial、导出不解锁 ✗）；
+			// 窄化后两者冲突归零，其余分区不受影响 ✓。真正的 owner/generation 变更仍按原规则严判 ✓。
+			dirRefreshOnly := lastAuth != nil && lastAuth.Owner == e.Owner && lastAuth.Generation == e.Generation &&
+				lastAuth.DirID != e.DirID
+			if lastAuth != nil && !validSwitch && !dirRefreshOnly && (lastAuth.Owner != e.Owner || lastAuth.DirID != e.DirID || lastAuth.Generation != e.Generation) {
+				conflict = fmt.Sprintf("authority:%s/%s/%d→%s/%s/%d",
+					lastAuth.Owner, lastAuth.DirID, lastAuth.Generation,
+					e.Owner, e.DirID, e.Generation)
+			}
+			ec := e
+			lastAuth = &ec
+			if e.Owner.Valid() {
+				rec.Owner = e.Owner
+			}
+			if e.Generation != 0 {
+				rec.Generation = e.Generation
+			}
+			if e.DirID != "" && !fullRecord {
+				rec.OwnerDirID = e.DirID
+				rec.WriteRoute.Owner = rec.Owner
+				rec.WriteRoute.DirID = e.DirID
+				rec.WriteRoute.Generation = rec.Generation
+				rec.WriteRoute.Frozen = false
+				rec.WriteRoute.LateOwner = rec.Owner
+				rec.WriteRoute.LateDirID = e.DirID
+			}
+		}
+	}
+	rec.ConflictGeneration = conflict
+	return conflict
+}

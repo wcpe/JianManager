@@ -88,7 +88,7 @@ func TestParseScenarioV2_RejectsNonFiniteCoordinates(t *testing.T) {
 	}
 }
 
-func TestParseScenarioV2_AllowsAttackUntilFR404Extensions(t *testing.T) {
+func TestParseScenarioV2_AllowsAttackUntilExtensions(t *testing.T) {
 	raw := `{"version":2,"seed":20260728,"cohorts":[{"key":"all","percent":100,"steps":[{"id":"brawl","type":"attack_until","observationStep":true,"selector":{"types":["player","zombie"],"radius":24,"priority":"random"},"searchArea":{"type":"radius","center":{"x":0,"y":64,"z":0},"radius":32},"stop":{"durationMs":3600000,"successPolicy":"any","minClientAttackAttempts":10},"attackIntervalMs":600,"chase":true,"reacquire":true,"targetNotFoundTimeoutMs":1000,"maxPathFailures":50,"respawn":{"maxAttempts":1000,"retryBackoffMs":500,"timeoutMs":10000}}]}]}`
 	scenario, err := ParseScenarioV2([]byte(raw))
 	require.NoError(t, err)

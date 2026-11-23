@@ -5,9 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
@@ -20,8 +18,7 @@ func newStorageTestService(t *testing.T) (*StorageService, *dataroot.Root) {
 	root, err := dataroot.Init(dir)
 	require.NoError(t, err)
 
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
+	db := openTestSQLite(t)
 	require.NoError(t, db.AutoMigrate(&model.Asset{}))
 	require.NoError(t, db.Exec("DELETE FROM assets").Error)
 
@@ -84,7 +81,7 @@ func TestStorage_Overview(t *testing.T) {
 	require.Equal(t, 2, ov.TotalFiles)
 }
 
-// Overview 的归档分布按 storage_state 聚合（FR-045 归档可见）。
+// Overview 的归档分布按 storage_state 聚合（归档可见）。
 func TestStorage_Overview_ArchiveSummary(t *testing.T) {
 	svc, _ := newStorageTestService(t)
 	require.NoError(t, svc.db.Create(&model.Asset{Type: model.AssetTypeCore, SHA256: "a", Size: 100, StorageState: model.AssetStorageHot}).Error)

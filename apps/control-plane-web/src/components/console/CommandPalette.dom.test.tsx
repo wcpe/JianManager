@@ -42,7 +42,7 @@ describe('CommandPalette DOM', () => {
     ['Bot', '/bots'],
     ['定时任务', '/schedules'],
     ['备份', '/backups'],
-  ])('FR-272 页面「%s」可从命令面板检索并跳转', async (label, path) => {
+  ])('页面「%s」可从命令面板检索并跳转', async (label, path) => {
     const user = userEvent.setup()
     renderWithProviders(<CommandPalette />, { route: '/' })
 

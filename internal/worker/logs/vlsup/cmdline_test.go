@@ -1,0 +1,101 @@
+package vlsup
+
+import (
+	"strings"
+	"testing"
+)
+
+func baseCfg(ns Namespace) InstanceConfig {
+	return InstanceConfig{
+		Namespace:       ns,
+		Port:            DefaultPort(ns),
+		StorageDataPath: StoragePathUnder("C:\\data", ns),
+		RetentionPeriod: DefaultRetentionPeriod,
+		AuthUsername:    DefaultAuthUsername,
+		AuthPassword:    "local-only",
+	}
+}
+
+func TestBuildArgsHotDefaults(t *testing.T) {
+	cfg := baseCfg(NamespaceHot)
+	args, err := BuildArgs(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"-storageDataPath=" + cfg.StorageDataPath,
+		"-httpListenAddr=127.0.0.1:19441",
+		// 引用常量而非硬编码：默认值会随保留策略调整（2026-10-21 由 30d 改 120d），
+		// 硬编码会让「改默认值」与「测试」永久不同步。
+		"-retentionPeriod=" + DefaultRetentionPeriod,
+		"-memory.allowedBytes=536870912",
+		"-httpAuth.username=jm",
+		"-httpAuth.password=local-only",
+	} {
+		if !containsArg(args, want) {
+			t.Fatalf("missing arg %q in %v", want, args)
+		}
+	}
+	if strings.Contains(joined, "0.0.0.0") {
+		t.Fatalf("must bind localhost only, got %s", joined)
+	}
+}
+
+func TestBuildArgsExplicitCache(t *testing.T) {
+	cfg := baseCfg(NamespaceHot)
+	cfg.MemoryAllowedBytes = 64 * 1024 * 1024
+	args, err := BuildArgs(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsArg(args, "-memory.allowedBytes=67108864") {
+		t.Fatalf("expected explicit cache flag: %v", args)
+	}
+}
+
+func TestBuildArgsValidation(t *testing.T) {
+	cfg := baseCfg(NamespaceHot)
+	cfg.StorageDataPath = ""
+	if _, err := BuildArgs(cfg); err == nil {
+		t.Fatal("empty storage path must fail")
+	}
+	cfg = baseCfg("nope")
+	if _, err := BuildArgs(cfg); err == nil {
+		t.Fatal("unknown namespace must fail")
+	}
+	cfg = baseCfg(NamespaceHot)
+	cfg.Port = 0
+	if _, err := BuildArgs(cfg); err == nil {
+		t.Fatal("invalid port must fail")
+	}
+	cfg = baseCfg(NamespaceHot)
+	cfg.AuthPassword = ""
+	if _, err := BuildArgs(cfg); err == nil {
+		t.Fatal("empty auth must fail")
+	}
+}
+
+func TestEffectiveCacheBytes(t *testing.T) {
+	hot := baseCfg(NamespaceHot)
+	if got := hot.EffectiveCacheBytes(); got != DefaultHotCacheBytes {
+		t.Fatalf("default cache: got %d want %d", got, DefaultHotCacheBytes)
+	}
+	// 2026-10-29：冷热双层已废除，不再有冷层单独的 cache 默认值可断言。
+}
+
+func TestListenAddrLoopbackOnly(t *testing.T) {
+	addr := ListenAddr(19441)
+	if !strings.HasPrefix(addr, "127.0.0.1:") {
+		t.Fatalf("listen addr must be loopback: %s", addr)
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}

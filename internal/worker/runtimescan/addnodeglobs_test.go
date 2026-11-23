@@ -8,7 +8,7 @@ import (
 
 // TestAddNodeGlobs_ManagedRootDiscovered 托管安装根经 AddNodeGlobs 追加后，
 // 一键安装布局（nodejs-<major>/bin/node）的 Node 能被扫描发现，且因位于
-// 托管根下自动标 AlreadyRegistered（FR-299×FR-300 胶合）。
+// 托管根下自动标 AlreadyRegistered（×胶合）。
 func TestAddNodeGlobs_ManagedRootDiscovered(t *testing.T) {
 	root := t.TempDir()
 	runtimesRoot := filepath.Join(root, "opt", "runtimes")

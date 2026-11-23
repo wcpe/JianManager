@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/wcpe/JianManager/internal/controlplane/logcoord"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
@@ -34,23 +35,46 @@ type ToolContent struct {
 type ToolDeps struct {
 	Instance *service.InstanceService
 	Node     *service.NodeService
-	Log      *service.LogService        // 可选；nil 时 agent_get_instance_logs 返回中文错误
-	Agent    *service.AgentTokenService // FR-395：可信目标解析与 scope 查询
-	// FR-396 扩展依赖；nil 时对应工具返回中文「服务不可用」。
+	// LogCoord 是日志联邦查询协调器（实例日志的真源在 Worker 的 VL 里）。
+	//
+	// 历史：这里原先是 *service.LogService（读 CP `logs` 表）。那张表正在废弃——
+	// 它把日志正文与业务数据混在同一个库，且关键词检索是 LIKE 全表扫。
+	// nil 时 agent_get_instance_logs 返回中文错误。
+	LogCoord *logcoord.Coordinator
+	Agent    *service.AgentTokenService // 可信目标解析与 scope 查询
+	// 扩展依赖；nil 时对应工具返回中文「服务不可用」。
 	Provision *service.ProvisionService
 	Import    *service.ImportServerService
 	Clone     *service.CloneService
 	Batch     *service.InstanceBatchService
 	Docker    *service.DockerImageService
 	Crash     *service.CrashSnapshotService
-	Task      *service.TaskService
-	// FR-397 内容运维依赖；nil 时对应工具返回中文「服务不可用」。
+	// BinaryVersion 二进制/Beacon 版本管理；nil 时对应工具返回中文「服务不可用」。
+	BinaryVersion *service.BinaryVersionService
+	// Quota 运行期配额强制；nil 时 instance_quota_status 返回中文「服务不可用」。
+	Quota *service.QuotaEnforcer
+	// Snapshot 实例整机快照与一键回滚；nil 时对应工具返回中文「服务不可用」。
+	Snapshot *service.SnapshotService
+	Task     *service.TaskService
+	// 492 平台审批：nil 时高危操作**一律拒绝**（失败关闭，不是放行）。
+	Approval *service.ApprovalService
+	// AssistantOverview 助手概览类只读：集群概览 / 任务 / 告警的聚合摘要。
+	// 按调用者 RBAC 收敛；nil 时三个概览工具返回「服务不可用」。
+	AssistantOverview *service.AssistantOverviewService
+	// 内容运维依赖；nil 时对应工具返回中文「服务不可用」。
 	File        *service.FileService
 	FileVersion *service.FileVersionService
 	Config      *service.ConfigService
 	Plugin      *service.PluginService
 	Transfer    *service.AgentTransferTicketService
-	// FR-398：Bot 舰队与压测编排；任一为 nil 时对应工具返回中文「服务不可用」。
+	// 实例分组；nil 时分组工具返回中文「服务不可用」。
+	InstanceGroup *service.InstanceGroupService
+	// BeaconSync Beacon 拓扑拉取映射；nil 时 beacon_topology_* 返回未启用提示。
+	BeaconSync *service.BeaconSyncService
+	// 群组服 Network 软标签与代理注册；nil 时对应工具返回中文「服务不可用」。
+	Network      *service.NetworkService
+	Registration *service.RegistrationService
+	// Bot 舰队与压测编排；任一为 nil 时对应工具返回中文「服务不可用」。
 	Bot           *service.BotService
 	LoadTemplate  *service.BotLoadTemplateService
 	StressSession *service.BotStressSessionService
@@ -60,6 +84,9 @@ type ToolDeps struct {
 	Report        *service.BotLoadReportService
 	Capacity      service.BotLoadCapacityProvider
 	Metrics       *service.BotLoadMetricSampler
+	// Business 经探针桥下发 ServerProbe 诊断命令（probe_* 工具代理）。
+	// nil 时 probe_* 返回中文「服务不可用」。
+	Business *service.BusinessService
 }
 
 // toolExec 工具执行器：参数已校验过会话，action 已从 catalog 解析。
@@ -71,7 +98,7 @@ type toolSpec struct {
 	Def          ToolDef
 	Action       string
 	Exec         toolExec // 可选；nil 时走 CallTool 内置 switch（兼容既有 11 工具）
-	ConfirmField string   // FR-396：destructive 确认参数名（如 confirmInstanceName）
+	ConfirmField string   // destructive 确认参数名（如 confirmInstanceName）
 }
 
 // allToolSpecs 全量工具目录（静态；永久禁区不在此处）。
@@ -128,7 +155,7 @@ var allToolSpecs = []toolSpec{
 	{
 		Def: ToolDef{
 			Name:        "agent_get_instance_logs",
-			Description: "获取指定实例最近日志（须在 scope 内）；可选 limit",
+			Description: "获取指定实例最近日志（须在 scope 内）；可选 limit。日志来自 Worker 的 VictoriaLogs（经 CP 联邦查询），不读 CP 本地表",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -188,14 +215,16 @@ var allToolSpecs = []toolSpec{
 	},
 }
 
-// init 追加 FR-397 内容运维工具（文件/配置/插件），保持各域声明在各自文件内。
+// init 追加内容运维工具（文件/配置/插件），保持各域声明在各自文件内。
 func init() {
 	allToolSpecs = append(allToolSpecs, fileToolSpecs...)
 	allToolSpecs = append(allToolSpecs, configToolSpecs...)
 	allToolSpecs = append(allToolSpecs, pluginToolSpecs...)
+	// 审批票据自查（spec §8.4）：Agent 提交高危操作后能回读结果，不必盲等。
+	allToolSpecs = append(allToolSpecs, approvalToolSpecs...)
 }
 
-// init 追加 FR-398 Bot 舰队与压测编排工具，保持 allToolSpecs 的追加式演进。
+// init 追加Bot 舰队与压测编排工具，保持 allToolSpecs 的追加式演进。
 func init() {
 	allToolSpecs = append(allToolSpecs, botToolSpecs()...)
 	allToolSpecs = append(allToolSpecs, loadTestToolSpecs()...)
@@ -221,7 +250,7 @@ func ToolNames() []string {
 	return out
 }
 
-// ToolsForPrincipal 按 principal 的能力与潜在 scope 动态裁剪工具列表（FR-395）。
+// ToolsForPrincipal 按 principal 的能力与潜在 scope 动态裁剪工具列表。
 // V1 仅显示兼容解释器确实可能允许的工具；V2 按 capability 与 scope 可用性过滤。
 func ToolsForPrincipal(p *service.AgentPrincipal) []ToolDef {
 	if p == nil {
@@ -259,8 +288,11 @@ func toolTargetByName(name string, args map[string]any) (targetType, targetID st
 	if !ok || d.ResourceType == service.AgentResourceNone {
 		return "", ""
 	}
-	id, err := toUint(args["id"])
-	if err != nil {
+	// 与拦截层的授权目标用同一套解析（见 approvalTargetID 的说明）：
+	// 只认 `id` 会让「实例不是 id 参数」的工具（如快照回滚）票据目标恒为空，
+	// 批准人因此看不到这次操作落在哪个实例上。
+	id, ok := approvalTargetID(name, args)
+	if !ok {
 		return "", ""
 	}
 	return d.ResourceType, strconv.FormatUint(uint64(id), 10)
@@ -274,10 +306,10 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 	if args == nil {
 		args = map[string]any{}
 	}
-	// 会话已踢线时 ctx 取消
+	// 调用方已断开（请求 ctx 取消）时不再执行工具
 	select {
 	case <-ctx.Done():
-		return toolErr("MCP 会话已关闭")
+		return toolErr("MCP 调用已取消")
 	default:
 	}
 
@@ -287,7 +319,16 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		return toolErr("未知工具: " + name + "（硬拒绝面操作不会注册为 tool）")
 	}
 
-	// FR-397 内容运维域（文件/配置/插件）在独立文件内分发。
+	// 审批拦截必须在**任何分发之前**。
+	//
+	// 位置关键——`callContentTool` 在下面先行处理文件/配置/插件域，
+	// 若把拦截放在 switch 之后，`file_issue_transfer_ticket`（签票后可写盘的完整绕过路径）
+	// 就已经执行完了，审批形同虚设。
+	if blocked, res := interceptApproval(ctx, deps, p, name, action, args); blocked {
+		return res
+	}
+
+	// 内容运维域（文件/配置/插件）在独立文件内分发。
 	if res, handled := callContentTool(deps, p, name, action, args); handled {
 		return res
 	}
@@ -359,6 +400,10 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		if err != nil {
 			return toolForbidden(err)
 		}
+		// 详情查询在序列化前附加能力画像，与 HTTP GET /instances/:id 同口径。
+		// 仅在真正会把它序列化出去的 get_instance 路径附加，不塞回 ResolveInstanceTarget，
+		// 以免启停/命令等所有实例级动作都携带无用字段。
+		service.AttachCapabilities(inst)
 		return toolOK(inst)
 
 	case "agent_get_instance_metrics":
@@ -392,7 +437,7 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		if _, _, err := deps.Agent.AuthorizeInstanceAction(p, action, id); err != nil {
 			return toolForbidden(err)
 		}
-		if deps.Log == nil {
+		if deps.LogCoord == nil {
 			return toolErr("日志服务不可用")
 		}
 		limit := 50
@@ -406,17 +451,24 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 				limit = 200
 			}
 		}
-		src := model.LogSourceInstance
-		page, err := deps.Log.Query(service.LogFilter{
-			InstanceID: &id,
-			Source:     &src,
-			Page:       1,
-			PageSize:   limit,
+		// 走联邦查询：实例日志的权威副本在 Worker 的 VL 里，CP 只做授权与归集。
+		// 目标集合仅含已通过 AuthorizeInstanceAction 校验的这一个实例（inst:<id>），
+		// 不扩到其他实例，也不读 CP 本地任何表。
+		resp, err := deps.LogCoord.Search(ctx, logcoord.Query{
+			RequestID:           fmt.Sprintf("mcp-instance-logs-%d", id),
+			AuthorizedTargetIDs: []string{fmt.Sprintf("inst:%d", id)},
+			PrincipalKey:        fmt.Sprintf("agent:%d", p.TokenID),
+			Fast:                true,
+			Budget:              logcoord.QueryBudget{Limit: limit},
 		})
 		if err != nil {
 			return toolErr("查询日志失败: " + err.Error())
 		}
-		return toolOK(page)
+		return toolOK(map[string]any{
+			"sourceTag": "federated",
+			"items":     resp.Items,
+			"coverage":  resp.Coverage,
+		})
 
 	case "instance_start", "instance_stop", "instance_restart":
 		return callLifecycle(ctx, deps, p, action, args)
@@ -427,11 +479,11 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		return callMaintenance(deps, p, action, args, false)
 
 	default:
-		// FR-398：Bot 舰队与压测编排域由独立执行器分发。
+		// Bot 舰队与压测编排域由独立执行器分发。
 		if exec, ok := botDomainExec(name); ok {
 			return exec(ctx, deps, p, action, args)
 		}
-		// FR-396+：扩展工具走注册表 Exec，CallTool 骨架统一处理确认参数。
+		// 扩展工具走注册表 Exec，CallTool 骨架统一处理确认参数。
 		return callRegisteredTool(ctx, deps, p, name, action, args)
 	}
 }
@@ -467,6 +519,16 @@ func authorizeDestructiveTarget(p *service.AgentPrincipal, action string, args m
 	if !ok {
 		return service.ErrAgentForbidden
 	}
+	// 实例分组 / 群组的确认目标既不是实例也不是节点——descriptor 复用 instance 资源类型
+	// 只为按节点/实例 scope 判定可发现性，其 id 指向分组/群组自身。若沿用实例目标授权，
+	// principalCanAccessInstance(分组id, 0) 因实例 scope 不含该 id（且 NodeID=0 使节点 scope 兜底失效）
+	// 而恒为 false → 任何 token 都删不掉分组。这类「容器」目标改按节点 scope 授权。
+	if isContainerTargetAction(action) {
+		if !service.PrincipalHasNodeScope(p) {
+			return service.ErrAgentForbidden
+		}
+		return nil
+	}
 	target := service.AgentTrustedTarget{ResourceType: d.ResourceType}
 	switch d.ResourceType {
 	case service.AgentResourceInstance:
@@ -478,6 +540,18 @@ func authorizeDestructiveTarget(p *service.AgentPrincipal, action string, args m
 	}
 	_, err = service.Authorize(p, action, target)
 	return err
+}
+
+// isContainerTargetAction 判定 action 的确认目标是否为「容器」资源（实例分组 / 群组）：
+// 其 id 不是实例/节点 id，授权与精确确认均需按容器资源解析，不能当作实例。
+// （network_delete 目前走 handler 内联确认，不经过本路径；此处一并纳入，避免同一类缺陷复发。）
+func isContainerTargetAction(action string) bool {
+	switch action {
+	case service.AgentActionInstanceGroupDelete, service.AgentActionNetworkDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 // findToolSpec 按工具名查找注册表条目。
@@ -505,38 +579,9 @@ func verifyDestructiveConfirm(deps ToolDeps, action string, args map[string]any,
 	if !ok {
 		return fmt.Errorf("未知动作")
 	}
-	var actual string
-	switch d.ResourceType {
-	case service.AgentResourceInstance:
-		if deps.Instance == nil {
-			return fmt.Errorf("实例服务不可用")
-		}
-		inst, e := deps.Instance.GetByID(id)
-		if e != nil {
-			return fmt.Errorf("确认名称与目标不符")
-		}
-		actual = inst.Name
-	case service.AgentResourceNode:
-		if deps.Node == nil {
-			return fmt.Errorf("节点服务不可用")
-		}
-		var n interface{ GetName() string }
-		if action == service.AgentActionNodePurgeArchived {
-			archived, e := deps.Node.GetArchived(id)
-			if e != nil {
-				return fmt.Errorf("确认名称与目标不符")
-			}
-			n = archived
-		} else {
-			active, e := deps.Node.GetByID(id)
-			if e != nil {
-				return fmt.Errorf("确认名称与目标不符")
-			}
-			n = nodeName{active.Name}
-		}
-		actual = n.GetName()
-	default:
-		return fmt.Errorf("确认参数仅适用于节点/实例目标")
+	actual, err := confirmTargetName(deps, action, d.ResourceType, id)
+	if err != nil {
+		return err
 	}
 	if raw != actual {
 		return fmt.Errorf("确认名称与目标不符")
@@ -544,16 +589,68 @@ func verifyDestructiveConfirm(deps ToolDeps, action string, args map[string]any,
 	return nil
 }
 
-type nodeName struct{ name string }
+// confirmTargetName 解析 destructive 目标的当前名称用于精确确认。
+// 容器资源（实例分组 / 群组）优先按各自领域服务解析名称——其 id 是分组/群组 id 而非实例 id，
+// 不能按实例解析（否则会命中同号实例的名称，误判「确认名称与目标不符」）；
+// 其余按 descriptor 的资源类型解析实例 / 节点。
+func confirmTargetName(deps ToolDeps, action, resourceType string, id uint) (string, error) {
+	switch {
+	case action == service.AgentActionInstanceGroupDelete:
+		if deps.InstanceGroup == nil {
+			return "", fmt.Errorf("实例分组服务不可用")
+		}
+		node, e := deps.InstanceGroup.Get(id)
+		if e != nil {
+			return "", fmt.Errorf("确认名称与目标不符")
+		}
+		return node.Name, nil
+	case action == service.AgentActionNetworkDelete:
+		if deps.Network == nil {
+			return "", fmt.Errorf("群组服务不可用")
+		}
+		detail, e := deps.Network.Get(id)
+		if e != nil {
+			return "", fmt.Errorf("确认名称与目标不符")
+		}
+		return detail.Name, nil
+	}
+	switch resourceType {
+	case service.AgentResourceInstance:
+		if deps.Instance == nil {
+			return "", fmt.Errorf("实例服务不可用")
+		}
+		inst, e := deps.Instance.GetByID(id)
+		if e != nil {
+			return "", fmt.Errorf("确认名称与目标不符")
+		}
+		return inst.Name, nil
+	case service.AgentResourceNode:
+		if deps.Node == nil {
+			return "", fmt.Errorf("节点服务不可用")
+		}
+		if action == service.AgentActionNodePurgeArchived {
+			archived, e := deps.Node.GetArchived(id)
+			if e != nil {
+				return "", fmt.Errorf("确认名称与目标不符")
+			}
+			return archived.GetName(), nil
+		}
+		active, e := deps.Node.GetByID(id)
+		if e != nil {
+			return "", fmt.Errorf("确认名称与目标不符")
+		}
+		return active.Name, nil
+	default:
+		return "", fmt.Errorf("确认参数仅适用于节点/实例目标")
+	}
+}
 
-func (n nodeName) GetName() string { return n.name }
-
-// registerToolSpecs 追加工具到全局目录（FR-396+ 域文件 init 调用）。
+// registerToolSpecs 追加工具到全局目录（域文件 init 调用）。
 func registerToolSpecs(specs ...toolSpec) {
 	allToolSpecs = append(allToolSpecs, specs...)
 }
 
-// callLifecycle 实例生命周期工具调用：可信目标授权 + expected node 派发（FR-395）。
+// callLifecycle 实例生命周期工具调用：可信目标授权 + expected node 派发。
 // 若 deps.Agent 为 nil（unit test 轻量场景），回退 ResolveAction 仅做主体内存判断。
 func callLifecycle(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult {
 	_ = ctx
@@ -561,7 +658,7 @@ func callLifecycle(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal
 	if e != nil {
 		return toolErr(e.Error())
 	}
-	// 有 Agent service → 可信目标授权 + expected node（FR-395 生产路径）。
+	// 有 Agent service → 可信目标授权 + expected node（生产路径）。
 	if deps.Agent != nil {
 		_, inst, err := deps.Agent.AuthorizeInstanceAction(p, action, id)
 		if err != nil {

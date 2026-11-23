@@ -1,4 +1,4 @@
-// 构建期依赖与许可证扫描（FR-135）：覆盖 Web、Bot Worker、Go 与客户端更新器，
+//  构建期依赖与许可证扫描：覆盖 Web、Bot Worker、Go 与客户端更新器，
 // 产出 apps/control-plane-web/public/licenses.json 供前端 /licenses 页读取。**构建期生成、不手维护**。
 //
 // 用法：node scripts/gen-licenses.mjs            （由 Makefile `gen-licenses` 调用，build 前置）
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(SCRIPT_DIR, '..')
-// FR-283：前端迁 apps/control-plane-web（pnpm workspace，锁文件在仓库根 pnpm-lock.yaml）。
+//  前端迁 apps/control-plane-web（pnpm workspace，锁文件在仓库根 pnpm-lock.yaml）。
 const WEB_DIR = join(REPO_ROOT, 'apps', 'control-plane-web')
 const BOT_DIR = join(REPO_ROOT, 'apps', 'bot-worker')
 const CLIENT_UPDATER_DIR = join(REPO_ROOT, 'client-updater')

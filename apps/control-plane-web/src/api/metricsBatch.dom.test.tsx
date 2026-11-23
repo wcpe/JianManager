@@ -5,8 +5,8 @@ import { createElement, type ReactNode } from 'react'
 import { loginMockUser } from '@/test/auth'
 import { useMetricSeriesBatch } from './metrics'
 
-/**
- * useMetricSeriesBatch 契约测试（FR-340）。走 MSW 假后端 /metrics/series/batch handler
+/** 
+ * useMetricSeriesBatch 契约测试。走 MSW 假后端 /metrics/series/batch handler
  * （domains/observ.ts），断言按 targetId 分组的同构序列 + metrics 过滤 + 空目标不发请求。
  * setup.ts 已 onUnhandledRequest:'error'（未 mock 请求即失败）。
  */
@@ -15,7 +15,7 @@ function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client: qc }, children)
 }
 
-describe('useMetricSeriesBatch（FR-340）', () => {
+describe('useMetricSeriesBatch', () => {
   it('按 targetId 分组返回同构序列（含 metrics 过滤）', async () => {
     loginMockUser()
     const { result } = renderHook(

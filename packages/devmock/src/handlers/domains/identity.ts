@@ -4,8 +4,8 @@ import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-mid
 import { db } from '@jianmanager/devmock/db'
 import type { User } from '@jianmanager/devmock/handlers/domains/auth'
 
-/**
- * 身份访问域 mock handler（FR-199）：setup / users / groups / audit。
+/** 
+ * 身份访问域 mock handler：setup / users / groups / audit。
  * 地基 auth.ts 已声明 users/sessions 集合并提供 /setup/status、/auth/login、/auth/refresh，
  * 本域不重定义这三者，仅追加 /setup、/auth/register 及 users/groups/audit 的全部端点。
  * 字段保真：返回结构匹配 web/src/api/{users,groups,audit}.ts 的 interface。
@@ -47,7 +47,7 @@ interface AuditLog {
   targetId: string
   detail: string
   ip: string
-  /** FR-321：操作是否失败与失败错误内容。 */
+  /** 操作是否失败与失败错误内容。 */
   failed: boolean
   error: string
   createdAt: string
@@ -94,6 +94,38 @@ const groups = db<Group>('groups', () => [
 ])
 
 const audit = db<AuditLog>('audit', () => [
+  /* 
+    节点配置类变更：节点详情「配置」页签的「最近变更」靠这几条渲染。
+    时间取相对当前（而不是写死日期），否则跑一段时间后永远显示「x 天前」甚至查不到。
+  */
+  {
+    id: 901,
+    uuid: 'a-901',
+    userId: 1,
+    action: 'node.proxy.set',
+    targetType: 'node',
+    targetId: '1',
+    detail: '{"nodeId":1,"mode":"inherit"}',
+    ip: '10.0.0.9',
+    failed: false,
+    error: '',
+    createdAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    user: { id: 1, username: 'admin' },
+  },
+  {
+    id: 902,
+    uuid: 'a-902',
+    userId: 2,
+    action: 'node.artifact_cache.set_cap',
+    targetType: 'node',
+    targetId: '2',
+    detail: '{"nodeId":2,"capBytes":21474836480}',
+    ip: '10.0.0.9',
+    failed: false,
+    error: '',
+    createdAt: new Date(Date.now() - 5 * 3600_000).toISOString(),
+    user: { id: 2, username: 'operator' },
+  },
   {
     id: 1,
     uuid: 'a-1',
@@ -140,7 +172,7 @@ const audit = db<AuditLog>('audit', () => [
 
 const invitations = db<Invitation>('invitations', () => [])
 
-/**
+/** 
  * 把假后端 User 投影为前端 UserInfo（users.ts）。
  * 种子用户仅 {id,uuid,username,role}，此处补 UserInfo 所需的 status/createdAt
  * （disabled→status：禁用=1，启用=0；createdAt 缺省给固定值便于断言）。
@@ -171,12 +203,15 @@ function filterAuditRows(url: URL): AuditLog[] {
   const userId = url.searchParams.get('userId')
   const action = url.searchParams.get('action')
   const targetType = url.searchParams.get('targetType')
+  // targetId：按对象回溯（真后端同样支持），供「这个节点被改过什么」这类查询。
+  const targetId = url.searchParams.get('targetId')
   const from = url.searchParams.get('from')
   const to = url.searchParams.get('to')
   let rows = audit.list()
   if (userId) rows = rows.filter((r) => String(r.userId) === userId)
   if (action) rows = rows.filter((r) => r.action.includes(action))
   if (targetType) rows = rows.filter((r) => r.targetType === targetType)
+  if (targetId) rows = rows.filter((r) => r.targetId === targetId)
   if (from) rows = rows.filter((r) => r.createdAt >= from)
   if (to) rows = rows.filter((r) => r.createdAt <= to)
   return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -210,7 +245,7 @@ export const handlers = [
   domainRoute('get', '/users', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    // FR-336 双形态（镜像 router/user.go）：q 用户名模糊；带 limit 返 {items,total,limit,offset} 信封，
+    // 双形态（镜像 router/user.go）：q 用户名模糊；带 limit 返 {items,total,limit,offset} 信封，
     // 不带 limit 返旧裸数组（UsersPage/AuditPage 等既有消费方不破）。
     const url = new URL(info.request.url)
     const q = (url.searchParams.get('q') ?? '').trim().toLowerCase()
@@ -402,7 +437,7 @@ export const handlers = [
   }),
 ]
 
-/**
+/** 
  * 播种本域独有集合（groups/audit）。users 由地基 auth.ts 播种，此处不碰。
  * handlers/index.ts 聚合时调用；resetDb 经集合自身 reset 重播。
  */

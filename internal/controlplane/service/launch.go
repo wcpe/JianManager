@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// LaunchSpec 是 MC 实例的结构化启动规格（ADR-008）。
+// LaunchSpec 是 MC 实例的结构化启动规格。
 // 由「绑定 JDK + JVM 参数（内存/GC）+ 核心 jar + 额外 args」派生 java 启动命令，
 // 取代用户手填的自由文本 start_command（根治 BUG-005 的引号/路径歧义）。
 type LaunchSpec struct {
@@ -18,11 +18,22 @@ type LaunchSpec struct {
 	// CoreJar 工作目录内的核心 jar 文件名（如 paper.jar），相对工作目录。
 	// Forge argfile 模式下仅作为兼容元数据保留，不参与 -jar 启动。
 	CoreJar string `json:"coreJar"`
+	// CoreKind 是核心类型（paper / spongevanilla / spongeforge / bungeecord / waterfall / velocity），
+	// 由一键搭建从已解析的核心信息（CoreInfo.Type）填入。
+	//
+	// 为什么需要它：一键搭建为「结构化启动命令与构建文件名解耦」把核心统一落盘为
+	// server.jar（见 provisionCoreJar），jar 文件名因此**不再携带核心类型信息**；
+	// 而日志采集规则必须按核心类型选择物理路径。这里把核心类型独立记下来，
+	// 使规则推导不再依赖 jar 名这一会丢失信息的字面量。
+	//
+	// 它不参与落盘文件名与启动命令的派生（deriveStartCommand 只读 CoreJar/JavaArgFiles），
+	// 缺失时调用方回退按 jar 名匹配（历史数据，见 deriveLogRuleKey）。
+	CoreKind string `json:"coreKind,omitempty"`
 	// JavaArgFiles 是传给 java 的 @argfile，相对工作目录，用于现代 Forge run 脚本布局。
 	JavaArgFiles []string `json:"javaArgFiles,omitempty"`
 	// ExtraArgs 传给服务端的额外参数（`nogui` 已默认附加，无需重复）。
 	ExtraArgs []string `json:"extraArgs"`
-	// OmitNogui 为 true 时不追加 `nogui`（代理 Velocity/BungeeCord 不接受该参数，FR-035）。
+	// OmitNogui 为 true 时不追加 `nogui`（代理 Velocity/BungeeCord 不接受该参数）。
 	OmitNogui bool `json:"omitNogui,omitempty"`
 }
 

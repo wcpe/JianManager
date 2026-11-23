@@ -58,10 +58,18 @@ type ConfigDiff struct {
 type ConfigService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
+	// inlinePorts 由配置源服务注入：返回某实例上以 inline 登记的端口项（键→值），
+	// 供跨实例端口唯一性校验并入（§2.4）。nil 时仅用文件值。
+	inlinePorts func(instanceID uint) map[string]string
 }
 
 func NewConfigService(db *gorm.DB, pool *cpgrpc.ClientPool) *ConfigService {
 	return &ConfigService{db: db, pool: pool}
+}
+
+// SetInlinePortProvider 注入内联端口提供者（配置源服务），使跨实例端口校验覆盖内联值。
+func (s *ConfigService) SetInlinePortProvider(p func(instanceID uint) map[string]string) {
+	s.inlinePorts = p
 }
 
 // DiscoveredConfig 是递归发现到的单个配置文件（相对工作目录）。
@@ -152,7 +160,7 @@ func configFormatOf(path string) (string, bool) {
 	}
 }
 
-// Discover 递归发现实例工作目录下全部配置文件（FR-071）。
+// Discover 递归发现实例工作目录下全部配置文件。
 // 经既有 Worker.ListFiles gRPC 逐目录遍历，不新增 gRPC（不改 proto）。
 func (s *ConfigService) Discover(instanceID uint) ([]DiscoveredConfig, bool, error) {
 	inst, client, err := s.client(instanceID)
@@ -206,7 +214,7 @@ func (s *ConfigService) Read(instanceID uint, filePath string) (*ConfigReadResul
 		return nil, fmt.Errorf("读取配置失败: %w", err)
 	}
 	// 用内置 schema 解析当前文件字段（覆盖 properties/yaml/toml；Worker 仅解析 properties），
-	// 并附上真实 schema 元数据，供前端渲染表单模式（FR-031 验收标准 2/3）。
+	// 并附上真实 schema 元数据，供前端渲染表单模式（验收标准 2/3）。
 	m := schema.MatchPath(filePath)
 	parsed := schema.ApplyTypes(schema.BuildFields(resp.Format, resp.Content), m)
 	fields := make([]map[string]any, 0, len(parsed))
@@ -258,6 +266,9 @@ func (s *ConfigService) WriteFields(instanceID uint, filePath string, updates ma
 }
 
 // Write 保存新版本；可选回滚源 versionID。
+//
+// 起向 Worker 传 expectedHash，由 Worker 落盘后读回比对：
+// 只有磁盘上真的写入了这份内容才算成功，否则返回 WRITE_VERIFY_FAILED。
 func (s *ConfigService) Write(instanceID uint, filePath, content, message string, authorID uint, rollbackOfVersionID *uint) (uint, map[string]any, error) {
 	inst, client, err := s.client(instanceID)
 	if err != nil {
@@ -265,18 +276,28 @@ func (s *ConfigService) Write(instanceID uint, filePath, content, message string
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	resp, err := client.Worker.WriteConfig(ctx, &workerpb.WriteConfigRequest{InstanceUuid: inst.UUID, Path: filePath, Content: content})
+	h := sha256.Sum256([]byte(content))
+	expectedHash := hex.EncodeToString(h[:])
+	resp, err := client.Worker.WriteConfig(ctx, &workerpb.WriteConfigRequest{
+		InstanceUuid: inst.UUID,
+		Path:         filePath,
+		Content:      content,
+		ExpectedHash: expectedHash,
+	})
 	if err != nil {
 		return 0, nil, fmt.Errorf("写入配置失败: %w", err)
 	}
 	if !resp.Success {
+		// error_code 带上原因码，便于上层区分「路径非法」与「落盘校验失败」。
+		if resp.ErrorCode != "" {
+			return 0, validationMap(resp.Validation), fmt.Errorf("%s: %s", resp.ErrorCode, resp.Error)
+		}
 		return 0, validationMap(resp.Validation), errors.New(resp.Error)
 	}
-	h := sha256.Sum256([]byte(content))
 	ver := model.InstanceConfigVersion{
 		InstanceID:          instanceID,
 		FilePath:            filePath,
-		ContentHash:         hex.EncodeToString(h[:]),
+		ContentHash:         expectedHash,
 		Content:             content,
 		Message:             message,
 		AuthorID:            authorID,
@@ -365,8 +386,8 @@ func (s *ConfigService) CheckCrossFile(instanceID uint, filePath, content string
 	if err != nil {
 		return nil, err
 	}
-	// 当前实例：解析传入 content
-	current := parseToSchema(inst, filePath, content)
+	// 当前实例：解析传入 content（并入内联端口，避免「文件里没有/被覆盖」的端口漏检）。
+	current := s.applyInlinePorts(parseToSchema(inst, filePath, content), inst.ID)
 	// 同节点其它实例的最新版本内容
 	var siblings []model.Instance
 	if err := s.db.Where("node_id = ? AND id <> ?", inst.NodeID, instanceID).Find(&siblings).Error; err != nil {
@@ -375,13 +396,17 @@ func (s *ConfigService) CheckCrossFile(instanceID uint, filePath, content string
 	cfgs := []schema.ParsedConfig{current}
 	for _, sib := range siblings {
 		var latest model.InstanceConfigVersion
-		if err := s.db.Where("instance_id = ? AND file_path = ?", sib.ID, filePath).Order("id DESC").First(&latest).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				continue
-			}
+		err := s.db.Where("instance_id = ? AND file_path = ?", sib.ID, filePath).Order("id DESC").First(&latest).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
 		}
-		cfgs = append(cfgs, parseToSchema(&sib, filePath, latest.Content))
+		// 无配置版本的兄弟不再直接跳过：用空内容 + 内联端口构造 cfg（§2.4），
+		// 否则「兄弟端口仅以 inline 登记、无文件版本」时会漏检跨实例端口冲突。
+		content := ""
+		if err == nil {
+			content = latest.Content
+		}
+		cfgs = append(cfgs, s.applyInlinePorts(parseToSchema(&sib, filePath, content), sib.ID))
 	}
 	issues := schema.CheckAll(cfgs)
 	out := make([]map[string]any, 0, len(issues))
@@ -404,6 +429,27 @@ func (s *ConfigService) client(instanceID uint) (*model.Instance, *cpgrpc.Client
 		return nil, nil, ErrNodeNotConnected
 	}
 	return &inst, client, nil
+}
+
+// applyInlinePorts 把实例上以 inline 登记的端口值并入解析结果（内联优先，覆盖文件值）。
+// inlinePorts 未注入或实例无内联端口时原样返回（§2.4）。
+func (s *ConfigService) applyInlinePorts(cfg schema.ParsedConfig, instanceID uint) schema.ParsedConfig {
+	if s.inlinePorts == nil {
+		return cfg
+	}
+	return mergeInlinePorts(cfg, s.inlinePorts(instanceID))
+}
+
+// mergeInlinePorts 把内联端口（键→值）覆盖到解析结果；空值跳过。
+// 纯函数，便于单测「两实例内联同端口被检出」。
+func mergeInlinePorts(cfg schema.ParsedConfig, inline map[string]string) schema.ParsedConfig {
+	for k, v := range inline {
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		cfg.SetValue(k, v)
+	}
+	return cfg
 }
 
 // parseToSchema 把（实例, 路径, 内容）解析为 schema.ParsedConfig，便于复用校验。

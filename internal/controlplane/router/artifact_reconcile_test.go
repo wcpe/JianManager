@@ -129,7 +129,7 @@ func waitRunDone(t *testing.T, r *gin.Engine, token string, runID float64) map[s
 }
 
 // TestArtifactReconcileAPI_TriggerAndReport 触发 → 202 异步 → 报告：缺失/孤儿明细可查、
-// 计数正确、审计留痕（FR-349 主链路）。
+// 计数正确、审计留痕（主链路）。
 func TestArtifactReconcileAPI_TriggerAndReport(t *testing.T) {
 	db := setupTestDB(t)
 	r, token, chID, store := setupReconcileRouter(t, db)

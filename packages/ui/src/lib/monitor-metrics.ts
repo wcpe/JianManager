@@ -1,9 +1,9 @@
-/**
+/** 
  * 监控页指标定义表 + 序列装配纯逻辑。把「哪张图画哪些 metricKey、用什么单位/格式」
  * 收敛成与 React 无关的数据，便于 vitest 单测，也让平台/节点/实例三 target 共用同一骨架。
  *
- * 消费既有节点/实例指标及 FR-401 节点级共享 Bot Worker 指标（见 internal/controlplane/model/metric.go）。
- * 数据里没有的维度（如 load5/load15、磁盘读写速率、进程 TOP10）一律不画、不留占位（按 FR-169 决定）。
+ * 消费既有节点/实例指标及节点级共享 Bot Worker 指标（见 internal/controlplane/model/metric.go）。
+ * 数据里没有的维度（如 load5/load15、磁盘读写速率、进程 TOP10）一律不画、不留占位（按决定）。
  */
 
 /** 一条原始序列（来自 /metrics/series 或 overview.trends）。 */
@@ -19,13 +19,13 @@ export interface PlotSeries {
   name: string
   /** 线色，默认按序取 --chart-1..5（与 TimeSeriesChart 一致）。 */
   color?: string
-  /** 该序列的数值格式（FR-221 对比图据此选 Y 轴/hover 格式器；缺省由调用方统一格式化）。 */
+  /** 该序列的数值格式（对比图据此选 Y 轴/hover 格式器；缺省由调用方统一格式化）。 */
   format?: ValueFormat
   points: { ts: string; value: number | null }[]
 }
 
 /** 数值格式化器标识：渲染层据此取对应函数（保持本模块纯数据可测）。 */
-export type ValueFormat = 'pct' | 'bytes' | 'bytesPerSec' | 'load' | 'count' | 'tps' | 'ms'
+export type ValueFormat = 'pct' | 'bytes' | 'bytesPerSec' | 'load' | 'count' | 'tps' | 'ms' | 'rate'
 
 /** 一张监控图的定义。 */
 export interface MetricChartDef {
@@ -37,7 +37,7 @@ export interface MetricChartDef {
   format: ValueFormat
   /** Y 轴范围；占比类传 [0,100] 更直观，其余自适应。 */
   yDomain?: [number, number]
-  /**
+  /** 
    * 该图的序列来源。每项 = 一条曲线的 metricKey + 名称 i18n key。
    * 占比派生（mem%/disk%）通过 derive 字段表达，渲染层据此用 used/total 两条原始序列算百分比。
    */
@@ -69,14 +69,18 @@ export function formatterFor(fmt: ValueFormat): (v: number) => string {
       return (v) => `${v.toFixed(1)}ms`
     case 'tps':
       return (v) => v.toFixed(1)
+    case 'rate':
+      // 速率：每秒事件数。小值保留两位（桥正常时拒绝率往往是 0.x 量级），
+      // 大值才取整——否则「0/s」会把“每秒丢 0.4 条”这种真信号抹平。
+      return (v) => (v !== 0 && Math.abs(v) < 10 ? `${v.toFixed(2)}/s` : `${v.toFixed(0)}/s`)
     case 'count':
     default:
       return (v) => v.toFixed(0)
   }
 }
 
-/**
- * 混合量纲的紧凑数值缩写（FR-221 多指标对比）：叠加序列单位不同（TPS vs 字节 vs %）时
+/** 
+ * 混合量纲的紧凑数值缩写（多指标对比）：叠加序列单位不同（TPS vs 字节 vs %）时
  * Y 轴无法用单一单位格式器，退而用十进制 SI 缩写压短大数（≥1e9→G、≥1e6→M、≥1e3→K，
  * 保留 1 位小数、整数位省略 .0），避免字节量级原始数字在窄 Y 轴里被截断。
  */
@@ -93,7 +97,7 @@ export function compactFormatter(v: number): string {
   return trim1(v)
 }
 
-/**
+/** 
  * 平台/节点监控指标定义（design §4.2）。
  * 受限于现有指标：负载只有 1 分钟（node_load），磁盘/网络 IO 用现有占用/速率指标，
  * 「资源使用率」= CPU% + 内存% + 磁盘%（占比同图对比）。
@@ -184,10 +188,10 @@ export const NODE_CHART_DEFS: MetricChartDef[] = [
   },
 ]
 
-/**
+/** 
  * 平台（集群聚合）监控的指标定义。受限于 /metrics/overview 仅聚合 4 条跨节点曲线
  * （node_cpu_pct 均值 / node_load 均值 / node_mem_used 合计 / inst_players_online 合计），
- * 平台视图只画这 4 张图——没有的维度（内存占比/磁盘/网络 IO）不画、不留占位（FR-169）。
+ * 平台视图只画这 4 张图——没有的维度（内存占比/磁盘/网络 IO）不画、不留占位。
  * 这是「同一骨架、三 target 可切」中平台 target 的 def 子集，与节点/实例共用 MonitorSkeleton。
  */
 export const PLATFORM_CHART_DEFS: MetricChartDef[] = [
@@ -218,7 +222,7 @@ export const PLATFORM_CHART_DEFS: MetricChartDef[] = [
   },
 ]
 
-/** 实例监控的指标定义（TPS/MSPT/堆/线程/玩家/区块——均现有 FR-060 指标）。 */
+/** 实例监控的指标定义（TPS/MSPT/堆/线程/玩家/区块——均现有指标）。 */
 export const INSTANCE_CHART_DEFS: MetricChartDef[] = [
   { id: 'tps', titleKey: 'monitor.chart.tps', format: 'tps', sources: [{ metricKey: 'inst_tps', nameKey: 'monitor.metric.tps' }] },
   { id: 'mspt', titleKey: 'monitor.chart.mspt', format: 'ms', sources: [{ metricKey: 'inst_mspt', nameKey: 'monitor.metric.mspt' }] },
@@ -235,6 +239,35 @@ export const INSTANCE_CHART_DEFS: MetricChartDef[] = [
   { id: 'players', titleKey: 'monitor.chart.players', format: 'count', sources: [{ metricKey: 'inst_players_online', nameKey: 'monitor.metric.players' }] },
   // 区块为分世界序列（world!=''），由渲染层按 world 拆线（buildWorldSeries）。
   { id: 'chunks', titleKey: 'monitor.chart.chunks', format: 'count', sources: [{ metricKey: 'world_loaded_chunks', nameKey: 'monitor.metric.chunks' }] },
+  // ── 业务桥（ServerProbe ↔ JM）中转链路 ────────────────────
+  //
+  // 为何与 TPS/内存并列放在实例页：上面那些回答「服务器怎么样」，
+  // 这三张回答「**事件发得出去吗**」。两者会各自出问题——TPS 正常但桥堵了，
+  // 业务事件就积压/丢失，而实例页看起来一切健康。
+  //
+  // 数据缺失时曲线自然断线（老探针不上报），不做零值填充：
+  // 零值会被读成「队列空、零丢失」，而那恰恰是要区分开的情况。
+  {
+    id: 'bridge-queue',
+    titleKey: 'monitor.chart.bridgeQueue',
+    format: 'count',
+    sources: [
+      { metricKey: 'bridge_reliable_queue', nameKey: 'monitor.metric.bridgeReliableQueue' },
+      { metricKey: 'bridge_best_effort_queue', nameKey: 'monitor.metric.bridgeBestEffortQueue' },
+    ],
+  },
+  {
+    id: 'bridge-rejected',
+    titleKey: 'monitor.chart.bridgeRejected',
+    format: 'rate',
+    sources: [{ metricKey: 'bridge_rejected_rate', nameKey: 'monitor.metric.bridgeRejectedRate' }],
+  },
+  {
+    id: 'bridge-health',
+    titleKey: 'monitor.chart.bridgeHealth',
+    format: 'rate',
+    sources: [{ metricKey: 'bridge_write_failures', nameKey: 'monitor.metric.bridgeWriteFailures' }],
+  },
 ]
 
 /** 逐点把两条序列做 numerator/denominator*100（缺测或分母≤0 处为 null）。按时间戳对齐。 */
@@ -251,18 +284,77 @@ export function ratioPctSeries(
   })
 }
 
-/**
- * 取一条原始序列的点（按 metricKey + 可选 world 匹配）。无匹配返回空数组。
- */
-function pointsOf(raw: RawSeries[], metricKey: string, world = ''): { ts: string; value: number | null }[] {
-  const s = raw.find((x) => x.metricKey === metricKey && (x.world ?? '') === world)
-  return s ? s.points : []
+/** 实际时间优先；非日期测试/遗留键仍有确定的字典序。 */
+function compareTimestamp(a: string, b: string): number {
+  const delta = Date.parse(a) - Date.parse(b)
+  return Number.isFinite(delta) && delta !== 0 ? delta : a.localeCompare(b)
+}
+
+/** 新时点优先，同刻按数值降序打破平局；缺测排在真实值后。 */
+function comparePoint(a: RawSeries['points'][number], b: RawSeries['points'][number]): number {
+  const time = compareTimestamp(b.ts, a.ts)
+  if (time !== 0) return time
+  const av = a.value != null && Number.isFinite(a.value) ? a.value : -Infinity
+  const bv = b.value != null && Number.isFinite(b.value) ? b.value : -Infinity
+  return av === bv ? 0 : av > bv ? -1 : 1
 }
 
 /**
+ * 合并同 metricKey/world 的全部序列，保留时间并集。
+ * 迁移时优先选择最新有效时刻更近的原始序列（尾部 null 不代表活跃）。
+ * 活跃时刻相同则按完整点时间/数值确定性排序，不依赖后端枚举顺序或点的顺序。
+ */
+function pointsOf(raw: RawSeries[], metricKey: string, world = ''): { ts: string; value: number | null }[] {
+  const ranked = raw
+    .filter((s) => s.metricKey === metricKey && (s.world ?? '') === world)
+    .map((s) => {
+      const points = [...s.points].sort(comparePoint)
+      const latest = points.find((p) => p.value != null && Number.isFinite(p.value))
+      return { points, latest }
+    })
+    .sort((a, b) => {
+      if (a.latest && b.latest) {
+        const time = compareTimestamp(b.latest.ts, a.latest.ts)
+        if (time !== 0) return time
+      } else if (a.latest || b.latest) {
+        return a.latest ? -1 : 1
+      }
+      for (let i = 0; i < Math.min(a.points.length, b.points.length); i++) {
+        const order = comparePoint(a.points[i]!, b.points[i]!)
+        if (order !== 0) return order
+      }
+      return b.points.length - a.points.length
+    })
+  const byTs = new Map<string, number | null>()
+  for (const s of ranked) {
+    for (const p of s.points) {
+      const seen = byTs.get(p.ts)
+      // 高优先级序列的真实值不可被旧值覆盖；缺测允许由其它序列补齐。
+      if (seen !== undefined && !(seen === null && p.value != null)) continue
+      byTs.set(p.ts, p.value)
+    }
+  }
+  return [...byTs.entries()].map(([ts, value]) => ({ ts, value })).sort((a, b) => compareTimestamp(a.ts, b.ts))
+}
+
+/** 每个时刻独立选择可计算占比，否则使用落库百分比；不反推 total。 */
+function resourcePctSeries(raw: RawSeries[], resource: 'mem' | 'disk'): RawSeries['points'] {
+  const used = pointsOf(raw, `node_${resource}_used`)
+  const total = pointsOf(raw, `node_${resource}_total`)
+  const fallback = pointsOf(raw, `node_${resource}_pct`)
+  const ratios = new Map(ratioPctSeries(used, total).map((p) => [p.ts, p.value]))
+  const percentages = new Map(fallback.map((p) => [p.ts, p.value]))
+  const times = new Set([...used, ...total, ...fallback].map((p) => p.ts))
+  return [...times].sort(compareTimestamp).map((ts) => ({
+    ts,
+    value: ratios.get(ts) ?? percentages.get(ts) ?? null,
+  }))
+}
+
+/** 
  * 装配一张图的曲线集合。
  * - 「资源使用率」图特判：CPU% + 内存%（mem_used/mem_total）+ 磁盘%（disk_used/disk_total）三线对比。
- * - 区块图特判：按 world 拆成多条线；worldFilter 非空时只画该世界（FR-221 下钻到世界）。
+ * - 区块图特判：按 world 拆成多条线；worldFilter 非空时只画该世界（下钻到世界）。
  * - 其余按 def.sources 直接取序列。
  * nameOf 为 i18n 翻译函数（注入以保持本模块纯逻辑、不依赖 i18next）。
  */
@@ -276,19 +368,26 @@ export function buildChartSeries(
     const out: PlotSeries[] = []
     const cpu = pointsOf(raw, 'node_cpu_pct')
     if (cpu.length) out.push({ key: 'node_cpu_pct', name: nameOf('monitor.metric.cpu'), points: cpu })
-    const mem = ratioPctSeries(pointsOf(raw, 'node_mem_used'), pointsOf(raw, 'node_mem_total'))
-    if (mem.some((p) => p.value != null)) out.push({ key: 'mem_pct', name: nameOf('monitor.metric.mem'), points: mem })
-    const disk = ratioPctSeries(pointsOf(raw, 'node_disk_used'), pointsOf(raw, 'node_disk_total'))
-    if (disk.some((p) => p.value != null)) out.push({ key: 'disk_pct', name: nameOf('monitor.metric.disk'), points: disk })
+    const memPts = resourcePctSeries(raw, 'mem')
+    if (memPts.some((p) => p.value != null)) out.push({ key: 'mem_pct', name: nameOf('monitor.metric.mem'), points: memPts })
+    const diskPts = resourcePctSeries(raw, 'disk')
+    if (diskPts.some((p) => p.value != null)) out.push({ key: 'disk_pct', name: nameOf('monitor.metric.disk'), points: diskPts })
     return out
   }
 
   if (def.id === 'chunks') {
     // 分世界：同一 metricKey 下每个 world 一条线；下钻聚焦时只保留该世界。
-    return raw
-      .filter((x) => x.metricKey === 'world_loaded_chunks' && (x.world ?? '') !== '')
-      .filter((x) => !worldFilter || x.world === worldFilter)
-      .map((s) => ({ key: s.world as string, name: s.world as string, points: s.points }))
+    // 每个世界只出一条线：实例迁移后同一 world 会有旧/新节点两条序列，直接 map 会产出
+    // 重复 key（React 重复 key + 后一条覆盖前一条）。这里按 world 合并时间线。
+    const worlds = [...new Set(
+      raw
+        .filter((x) => x.metricKey === 'world_loaded_chunks' && (x.world ?? '') !== '')
+        .filter((x) => !worldFilter || x.world === worldFilter)
+        .map((s) => s.world as string),
+    )]
+    return worlds
+      .map((world) => ({ key: world, name: world, points: pointsOf(raw, 'world_loaded_chunks', world) }))
+      .filter((s) => s.points.length > 0)
   }
 
   return def.sources
@@ -296,19 +395,19 @@ export function buildChartSeries(
     .filter((s) => s.points.length > 0)
 }
 
-// ===== FR-221 时序剖析增强：指标目录 + 关键指标概览 + 多指标对比 =====
+// =====时序剖析增强：指标目录 + 关键指标概览 + 多指标对比 =====
 
-/** 一个可选/可对比的指标项（名称 + 单位格式）。FR-221 概览/对比据此枚举与取值。 */
+/** 一个可选/可对比的指标项（名称 + 单位格式）。概览/对比据此枚举与取值。 */
 export interface MetricCatalogItem {
   metricKey: string
   nameKey: string
   format: ValueFormat
 }
 
-/**
+/** 
  * 各 target 的指标目录（仅列「单序列、可直接取当前值」的指标——派生占比/分世界不入目录，
  * 它们在主图网格里已有专门处理）。用于「关键指标概览」与「多指标对比」枚举可选项。
- * 严格对齐既有 FR-060 指标键（model/metric.go），不新增后端字段。
+ * 严格对齐既有指标键（model/metric.go），不新增后端字段。
  */
 export const NODE_METRIC_CATALOG: MetricCatalogItem[] = [
   { metricKey: 'node_cpu_pct', nameKey: 'monitor.metric.cpu', format: 'pct' },
@@ -355,7 +454,10 @@ export function catalogFor(kind: 'platform' | 'node' | 'instance'): MetricCatalo
 export function latestValue(raw: RawSeries[], metricKey: string): number | null {
   const pts = pointsOf(raw, metricKey)
   for (let i = pts.length - 1; i >= 0; i--) {
-    const v = pts[i].value
+    // i 恒在 [0, length-1]，元素必存在；判 undefined 仅为类型收窄
+    const pt = pts[i]
+    if (pt === undefined) continue
+    const v = pt.value
     if (v != null && Number.isFinite(v)) return v
   }
   return null
@@ -370,7 +472,7 @@ export interface MetricSnapshot {
   points: { ts: string; value: number | null }[]
 }
 
-/** 据目录与原始序列装配关键指标概览（当前值 + sparkline 点）。FR-221「关键指标概览」。 */
+/** 据目录与原始序列装配关键指标概览（当前值 + sparkline 点）。「关键指标概览」。 */
 export function buildSnapshots(catalog: MetricCatalogItem[], raw: RawSeries[]): MetricSnapshot[] {
   return catalog.map((item) => ({
     metricKey: item.metricKey,
@@ -381,7 +483,7 @@ export function buildSnapshots(catalog: MetricCatalogItem[], raw: RawSeries[]): 
   }))
 }
 
-/**
+/** 
  * 装配「多指标对比」叠加曲线：按 selected 的 metricKey 顺序各取一条序列叠加到同一图。
  * 跨指标量纲不同（如 TPS vs 字节），故对比图统一不约束 Y 轴（auto），按各自原值绘制——
  * 形状/趋势对比为主，绝对值看 hover。无匹配序列的 key 跳过。

@@ -1,0 +1,595 @@
+package logcoord
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// OrderVersion 稳定复合排序版本（§6.3 / §4.5）。
+//
+//	(event_time DESC, log_source_id ASC, source_generation ASC,
+//	 record_start DESC, record_end DESC, event_id ASC)
+const OrderVersion = "v1:event_time.DESC,log_source_id.ASC,source_generation.ASC,record_start.DESC,record_end.DESC,event_id.ASC"
+
+const DefaultPageLimit = 200
+
+// EnumerationState 列表/导出枚举结束语义（与 proto LogEnumerationState 对齐）。
+type EnumerationState string
+
+const (
+	EnumOpen      EnumerationState = "OPEN"
+	EnumExhausted EnumerationState = "EXHAUSTED"
+	EnumStale     EnumerationState = "STALE"
+	EnumCancelled EnumerationState = "CANCELLED"
+)
+
+// CoverageState 目标覆盖状态（proto LogCoverageState 字符串形态）。
+type CoverageState string
+
+const (
+	CoverageUnspecified    CoverageState = "unspecified"
+	CoverageSuccess        CoverageState = "success"
+	CoverageOffline        CoverageState = "offline"
+	CoverageNotReady       CoverageState = "not_ready"
+	CoverageArchiveMissing CoverageState = "archive_missing"
+	CoveragePartial        CoverageState = "partial"
+	CoverageStale          CoverageState = "stale"
+)
+
+// DuplicateQuality / StatsQuality 独立于覆盖完整性（§6.3）。
+type DuplicateQuality string
+
+const (
+	DupUnspecified DuplicateQuality = "unspecified"
+	DupExact       DuplicateQuality = "exact"
+	DupUnresolved  DuplicateQuality = "unresolved"
+	DupConflict    DuplicateQuality = "conflict"
+)
+
+type StatsQuality string
+
+const (
+	StatsQUnspecified StatsQuality = "unspecified"
+	StatsQExact       StatsQuality = "exact"
+	StatsQPartial     StatsQuality = "partial"
+	StatsQUnavailable StatsQuality = "unavailable"
+)
+
+// Readiness 目标当前可查询就绪度（CP 注册表/探测结果，非覆盖结果）。
+type Readiness string
+
+const (
+	ReadyOnline         Readiness = "online"
+	ReadyOffline        Readiness = "offline"
+	ReadyNotReady       Readiness = "not_ready"
+	ReadyArchiveMissing Readiness = "archive_missing"
+	ReadyUnsupported    Readiness = "unsupported" // 老 Worker Log RPC Unimplemented
+)
+
+// TargetInfo CP 计算出的授权目标 + 运行时就绪信息。
+//
+// 实例换节点时，历史数据持有者（HistoricalHolder）仍属于授权目标集合，
+// 不得因当前不在线而被静默丢弃。
+type TargetInfo struct {
+	ID               string    `json:"id"`
+	AuthorizationID  string    `json:"authorization_id,omitempty"`
+	WorkerTargetID   string    `json:"worker_target_id,omitempty"`
+	WorkerID         string    `json:"worker_id"`
+	Readiness        Readiness `json:"readiness"`
+	HistoricalHolder bool      `json:"historical_holder"`
+	// ClosedVisibleSeq / CatalogGeneration 来自 Worker PublishedProjection（若已知）。
+	ClosedVisibleSeq  string `json:"closed_visible_seq,omitempty"`
+	CatalogGeneration string `json:"catalog_generation,omitempty"`
+}
+
+// QueryBudget 结果行预算与扇出/字节预算（：limit 只限结果数）。
+type QueryBudget struct {
+	Limit     int    `json:"limit"`
+	MaxBytes  uint64 `json:"max_bytes"`
+	TimeoutMS uint32 `json:"timeout_ms"`
+	MaxFanout uint32 `json:"max_fanout"`
+}
+
+// Query 协调器查询请求。
+type Query struct {
+	RequestID string `json:"request_id"`
+	FromUTC   string `json:"from_utc"` // RFC3339，闭开 [from,to)
+	ToUTC     string `json:"to_utc"`
+	// AuthorizedTargetIDs 为 CP 鉴权后的全部授权目标；协调器必须先解析全集。
+	AuthorizedTargetIDs []string `json:"authorized_target_ids"`
+	// PrincipalKey 当前调用方授权主体标识（如 user:<id>|role:<roleKey>|scope digest）。
+	// Query View 创建时绑定；复用 viewId 时必须与创建主体一致且授权集合仍覆盖 view 目标。
+	PrincipalKey string `json:"principal_key,omitempty"`
+	// OnlineOnly 仅在调用方显式选择「仅在线」时为 true；不得默认。
+	OnlineOnly bool        `json:"online_only"`
+	Budget     QueryBudget `json:"budget"`
+	// Fast 首屏省去 OpenView 往返，汇总 Search 返回的真实 Worker 快照后才公开 CP 视图。
+	// 完整性校验仍以 Pending 标记；导出必须用同一快照重新读取并完成校验。
+	Fast bool `json:"fast,omitempty"`
+	// ExploreFields opts Fields/Facets into bounded document-field discovery.
+	ExploreFields bool `json:"explore_fields,omitempty"`
+	// AllowProjectionDrift：本次查询豁免 Worker 侧「投影清单版本（ManifestVersion）变化」判 VIEW_STALE。
+	//
+	// 只允许**导出路径**（Coordinator.Export 逐页 Search）置位：导出是「单次操作自己 CreateView、
+	// 自己读完」的视图，不存在「前端旧 view_id 跨请求复用」场景，故源在导出期间写入新投影
+	// 属正常现象，而非集合被破坏。列表/翻页等复用既有 view_id 的路径**一律不得**置位。
+	//
+	// 豁免边界（不得扩大）：只跳过 ManifestVersion 一条分支；分区记录消失、无权威副本、目录/代次
+	// 变化、closed_visible_seq 缩水（数据变少）仍必须 VIEW_STALE（见 Worker planner 注释）。
+	// 与 Fast 正交：本字段不改变任何 coverage/quality 判定口径，只免去一个陈旧性误判。
+	AllowProjectionDrift bool `json:"allow_projection_drift,omitempty"`
+	// ViewID 非空时复用既有逻辑事件集合，不重新选择最新目标集合。
+	ViewID string `json:"view_id,omitempty"`
+	// Cursor 是 CP 联邦分页边界，绑定 View 与全局复合排序键。
+	Cursor string `json:"cursor,omitempty"`
+	// OrderVersion 复用 view 时须与创建时一致（空则跳过该维校验）。
+	OrderVersion    string `json:"order_version,omitempty"`
+	Filter          string `json:"filter,omitempty"`
+	PermissionScope string `json:"permission_scope,omitempty"`
+	CancelToken     string `json:"cancellation_token,omitempty"`
+	// BypassCache 跳过同参缓存读取（仍正常写缓存），**仅预热器内部使用**、不参与
+	// 缓存键：预热若允许命中上一轮自己的条目，会把旧结果（含启动早期 dial 失败
+	// 的空结果）反复续写进新桶形成「雪球」，用户落进这些桶即拿到 0 条/陈旧数据
+	// （2026-10-08 面板恒冷复盘）。只读路径不受影响。
+	BypassCache bool `json:"-"`
+	// disableCache 只供导出内部使用，既不读取也不写入列表缓存。
+	disableCache bool
+}
+
+// SortKey 稳定复合排序键。
+type SortKey struct {
+	EventTimeUTC     time.Time
+	LogSourceID      string
+	SourceGeneration string
+	RecordStart      uint64
+	RecordEnd        uint64
+	EventID          string
+}
+
+// Compare 返回 a 相对 b 的排序位置（负数 a 在前，0 相等，正数 b 在前）。
+// 顺序：event_time DESC, log_source_id ASC, source_generation ASC,
+// record_start DESC, record_end DESC, event_id ASC。
+func (a SortKey) Compare(b SortKey) int {
+	if !a.EventTimeUTC.Equal(b.EventTimeUTC) {
+		if a.EventTimeUTC.After(b.EventTimeUTC) {
+			return -1
+		}
+		return 1
+	}
+	if c := strings.Compare(a.LogSourceID, b.LogSourceID); c != 0 {
+		return c
+	}
+	if c := strings.Compare(a.SourceGeneration, b.SourceGeneration); c != 0 {
+		return c
+	}
+	if a.RecordStart != b.RecordStart {
+		if a.RecordStart > b.RecordStart {
+			return -1
+		}
+		return 1
+	}
+	if a.RecordEnd != b.RecordEnd {
+		if a.RecordEnd > b.RecordEnd {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(a.EventID, b.EventID)
+}
+
+// Event 协调器合并用的逻辑事件行。
+type Event struct {
+	EventID          string `json:"event_id"`
+	LogSourceID      string `json:"log_source_id"`
+	SourceGeneration string `json:"source_generation"`
+	RecordStart      uint64 `json:"record_start"`
+	RecordEnd        uint64 `json:"record_end"`
+	EventTimeUTC     string `json:"event_time_utc"` // RFC3339
+	IngestTimeUTC    string `json:"ingest_time_utc,omitempty"`
+	Level            string `json:"level,omitempty"`
+	Stream           string `json:"stream,omitempty"`
+	Message          string `json:"message,omitempty"`
+	CanonicalHash    string `json:"canonical_content_hash,omitempty"`
+	// Fields carries structured values through both historical search and native tail.
+	Fields map[string]string `json:"fields,omitempty"`
+	// TargetID 合并时标注来源目标（便于覆盖侧信道审计，不参与排序）。
+	TargetID string `json:"target_id,omitempty"`
+	// WorkerID 来源 Worker。
+	WorkerID string `json:"worker_id,omitempty"`
+}
+
+// SortKey 提取稳定复合排序键；非法时间按零值处理（仍保持确定性）。
+func (e Event) SortKey() SortKey {
+	t, _ := time.Parse(time.RFC3339Nano, e.EventTimeUTC)
+	if t.IsZero() {
+		t, _ = time.Parse(time.RFC3339, e.EventTimeUTC)
+	}
+	return SortKey{
+		EventTimeUTC:     t,
+		LogSourceID:      e.LogSourceID,
+		SourceGeneration: e.SourceGeneration,
+		RecordStart:      e.RecordStart,
+		RecordEnd:        e.RecordEnd,
+		EventID:          e.EventID,
+	}
+}
+
+// ApproxBytes 粗略事件字节估算（用于 MaxBytes 预算门禁）。
+func (e Event) ApproxBytes() uint64 {
+	n := len(e.EventID) + len(e.LogSourceID) + len(e.SourceGeneration) +
+		len(e.EventTimeUTC) + len(e.IngestTimeUTC) + len(e.Level) +
+		len(e.Stream) + len(e.Message) + len(e.CanonicalHash) +
+		len(e.TargetID) + len(e.WorkerID) + 32
+	for key, value := range e.Fields {
+		n += len(key) + len(value) + 6
+	}
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
+}
+
+// TargetCoverage 单目标覆盖摘要。
+type TargetCoverage struct {
+	TargetID          string        `json:"target_id"`
+	State             CoverageState `json:"state"`
+	Reasons           []string      `json:"reasons,omitempty"`
+	ClosedVisibleSeq  string        `json:"closed_visible_seq,omitempty"`
+	CatalogGeneration string        `json:"catalog_generation,omitempty"`
+	WorkerID          string        `json:"worker_id,omitempty"`
+	HistoricalHolder  bool          `json:"historical_holder,omitempty"`
+}
+
+// Coverage 跨目标覆盖摘要；随 Search/Stats/Facets/Export 返回。
+type Coverage struct {
+	Complete         bool             `json:"complete"`
+	PartialReasons   []string         `json:"partial_reasons,omitempty"`
+	Targets          []TargetCoverage `json:"targets,omitempty"`
+	EnumerationState EnumerationState `json:"enumeration_state"`
+	// Pending：首屏快路径（Fast）尚未做逐目标完整性校验时的独立标记 ✗。
+	// **绝不写入 notes、不改变 Complete 的枚举语义** ✓——否则前端会把它读成 not-ready 并回退 legacy
+	// （2026-10-07 浏览器 E2E 的真实回退坑 ✓）；导出闸仍只看 Complete/Quality（log_federation.go:76-78 ✗）。
+	Pending bool `json:"pending,omitempty"`
+}
+
+// Quality 查询质量维度（与 complete 独立）。
+type Quality struct {
+	DuplicateQuality DuplicateQuality `json:"duplicate_quality"`
+	StatsQuality     StatsQuality     `json:"stats_quality"`
+}
+
+// View 跨 Worker 固定查询视图：各目标 closed_visible_seq 向量。
+// 不承诺全局同一物理时刻；Export 与 Search 必须复用同一 view。
+type View struct {
+	ViewID        string   `json:"view_id"`
+	OrderVersion  string   `json:"order_version"`
+	FromUTC       string   `json:"from_utc"`
+	ToUTC         string   `json:"to_utc"`
+	TargetIDs     []string `json:"target_ids"` // 解析后的查询目标集合
+	AuthorizedIDs []string `json:"authorized_ids"`
+	// CoverageTargets 固定首次授权覆盖全集，含仅在线排除项及历史持有者身份。
+	CoverageTargets []TargetInfo `json:"-"`
+	// PrincipalKey 创建时的授权主体；复用 viewId 时必须与当前调用方一致（F-001）。
+	PrincipalKey    string      `json:"principal_key,omitempty"`
+	OnlineOnly      bool        `json:"online_only"`
+	Budget          QueryBudget `json:"budget"`
+	Filter          string      `json:"filter,omitempty"`
+	PermissionScope string      `json:"permission_scope,omitempty"`
+	// WorkerViewIDs 绑定每个 Worker 实际创建的本地固定视图。
+	WorkerViewIDs            map[string]string `json:"-"`
+	WorkerViewErrors         map[string]string `json:"-"`
+	TargetAuthorizationIDs   map[string]string `json:"-"`
+	ClosedVisibleSeq         map[string]string `json:"closed_visible_seq,omitempty"`
+	WorkerCatalogGenerations map[string]string `json:"-"`
+	CreatedAt                time.Time         `json:"created_at"`
+}
+
+// IngestPositionGap 独立保留永久位置缺失凭据，不参与覆盖、质量或导出判定。
+// WorkerID 由协调器的可信路由赋值；旧 Worker 未提供真实源代次时留空，不能猜测。
+type IngestPositionGap struct {
+	WorkerID         string `json:"worker_id,omitempty"`
+	StorageNamespace string `json:"storage_namespace"`
+	From             string `json:"from"`
+	To               string `json:"to"`
+	ReasonCode       string `json:"reason_code"`
+	Operator         string `json:"operator"`
+	AtUTC            string `json:"at_utc"`
+	LogSourceID      string `json:"log_source_id,omitempty"`
+	SourceGeneration string `json:"source_generation,omitempty"`
+}
+
+// SearchResponse 跨 Worker Search 汇总结果。
+type SearchResponse struct {
+	View       View     `json:"view"`
+	Coverage   Coverage `json:"coverage"`
+	Quality    Quality  `json:"quality"`
+	Items      []Event  `json:"items"`
+	Exhausted  bool     `json:"exhausted"`
+	NextCursor string   `json:"next_cursor,omitempty"`
+	// BudgetCut 行/字节预算截断了结果；与 Coverage.Complete 独立。
+	BudgetCut          bool                `json:"budget_cut"`
+	IngestPositionGaps []IngestPositionGap `json:"ingest_position_gaps,omitempty"`
+}
+
+type FieldsResponse struct {
+	ExploreApplied bool     `json:"explore_applied,omitempty"`
+	View           View     `json:"view"`
+	Coverage       Coverage `json:"coverage"`
+	Fields         []string `json:"fields"`
+	Truncated      bool     `json:"truncated"`
+}
+
+// StatsQuery 统计请求。
+type StatsQuery struct {
+	Query
+	GroupBy    []string `json:"group_by,omitempty"`
+	TimeBucket string   `json:"time_bucket,omitempty"` // 如 "1m" / "5m" / "1h"
+	// MetricField 参与 sum/min/max/avg 的数值字段；空则只做 count。
+	MetricField string `json:"metric_field,omitempty"`
+}
+
+// StatsAggregate 可合并聚合：avg = sum/count（加权，禁止对 avg 再平均）。
+type StatsAggregate struct {
+	Count     uint64  `json:"count"`
+	Sum       float64 `json:"sum"`
+	Min       float64 `json:"min"`
+	Max       float64 `json:"max"`
+	HasMinMax bool    `json:"has_min_max"`
+}
+
+// Merge 将 b 合并进 a（sum+count；min/max 取边界）。
+func (a *StatsAggregate) Merge(b StatsAggregate) {
+	a.Count += b.Count
+	a.Sum += b.Sum
+	if b.Count == 0 && !b.HasMinMax {
+		return
+	}
+	if !a.HasMinMax && b.HasMinMax {
+		a.Min, a.Max, a.HasMinMax = b.Min, b.Max, true
+		return
+	}
+	if !a.HasMinMax {
+		return
+	}
+	if b.HasMinMax {
+		if b.Min < a.Min {
+			a.Min = b.Min
+		}
+		if b.Max > a.Max {
+			a.Max = b.Max
+		}
+	}
+}
+
+// Avg 加权平均：sum/count；count==0 时返回 0。
+func (a StatsAggregate) Avg() float64 {
+	if a.Count == 0 {
+		return 0
+	}
+	return a.Sum / float64(a.Count)
+}
+
+// StatsPoint 一个维度/时间桶上的聚合结果。
+type StatsPoint struct {
+	// Dimensions 含 group_by 字段；TimeBucketUTC 为绝对 UTC 桶起点（RFC3339）。
+	Dimensions    map[string]string `json:"dimensions,omitempty"`
+	TimeBucketUTC string            `json:"time_bucket_utc,omitempty"`
+	Agg           StatsAggregate    `json:"agg"`
+}
+
+// StatsResponse 跨 Worker 二次聚合结果。
+type StatsResponse struct {
+	View       View         `json:"view"`
+	Coverage   Coverage     `json:"coverage"`
+	Quality    Quality      `json:"quality"`
+	Points     []StatsPoint `json:"points"`
+	Metric     string       `json:"metric,omitempty"`
+	TimeBucket string       `json:"time_bucket,omitempty"`
+	BudgetCut  bool         `json:"budget_cut"`
+}
+
+// FacetsQuery Facet 请求。
+type FacetsQuery struct {
+	Query
+	Dimensions     []string `json:"dimensions"`
+	DimensionLimit uint32   `json:"dimension_limit"` // 每维返回值上限
+}
+
+// FacetValue 维度值计数。
+type FacetValue struct {
+	Value string `json:"value"`
+	Count uint64 `json:"count"`
+}
+
+// FacetDimension 合并后的单维度结果。
+type FacetDimension struct {
+	Dimension string `json:"dimension"`
+	// Controlled 受控维度精确合并；高基数维度必须带截断语义。
+	Controlled bool         `json:"controlled"`
+	Values     []FacetValue `json:"values"`
+	// Truncated 任一来源发生截断，或合并后按 DimensionLimit 裁剪。
+	Truncated bool `json:"truncated"`
+	// TruncatedCount 已知被省略的值数量（上界可来自 Worker 截断计数之和 + 本地裁剪）。
+	TruncatedCount uint64 `json:"truncated_count"`
+	Limit          uint32 `json:"limit"`
+}
+
+// FacetsResponse 跨 Worker Facet 汇总。
+type FacetsResponse struct {
+	ExploreApplied bool             `json:"explore_applied,omitempty"`
+	View           View             `json:"view"`
+	Coverage       Coverage         `json:"coverage"`
+	Quality        Quality          `json:"quality"`
+	Dimensions     []FacetDimension `json:"dimensions"`
+	// Truncated 任一维度存在截断语义。
+	Truncated bool `json:"truncated"`
+}
+
+// StreamsQuery 流枚举请求。
+type StreamsQuery struct {
+	Query
+}
+
+// StreamItem 是一条流（粒度：源 + 流名）与它在窗内的条数。
+//
+// 与 FacetValue 的区别：FacetValue 是「维度 + 值 + 计数」的通用形态，
+// 而这里是**已拆好的二元组**——前端拿它直接渲染表，不必再拆一层。
+type StreamItem struct {
+	LogSourceID string `json:"log_source_id"`
+	Stream      string `json:"stream"`
+	Raw         string `json:"raw,omitempty"`
+	Hits        uint64 `json:"hits"`
+}
+
+// StreamsResponse 流枚举结果。
+//
+// Complete 是「条数是否可信」：false 时不得把 Hits=0 读成「该流没数据」。
+type StreamsResponse struct {
+	View     View         `json:"view"`
+	Coverage Coverage     `json:"coverage"`
+	Quality  Quality      `json:"quality"`
+	Streams  []StreamItem `json:"streams"`
+	Complete bool         `json:"complete"`
+}
+
+// StreamFieldValuesQuery stream 标签维度取值分布请求。
+type StreamFieldValuesQuery struct {
+	Query
+	Field string `json:"field"`
+}
+
+// StreamFieldNamesResponse stream 标签维度名结果。
+type StreamFieldNamesResponse struct {
+	View     View     `json:"view"`
+	Coverage Coverage `json:"coverage"`
+	Fields   []string `json:"fields"`
+}
+
+// StreamFieldValuesResponse stream 标签维度取值分布结果。
+type StreamFieldValuesResponse struct {
+	View     View         `json:"view"`
+	Coverage Coverage     `json:"coverage"`
+	Quality  Quality      `json:"quality"`
+	Field    string       `json:"field"`
+	Values   []FacetValue `json:"values"`
+	Complete bool         `json:"complete"`
+}
+
+// ExportResult 导出物化结果。
+//
+// 完整校验通过前不得生成成功产物：partial / 截断 / 超预算一律 ExportIncomplete，
+// Artifact 保持 nil。
+type ExportResult struct {
+	View     View     `json:"view"`
+	Coverage Coverage `json:"coverage"`
+	Quality  Quality  `json:"quality"`
+	Items    []Event  `json:"items"`
+	// ExportIncomplete 为 true 时 Artifact 必须为 nil。
+	ExportIncomplete  bool     `json:"export_incomplete"`
+	IncompleteReasons []string `json:"incomplete_reasons,omitempty"`
+	BudgetExceeded    bool     `json:"budget_exceeded"`
+	Cut               bool     `json:"cut"` // 列表/Worker 截断
+	// Artifact 仅在完整通过时非 nil（NDJSON 等物化载荷）。
+	Artifact []byte `json:"artifact,omitempty"`
+	RowBytes uint64 `json:"row_bytes,omitempty"`
+	// Limits 本次导出实际采用的预算上限与实取行数，供 UI 给出可操作提示
+	// （「单次最多 N 行」而非笼统「预算超了」）。不参与任何闸门判定。
+	Limits ExportLimits `json:"limits"`
+}
+
+// ResolveReadinessToCoverage 就绪度映射为覆盖状态（查询前的默认）。
+func ResolveReadinessToCoverage(r Readiness) CoverageState {
+	switch r {
+	case ReadyOnline:
+		return CoverageSuccess
+	case ReadyOffline:
+		return CoverageOffline
+	case ReadyNotReady:
+		return CoverageNotReady
+	case ReadyArchiveMissing:
+		return CoverageArchiveMissing
+	case ReadyUnsupported:
+		return CoverageNotReady
+	default:
+		return CoverageUnspecified
+	}
+}
+
+// FormatClosedVisibleSeq 将向量格式化为稳定字符串。
+func FormatClosedVisibleSeq(vec map[string]string) string {
+	if len(vec) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(vec))
+	for k := range vec {
+		keys = append(keys, k)
+	}
+	// 简单插入排序，保证确定性。
+	for i := 1; i < len(keys); i++ {
+		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
+			keys[j], keys[j-1] = keys[j-1], keys[j]
+		}
+	}
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(vec[k])
+	}
+	return b.String()
+}
+
+// NewViewID 生成视图 ID。
+//
+// 必须是**不可预测**的不透明标识：View 绑定调用方主体与授权范围，虽然复用还要经过
+// PrincipalKey/权限范围/目标覆盖校验（故可预测性本身不构成直接越权），但基于时间的
+// 可枚举 ID 会暴露「某 View 是否存在」的侧信道（跨主体复用返回 403、未知 View 返回
+// 400，两者可区分）。故改用 128 位加密随机数；失败时退回时间戳以保证仍能生成 ID。
+func NewViewID() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "cv_" + strconv.FormatInt(time.Now().UTC().UnixNano(), 36)
+	}
+	return "cv_" + hex.EncodeToString(buf[:])
+}
+
+// MustParseRFC3339 解析 RFC3339，失败返回零时间。
+func MustParseRFC3339(s string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err == nil {
+		return t
+	}
+	t, err = time.Parse(time.RFC3339, s)
+	if err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
+// ValidateQuery 基础请求校验。
+func ValidateQuery(q Query) error {
+	if len(q.AuthorizedTargetIDs) == 0 && q.ViewID == "" {
+		return fmt.Errorf("logcoord: authorized target set is empty")
+	}
+	if q.FromUTC != "" || q.ToUTC != "" {
+		from := MustParseRFC3339(q.FromUTC)
+		to := MustParseRFC3339(q.ToUTC)
+		if q.FromUTC != "" && from.IsZero() {
+			return fmt.Errorf("logcoord: invalid from_utc %q", q.FromUTC)
+		}
+		if q.ToUTC != "" && to.IsZero() {
+			return fmt.Errorf("logcoord: invalid to_utc %q", q.ToUTC)
+		}
+		if !from.IsZero() && !to.IsZero() && !from.Before(to) {
+			return fmt.Errorf("logcoord: time range from must be before to")
+		}
+	}
+	return nil
+}

@@ -34,7 +34,7 @@ func startReapedSleeper(t *testing.T) (int, func()) {
 	}
 }
 
-// TestRemoveInstance_ReapsLingeringDaemonTree 复现 FR-310 真机缺陷：删除运行中 daemon 实例时，
+// TestRemoveInstance_ReapsLingeringDaemonTree 复现真机缺陷：删除运行中 daemon 实例时，
 // 删除流程只杀 wrapper 组，Unix 上自成进程组（wrapper.applyProcAttr）的 Java 子进程未死，
 // RemoveAll 之后 Java 继续写 world region 把工作目录重建出来（worker 日志打印「已清理工作目录」，
 // 盘上却残留 world/plugins），且 wrapper 被强杀时其 defer 未执行、遗留 <uuid>.pid / <uuid>.sock。
@@ -59,7 +59,7 @@ func TestRemoveInstance_ReapsLingeringDaemonTree(t *testing.T) {
 	defer cleanJava()
 
 	// 托管区内的工作目录 + world 子目录（模拟真实实例目录）。
-	workDir := filepath.Join(root.ServersDir(), "fr316-precheck-test-c3a5033b")
+	workDir := filepath.Join(root.ServersDir(), "precheck-test-c3a5033b")
 	require.NoError(t, os.MkdirAll(filepath.Join(workDir, "world"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workDir, "server.jar"), []byte("jar"), 0o644))
 
@@ -83,7 +83,7 @@ func TestRemoveInstance_ReapsLingeringDaemonTree(t *testing.T) {
 	// 忠实复现「注册表已无、但进程树 + PID 记录仍在」的删除窗口。
 	resp, err := srv.RemoveInstance(context.Background(), &workerpb.RemoveInstanceRequest{
 		InstanceUuid: uuid,
-		WorkDir:      "var/servers/fr316-precheck-test-c3a5033b",
+		WorkDir:      "var/servers/precheck-test-c3a5033b",
 	})
 	require.NoError(t, err)
 	require.True(t, resp.Success, "删除应成功: %s", resp.Error)

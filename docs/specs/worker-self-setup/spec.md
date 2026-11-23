@@ -167,3 +167,20 @@ worker daemon                        # 既有：daemon wrapper 子进程（不�
 - 安装脚本退化（「cwd 有完整 worker 跳下载 / 下载与上线分两步 / 脚本调 setup」）→ **FR-223**。
 - 终端断连 UX（FIX-B）、启停 kill 竞态（FIX-C）、首次上线真机断点（FIX-D）→ 各自 fix。
 - `.yml` 约定本身（`.yaml`→`.yml` + viper 搜索）→ **FR-224**（已落地，本 FR 依赖其成果）。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入（保留原文）。
+
+### FR-222 worker 免配置自启 setup（节点上线丝滑化，参考 GitHub Actions Runner 下载/上线分离）
+
+worker 免配置自启 setup（节点上线丝滑化，参考 GitHub Actions Runner 下载/上线分离）：worker 启动时若未配置（无 .yml / 无 `etc/node-identity.json`）→ 进入 setup（有 TTY 交互式问 CP gRPC 地址 / enroll token / 节点名；无 TTY/CI 读命令行参数 + env，无人值守）写 worker.yml + 携 enroll token 注册持久化身份 → 转 run；已配置直接 run。「下载」（取二进制）与「上线」（setup+注册+run）解耦（**需 spec + ADR-051**，改写 ADR-020「一键单脚本下载+配置+注册+起」模型；依赖 FR-224 .yml）
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 索引段迁入（保留原文）。
+
+### FR-222~224 + FIX-A~D（节点上线流程打通 + worker 生命周期修复 + .yml 约定）
+
+FR-222~224 + FIX-A~D（节点上线流程打通 + worker 生命周期修复 + .yml 约定）：FR-222/223 已由 0.13.0 开发版 FIX-1/2/3 归真闭环；FR-224 已在 v0.12.0 交付；FR-222 `docs/specs/worker-self-setup/`，FR-223/224 免 spec。FIX-A #2 worker 重连重推实例[+ADR-050] / FIX-B #3 终端断连 / FIX-C #4 启停 kill 竞态 / FIX-D 首次上线真机断点（fix 走 sdd-fix-bug，不占 §4）
+

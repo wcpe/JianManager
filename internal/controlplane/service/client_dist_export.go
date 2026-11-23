@@ -42,7 +42,14 @@ type ClientDistExportFilter struct {
 	PlayerName string
 	LogType    string
 	Version    *int
-	From, To   time.Time
+	// 运行态维度（R34）：运行态下钻的列表带这几个筛选，导出契约此前不带，
+	// 于是「筛 Linux 的表格」导出出来的 CSV 里混着 Windows 的行。
+	// 口径与 /client-dist/events/search 的运行态筛选完全一致（同一套复合键收敛）。
+	RuntimeVersion *int
+	CoreVersion    string
+	Platform       string
+	Lag            *int
+	From, To       time.Time
 }
 
 // ClientDistExportService 以分页查询和流式 CSV 写入导出分发数据。
@@ -171,7 +178,53 @@ func (s *ClientDistExportService) eventQuery(f ClientDistExportFilter) *gorm.DB 
 	case "failure":
 		q = q.Where("status >= 400")
 	}
-	return q
+	return s.applyExportRuntimeFilter(q, f)
+}
+
+// applyExportRuntimeFilter 把运行态维度下推到明细导出（R34）。
+//
+// 运行态下钻的列表按 runtimeVersion/coreVersion/platform/lag 过滤，导出契约原先不带这四项，
+// 于是从「Linux 筛选表」导出的 CSV 里混进 Windows 行——同一屏两块数据不同集合。
+// 这里复用运行时过滤的复合键收敛（同 applyRuntimeIdentityFilter），保证与列表同一口径。
+func (s *ClientDistExportService) applyExportRuntimeFilter(q *gorm.DB, f ClientDistExportFilter) *gorm.DB {
+	if f.RuntimeVersion == nil && f.CoreVersion == "" && f.Platform == "" && f.Lag == nil {
+		return q
+	}
+	var states []model.ClientRuntimeState
+	rq := s.db.Model(&model.ClientRuntimeState{})
+	if f.ChannelID != "" {
+		rq = rq.Where("channel_id = ?", f.ChannelID)
+	}
+	if f.RuntimeVersion != nil {
+		rq = rq.Where("local_version = ?", *f.RuntimeVersion)
+	}
+	if f.CoreVersion != "" {
+		rq = rq.Where("core_version = ?", f.CoreVersion)
+	}
+	if f.Platform != "" {
+		rq = rq.Where("platform = ?", f.Platform)
+	}
+	if err := rq.Find(&states).Error; err != nil {
+		return q.Where("1 = 0")
+	}
+	if f.Lag != nil {
+		latest := latestByChannel(states)
+		filtered := states[:0]
+		for _, st := range states {
+			lag := latest[st.ChannelID] - st.LocalVersion
+			if lag < 0 {
+				lag = 0
+			}
+			if lag == *f.Lag {
+				filtered = append(filtered, st)
+			}
+		}
+		states = filtered
+	}
+	if len(states) == 0 {
+		return q.Where("1 = 0")
+	}
+	return applyRuntimeIdentityFilter(q, states)
 }
 
 type exportEventView struct{ PlayerName, CoreVersion string }
