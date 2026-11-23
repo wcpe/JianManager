@@ -29,7 +29,7 @@ func writePID(t *testing.T, dir, uuid string, wrapperPID int) {
 func TestResolvePIDDir_FlagWins(t *testing.T) {
 	t.Setenv(dataroot.EnvVar, filepath.Join(t.TempDir(), "envroot"))
 	flagDir := t.TempDir()
-	got, err := resolvePIDDir(flagDir)
+	got, err := resolvePIDDir("", flagDir)
 	require.NoError(t, err)
 	assert.Equal(t, flagDir, got)
 }
@@ -42,21 +42,44 @@ func TestResolvePIDDir_EnvDataRoot(t *testing.T) {
 	require.NoError(t, os.MkdirAll(serversDir, 0o755))
 	t.Setenv(dataroot.EnvVar, root)
 
-	got, err := resolvePIDDir("")
+	got, err := resolvePIDDir("", "")
 	require.NoError(t, err)
 	assert.Equal(t, serversDir, got)
 }
 
-// TestResolvePIDDir_NotFound 无 flag、无 env、默认 ./data/var/servers 不存在时报错提示用 --pid-dir。
+// TestResolvePIDDir_NotFound 无 flag、无 env、默认 ./data/var/servers 不存在时报错提示用 --data-dir。
 func TestResolvePIDDir_NotFound(t *testing.T) {
 	// 把工作目录切到一个空临时目录，使默认 ./data/var/servers 不存在。
 	dir := t.TempDir()
 	chdir(t, dir)
 	t.Setenv(dataroot.EnvVar, "")
 
-	_, err := resolvePIDDir("")
+	_, err := resolvePIDDir("", "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--pid-dir")
+	assert.Contains(t, err.Error(), "--data-dir")
+}
+
+// TestResolvePIDDir_DataDirFlag --data-dir 直指数据根，拼接 var/servers。
+func TestResolvePIDDir_DataDirFlag(t *testing.T) {
+	root := t.TempDir()
+	got, err := resolvePIDDir(root, "")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(root, "var", "servers"), got)
+}
+
+// TestResolvePIDDir_PidDirAlias --pid-dir 给数据根时取其下 var/servers；直指 PID 目录则原样采用。
+func TestResolvePIDDir_PidDirAlias(t *testing.T) {
+	root := t.TempDir()
+	servers := filepath.Join(root, "var", "servers")
+	require.NoError(t, os.MkdirAll(servers, 0o755))
+	got, err := resolvePIDDir("", root)
+	require.NoError(t, err)
+	assert.Equal(t, servers, got)
+
+	direct := t.TempDir()
+	got, err = resolvePIDDir("", direct)
+	require.NoError(t, err)
+	assert.Equal(t, direct, got)
 }
 
 // TestResolvePIDDir_DefaultDataDir 无 flag、无 env，但默认 ./data/var/servers 存在时采用之。
@@ -67,7 +90,7 @@ func TestResolvePIDDir_DefaultDataDir(t *testing.T) {
 	def := filepath.Join(dir, "data", "var", "servers")
 	require.NoError(t, os.MkdirAll(def, 0o755))
 
-	got, err := resolvePIDDir("")
+	got, err := resolvePIDDir("", "")
 	require.NoError(t, err)
 	assert.Equal(t, def, got)
 }

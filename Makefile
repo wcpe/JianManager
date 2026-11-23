@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test test-plain e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
+.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test test-plain e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-jm dist-jm-npm dist-jmctl dist-prep
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -28,10 +28,16 @@ build-worker:
 build-jmctl:
 	go build -o bin/jmctl.exe ./apps/jmctl
 
-# 构建 jmagent Agent 管理 CLI（FR-385）；jm 为推荐短别名（同一 main，两个二进制名）
-build-jmagent:
-	go build -o bin/jmagent.exe ./apps/jmagent
-	go build -o bin/jm.exe ./apps/jmagent
+# 构建 jm 命令行客户端。
+#
+# 目录与产物都已统一为 `jm`。`jmagent.exe` 是**兼容别名**，保留一个版本周期后删除
+# （删除时同时移除这里的第二行与 build-jmagent 目标）。
+build-jm:
+	go build -o bin/jm.exe ./apps/jm
+	go build -o bin/jmagent.exe ./apps/jm
+
+# 过渡别名：既有文档/脚本仍可能写 make build-jmagent。
+build-jmagent: build-jm
 
 # 构建前端（FR-283：pnpm workspace，主应用在 apps/control-plane-web）
 build-web:
@@ -106,8 +112,17 @@ clear-worker-embed:
 	@find internal/controlplane/embed/worker -type f ! -name '.gitignore' -delete 2>/dev/null || true
 	@test -f internal/controlplane/embed/worker/.gitignore || printf '%s\n' '*' '!.gitignore' > internal/controlplane/embed/worker/.gitignore
 
+# 交叉编译 linux/windows amd64 的 jmctl 并注入 CP 内嵌目录：install-worker 分发与
+# Worker 升级同步从 /downloads/jmctl-* 拉取，不依赖 GitHub。产物与 manifest 不入库；
+# 不跑此目标时 CP 不内嵌 jmctl，下载端点返回 503，Worker 侧跳过 jmctl 同步。
+embed-jmctl:
+	mkdir -p internal/controlplane/embed/jmctl
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/jmctl/jmctl-linux-amd64 ./apps/jmctl
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/jmctl/jmctl-windows-amd64.exe ./apps/jmctl
+	go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/jmctl --version $(VERSION) --prefix jmctl
+
 # 两档共用的前端/botworker 等内嵌（不含 Worker 内嵌）。
-dist-prep: gen-licenses build-web embed-web embed-install-scripts embed-botworker
+dist-prep: gen-licenses build-web embed-web embed-install-scripts embed-botworker embed-jmctl
 
 # dist 默认 = 完整版（兼容旧习惯）：CP 内嵌双平台 Worker。
 dist: dist-full
@@ -119,7 +134,7 @@ dist-full: dist-prep embed-worker dist-bin-full
 dist-slim: dist-prep clear-worker-embed dist-bin-slim
 
 # 一次产出 full + slim CP 与独立 worker（先 full 再 slim，避免 embed 目录互相污染）。
-dist-all: dist-full dist-slim
+dist-all: dist-full dist-slim dist-jm dist-jmctl
 
 # 完整版二进制命名（ADR-036）：control-plane / worker × linux|windows amd64。
 dist-bin-full:
@@ -140,6 +155,37 @@ dist-bin-slim:
 
 # 兼容旧目标名：dist-bin = 完整版四件套。
 dist-bin: dist-bin-full
+
+# 客户端 `jm` 的三平台发行物（FR-564）。
+#
+# 与 CP/Worker 分开命名（不带 slim/full）：客户端是独立演进的人类侧工具，
+# 同一个二进制即可对任意 CP 实例工作，不随服务端形态分叉。
+# darwin 一并出：macOS 是 `jm` 的主要使用环境之一（钥匙串实现见 internal/platform/keyring）。
+dist-jm:
+	mkdir -p dist
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-windows-amd64.exe ./apps/jm
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-linux-amd64 ./apps/jm
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-darwin-amd64 ./apps/jm
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-darwin-arm64 ./apps/jm
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jm-linux-arm64 ./apps/jm
+
+# 生成 npm 分发包目录（主包 + 5 个平台分包）到 .tmp/jm-npm-build/（FR-567）。
+# 依赖 dist-jm 的产物；加 PUBLISH=1 才会真正推送到 npm。
+dist-jm-npm: dist-jm
+	node packages/jm-npm/scripts/build-npm-packages.js $(if $(PUBLISH),--publish,)
+
+# 紧急控制台 CLI jmctl 的发行物（FR-184 / ADR-041）。
+#
+# 单独发布而不并入 CP：它的用途正是 CP 与 Worker 全挂时的本机救援，
+# 此时无法指望 CP 自身携带这个工具。ADR-041 原文即写明「纳入 release 矩阵
+# 可后续增量」，这里兑现该条。
+#
+# 只出 linux/windows amd64：jmctl 走 Unix socket / 命名管道直连本机 daemon，
+# 实际部署只有这两类主机。
+dist-jmctl:
+	mkdir -p dist
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jmctl-windows-amd64.exe ./apps/jmctl
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/jmctl-linux-amd64 ./apps/jmctl
 
 # 构建 Bot Worker
 build-bot:

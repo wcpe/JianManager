@@ -26,18 +26,56 @@ type instanceInfo struct {
 //
 // Worker 把 <uuid>.pid 写到「服务器工作目录根」= 数据根下 var/servers（process.Manager 的
 // pidDir 即 serversDir，见 cmd/worker/main.go）。jmctl 据此发现实例，故按以下优先级解析：
-//  1. flag（--pid-dir）显式指定；
+//  1. flag 显式指定（--data-dir 为正式名，指向数据根；--pid-dir 留作兼容别名，
+//     既可指数据根也可直指 PID 目录，按实际布局识别）；
 //  2. 环境变量 JIANMANAGER_DATA_DIR 指向的数据根下 var/servers；
-//  3. 默认数据根 ./data 下 var/servers（开发环境）。
+//  3. 从可执行文件位置向上逐级找 <祖先>/data/var/servers——jmctl 装在
+//     /opt/jianmanager/bin/ 时数据根在 /opt/jianmanager/data，cwd 推断会落空；
+//  4. 默认数据根 ./data 下 var/servers（开发环境）。
 //
-// 2/3 两档要求目录实际存在才采用，否则继续回退；全部落空报错并提示用 --pid-dir。
-func resolvePIDDir(flag string) (string, error) {
-	if strings.TrimSpace(flag) != "" {
-		return flag, nil
+// 2/3/4 三档要求目录实际存在才采用，否则继续回退；全部落空报错并提示用 --data-dir。
+func resolvePIDDir(dataDirFlag, pidDirFlag string) (string, error) {
+	// --data-dir：指数据根，取 <dir>/var/servers；目录不存在也直返（错误信息含用户给的路径更准确）。
+	if v := strings.TrimSpace(dataDirFlag); v != "" {
+		return filepath.Join(v, "var", "servers"), nil
+	}
+	// --pid-dir（别名）：优先按「直指 PID 目录」保留旧语义；若给出的是数据根（含 var/servers 子目录）则取其下。
+	if v := strings.TrimSpace(pidDirFlag); v != "" {
+		if dirExists(filepath.Join(v, "var", "servers")) {
+			return filepath.Join(v, "var", "servers"), nil
+		}
+		return v, nil
 	}
 
-	// JIANMANAGER_DATA_DIR 优先；为空时 dataroot 回退到默认 ./data。
-	// Resolve 不创建目录，仅求绝对路径，由下方存在性判断决定是否采用。
+	// JIANMANAGER_DATA_DIR 显式设置时优先（存在性检查）。
+	if env := strings.TrimSpace(os.Getenv("JIANMANAGER_DATA_DIR")); env != "" {
+		serversDir := filepath.Join(env, "var", "servers")
+		if dirExists(serversDir) {
+			return serversDir, nil
+		}
+	}
+
+	// 可执行文件向上逐级找 data/var/servers：覆盖 /opt/jianmanager/bin/jmctl（上溯两级
+	// 命中 /opt/jianmanager/data）与 /opt/jianmanager/jmctl（一级）两种部署形态。
+	if exe, err := os.Executable(); err == nil {
+		if real, err2 := filepath.EvalSymlinks(exe); err2 == nil {
+			exe = real
+		}
+		dir := filepath.Dir(exe)
+		for i := 0; i < 5; i++ {
+			cand := filepath.Join(dir, "data", "var", "servers")
+			if dirExists(cand) {
+				return cand, nil
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+
+	// cwd 默认数据根（开发环境）。
 	if root, err := dataroot.Resolve(""); err == nil {
 		serversDir := root.ServersDir()
 		if dirExists(serversDir) {
@@ -45,7 +83,7 @@ func resolvePIDDir(flag string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("未找到 daemon PID 目录（数据根下 var/servers 不存在）；请用 --pid-dir 显式指定")
+	return "", fmt.Errorf("未找到 daemon PID 目录（数据根下 var/servers 不存在）；请用 --data-dir 显式指定数据根")
 }
 
 // dirExists 判断路径是否为已存在目录。
@@ -121,13 +159,15 @@ func resolvePrefix(insts []instanceInfo, prefix string) (instanceInfo, error) {
 
 // runList 实现 `jmctl list`：扫描并打印本机全部 daemon 实例（非交互）。
 func runList(args []string) error {
+	const jmctlName = "jmctl"
 	fs := newFlagSet("list")
-	pidDirFlag := fs.String("pid-dir", "", "daemon PID 目录（默认数据根下 var/servers）")
+	dataDirFlag := fs.String("data-dir", "", "数据根（默认自动推断；--pid-dir 为兼容别名）")
+	pidDirFlag := fs.String("pid-dir", "", "daemon PID 目录（--data-dir 的别名）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	pidDir, err := resolvePIDDir(*pidDirFlag)
+	pidDir, err := resolvePIDDir(*dataDirFlag, *pidDirFlag)
 	if err != nil {
 		return err
 	}
@@ -140,14 +180,39 @@ func runList(args []string) error {
 		return nil
 	}
 
-	fmt.Printf("PID 目录: %s\n", pidDir)
-	fmt.Printf("%-36s  %-6s  %-10s  %-10s  %s\n", "UUID", "存活", "WrapperPID", "JavaPID", "工作目录")
+	// 合并 Worker 写的实例清单：PID 文件只有寻址信息，没有实例名与业务状态。
+	// 清单缺失时（旧版 Worker 或刚升级）降级为只显示 UUID，不报错。
+	idx := loadInstanceIndex(pidDir)
+	names := idx.byUUID()
+
+	fmt.Printf("PID 目录: %s\n\n", pidDir)
+	fmt.Printf("%-36s  %-20s  %-10s  %-8s  %s\n", "UUID", "实例名", "状态", "存活", "工作目录")
 	for _, in := range insts {
 		alive := "否"
 		if in.Alive {
 			alive = "是"
 		}
-		fmt.Printf("%-36s  %-6s  %-10d  %-10d  %s\n", in.UUID, alive, in.WrapperPID, in.JavaPID, in.WorkDir)
+		name, state := "-", "-"
+		if e, ok := names[in.UUID]; ok {
+			if e.Name != "" {
+				name = e.Name
+			}
+			if e.State != "" {
+				state = e.State
+			}
+		}
+		fmt.Printf("%-36s  %-20s  %-10s  %-8s  %s\n", in.UUID, name, state, alive, in.WorkDir)
 	}
+
+	// 一份可直接照做的下一步，解决「agent 连上来不知道能干什么」。
+	fmt.Printf(`
+下一步:
+  %s attach <uuid 前缀>     进入控制台（Ctrl+C 优雅停服）
+  %s stop <uuid 前缀>       优雅停服
+  %s server status          查看部署概况（目录 / 配置 / 服务状态）
+
+要从 Agent 远程管理（启动 / 重启 / 指标）请用 MCP：
+  jm token create --name <名称>   生成 Agent 令牌并打印配置片段
+`, jmctlName, jmctlName, jmctlName)
 	return nil
 }

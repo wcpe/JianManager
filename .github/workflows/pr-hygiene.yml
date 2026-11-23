@@ -122,7 +122,10 @@ jobs:
           #  - 开发默认值 `dev-secret-change-me`：名字本身就写着「请在生产覆盖」，
           #    且注释明确指出生产经环境变量注入；
           #  - mock 测试值 `sk-mock-test`、明显构造的 `sk-ant-api03-XyZ987...`。
-          TESTISH_VAL='^(sk-(should|audit|survives|test|fake|dummy|example|original|new|probe|value|mock|ant-api03-XyZ)|dev-secret-change-me|password123|admin123|fake-key|test-secret|x{8,}|p|xxx|\$\{[A-Z_]+)'
+          # 额外放行本项目自己的凭证前缀：jmut_/jmat_ 后紧跟 test/fake/dummy/mock/sample
+          # 的，是测试构造值。项目强制的凭证格式让测试必然大量使用这类字面量，
+          # 不单独放行会把「测试假值」与「真实凭据」混为一谈。
+          TESTISH_VAL='^(sk-(should|audit|survives|test|fake|dummy|example|original|new|probe|value|mock|ant-api03-XyZ)|dev-secret-change-me|password123|admin123|fake-key|test-secret|x{8,}|p|xxx|jm[ua]t_(test|fake|dummy|mock|sample)|\$\{[A-Z_]+)'
           # 注意：不能用「像 camelCase」当判据——随机密钥（aB3xK9mP2qR7tY4w）也长得像。
           # 只认两种确凿的代码引用形态：含调用/成员语法，或纯字母组成的标识符（无数字）。
           CODE_REF_VAL='[().]|[]]|^[A-Za-z][A-Za-z]*$'

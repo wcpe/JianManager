@@ -10,8 +10,15 @@
 |---|---|
 | `control-plane`(`.exe`) | Control Plane：唯一面向浏览器的 HTTP 入口，已内嵌前端 UI（单二进制） |
 | `worker`(`.exe`) | Worker Node：受 Control Plane 通过 gRPC 调度，管理本机游戏服进程、终端、指标、Bot |
+| `jm` | 人类侧命令行客户端：经 CP HTTPS + 用户令牌（`jmut_`）做日常运维，也可 `npm i -g @jianmanager/jm` 获取 |
+| `jmctl`(`.exe`) | 紧急控制台：CP 与 Worker 全挂时本机直连 daemon socket 做最后救援（无网络面，见 §10） |
 | `control-plane.yml` / `worker.yml` | 配置样例 |
 | `README.md` / `DEPLOY.md` / `CHANGELOG.md` | 文档 |
+
+`jm` 不内嵌在 CP 二进制里：它是独立演进的人类侧工具，随 Release 单独发布（另有 npm 包）。
+`jmctl` 则**内嵌**在 CP 里（`make embed-jmctl`，~3MB）：Worker 安装与升级时经 CP 的
+`/downloads/jmctl-*` 路由同步分发到 `<Worker安装目录>/bin/`——jmctl 只操作本机 daemon 的
+pid/socket，和 Worker 同机部署才有意义，与 CP 同版本发布保证协议兼容。
 
 三进程模型：`浏览器 →(HTTP/WS)→ Control Plane →(gRPC)→ Worker Node →(spawn)→ Bot Worker(Node.js)`。
 Bot Worker 是 Node.js 子进程，其 dist 已内嵌 Control Plane，Worker 注册后**自动下发**到本机，无需手动准备文件（FR-308，见 §6）。
@@ -408,3 +415,43 @@ irm https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.ps
 精简版 CP 场景：把 release 里的 `worker-linux-amd64` 与 CP 放在同一目录，再跑安装脚本，不会去外网拉 Worker。
 
 Worker 仍推荐面板 **「节点 → 添加节点」** 生成的一键命令（见 §6）。
+
+## 13. 应急：CP 与 Worker 全挂时用 jmctl
+
+`jmctl` 是**纯本机**工具：直连 daemon 的 Unix socket / Windows 命名管道，无网络面、无鉴权
+（能在本机读写该 socket 即等同宿主级运维权限）。它不依赖 CP、Worker、数据库或 gRPC。
+
+典型场景：CP 打不开、Worker 不再响应，但游戏服进程仍在 daemon 托管下运行。
+
+### 13.1 安装
+
+jmctl **随 Worker 分发**，一般无需单独安装：
+
+- `install-worker.sh` / `install-worker.ps1` 装 Worker 时，自动把对应平台的 jmctl
+  放到 `<Worker安装目录>/bin/jmctl[.exe]`（来源：CP 内嵌路由 `/downloads/jmctl-*`，
+  不依赖 GitHub；`--no-jmctl` / `-NoJmctl` 可跳过；失败不阻断 Worker 安装；
+  已存在且版本相同则跳过）。
+- Worker 每次升级成功后会同步更新同目录 `bin/jmctl` 到同一目标版本
+  （sha256 校验 + 原子替换；失败仅记日志，Windows 文件锁失败留待下次重试）。
+
+> 注意顺序：**先起 CP，再装 Worker**。jmctl 来自 CP 内嵌路由，若装 Worker 时 CP
+> 还没起来，jmctl 会跳过（Worker 安装不受影响），等 Worker 下次升级时自动补装；
+> 也可届时手动取 `http://<CP>/downloads/jmctl-linux-amd64`（或 `-windows-amd64.exe`）。
+
+无 Worker 的机器上单独使用（少见），可直接取 CP 下载端点或 Release 里的
+`jmctl-<os>-amd64` 二进制，或 `make dist-jmctl` 本地构建。
+
+### 13.2 使用
+
+```bash
+jmctl list                                    # 列出本机全部 daemon 实例
+jmctl emergency --instance <uuid 前缀>         # 交互式紧急终端（Ctrl+C 优雅停服，连按两次强杀）
+jmctl stop <uuid 前缀>                         # 优雅停服后退出
+jmctl kill <uuid 前缀>                         # 强制终止
+jmctl --version                               # 确认手上这份的版本
+```
+
+PID 目录默认取数据根下 `var/servers`，可用 `--pid-dir` 或 `JIANMANAGER_DATA_DIR` 覆盖。
+
+> 停止服务后 daemon 会按既有策略回收；恢复 CP/Worker 后实例状态以它们的心跳为准，
+> 必要时在面板上重新校准。本工具不写入任何业务数据。

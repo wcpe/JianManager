@@ -25,7 +25,19 @@ import { LOG_FIELD_EXPLORER_LOCALES } from '../components/logs/log-field-explore
 
 const i18nDir = dirname(fileURLToPath(import.meta.url))
 const srcDir = join(i18nDir, '..')
+/**
+ * 本文件在源码里的相对路径，**统一用正斜杠**。
+ *
+ * 台账/基准里手写的路径一律是 POSIX 形态，而 `join()` 在 Windows 产出反斜杠；
+ * 若直接拿两边做 `===`，Windows 下永远不相等——豁免静默失效，把本该放行的
+ * 局部命名空间 key 全判成缺失。故比较前一律经 `toPosixPath()` 归一。
+ */
 const localNamespaceFile = 'components/logs/LogFieldExplorer.tsx'
+
+/** 归一为 POSIX 分隔符，供跨平台比较使用（只影响比较口径，不改变真实路径）。 */
+function toPosixPath(p: string): string {
+  return p.replace(/\\/g, '/')
+}
 
 /**
  * 扫描范围 = app 的 src + 其它消费**同一套语言包**的第一方源。
@@ -231,7 +243,9 @@ function collectUsedKeys(): Map<string, string[]> {
     if (!existsSync(dir)) continue
     for (const file of listSourceFiles(dir)) {
       const text = readFileSync(file, 'utf-8')
-      const rel = label + file.replace(dir + '\\', '').replace(dir + '/', '')
+      // 归一成 POSIX 相对路径：基准表（localNamespaceFile 等）都是正斜杠写法，
+      // Windows 下 `join()` 给的是反斜杠，不归一就永远比对不上。
+      const rel = label + toPosixPath(file).replace(toPosixPath(dir) + '/', '')
       for (const key of extractStaticTKeys(text)) {
         const list = used.get(key) ?? []
         if (!list.includes(rel)) list.push(rel)

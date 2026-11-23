@@ -113,6 +113,11 @@ type Manager struct {
 	onOutput   func(instanceID string, stream string, data []byte)
 	// pidDir 存放 daemon wrapper 的 PID 文件目录。
 	pidDir string
+	// indexMu / indexDirty / indexRunning 是实例清单快照的写盘合并控制
+	// （见 instance_index.go 的 refreshInstanceIndexAsync）。
+	indexMu      sync.Mutex
+	indexDirty   bool
+	indexRunning bool
 	// onStateChange 实例状态变更回调，用于 StreamInstanceEvents 推送。
 	onStateChange func(instanceUUID string, oldState, newState InstanceState)
 	// onCrash 进程非正常退出回调，用于组装崩溃快照上报 CP。
@@ -368,6 +373,9 @@ func (m *Manager) markStrategyState(uuid string, newState InstanceState) {
 	inst.State = newState
 	m.mu.Unlock()
 	m.emitStateChange(uuid, oldState, newState)
+	// 实例清单快照在状态变更后刷新，供 jmctl 等本机只读工具消费（见 instance_index.go）。
+	// 放在解锁后、异步执行：写文件不应阻塞状态机，更不该因磁盘问题影响实例生命周期。
+	m.refreshInstanceIndexAsync("state:" + string(newState))
 }
 
 // InstanceSnapshot 表示单个实例的状态快照（用于心跳上报）。

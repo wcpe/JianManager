@@ -146,11 +146,28 @@ func formatScalar(v any) string {
 }
 
 // formatWhoami text 输出 whoami。
+// formatWhoami text 输出当前身份。
+//
+// 需同时适配两种响应结构，因为 `jm` 走的是用户侧 `/api/v1/auth/me`
+// （`jmut_` 令牌），而旧的 Agent 侧 `/agent/whoami`（`jmat_`）字段完全不同。
+// 以 response 里是否存在 `username` 区分，避免维护两套命令。
 func formatWhoami(w io.Writer, v any) error {
 	m, ok := v.(map[string]any)
 	if !ok {
 		return writePrettyAny(w, v)
 	}
+	// 用户侧身份（/api/v1/auth/me）：userId / username / role / roleKey / isPlatformAdmin / nodes。
+	if _, isUser := m["username"]; isUser {
+		fmt.Fprintf(w, "username:          %v\n", formatScalar(m["username"]))
+		fmt.Fprintf(w, "userId:            %v\n", formatScalar(m["userId"]))
+		fmt.Fprintf(w, "role:              %v\n", formatScalar(m["roleKey"]))
+		fmt.Fprintf(w, "isPlatformAdmin:   %v\n", formatScalar(m["isPlatformAdmin"]))
+		if perms, ok := m["nodes"].([]any); ok {
+			fmt.Fprintf(w, "permissions:       %d 项\n", len(perms))
+		}
+		return nil
+	}
+	// Agent 侧身份（/api/v1/agent/whoami）：保留原输出，供 jmat_ 令牌使用。
 	fmt.Fprintf(w, "kind:              %v\n", formatScalar(m["kind"]))
 	fmt.Fprintf(w, "name:              %v\n", formatScalar(m["name"]))
 	fmt.Fprintf(w, "tokenId:           %v\n", formatScalar(m["tokenId"]))

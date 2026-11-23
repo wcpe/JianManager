@@ -68,12 +68,13 @@ func streamOutput(conn io.Reader, out, errw io.Writer) error {
 func runEmergency(args []string) error {
 	fs := newFlagSet("emergency")
 	instanceFlag := fs.String("instance", "", "目标实例 UUID 或其唯一前缀（省略则交互选择）")
-	pidDirFlag := fs.String("pid-dir", "", "daemon PID 目录（默认数据根下 var/servers）")
+	dataDirFlag := fs.String("data-dir", "", "数据根（默认自动推断；--pid-dir 为兼容别名）")
+	pidDirFlag := fs.String("pid-dir", "", "daemon PID 目录（--data-dir 的别名）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	pidDir, err := resolvePIDDir(*pidDirFlag)
+	pidDir, err := resolvePIDDir(*dataDirFlag, *pidDirFlag)
 	if err != nil {
 		return err
 	}

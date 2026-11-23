@@ -20,14 +20,22 @@ import { describe, expect, it } from 'vitest'
 
 const root = path.resolve(__dirname, '..')
 
-/** 把一条 import 说明符解析成 src 下的真实文件；解析不到（包、css、动态拼接）返回 null。 */
+/**
+ * 把一条 import 说明符解析成 src 下的真实文件；解析不到（包、css、动态拼接）返回 null。
+ *
+ * 返回前一律经 `path.resolve` 归一：下面的扩展名候选里混用了 `'${base}.ts'` 与
+ * `'${base}/index.ts'`，正斜杠直接拼进 Windows 路径会得到 `src\i18n/index.ts` 这种
+ * 半反斜杠形态。而断言侧用 `path.join` 得到的是纯反斜杠路径，`Set.has()` 按字符串
+ * 精确比较，于是「明明可达」也被判成不可达——门禁在 Windows 上恒红。
+ */
 function resolveSpecifier(fromFile: string, spec: string): string | null {
   let base: string
   if (spec.startsWith('@/')) base = path.join(root, spec.slice(2))
   else if (spec.startsWith('.')) base = path.resolve(path.dirname(fromFile), spec)
   else return null
   for (const ext of ['.ts', '.tsx', '/index.ts', '/index.tsx']) {
-    if (existsSync(base + ext)) return base + ext
+    const candidate = path.resolve(base + ext)
+    if (existsSync(candidate)) return candidate
   }
   return null
 }

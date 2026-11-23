@@ -234,7 +234,7 @@ func (d *directStrategy) GetPID() int {
 }
 
 // instanceWriter 将进程输出路由到 Manager 的 onOutput 回调。
-// Windows 上自动将 GBK 编码转换为 UTF-8。
+// 自动将 GBK/GB18030 编码转换为 UTF-8（见 gbk.go 的 auto 判定）。
 type instanceWriter struct {
 	manager    *Manager
 	instanceID string
@@ -243,7 +243,7 @@ type instanceWriter struct {
 
 func (w *instanceWriter) Write(p []byte) (n int, err error) {
 	if w.manager != nil && w.manager.onOutput != nil {
-		// Windows cmd.exe 子进程输出默认 GBK，转换为 UTF-8
+		// 子进程输出可能为 GBK（Windows cmd / 中文 locale JVM），转换为 UTF-8
 		w.manager.onOutput(w.instanceID, w.stream, gbkToUTF8(p))
 	}
 	return len(p), nil

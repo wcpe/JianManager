@@ -264,11 +264,7 @@ func (d *daemonStrategy) readLoop(conn net.Conn) {
 				if fr.Channel == daemon.ChannelStderr {
 					stream = "stderr"
 				}
-				data := fr.Payload
-				// Windows 上 Java 输出可能为 GBK，这里复用 direct 的转换逻辑
-				if runtime.GOOS == "windows" {
-					data = decodeGBK(fr.Payload)
-				}
+				data := decodeGBK(fr.Payload)
 				d.mgr.onOutput(d.spec.UUID, stream, data)
 			}
 		case daemon.ChannelControl:
@@ -711,7 +707,7 @@ func (d *daemonStrategy) GetPID() int {
 	return d.wrapperPID
 }
 
-// decodeGBK 将 GBK 字节解码为 UTF-8（Windows Java 输出常见）。
+// decodeGBK 将 GBK 字节解码为 UTF-8（中文 locale 的 JVM 输出常见，不限 Windows）。
 func decodeGBK(p []byte) []byte {
 	// 复用 direct 包内转换器，避免重复导入 transform
 	return gbkToUTF8(p)

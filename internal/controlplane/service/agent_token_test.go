@@ -265,3 +265,35 @@ func TestAgentCapability_CatalogAndDiscover(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, AgentCapabilityNodeRead, auth.Capability)
 }
+
+// TestCatalog_SummaryPresent 断言所有 action 都有非空摘要。
+// 摘要供 MCP tool 描述使用，缺失会导致 agent 无从判断工具用途。
+func TestCatalog_SummaryPresent(t *testing.T) {
+	for _, d := range AgentActionCatalog() {
+		assert.NotEmpty(t, d.Summary, "action %s 缺 Summary", d.Action)
+	}
+}
+
+// TestCatalog_DestructiveFlags 校验破坏性操作的标注口径。
+func TestCatalog_DestructiveFlags(t *testing.T) {
+	for _, d := range AgentActionCatalog() {
+		if d.Operation == AgentOperationDestructive {
+			assert.True(t, d.IsDestructive(), "action %s 应判定为破坏性", d.Action)
+			assert.False(t, d.IsReadOnly(), "破坏性 action %s 不可能是只读", d.Action)
+			continue
+		}
+		assert.False(t, d.IsDestructive(), "非破坏性 action %s 被误判", d.Action)
+	}
+
+	// 已知破坏性 action 必须被识别，防止后续把 Operation 改回 write 而丢失确认门禁。
+	for _, action := range []string{
+		AgentActionInstanceKill,
+		AgentActionInstanceDelete,
+		AgentActionNodePurgeArchived,
+		AgentActionBotDelete,
+	} {
+		d, ok := DescribeAgentAction(action)
+		require.True(t, ok, "action 必须登记: "+action)
+		assert.True(t, d.IsDestructive(), "action 应判定为破坏性: "+action)
+	}
+}

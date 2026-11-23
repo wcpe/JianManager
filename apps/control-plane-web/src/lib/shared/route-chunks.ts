@@ -76,6 +76,8 @@ export const ROUTE_CHUNKS = {
   '/database': () => import('@/pages/DatabasePage'),
   '/system-update': () => import('@/pages/SystemUpdatePage'),
   '/agent-tokens': () => import('@/pages/AgentTokensPage'),
+  // 我的令牌：用户自助的人类凭证，所有登录用户可访问。
+  '/my-tokens': () => import('@/pages/UserTokensPage'),
   // 平台审批中心。
   '/approvals': () => import('@/pages/ApprovalsPage'),
   '/mcp-activity': () => import('@/pages/McpActivityPage'),
