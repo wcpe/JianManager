@@ -115,6 +115,26 @@ type ApprovalTicket struct {
 	// FailureReason status=failed 时的原因（保留批准事实，只记失败原因）。
 	FailureReason string `gorm:"type:varchar(512)" json:"failureReason,omitempty"`
 
+	// ResultJSON 执行产出的可回读结果（JSON），供申请人事后经 approval_get 取回。
+	//
+	// 为什么需要它：部分 action 的价值不在「执行成功」本身，而在它产出的一份
+	// 一次性凭据——典型是 file_issue_transfer_ticket 签发的传输票据（明文含 HMAC 签名，
+	// 只能用一次、有效期 5 分钟）。若执行完就丢弃，批准了也等于没做。
+	//
+	// 为什么存在票据上而不是别处：approval_get 是申请人事后自查的唯一入口，
+	// 且它已经按 TokenID 做了归属限制，天然就是「只有申请人能读」的读取点。
+	//
+	// 安全边界：只存**申请人本就该拿到**的结果，不存内部诊断信息；
+	// 读取路径必须与 approval_get 同口径做归属校验（见 mcp/tools_approval.go）。
+	ResultJSON string `gorm:"type:text" json:"resultJson,omitempty"`
+
+	// ResultConsumedAt 结果被取走的时间。非空表示该结果已被读取。
+	//
+	// 用途：传输票据是单用途凭据，用户重复取回同一条明文没有意义，
+	// 反而延长了它在库里的可读窗口。记录取走时刻既便于审计，
+	// 也让后续实现（如限次读取、定时清理）有判据。
+	ResultConsumedAt *time.Time `json:"resultConsumedAt,omitempty"`
+
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }

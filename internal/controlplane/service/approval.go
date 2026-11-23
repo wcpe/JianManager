@@ -246,6 +246,17 @@ func (s *ApprovalService) ListApprovals(f ApprovalListFilter) ([]model.ApprovalT
 	return out, nil
 }
 
+// MarkResultConsumed 记录执行结果被申请人取走的时刻（审计用）。
+//
+// 只在首次取走时写入（条件带 result_consumed_at IS NULL），因此重复轮询不会
+// 反复刷新时间戳——那会让「什么时候第一次拿到」这个事实失真。
+// 返回值刻意不用：记录取走时刻是旁路信息，不该让它影响结果能否返回。
+func (s *ApprovalService) MarkResultConsumed(ticketID uint) error {
+	return s.db.Model(&model.ApprovalTicket{}).
+		Where("id = ? AND result_consumed_at IS NULL", ticketID).
+		Update("result_consumed_at", s.now()).Error
+}
+
 // GetApproval 单张详情；applicantID 非空时校验归属（越权与不存在共用 not found）。
 func (s *ApprovalService) GetApproval(id uint, applicantID *uint) (*model.ApprovalTicket, error) {
 	var t model.ApprovalTicket
