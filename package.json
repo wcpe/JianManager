@@ -5,7 +5,8 @@
   "pnpm": {
     "overrides": {
       "i18next": "26.3.1",
-      "react-i18next": "17.0.8"
+      "react-i18next": "17.0.8",
+      "zustand": "5.0.14"
     }
   },
   "scripts": {
