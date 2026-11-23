@@ -33,16 +33,16 @@ type manifest struct {
 	Assets  []entry `json:"assets"`
 }
 
-var namePattern = regexp.MustCompile(`^worker-([a-z0-9]+)-([a-z0-9]+?)(\.exe)?$`)
-
 func main() {
-	dir := flag.String("dir", "", "嵌入目录（含 worker-<os>-<arch> 二进制）")
-	version := flag.String("version", "", "Worker 构建版本（与 CP version.Version 同源）")
+	dir := flag.String("dir", "", "嵌入目录（含 <prefix>-<os>-<arch> 二进制）")
+	version := flag.String("version", "", "构建版本（与 CP version.Version 同源）")
+	prefix := flag.String("prefix", "worker", "二进制文件名前缀（worker / jmctl）")
 	flag.Parse()
 	if *dir == "" || *version == "" {
-		fmt.Fprintln(os.Stderr, "用法: --dir <嵌入目录> --version <版本>")
+		fmt.Fprintln(os.Stderr, "用法: --dir <嵌入目录> --version <版本> [--prefix worker|jmctl]")
 		os.Exit(2)
 	}
+	namePattern := regexp.MustCompile(`^` + regexp.QuoteMeta(*prefix) + `-([a-z0-9]+)-([a-z0-9]+?)(\.exe)?$`)
 
 	files, err := os.ReadDir(*dir)
 	if err != nil {
@@ -65,7 +65,7 @@ func main() {
 		assets = append(assets, entry{OS: m[1], Arch: m[2], File: f.Name(), SHA256: sum, Size: size})
 	}
 	if len(assets) == 0 {
-		fatal("嵌入目录 %s 未发现 worker-<os>-<arch> 二进制", *dir)
+		fatal("嵌入目录 %s 未发现 %s-<os>-<arch> 二进制", *dir, *prefix)
 	}
 
 	raw, err := json.MarshalIndent(manifest{Version: strings.TrimSpace(*version), Assets: assets}, "", "  ")
@@ -76,7 +76,7 @@ func main() {
 	if err := os.WriteFile(out, append(raw, '\n'), 0o644); err != nil {
 		fatal("写 %s 失败: %v", out, err)
 	}
-	fmt.Printf("[embed-worker] 写出 %s（version=%s, %d 平台）\n", out, *version, len(assets))
+	fmt.Printf("[embed-%s] 写出 %s（version=%s, %d 平台）\n", *prefix, out, *version, len(assets))
 }
 
 func fileSHA256(path string) (string, int64, error) {

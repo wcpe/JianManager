@@ -66,6 +66,11 @@ type UserAccess struct {
 	AdminGroupIDs    map[uint]struct{} // 以组管理员身份管理的组 ID 集合
 	MemberGroupIDs   map[uint]struct{} // 以普通成员身份所属的组 ID 集合
 	AccessibleGroups map[uint]struct{} // AdminGroupIDs ∪ MemberGroupIDs，用于读权限
+	// TokenScopedNodeIDs / TokenScopedInstanceIDs：用户令牌（jmut_）声明的资源
+	// scope，nil 表示 JWT 主体或令牌未声明该档 scope（不额外收窄）。
+	// 与 capabilities 收窄（LoadAccess 中收敛 Nodes）一起保证「越权返回 403」。
+	TokenScopedNodeIDs     map[uint]struct{}
+	TokenScopedInstanceIDs map[uint]struct{}
 }
 
 // AuthzService 授权服务，负责加载用户授权上下文并执行权限判断。
@@ -213,6 +218,10 @@ func (a *UserAccess) CanAccessGroup(groupID uint) bool {
 // CanAccessInstance 判断用户是否能访问指定实例。
 // 平台管理员全量放行；否则实例必须归属于其可访问的组。
 func (s *AuthzService) CanAccessInstance(access *UserAccess, instanceID uint) (bool, error) {
+	// 令牌 scope 收窄优先于角色判定：管理员令牌同样受声明 scope 约束。
+	if ok, err := s.withinTokenInstanceScope(access, instanceID); err != nil || !ok {
+		return ok, err
+	}
 	if access.IsPlatformAdmin {
 		return true, nil
 	}
@@ -230,6 +239,9 @@ func (s *AuthzService) CanAccessInstance(access *UserAccess, instanceID uint) (b
 // CanManageInstance 判断用户是否能管理（写/删除）指定实例。
 // 平台管理员全量放行；否则实例必须归属于其管理的组（组管理员）或所属组（成员对写操作的边界由调用方决定）。
 func (s *AuthzService) CanManageInstance(access *UserAccess, instanceID uint) (bool, error) {
+	if ok, err := s.withinTokenInstanceScope(access, instanceID); err != nil || !ok {
+		return ok, err
+	}
 	if access.IsPlatformAdmin {
 		return true, nil
 	}
@@ -246,6 +258,9 @@ func (s *AuthzService) CanManageInstance(access *UserAccess, instanceID uint) (b
 // CanManageInstanceLaunchSpec 判断用户是否能修改实例启动命令和环境变量等高风险启动规格。
 // 这些字段会改变 Worker 创建进程时的执行上下文，故仅平台管理员或所属用户组管理员可修改。
 func (s *AuthzService) CanManageInstanceLaunchSpec(access *UserAccess, instanceID uint) (bool, error) {
+	if ok, err := s.withinTokenInstanceScope(access, instanceID); err != nil || !ok {
+		return ok, err
+	}
 	if access.IsPlatformAdmin {
 		return true, nil
 	}
@@ -289,24 +304,92 @@ func (s *AuthzService) CanAccessBot(access *UserAccess, botID uint) (bool, error
 // 非管理员返回 (ids, true)，ids 为其可访问组下的实例 ID（可能为空切片，表示无任何可见实例）。
 // 万级 Bot 下不可用逐条 CanAccessInstance 循环，故以集合谓词替代（参见）。
 func (s *AuthzService) AccessibleInstanceIDs(access *UserAccess) ([]uint, bool, error) {
-	if access.IsPlatformAdmin {
+	if access.IsPlatformAdmin && access.TokenScopedInstanceIDs == nil && access.TokenScopedNodeIDs == nil {
 		return nil, false, nil
 	}
-	if len(access.AccessibleGroups) == 0 {
-		return []uint{}, true, nil
-	}
-	groupIDs := make([]uint, 0, len(access.AccessibleGroups))
-	for gid := range access.AccessibleGroups {
-		groupIDs = append(groupIDs, gid)
-	}
 	var instanceIDs []uint
-	if err := s.db.Model(&model.GroupInstance{}).
-		Where("group_id IN ?", groupIDs).
-		Distinct().
-		Pluck("instance_id", &instanceIDs).Error; err != nil {
-		return nil, false, fmt.Errorf("查询可访问实例集合失败: %w", err)
+	if access.IsPlatformAdmin {
+		// 管理员带令牌 scope 时才有收敛需求：以实例全集为基数再与 scope 取交。
+		if err := s.db.Model(&model.Instance{}).Distinct().Pluck("id", &instanceIDs).Error; err != nil {
+			return nil, false, fmt.Errorf("查询实例集合失败: %w", err)
+		}
+	} else {
+		if len(access.AccessibleGroups) == 0 {
+			return []uint{}, true, nil
+		}
+		groupIDs := make([]uint, 0, len(access.AccessibleGroups))
+		for gid := range access.AccessibleGroups {
+			groupIDs = append(groupIDs, gid)
+		}
+		if err := s.db.Model(&model.GroupInstance{}).
+			Where("group_id IN ?", groupIDs).
+			Distinct().
+			Pluck("instance_id", &instanceIDs).Error; err != nil {
+			return nil, false, fmt.Errorf("查询可访问实例集合失败: %w", err)
+		}
+	}
+	if access.TokenScopedInstanceIDs != nil {
+		allowed := make([]uint, 0, len(access.TokenScopedInstanceIDs))
+		for id := range access.TokenScopedInstanceIDs {
+			allowed = append(allowed, id)
+		}
+		instanceIDs = intersectUintIDs(instanceIDs, allowed)
+	}
+	if access.TokenScopedNodeIDs != nil {
+		nodeIDs := make([]uint, 0, len(access.TokenScopedNodeIDs))
+		for id := range access.TokenScopedNodeIDs {
+			nodeIDs = append(nodeIDs, id)
+		}
+		var scoped []uint
+		if err := s.db.Model(&model.Instance{}).
+			Where("id IN ? AND node_id IN ?", instanceIDs, nodeIDs).
+			Distinct().
+			Pluck("id", &scoped).Error; err != nil {
+			return nil, false, fmt.Errorf("按节点 scope 收敛实例集合失败: %w", err)
+		}
+		instanceIDs = scoped
 	}
 	return instanceIDs, true, nil
+}
+
+// withinTokenInstanceScope 判断令牌 scope 是否覆盖指定实例。
+// scoped_instance_ids 非空时实例须在集合内；scoped_node_ids 非空时实例所在节点须在集合内。
+// 未声明（nil）的档位不限制。
+func (s *AuthzService) withinTokenInstanceScope(access *UserAccess, instanceID uint) (bool, error) {
+	if access.TokenScopedInstanceIDs != nil {
+		if _, ok := access.TokenScopedInstanceIDs[instanceID]; !ok {
+			return false, nil
+		}
+	}
+	if access.TokenScopedNodeIDs != nil {
+		var inst model.Instance
+		err := s.db.Select("node_id").First(&inst, instanceID).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return false, nil
+			}
+			return false, fmt.Errorf("查询实例节点失败: %w", err)
+		}
+		if _, ok := access.TokenScopedNodeIDs[inst.NodeID]; !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// intersectUintIDs 返回 ids 中属于 allowed 的元素。
+func intersectUintIDs(ids, allowed []uint) []uint {
+	set := make(map[uint]struct{}, len(allowed))
+	for _, id := range allowed {
+		set[id] = struct{}{}
+	}
+	out := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := set[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // CanManageBot 判断用户是否能管理指定 Bot。

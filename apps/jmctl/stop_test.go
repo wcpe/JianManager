@@ -28,7 +28,7 @@ func TestParseTargetArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prefix, pidDir, err := parseTargetArgs("stop", tt.args)
+			prefix, _, pidDir, err := parseTargetArgs("stop", tt.args)
 			if tt.wantErr {
 				require.Error(t, err)
 				return

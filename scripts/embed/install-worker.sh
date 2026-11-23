@@ -41,6 +41,7 @@ SERVICE_EXEC=""         # 可选 systemd ExecStart 路径（版本化部署指�
 SERVICE_NAME_OVERRIDE="" # 可选 systemd 服务名（多 Worker 部署与编排脚本共用）
 DOWNLOAD_ONLY="0"       # 仅下载、不上线
 SKIP_DOWNLOAD="0"       # 跳过下载、直接上线
+NO_JMCTL="0"            # 跳过 jmctl 注入（默认随 Worker 一并安装）
 
 usage() {
     cat <<'USAGE'
@@ -65,6 +66,7 @@ usage() {
   --service-name <name>    systemd 服务名（默认根据安装目录推导）
   --download-only          只下载/准备二进制，不上线
   --skip-download          跳过下载，直接用安装目录已有二进制上线
+  --no-jmctl               不安装 jmctl 紧急控制台 CLI
   -h, --help               显示本帮助
 
 取二进制优先级（未 --binary / --skip-download 时）:
@@ -91,6 +93,7 @@ while [ $# -gt 0 ]; do
         --service-name)  SERVICE_NAME_OVERRIDE="$2"; shift 2 ;;
         --download-only) DOWNLOAD_ONLY="1"; shift ;;
         --skip-download) SKIP_DOWNLOAD="1"; shift ;;
+        --no-jmctl)      NO_JMCTL="1"; shift ;;
         -h|--help)       usage; exit 0 ;;
         *) echo "未知参数: $1" >&2; usage; exit 1 ;;
     esac
@@ -231,6 +234,67 @@ else
     exit 1
 fi
 chmod +x "$BIN_PATH"
+
+# ---- jmctl 注入（需求 1.1）----
+# 随 Worker 把 jmctl 紧急控制台放到 <安装目录>/bin/，供 CP 失联时本机救援。
+# 来源为 CP 内嵌路由 /downloads/jmctl-<os>-<arch>（匿名可读，不依赖 GitHub）。
+# 非阻断：任一步失败只告警，不影响 Worker 安装；已存在且 sha256 相同则跳过。
+install_jmctl() {
+    [ "$NO_JMCTL" = "1" ] && return 0
+    # 仅分发 linux/windows amd64（与 CP 内嵌清单一致）；其余平台跳过。
+    jmctl_file=""
+    jmctl_name="jmctl"
+    case "$OS/$ARCH" in
+        linux/amd64)   jmctl_file="jmctl-linux-amd64" ;;
+        windows/amd64) jmctl_file="jmctl-windows-amd64.exe"; jmctl_name="jmctl.exe" ;;
+        *) return 0 ;;
+    esac
+    # CP HTTP 基址：仅从 CP-local 下载源推导（GitHub Releases 上没有 jmctl）。
+    cp_origin="$(printf '%s' "$DOWNLOAD_URL" | sed -nE 's@^(https?://[^/]+).*@\1@p')"
+    if [ -z "$cp_origin" ]; then
+        echo "      (jmctl：下载源非 CP，跳过；可稍后手动取 $cp_origin/downloads/$jmctl_file)" >&2
+        return 0
+    fi
+    mkdir -p "$INSTALL_DIR/bin" 2>/dev/null || true
+    jmctl_path="$INSTALL_DIR/bin/$jmctl_name"
+    # 版本比对：拉 manifest 取目标 sha256，与本地一致即跳过。
+    want_sha=""
+    if command -v curl >/dev/null 2>&1; then
+        manifest="$(curl -fsSL --max-time 15 "$cp_origin/downloads/jmctl-manifest.json" 2>/dev/null || true)"
+    else
+        manifest="$(wget -qO- --timeout=15 "$cp_origin/downloads/jmctl-manifest.json" 2>/dev/null || true)"
+    fi
+    if [ -n "$manifest" ]; then
+        want_sha="$(printf '%s\n' "$manifest" | awk -v f="\"file\": \"$jmctl_file\"" '
+            $0 ~ f { hit=1 } hit && /"sha256"/ { gsub(/[",]/, "", $2); print $2; exit }')"
+    fi
+    if [ -n "$want_sha" ] && [ -f "$jmctl_path" ]; then
+        have_sha="$(sha256sum "$jmctl_path" 2>/dev/null | awk '{print $1}')"
+        if [ "$have_sha" = "$want_sha" ]; then
+            echo "      jmctl 已存在且为同版本，跳过 ($jmctl_path)"
+            return 0
+        fi
+    fi
+    tmp="$(mktemp "$INSTALL_DIR/bin/.jmctl.XXXXXX" 2>/dev/null || printf '%s' "$jmctl_path.tmp")"
+    url="$cp_origin/downloads/$jmctl_file"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time 60 "$url" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; echo "      (jmctl：下载失败，不影响 Worker 安装)" >&2; return 0; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$tmp" --timeout=60 "$url" 2>/dev/null || { rm -f "$tmp"; echo "      (jmctl：下载失败，不影响 Worker 安装)" >&2; return 0; }
+    else
+        echo "      (jmctl：无 curl/wget，跳过)" >&2; return 0
+    fi
+    if [ -n "$want_sha" ]; then
+        got_sha="$(sha256sum "$tmp" 2>/dev/null | awk '{print $1}')"
+        if [ "$got_sha" != "$want_sha" ]; then
+            rm -f "$tmp"; echo "      (jmctl：sha256 校验不符，跳过)" >&2; return 0
+        fi
+    fi
+    chmod +x "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$jmctl_path" 2>/dev/null || { rm -f "$tmp"; echo "      (jmctl：写入失败，不影响 Worker 安装)" >&2; return 0; }
+    echo "      jmctl 已安装到 $jmctl_path"
+}
+install_jmctl
 
 if [ "$DOWNLOAD_ONLY" = "1" ]; then
     echo "[3/4] --download-only：二进制已就绪，跳过上线 ($BIN_PATH)"

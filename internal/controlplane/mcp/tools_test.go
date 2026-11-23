@@ -48,6 +48,59 @@ func TestRegisteredTools_Set(t *testing.T) {
 	}
 }
 
+// TestToolSpecsMatchCatalog 断言每个工具的 Action 都在 catalog 中登记。
+//
+// catalog 是 action→capability→scope 的唯一真源。
+// 工具若引用未登记 action，则该工具不可被授权，属于死配置。
+func TestToolSpecsMatchCatalog(t *testing.T) {
+	for _, s := range allToolSpecs {
+		require.NotEmpty(t, s.Action, "工具 %s 缺 Action 关联", s.Def.Name)
+		_, ok := service.DescribeAgentAction(s.Action)
+		assert.True(t, ok, "工具 %s 引用了未登记的 action %s", s.Def.Name, s.Action)
+	}
+}
+
+// TestToolSpecsAnnotations 校验标注按 catalog 操作等级派生。
+func TestToolSpecsAnnotations(t *testing.T) {
+	for _, def := range RegisteredTools() {
+		action, ok := toolActionByName(def.Name)
+		require.True(t, ok, "工具 %s 找不到 action", def.Name)
+		d, ok := service.DescribeAgentAction(action)
+		require.True(t, ok, "工具 %s 的 action %s 未登记", def.Name, action)
+
+		require.NotNil(t, def.Annotations, "工具 %s 缺 annotations", def.Name)
+		assert.Equal(t, d.IsReadOnly(), def.Annotations["readOnlyHint"],
+			"工具 %s 的 readOnlyHint 与 catalog 不一致", def.Name)
+		assert.Equal(t, d.IsDestructive(), def.Annotations["destructiveHint"],
+			"工具 %s 的 destructiveHint 与 catalog 不一致", def.Name)
+	}
+}
+
+// TestDestructiveToolsAreAnnotated 断言破坏性工具一定被标注，
+// 且需要确认的工具把确认字段透出给客户端。
+func TestDestructiveToolsAreAnnotated(t *testing.T) {
+	var destructiveCount int
+	for _, s := range allToolSpecs {
+		d, ok := service.DescribeAgentAction(s.Action)
+		if !ok || !d.IsDestructive() {
+			continue
+		}
+		destructiveCount++
+		def := withAnnotations(s)
+		assert.Equal(t, true, def.Annotations["destructiveHint"],
+			"破坏性工具 %s 必须带 destructiveHint", def.Name)
+		assert.Equal(t, false, def.Annotations["readOnlyHint"],
+			"破坏性工具 %s 不得标为只读", def.Name)
+		if d.RequiresConfirm && s.ConfirmField != "" {
+			// 确认字段名由各工具自定义（confirmInstanceName / confirmNodeName / confirmName…），
+			// 声明的必须原样透出；未声明 ConfirmField 的工具自行在 InputSchema 内校验，此处不强制。
+			assert.Equal(t, s.ConfirmField, def.Annotations["confirmField"],
+				"工具 %s 的确认字段未透出", def.Name)
+		}
+	}
+	assert.Positive(t, destructiveCount, "应存在破坏性工具以覆盖标注路径")
+}
+
 func TestToolsForPrincipal_EmptyV2OnlyWhoami(t *testing.T) {
 	p := &service.AgentPrincipal{
 		PolicyVersion: service.AgentPolicyVersionV2,

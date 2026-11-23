@@ -16,6 +16,8 @@
 
 ## 索引（最近新增）
 
+- [ADR-112](112-user-token-separation.md) 用户令牌与 Agent Token 的凭证分离（`jmut_` 人类凭证 vs `jmat_` 机器凭证；权限取交集；device flow + keyring；FR-560～566）
+- [ADR-111](111-agent-knowledge-and-risk-annotation.md) Agent 运维知识双通道分发与工具风险标注（skill 走 GitHub + CP 静态路由；MCP 工具按 catalog 派生 destructiveHint；FR-566）
 - [ADR-110](110-native-instance-log-tail-stream.md) 实例 VL 原生尾流经反向隧道与认证 HTTP SSE 桥接（兼容新增 `LogTailLive`；有界队列、权限复核、取消与有限回放；节点/平台仍读文件）
 - [ADR-109](109-instance-logs-advanced-query-boundary.md) 实例高级查询使用 filter-only 表达式与独立授权 selector（两输入入口共用语法边界、整请求预算与 Query View，草稿和已应用 scope 分离）
 - [ADR-108](108-release-version-provenance-and-smoke.md) 发布版本溯源、Bot 内嵌与原生烟测（**原 ADR-074，2026-11-09 改号**——与 Bot 分布式压测调度的 ADR-074 重号，按「改引用面小的一方」处置；修订 ADR-036，部分被 ADR-083 取代）

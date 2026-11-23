@@ -5,7 +5,11 @@
   "pnpm": {
     "overrides": {
       "i18next": "26.3.1",
-      "react-i18next": "17.0.8"
+      "react-i18next": "17.0.8",
+      "zustand": "5.0.14",
+      "immer": "11.1.11",
+      "@tanstack/react-query": "5.101.0",
+      "@tanstack/query-core": "5.101.0"
     }
   },
   "scripts": {
@@ -15,7 +19,7 @@
     "lint": "pnpm -r lint"
   },
   "dependencies": {
-    "@astryxdesign/core": "^0.6.3",
+    "@astryxdesign/core": "^0.7.16",
     "@astryxdesign/theme-neutral": "^0.6.3",
     "@stylexjs/stylex": "^0.19.1"
   },

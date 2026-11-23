@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Agent 策略版本与 V2 能力常量。
@@ -55,6 +56,36 @@ type AgentActionDescriptor struct {
 	HTTPPath        string
 	HTTPInContract  bool
 	RequiresConfirm bool // destructive 操作须服务端精确确认参数
+
+	// Summary 是一句话摘要，供 MCP tool Description 使用。
+	Summary string
+
+	// AgentSubjectOnly 该 action **只能由 Agent 主体发起**，人类不可申请、不可代签。
+	//
+	// 【为什么需要这个字段，而不是「没有 HTTP 端点就等于人类申请不了」】
+	// 后者是**隐含**约束：今天人类没有入口，靠的是没人去加；一旦有人给人类侧
+	// 加一个「顺便也能申请」的端点，约束就无声消失了，而代码里没有任何地方
+	// 表达过「这不该给人类」。把边界写成数据后：
+	//   - 出票阶段就拒绝人类主体（见 approval_intercept.go），不是等批准后才炸；
+	//   - 执行期另有兜底（见 approval_adapters.go 的 loadTicketPrincipal）；
+	//   - 目录本身可被测试断言，新增入口若绕过会被用例抓到。
+	//
+	// 【判据】该动作的产出物是否为「一把只能由 Token 消费的凭据」。
+	// 传输票据是典型：Consume 时会按 claims.TokenID 重建主体重跑授权
+	// （见 agent_transfer_ticket.go），人类没有 TokenID，硬造一个假身份
+	// 恰恰是被明令禁止的事。
+	AgentSubjectOnly bool
+}
+
+// IsDestructive 报告该 action 是否为破坏性操作。
+// destructive 操作在 MCP 层须带 destructiveHint 标注，客户端据此在调用前征求用户确认。
+func (d AgentActionDescriptor) IsDestructive() bool {
+	return d.Operation == AgentOperationDestructive
+}
+
+// IsReadOnly 报告该 action 是否只读。
+func (d AgentActionDescriptor) IsReadOnly() bool {
+	return d.Operation == AgentOperationRead
 }
 
 // AgentAuthorization 授权结果；Capability 供调用流水记录。
@@ -92,123 +123,169 @@ var agentActionCatalog = map[string]AgentActionDescriptor{
 	AgentActionWhoami: {
 		Action: AgentActionWhoami, ResourceType: AgentResourceNone, Operation: AgentOperationRead,
 		V1Allowed: true, HTTPMethod: "GET", HTTPPath: "/api/v1/agent/whoami", HTTPInContract: true,
+		Summary: "显示当前 Agent Token 的身份、策略版本与能力",
 	},
 	AgentActionListNodes: {
 		Action: AgentActionListNodes, V2Capability: AgentCapabilityNodeRead,
 		ResourceType: AgentResourceNode, Operation: AgentOperationRead,
 		V1Allowed: true, HTTPMethod: "GET", HTTPPath: "/api/v1/agent/nodes", HTTPInContract: true,
+		Summary: "列出 Token scope 内的节点",
 	},
 	AgentActionListInstances: {
 		Action: AgentActionListInstances, V2Capability: AgentCapabilityInstanceRead,
 		ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
 		V1Allowed: true, HTTPMethod: "GET", HTTPPath: "/api/v1/agent/instances", HTTPInContract: true,
+		Summary: "列出 Token scope 内的实例",
 	},
 	AgentActionGetInstance: {
 		Action: AgentActionGetInstance, V2Capability: AgentCapabilityInstanceRead,
 		ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
 		V1Allowed: true, HTTPMethod: "GET", HTTPPath: "/api/v1/agent/instances/:id", HTTPInContract: true,
+		Summary: "查看实例当前状态",
 	},
 	AgentActionGetInstanceMetrics: {
 		Action: AgentActionGetInstanceMetrics, V2Capability: AgentCapabilityObservabilityRead,
 		ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
 		V1Allowed: true, HTTPMethod: "GET", HTTPPath: "/api/v1/agent/instances/:id/metrics", HTTPInContract: true,
+		Summary: "读取实例运行指标",
 	},
 	AgentActionGetInstanceLogs: {
 		Action: AgentActionGetInstanceLogs, V2Capability: AgentCapabilityObservabilityRead,
 		ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
 		V1Allowed: true, // MCP 专属，不进 HTTP 契约投影
+		Summary:   "读取实例日志（仅 MCP）",
 	},
-	// 助手概览类只读（补回）：ResourceType=none，只按能力把关。
+	// 助手概览类只读：ResourceType=none，只按能力把关。
 	AgentActionClusterOverview: {
 		Action: AgentActionClusterOverview, V2Capability: AgentCapabilityInstanceRead,
 		ResourceType: AgentResourceNone, Operation: AgentOperationRead,
 		V1Allowed: true, // 只读聚合，MCP 专属，不进 HTTP 契约投影
+		Summary:   "汇总集群概览（仅 MCP）",
 	},
 	AgentActionListTasksBrief: {
 		Action: AgentActionListTasksBrief, V2Capability: AgentCapabilityInstanceRead,
 		ResourceType: AgentResourceNone, Operation: AgentOperationRead,
-		V1Allowed: true,
+		V1Allowed: true, // 只读聚合，MCP 专属，不进 HTTP 契约投影
+		Summary:   "列出任务简报（仅 MCP）",
 	},
 	AgentActionListAlertsBrief: {
 		Action: AgentActionListAlertsBrief, V2Capability: AgentCapabilityInstanceRead,
 		ResourceType: AgentResourceNone, Operation: AgentOperationRead,
-		V1Allowed: true,
+		V1Allowed: true, // 只读聚合，MCP 专属，不进 HTTP 契约投影
+		Summary:   "列出告警简报（仅 MCP）",
 	},
 	AgentActionInstanceStart: {
 		Action: AgentActionInstanceStart, V2Capability: AgentCapabilityInstanceLife,
 		ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
 		V1Allowed: true, V1WriteAllow: AgentWriteInstanceLife,
 		HTTPMethod: "POST", HTTPPath: "/api/v1/agent/instances/:id/start", HTTPInContract: true,
+		Summary: "启动实例",
 	},
 	AgentActionInstanceStop: {
 		Action: AgentActionInstanceStop, V2Capability: AgentCapabilityInstanceLife,
 		ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
 		V1Allowed: true, V1WriteAllow: AgentWriteInstanceLife,
 		HTTPMethod: "POST", HTTPPath: "/api/v1/agent/instances/:id/stop", HTTPInContract: true,
+		Summary: "优雅停止实例",
 	},
 	AgentActionInstanceRestart: {
 		Action: AgentActionInstanceRestart, V2Capability: AgentCapabilityInstanceLife,
 		ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
 		V1Allowed: true, V1WriteAllow: AgentWriteInstanceLife,
 		HTTPMethod: "POST", HTTPPath: "/api/v1/agent/instances/:id/restart", HTTPInContract: true,
+		Summary: "重启实例",
 	},
 	AgentActionNodeMaintenanceEnter: {
 		Action: AgentActionNodeMaintenanceEnter, V2Capability: AgentCapabilityNodeOperate,
 		ResourceType: AgentResourceNode, Operation: AgentOperationWrite,
 		V1Allowed: true, V1WriteAllow: AgentWriteNodeMaintenance,
 		HTTPMethod: "POST", HTTPPath: "/api/v1/agent/nodes/:id/maintenance/enter", HTTPInContract: true,
+		Summary: "让节点进入维护模式",
 	},
 	AgentActionNodeMaintenanceLeave: {
 		Action: AgentActionNodeMaintenanceLeave, V2Capability: AgentCapabilityNodeOperate,
 		ResourceType: AgentResourceNode, Operation: AgentOperationWrite,
 		V1Allowed: true, V1WriteAllow: AgentWriteNodeMaintenance,
 		HTTPMethod: "POST", HTTPPath: "/api/v1/agent/nodes/:id/maintenance/leave", HTTPInContract: true,
+		Summary: "让节点退出维护模式",
 	},
 }
 
 // capabilityDomainActions 是节点/实例扩展 action，经 init 注入 catalog，
-// 保持 map 字面量本体不被并行分支争用（与398 的追加风格一致）。
+// 保持 map 字面量本体不被并行分支争用（与其它域的追加风格一致）。
 var capabilityDomainActions = []AgentActionDescriptor{
-	{Action: AgentActionNodeGet, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
-	{Action: AgentActionNodeGetMetrics, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
-	{Action: AgentActionNodeCheckDocker, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
-	{Action: AgentActionNodeDrain, V2Capability: AgentCapabilityNodeOperate, ResourceType: AgentResourceNode, Operation: AgentOperationWrite},
-	{Action: AgentActionNodeListArchived, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
-	{Action: AgentActionNodePurgeArchived, V2Capability: AgentCapabilityNodeDestructive, ResourceType: AgentResourceNode, Operation: AgentOperationDestructive, RequiresConfirm: true},
-	{Action: AgentActionInstanceSearch, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
-	{Action: AgentActionInstanceGetEnv, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
-	{Action: AgentActionInstanceListCrashSnapshots, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionNodeGet, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead,
+		Summary: "查看节点详情"},
+	{Action: AgentActionNodeGetMetrics, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead,
+		Summary: "读取节点运行指标"},
+	{Action: AgentActionNodeCheckDocker, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead,
+		Summary: "检查节点 Docker 环境"},
+	{Action: AgentActionNodeDrain, V2Capability: AgentCapabilityNodeOperate, ResourceType: AgentResourceNode, Operation: AgentOperationWrite,
+		Summary: "排空节点上的实例"},
+	{Action: AgentActionNodeListArchived, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead,
+		Summary: "列出已归档节点"},
+	{Action: AgentActionNodePurgeArchived, V2Capability: AgentCapabilityNodeDestructive, ResourceType: AgentResourceNode, Operation: AgentOperationDestructive, RequiresConfirm: true,
+		Summary: "永久清除已归档节点（不可恢复）"},
+	{Action: AgentActionInstanceSearch, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
+		Summary: "在 Token scope 内搜索实例"},
+	{Action: AgentActionInstanceGetEnv, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
+		Summary: "获取实例环境变量视图"},
+	{Action: AgentActionInstanceListCrashSnapshots, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
+		Summary: "列出实例崩溃快照元数据"},
 	// 创建类：目标资源类型按节点授权（创建前尚无实例），clone/rebuild 源实例仍走 instance。
-	{Action: AgentActionInstanceCreate, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceProvisionServer, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceImportInspect, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
-	{Action: AgentActionInstanceImport, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceClone, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceRebuild, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceUpdateConfig, V2Capability: AgentCapabilityInstanceConfigure, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceCreate, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationWrite,
+		Summary: "在节点上创建新实例"},
+	{Action: AgentActionInstanceProvisionServer, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationWrite,
+		Summary: "按服务端规格初始化实例"},
+	{Action: AgentActionInstanceImportInspect, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationRead,
+		Summary: "导入前检视待导入实例"},
+	{Action: AgentActionInstanceImport, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationWrite,
+		Summary: "导入既有实例"},
+	{Action: AgentActionInstanceClone, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "克隆实例"},
+	{Action: AgentActionInstanceRebuild, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "重建实例"},
+	{Action: AgentActionInstanceUpdateConfig, V2Capability: AgentCapabilityInstanceConfigure, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "更新实例配置"},
 	// 实例标签：权限面比 configure 更轻（instance.write），仅动 tags 字段。
-	{Action: AgentActionInstanceUpdateTags, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceUpdateTags, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "更新实例标签"},
 	// task_get 无固定资源类型：先按 task 关联实例归属重验，再走 instance.read 能力。
-	{Action: AgentActionTaskGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
+	{Action: AgentActionTaskGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		Summary: "查询异步任务状态"},
 	// 审批票据自查：无固定资源类型（按 TokenID 限域，见 ApprovalService 的按票过滤）。
 	// list/get 是读；withdraw 是写但**不产生任何外部副作用**（只改自己的票状态），
 	// 因此 V1WriteAllow 留空且 V1Allowed=false——V1 白名单里没有“审批”这一档，
 	// 宁可让 V1 Token 用不了自查，也不给它新开口子。
-	{Action: AgentActionApprovalList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
-	{Action: AgentActionApprovalGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
-	{Action: AgentActionApprovalWithdraw, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
+	{Action: AgentActionApprovalList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		Summary: "列出本 Token 名下的审批票据"},
+	{Action: AgentActionApprovalGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		Summary: "查看审批票据详情"},
+	{Action: AgentActionApprovalWithdraw, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		Summary: "撤回自己发起的审批票据"},
 	// 实例分组：分组自身无独立资源类型，按节点/实例 scope 判定可发现性（复用 instance 分支）。
-	{Action: AgentActionInstanceGroupList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
-	{Action: AgentActionInstanceGroupRead, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
-	{Action: AgentActionInstanceGroupCreate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceGroupUpdate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceGroupDelete, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true},
-	{Action: AgentActionInstanceGroupAddMembers, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceGroupRemoveMembers, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceSendCommand, V2Capability: AgentCapabilityInstanceCommand, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceBatch, V2Capability: AgentCapabilityInstanceLife, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	{Action: AgentActionInstanceKill, V2Capability: AgentCapabilityInstanceDestructive, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true},
-	{Action: AgentActionInstanceDelete, V2Capability: AgentCapabilityInstanceDestructive, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true},
+	{Action: AgentActionInstanceGroupList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
+		Summary: "列出实例分组"},
+	{Action: AgentActionInstanceGroupRead, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
+		Summary: "查看实例分组详情"},
+	{Action: AgentActionInstanceGroupCreate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "创建实例分组"},
+	{Action: AgentActionInstanceGroupUpdate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "更新实例分组"},
+	{Action: AgentActionInstanceGroupDelete, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true,
+		Summary: "删除实例分组（不可恢复）"},
+	{Action: AgentActionInstanceGroupAddMembers, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "向实例分组添加成员"},
+	{Action: AgentActionInstanceGroupRemoveMembers, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "从实例分组移除成员"},
+	{Action: AgentActionInstanceSendCommand, V2Capability: AgentCapabilityInstanceCommand, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "向运行中实例下发控制台命令"},
+	{Action: AgentActionInstanceBatch, V2Capability: AgentCapabilityInstanceLife, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "批量下发实例生命周期操作"},
+	{Action: AgentActionInstanceKill, V2Capability: AgentCapabilityInstanceDestructive, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true,
+		Summary: "强制终止实例（不保证优雅退出）"},
+	{Action: AgentActionInstanceDelete, V2Capability: AgentCapabilityInstanceDestructive, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true,
+		Summary: "删除实例（不可恢复）"},
 }
 
 func init() {
@@ -316,40 +393,64 @@ func init() {
 	}
 }
 
-// botDomainActions 是新增 action 的紧凑声明：action → (capability, resource, operation)。
+// botDomainActions 是 Bot 域 action 的紧凑声明：action → (capability, resource, operation)。
 // 全部 V1Allowed=false、HTTPInContract=false，故不逐条重复这两个字段。
 var botDomainActions = []AgentActionDescriptor{
-	{Action: AgentActionBotList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
-	{Action: AgentActionBotGet, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBot, Operation: AgentOperationRead},
-	{Action: AgentActionBotCreate, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	{Action: AgentActionBotSetBehavior, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationWrite},
-	{Action: AgentActionBotSendCommand, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationWrite},
-	{Action: AgentActionBotDelete, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationDestructive},
+	{Action: AgentActionBotList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
+		Summary: "列出实例下的 Bot"},
+	{Action: AgentActionBotGet, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBot, Operation: AgentOperationRead,
+		Summary: "查看单个 Bot 详情"},
+	{Action: AgentActionBotCreate, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "为实例创建 Bot"},
+	{Action: AgentActionBotSetBehavior, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationWrite,
+		Summary: "设置 Bot 行为参数"},
+	{Action: AgentActionBotSendCommand, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationWrite,
+		Summary: "向 Bot 下发指令"},
+	{Action: AgentActionBotDelete, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationDestructive,
+		Summary: "删除 Bot（不可恢复）"},
 
-	// 模板不绑定实例：ResourceType=none，仅由 capability 把关（附注：持 bot.load 管理全部模板）。
-	{Action: AgentActionLoadTestTemplateList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
-	{Action: AgentActionLoadTestTemplateGet, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
-	{Action: AgentActionLoadTestTemplateCreate, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceNone, Operation: AgentOperationWrite},
-	{Action: AgentActionLoadTestTemplateUpdate, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceNone, Operation: AgentOperationWrite},
-	{Action: AgentActionLoadTestTemplateDelete, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceNone, Operation: AgentOperationDestructive},
+	// 模板不绑定实例：ResourceType=none，仅由 capability 把关（持 bot.load 即可管理全部模板）。
+	{Action: AgentActionLoadTestTemplateList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		Summary: "列出压测模板"},
+	{Action: AgentActionLoadTestTemplateGet, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		Summary: "查看压测模板详情"},
+	{Action: AgentActionLoadTestTemplateCreate, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceNone, Operation: AgentOperationWrite,
+		Summary: "创建压测模板"},
+	{Action: AgentActionLoadTestTemplateUpdate, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceNone, Operation: AgentOperationWrite,
+		Summary: "更新压测模板"},
+	{Action: AgentActionLoadTestTemplateDelete, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceNone, Operation: AgentOperationDestructive,
+		Summary: "删除压测模板（不可恢复）"},
 
-	{Action: AgentActionLoadTestRunCreate, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	{Action: AgentActionLoadTestRunList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
-	{Action: AgentActionLoadTestRunGet, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
-	{Action: AgentActionLoadTestNodeCapacity, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
-	{Action: AgentActionLoadTestRunPreflight, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite},
-	{Action: AgentActionLoadTestRunStart, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite},
-	{Action: AgentActionLoadTestRunStop, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite},
-	{Action: AgentActionLoadTestRunRetryFailed, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite},
+	{Action: AgentActionLoadTestRunCreate, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
+		Summary: "创建压测运行"},
+	{Action: AgentActionLoadTestRunList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
+		Summary: "列出压测运行"},
+	{Action: AgentActionLoadTestRunGet, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead,
+		Summary: "查看压测运行详情"},
+	{Action: AgentActionLoadTestNodeCapacity, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead,
+		Summary: "查询节点压测容量"},
+	{Action: AgentActionLoadTestRunPreflight, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite,
+		Summary: "压测运行前置检查"},
+	{Action: AgentActionLoadTestRunStart, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite,
+		Summary: "启动压测运行"},
+	{Action: AgentActionLoadTestRunStop, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite,
+		Summary: "停止压测运行"},
+	{Action: AgentActionLoadTestRunRetryFailed, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite,
+		Summary: "重试压测中的失败 Bot"},
 
-	{Action: AgentActionLoadTestRunBots, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
-	{Action: AgentActionLoadTestRunFailures, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
-	{Action: AgentActionLoadTestRunEvents, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
-	{Action: AgentActionLoadTestRunMetrics, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
-	{Action: AgentActionLoadTestRunReport, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
+	{Action: AgentActionLoadTestRunBots, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead,
+		Summary: "列出压测运行中的 Bot"},
+	{Action: AgentActionLoadTestRunFailures, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead,
+		Summary: "查看压测运行失败明细"},
+	{Action: AgentActionLoadTestRunEvents, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead,
+		Summary: "查看压测运行事件流"},
+	{Action: AgentActionLoadTestRunMetrics, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead,
+		Summary: "查看压测运行指标"},
+	{Action: AgentActionLoadTestRunReport, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead,
+		Summary: "生成压测运行报告"},
 }
 
-// init 把的 Bot 域 action 追加进唯一真源目录，保持 catalog 的追加式演进。
+// init 把 Bot 域 action 追加进唯一真源目录，保持 catalog 的追加式演进。
 func init() {
 	for _, d := range botDomainActions {
 		agentActionCatalog[d.Action] = d
@@ -385,6 +486,14 @@ func init() {
 	registerAgentInstanceActions(AgentCapabilityObservabilityRead, AgentOperationRead,
 		AgentActionProbeDiagnose,
 	)
+
+	// 只能由 Agent 主体发起的 action。
+	//
+	// 判据是「产出物为一把只能由 Token 消费的凭据」：传输票据在 Consume 时
+	// 会按 claims.TokenID 重建主体并重跑授权，人类没有 TokenID，因此这张票
+	// 对人类天然不可用——允许人类申请只会产出一张谁也消费不了的废票。
+	// 人类要传大文件走 POST /instances/:id/files/upload（流式、无大小上限）。
+	markAgentSubjectOnly(AgentActionFileIssueTransferTicket)
 }
 
 // registerAgentInstanceActions 批量登记同能力同操作等级的实例类 action。
@@ -395,7 +504,63 @@ func registerAgentInstanceActions(capability, operation string, actions ...strin
 			V2Capability: capability,
 			ResourceType: AgentResourceInstance,
 			Operation:    operation,
+			Summary:      agentActionFallbackSummary(action, operation),
 		}
+	}
+}
+
+// markAgentSubjectOnly 把若干 action 标记为「只能由 Agent 主体发起」。
+//
+// 单独成函数而不用描述符字面量直接写：这些 action 大多由
+// registerAgentInstanceActions 批量登记，逐条改写成字面量会丢掉
+// 「同能力同等级」这个分组信息，也让后续新增同类 action 容易漏标。
+func markAgentSubjectOnly(actions ...string) {
+	for _, action := range actions {
+		d, ok := agentActionCatalog[action]
+		if !ok {
+			// 登记顺序错了（在注册之前调用）会让标记静默失效——直接 panic，
+			// 这种装配错误必须在启动时暴露，而不是留到运行期变成一条越权路径。
+			panic("markAgentSubjectOnly: action 未在目录中登记: " + action)
+		}
+		d.AgentSubjectOnly = true
+		agentActionCatalog[action] = d
+	}
+}
+
+// agentActionFallbackSummary 为未逐条撰写摘要的批量 action 生成可读摘要。
+// 优先取 agentActionSummaries 中的手写文案；缺失时按 action 名与操作等级兜底，
+// 保证 MCP tool 描述与 CLI 帮助不出现空摘要。
+func agentActionFallbackSummary(action, operation string) string {
+	if s, ok := agentActionSummaries[action]; ok {
+		return s
+	}
+	return summarizeActionName(action, operation)
+}
+
+// agentActionSummaries 为需要精确措辞的批量 action 提供手写摘要。
+var agentActionSummaries = map[string]string{
+	AgentActionFileDelete:              "删除实例内文件（不可恢复）",
+	AgentActionPluginDelete:            "删除实例插件（不可恢复）",
+	AgentActionFileRollback:            "回滚实例文件到指定版本",
+	AgentActionFileIssueTransferTicket: "签发文件传输票据",
+	AgentActionConfigRollback:          "回滚实例配置到指定版本",
+	AgentActionConfigCrossCheck:        "交叉校验实例配置一致性",
+	AgentActionPluginDeployFromAsset:   "从制品部署插件",
+}
+
+// summarizeActionName 从 action 名推导中文摘要兜底。
+func summarizeActionName(action, operation string) string {
+	name := strings.TrimPrefix(action, "agent.")
+	name = strings.ReplaceAll(name, "_", " ")
+	switch operation {
+	case AgentOperationRead:
+		return "读取 " + name
+	case AgentOperationWrite:
+		return "执行 " + name
+	case AgentOperationDestructive:
+		return "执行 " + name + "（破坏性，不可恢复）"
+	default:
+		return name
 	}
 }
 
@@ -416,8 +581,14 @@ func IsAgentKnownCapability(cap string) bool {
 }
 
 // DescribeAgentAction 返回 action 描述；未知 action 返回 false。
+//
+// 摘要在此统一兜底：批量登记路径（networkDomainActions 等）不逐条写字，
+// 但下游 MCP 工具描述与 Catalog 契约要求每项都有摘要，故在出口补全而不改登记点。
 func DescribeAgentAction(action string) (AgentActionDescriptor, bool) {
 	d, ok := agentActionCatalog[action]
+	if ok && d.Summary == "" {
+		d.Summary = agentActionFallbackSummary(d.Action, d.Operation)
+	}
 	return d, ok
 }
 
@@ -425,6 +596,9 @@ func DescribeAgentAction(action string) (AgentActionDescriptor, bool) {
 func AgentActionCatalog() []AgentActionDescriptor {
 	out := make([]AgentActionDescriptor, 0, len(agentActionCatalog))
 	for _, d := range agentActionCatalog {
+		if d.Summary == "" {
+			d.Summary = agentActionFallbackSummary(d.Action, d.Operation)
+		}
 		out = append(out, d)
 	}
 	return out
@@ -602,7 +776,8 @@ func Authorize(p *AgentPrincipal, action string, target AgentTrustedTarget) (Age
 
 func authorizeCapability(p *AgentPrincipal, d AgentActionDescriptor) error {
 	if p.PolicyVersion == AgentPolicyVersionV2 {
-		if d.Action == AgentActionWhoami {
+		// whoami 与知识读取不涉及业务资源，任何有效 Token 均可访问。
+		if isResourceFreeReadAction(d.Action) {
 			return nil
 		}
 		if d.V2Capability == "" || !principalHasCapability(p, d.V2Capability) {
@@ -620,4 +795,16 @@ func authorizeCapability(p *AgentPrincipal, d AgentActionDescriptor) error {
 		}
 	}
 	return nil
+}
+
+// isResourceFreeReadAction 判定无需 capability 的只读 action。
+// 仅限不触达任何业务资源、且内容公开给所有 Token 的入口；
+// 新增成员必须同时满足「ResourceType=none」与「Operation=read」。
+func isResourceFreeReadAction(action string) bool {
+	switch action {
+	case AgentActionWhoami:
+		return true
+	default:
+		return false
+	}
 }

@@ -130,7 +130,7 @@ V1 不启用节点→实例继承；V2 节点 scope 覆盖该节点当前与未�
 go test ./internal/controlplane/router/ -run 'AgentGate|AgentCapability|MCP' -count=1
 go test ./internal/controlplane/service/ -run 'AgentToken|AgentCapability|AgentScope|AgentCallLog' -count=1
 go test ./internal/controlplane/mcp/ -count=1
-go test ./apps/jmagent/... -count=1
+go test ./apps/jm/... -count=1
 
 # FR-492 审批闸：三入口同策略 + 出票零副作用 + 目标漂移 + 登记表覆盖
 go test ./internal/controlplane/router/ -run 'AgentOps_' -count=1

@@ -67,6 +67,24 @@ const SUB_ROUTE_PARENT: Record<string, string> = {
 }
 
 /** 
+ * 上游工作区层定稿之后**新增**的导航目的地（不属于旧六域 41 条快照）：
+ * 它们是本层自己的登记项，与子路由深链分开记账——子路由必须能追到旧入口页 inherit perm，
+ * 而新增目的地自带 perm 语义（`/my-tokens` 无 perm，所有登录用户可见）。
+ */
+const ADDED_NAV_PATHS = new Set<string>(['/my-tokens'])
+
+/**
+ * lucide 上游改名兼容表：同一图标组件在新版本换了 displayName（旧名保留为别名导出）。
+ * 快照存的是改名前的 displayName，对比前把新名归一回历史名，避免依赖升级造成假阳性。
+ * 新增条目时写明「新 displayName → 快照里的旧名」。
+ */
+const LUCIDE_RENAMED_DISPLAY_NAMES: Record<string, string> = {
+  // lucide ≥1.x 把 triangle-alert 改名为 triangle-exclamation-point，
+  // TriangleAlert 仍作为同一组件的别名导出，displayName 随之变为新名。
+  TriangleExclamationPoint: 'TriangleAlert',
+}
+
+/**
  * icon 归一：新层是 lucide 组件引用，快照里存的是 `displayName` 字符串。
  * 两个方向都要处理（字符串直回，组件取 displayName），对比前归一到同一字符串。
  */
@@ -74,7 +92,8 @@ function iconName(icon: CollectedEntry['icon']): string | undefined {
   if (icon === undefined || icon === null) return undefined
   if (typeof icon === 'string') return icon
   const c = icon as unknown as { displayName?: string; name?: string }
-  return c.displayName ?? c.name
+  const name = c.displayName ?? c.name
+  return name === undefined ? undefined : (LUCIDE_RENAMED_DISPLAY_NAMES[name] ?? name)
 }
 
 /** 
@@ -161,6 +180,8 @@ function assertPermissionEquivalence(nodes: Set<string>, admin: boolean, label: 
   const extras = newPaths.filter((to) => !NAV_PATH_SET.has(to))
 
   for (const to of extras) {
+    // 新增目的地不是深链：它自带 perm 语义，没有可继承的旧入口页
+    if (ADDED_NAV_PATHS.has(to)) continue
     expect(SUB_ROUTE_SET.has(to), `${label}：出现未登记的新增项 ${to}`).toBe(true)
     const parent = SUB_ROUTE_PARENT[to]
     expect(parent, `${label}：${to} 缺入口页登记`).toBeDefined()
@@ -230,7 +251,7 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
       {
         key: 'platform',
         groups: [
-          { key: 'platformIdentity', labelKey: 'nav.identityAccess', pages: ['/users', '/groups', '/permissions'] },
+          { key: 'platformIdentity', labelKey: 'nav.identityAccess', pages: ['/users', '/groups', '/permissions', '/my-tokens'] },
           {
             key: 'platformRuntimeContent',
             labelKey: 'nav.runtimeAndContent',
@@ -269,20 +290,22 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
       ['ops', 3, 10],
       ['observability', 3, 12],
       ['operation', 2, 6],
-      ['platform', 5, 18],
+      ['platform', 5, 19],
     ])
 
     const allPaths = NEW_ENTRIES.map((e) => e.to)
     expect(new Set(allPaths).size, '工作区层存在重复登记的路径').toBe(allPaths.length)
 
-    const navPaths = allPaths.filter((p) => NAV_PATH_SET.has(p))
+    const carriedNavPaths = allPaths.filter((p) => NAV_PATH_SET.has(p))
+    const addedNavPaths = allPaths.filter((p) => ADDED_NAV_PATHS.has(p))
     const subPaths = allPaths.filter((p) => SUB_ROUTE_SET.has(p))
-    expect(navPaths.length, '41 个导航目的地').toBe(41)
+    expect(carriedNavPaths.length, '41 个旧导航目的地').toBe(41)
+    expect(new Set(addedNavPaths), '1 条新增导航目的地').toEqual(ADDED_NAV_PATHS)
     expect(new Set(subPaths), '5 条子路由全部登记').toEqual(SUB_ROUTE_SET)
-    expect(navPaths.length + subPaths.length).toBe(allPaths.length)
+    expect(carriedNavPaths.length + addedNavPaths.length + subPaths.length).toBe(allPaths.length)
 
-    // 49 = 41 导航 + 5 子路由 + 3 认证页
-    expect(allPaths.length + AUTH_ROUTE_PATHS.length).toBe(49)
+    // 50 = 42 导航 + 5 子路由 + 3 认证页
+    expect(allPaths.length + AUTH_ROUTE_PATHS.length).toBe(50)
 
     // 组 key 全局唯一（折叠态 / 图标映射按 key 记账）
     const groupKeys = WORKSPACE_GROUP_LIST.map((g) => g.key)
@@ -291,6 +314,11 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
     // 每条子路由的入口页都在旧导航里登记过（perm 来源可追溯）
     for (const pattern of SUB_ROUTE_PATTERNS) {
       expect(NAV_PATH_SET.has(SUB_ROUTE_PARENT[pattern]), `${pattern} 的入口页不在旧导航中`).toBe(true)
+    }
+    // 新增目的地不属于旧快照，必须显式登记而不是混进子路由集合
+    for (const to of ADDED_NAV_PATHS) {
+      expect(addedNavPaths.includes(to), `${to} 应在导航目的地中`).toBe(true)
+      expect(SUB_ROUTE_SET.has(to), `${to} 不应被当作子路由`).toBe(false)
     }
   })
 
@@ -337,8 +365,8 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
     }
   })
 
-  it('路由零遗漏：新层包含旧导航全部 41 条，新增恰为 5 条子路由', () => {
-    // 管理员全开：旧层 41 条导航目的地，新层 41 + 5 条
+  it('路由零遗漏：新层包含旧导航全部 41 条，新增为 5 条子路由 + 1 条新目的地', () => {
+    // 管理员全开：旧层 41 条导航目的地，新层 41 + 5 子路由 + 1 新目的地
     const oldAdminPaths = oldFlatPaths(adminNodes, true)
     expect(oldAdminPaths, '旧层管理员口径应为 41 条').toEqual(OLD_ALL_PATHS)
     expect(flatWorkspaceItems(adminNodes, true).map((i) => i.to)).toEqual(NEW_ALL_PATHS)
@@ -346,24 +374,34 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
     const newSet = new Set(NEW_ALL_PATHS)
     for (const to of OLD_ALL_PATHS) expect(newSet.has(to), `新层丢失了 ${to}`).toBe(true)
 
-    expect(new Set(NEW_ALL_PATHS.filter((p) => !NAV_PATH_SET.has(p)))).toEqual(SUB_ROUTE_SET)
-    expect([...new Set(NEW_ALL_PATHS.filter((p) => NAV_PATH_SET.has(p)))].sort()).toEqual([...OLD_ALL_PATHS].sort())
+    // 新增项 = 子路由深链 ∪ 新登记目的地（与旧 41 条快照不相交）
+    const addedPaths = new Set(NEW_ALL_PATHS.filter((p) => !NAV_PATH_SET.has(p)))
+    const expectedAdded = new Set<string>([...SUB_ROUTE_SET, ...ADDED_NAV_PATHS])
+    // 旧导航目的地必须一条不落地被新层承接
+    const carriedPaths = new Set(NEW_ALL_PATHS.filter((p) => NAV_PATH_SET.has(p)))
+    expect([...carriedPaths].sort()).toEqual([...OLD_ALL_PATHS].sort())
+    // 新增目的地确实落在新层里
+    for (const to of ADDED_NAV_PATHS) expect(newSet.has(to), `新层缺新增目的地 ${to}`).toBe(true)
+    expect(addedPaths).toEqual(expectedAdded)
     expect(newSet.size).toBe(NEW_ALL_PATHS.length)
 
-    // 角色包装下平台管理员同样是「41 + 5」；null 走角色种子（未知角色保守清零），
+    // 角色包装下平台管理员同样是「41 + 6」；null 走角色种子（未知角色保守清零），
     // 与旧 `flatNavItems(null, true)` 的老行为一致——null 不等于「管理员全开」。
-    expect(flatWorkspaceItems(null, true).map((i) => i.to)).toEqual(oldFlatPaths(null, true))
-    expect(flatWorkspaceItems(null, true).map((i) => i.to)).toEqual(['/'])
+    // 旧层 null 只剩首页；新层另有与角色无关的自助入口
+    expect(oldFlatPaths(null, true)).toEqual(['/'])
+    expect(flatWorkspaceItems(null, true).map((i) => i.to)).toEqual(['/', ...ADDED_NAV_PATHS])
     expect(flatWorkspaceItems(ROLE_PLATFORM_ADMIN).map((i) => i.to)).toEqual(NEW_ALL_PATHS)
   })
 
   it('权限裁剪等价：空权限只留无 perm 入口', () => {
+    // 旧层唯一无 perm 入口是首页；新层另有自助令牌页（个人凭证与角色无关）
     expect(oldFlatPaths(new Set(), false)).toEqual(['/'])
-    expect(flatWorkspaceItems(new Set(), false).map((i) => i.to)).toEqual(['/'])
-    expect(flatWorkspaceItems(null, false).map((i) => i.to)).toEqual(['/'])
+    const permFree = ['/', ...ADDED_NAV_PATHS]
+    expect(flatWorkspaceItems(new Set(), false).map((i) => i.to)).toEqual(permFree)
+    expect(flatWorkspaceItems(null, false).map((i) => i.to)).toEqual(permFree)
 
     const empty = workspacesForPermissions(new Set<string>(), false)
-    expect(empty.map((w) => w.key)).toEqual(['ops'])
+    expect(empty.map((w) => w.key)).toEqual(['ops', 'platform'])
     expect(empty[0].groups.map((g) => g.key)).toEqual(['opsResources'])
     // 空权限下不出现任何实例 / 发布 / 会话深链
     for (const pattern of SUB_ROUTE_PATTERNS) {
@@ -393,6 +431,8 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
       '/config-files',
       '/config-adopt',
       '/config-deliveries',
+      // 无 perm 的自助入口对所有登录用户可见，不受上面这组权限影响
+      '/my-tokens',
     ])
   })
 
@@ -581,17 +621,27 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
       const newSet = new Set(newPaths)
 
       for (const to of oldPaths) expect(newSet.has(to), `role=${role}：新层丢了 ${to}`).toBe(true)
-      expect(new Set(newPaths.filter((p) => NAV_PATH_SET.has(p))), `role=${role}：导航目的地集合不一致`).toEqual(oldSet)
+      // 对账口径只含旧六域登记过的目的地：新增目的地无旧层对应物，单独断言不参与等价比较
+      const carriedNew = newPaths.filter((p) => NAV_PATH_SET.has(p))
+      expect(new Set(carriedNew), `role=${role}：导航目的地集合不一致`).toEqual(oldSet)
       for (const to of newPaths.filter((p) => !NAV_PATH_SET.has(p))) {
+        if (ADDED_NAV_PATHS.has(to)) {
+          // 新增目的地自带 perm 语义：无 perm 才对所有人可见，旧层无对应入口可继承
+          expect(ADDED_NAV_PATHS.has(to), `role=${role}：新目的地 ${to}`).toBe(true)
+          continue
+        }
         expect(SUB_ROUTE_SET.has(to), `role=${role}：未登记的新增项 ${to}`).toBe(true)
         expect(oldSet.has(SUB_ROUTE_PARENT[to]), `role=${role}：入口页不可见却漏出 ${to}`).toBe(true)
       }
     }
 
-    // 未知角色 / null 保守清零；平台管理员全开
+    // 未知角色 / null 保守清零；平台管理员全开。
+    // 例外：无 perm 的新增目的地（`/my-tokens`）本就对所有登录用户开放，
+    // 清零只作用于「按权限裁剪」的入口，不应把自助入口一并抹掉。
+    const permFreeAdded = [...ADDED_NAV_PATHS]
     for (const role of [-1, 99, null] as const) {
-      expect(flatWorkspaceItems(role).map((i) => i.to), `role=${role} 应保守清零`).toEqual(['/'])
-      expect(workspacesForRole(role).map((w) => w.key)).toEqual(['ops'])
+      expect(flatWorkspaceItems(role).map((i) => i.to), `role=${role} 应保守清零`).toEqual(['/', ...permFreeAdded])
+      expect(workspacesForRole(role).map((w) => w.key)).toEqual(['ops', 'platform'])
     }
     expect(flatWorkspaceItems(ROLE_PLATFORM_ADMIN).map((i) => i.to)).toEqual(NEW_ALL_PATHS)
     expect(workspacesForRole(ROLE_PLATFORM_ADMIN).map((w) => w.key)).toEqual([
