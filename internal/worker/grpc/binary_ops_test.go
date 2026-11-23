@@ -313,7 +313,10 @@ func TestFetchBinary_ExecutableFalseKeepsMode(t *testing.T) {
 
 	st, statErr := os.Stat(filepath.Join(workDir, "data.bin"))
 	require.NoError(t, statErr)
-	require.Zero(t, st.Mode().Perm()&0o111, "executable=false 不应置可执行位，实际 %v", st.Mode().Perm())
+	// 同本文件另外两处：可执行位只在 POSIX 上有意义（Windows 恒报 0666，`&0o111` 会是 0）。
+	if runtime.GOOS != "windows" {
+		require.Zero(t, st.Mode().Perm()&0o111, "executable=false 不应置可执行位，实际 %v", st.Mode().Perm())
+	}
 }
 
 // TestFetchBinary_ProgressStrideOnLargePayload 大文件应按步长上报进度（§3.3 的字节进度）。

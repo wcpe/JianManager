@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -366,7 +367,12 @@ func TestQQBind_完成态解密落盘与ENV引用(t *testing.T) {
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "密钥文件必须 0600")
+	// 权限位只在 POSIX 上有意义：Windows 的 os.Stat().Mode().Perm() 恒报 0666（只读文件 0444），
+	// 与 chmod 无关（GOROOT os/types_windows.go 的 fileStat.mode 只映射 FILE_ATTRIBUTE_READONLY）。
+	// 同口径先例：internal/worker/setup/setup_test.go。
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "密钥文件必须 0600")
+	}
 
 	// 原子写：不留临时文件。
 	leftovers, err := filepath.Glob(filepath.Join(root.EtcDir(), QQSecretSubdir, ".qq-secret-*.tmp"))
@@ -544,7 +550,10 @@ func TestQQBind_落盘覆盖旧文件并收紧权限(t *testing.T) {
 	assert.Equal(t, "new-secret", string(raw))
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	// 同 TestQQBind_完成态解密落盘与ENV引用：Windows 无 POSIX 权限位，不校验。
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 
 	leftovers, err := filepath.Glob(filepath.Join(root.EtcDir(), QQSecretSubdir, ".qq-secret-*.tmp"))
 	require.NoError(t, err)

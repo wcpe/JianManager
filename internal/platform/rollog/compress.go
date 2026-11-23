@@ -55,17 +55,6 @@ func (w *Writer) maintenanceLoop() {
 	}
 }
 
-// compressOne 把单个轮转档压缩为 .gz。
-//
-// 用临时文件 + rename 发布：压缩到一半崩溃时不会留下一个“看起来完整、其实截断”的 .gz，
-// 而是只留下一个 .tmp。
-//
-// # .tmp 孤儿的两种处置
-//
-// 下次启动时 `.log` 还在，就重做一遍（以 O_TRUNC 覆盖旧 .tmp，rename 发布后自然消化掉它）；
-// 但 `.log` 若已不在（被保留策略删掉、或人工清理），这个 .tmp 就永远没人管了——
-// 它既不在 listRotated 的 glob 里（那只看 .log 与 .log.gz），也不受任何保留规则约束。
-// 所以这里**主动清掉**：见 removeOrphanTmp。
 func (w *Writer) compressOne(path string) error {
 	if filepath.Ext(path) == compressSuffix {
 		// 已经是压缩档（补压扫描可能重复入队），跳过。
@@ -84,10 +73,11 @@ func (w *Writer) compressOne(path string) error {
 		}
 		return fmt.Errorf("rollog: 打开待压缩日志 %s 失败: %w", filepath.Base(path), err)
 	}
-	defer src.Close()
 
 	dst, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
+		// 源文件必须在这里显式关闭：Windows 上不关闭会连临时目录都清理不掉。
+		_ = src.Close()
 		return fmt.Errorf("rollog: 创建压缩文件 %s 失败: %w", filepath.Base(tmpPath), err)
 	}
 
@@ -95,15 +85,18 @@ func (w *Writer) compressOne(path string) error {
 	if _, err := io.Copy(zw, src); err != nil {
 		_ = zw.Close()
 		_ = dst.Close()
+		_ = src.Close()
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rollog: 压缩 %s 失败: %w", filepath.Base(path), err)
 	}
 	if err := zw.Close(); err != nil {
 		_ = dst.Close()
+		_ = src.Close()
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rollog: 关闭压缩流 %s 失败: %w", filepath.Base(path), err)
 	}
 	if err := dst.Close(); err != nil {
+		_ = src.Close()
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rollog: 关闭压缩文件 %s 失败: %w", filepath.Base(path), err)
 	}
@@ -111,8 +104,22 @@ func (w *Writer) compressOne(path string) error {
 	// 先发布 .gz，再删原文件。顺序反了（先删后发布）会在两者之间丢数据。
 	gzPath := path + compressSuffix
 	if err := os.Rename(tmpPath, gzPath); err != nil {
+		_ = src.Close()
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rollog: 发布压缩文件 %s 失败: %w", filepath.Base(gzPath), err)
+	}
+
+	// # 必须先把源文件关掉再删除（不能用 defer）
+	//
+	// Go 在 Windows 上用 CreateFile 打开文件时只申请 FILE_SHARE_READ|FILE_SHARE_WRITE，
+	// **不含 FILE_SHARE_DELETE**，所以「仍持有句柄时删除」在 Windows 上必然失败并返回
+	// ERROR_SHARING_VIOLATION。原实现把 close 推迟到函数返回（defer），而 Remove 发生在
+	// 返回之前，于是 Windows 上每份轮转档的 .log 都删不掉：.gz 已生成、原文件却永远残留，
+	// 磁盘占用翻倍，且 listRotated 会把同一份数据当成两个文件参与保留判定。
+	// Linux 上「删除已打开的文件」合法（目录项立刻消失），因此该缺陷只在 Windows 暴露。
+	if closeErr := src.Close(); closeErr != nil {
+		// 关闭失败不阻断删除尝试：句柄已失效，删除通常仍可进行。
+		w.cfg.OnError(fmt.Errorf("rollog: 关闭待压缩日志 %s 失败（继续删除）: %w", filepath.Base(path), closeErr))
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		// .gz 已就位，原文件删不掉只浪费空间，不影响正确性。

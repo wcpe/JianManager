@@ -75,6 +75,7 @@ func TestSocketServedContextCanceledIsNotAFalseNegative(t *testing.T) {
 	uuid := "sock-cancel"
 	listener, err := Listen(SocketAddr(pidDir, uuid))
 	require.NoError(t, err)
+	serveProbeConnections(listener)
 	defer func() { _ = listener.Close() }()
 
 	// 未取消时：连续两次都可拨通 ⇒ 判真（既有语义不变）。

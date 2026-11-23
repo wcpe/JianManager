@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"testing"
 	"time"
@@ -53,6 +54,12 @@ func newStatsSvcWithSQLLog(t *testing.T, name string, out *[]string) *StatsServi
 	}
 	db, err := gorm.Open(sqlite.Open(dsn), cb)
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关则会残留整库
+	// （含已迁移的表），重复运行或整包重跑时同名库复用，AutoMigrate 撞
+	// 「table ... already exists」——确定性失败，不是偶发。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{}, &model.Instance{}, &model.MetricSeries{},
 		&model.MetricSampleRaw{}, &model.MetricRollup5m{}, &model.MetricRollup1h{},
@@ -304,12 +311,12 @@ func TestStats_OverviewCounts(t *testing.T) {
 		CPUCores: 100, MemoryMB: 1024, MemoryUsedMB: 1024, CPUUsage: 99,
 	}).Error)
 
-	for _, s := range []model.InstanceStatus{
+	for i, s := range []model.InstanceStatus{
 		model.InstanceStatusRunning, model.InstanceStatusRunning,
 		model.InstanceStatusStopped, model.InstanceStatusCrashed,
 	} {
 		require.NoError(t, svc.db.Create(&model.Instance{
-			UUID: "i-" + string(s) + "-" + time.Now().Format("150405.000000000"), NodeID: 1, Name: "i",
+			UUID: fmt.Sprintf("i-%d-%s", i, s), NodeID: 1, Name: "i",
 			Type: model.InstanceTypeMinecraftJava, ProcessType: "direct",
 			StartCommand: "java", Status: s,
 		}).Error)

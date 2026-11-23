@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -178,8 +179,14 @@ func (c *Collector) scanOnce(ctx context.Context) error {
 		key := f.Identity.Key()
 		seen[key] = struct{}{}
 		if _, exists := c.harvesters[key]; exists {
-			// 已在该文件：只更新路径（轮转后路径会变，fingerprint 不变）。
+			// 已在该文件：更新路径（轮转后路径会变，fingerprint 不变）。
 			c.harvesters[key].SetPath(f.Path)
+			// Windows 没有可用 inode，Registry 只能用路径清理同路径的陈旧指纹。
+			// 先把已轮转文件的路径写回位点表，避免新 latest.log 到来时误删旧文件位点。
+			if st, ok := c.reg.Get(f.Identity); ok && filepath.Clean(st.Path) != filepath.Clean(f.Path) {
+				st.Path = f.Path
+				c.reg.Put(st)
+			}
 			continue
 		}
 		// 新文件：决定起始位置。

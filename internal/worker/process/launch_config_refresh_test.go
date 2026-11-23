@@ -34,6 +34,7 @@ func (s *launchConfigStrategy) GetPID() int { return 0 }
 // STOPPING→STOPPED 收尾窗口到达：下一次 Start 仍须关闭旧策略并按新规格重建。
 func TestManager_StartDropsLateStaleStrategy(t *testing.T) {
 	m := NewManager(t.TempDir())
+	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	const uuid = "late-launch-refresh"
 	workDir := t.TempDir()
 	require.NoError(t, m.Create(uuid, "并发窗口实例", "echo old", "stop", workDir,

@@ -68,7 +68,7 @@ func resolveSafePath(workDir, relPath string) (string, error) {
 	if strings.TrimSpace(relPath) == "" {
 		return "", fmt.Errorf("%w: 路径为空", ErrPathEscape)
 	}
-	if filepath.IsAbs(relPath) {
+	if isAbsolutePathAnyOS(relPath) {
 		return "", fmt.Errorf("%w: %s", ErrAbsolutePath, relPath)
 	}
 	clean := filepath.Clean(relPath)
@@ -92,6 +92,21 @@ func resolveSafePath(workDir, relPath string) (string, error) {
 		return "", err
 	}
 	return abs, nil
+}
+
+// isAbsolutePathAnyOS 识别 POSIX 与 Windows 两种路径方言的绝对/根路径形态。
+//
+// filepath.IsAbs 的判断语义绑定编译目标 GOOS：Windows 版会漏掉 `/etc/passwd`，
+// Linux 版则会漏掉 `\\etc\\passwd` 与 `C:\\Windows\\...`。配置写入是安全边界，
+// 必须拒绝任一平台上的绝对路径，且只能比原有宿主语义更严格，不能放松既有拒绝结果。
+func isAbsolutePathAnyOS(path string) bool {
+	if filepath.IsAbs(path) || strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\") {
+		return true
+	}
+	// Windows 的盘符路径（包括盘符相对形态 C:foo）不属于工作目录相对路径。
+	return len(path) >= 2 &&
+		((path[0] >= 'a' && path[0] <= 'z') || (path[0] >= 'A' && path[0] <= 'Z')) &&
+		path[1] == ':'
 }
 
 // verifyNoSymlinkEscape 检查 target 的最深已存在祖先在解析符号链接后是否仍在 workDir 内。

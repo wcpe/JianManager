@@ -65,6 +65,7 @@ func TestRV014PeriodicAdoptionIsolation(t *testing.T) {
 // 完整登记被收养后，下一次启动应重建策略并携带完整启动规格。
 func TestRV015AdoptedCompleteSpecRebuilt(t *testing.T) {
 	f := newAdoptFixture(t)
+	f.m.SetMemGuard(MemGuardConfig{Disabled: true})
 	workDir, err := filepath.EvalSymlinks(f.dir)
 	require.NoError(t, err)
 	require.NoError(t, f.m.Create(adoptUUID, "实例", "sleep 60", "save-and-stop", workDir, map[string]string{"KEY": "VALUE"}, true, ProcessTypeDaemon, "jdk-home", "jdk-bin", 25566, 120))

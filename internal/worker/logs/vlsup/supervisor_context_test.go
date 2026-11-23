@@ -207,7 +207,12 @@ func TestSupervisorStartCancellationDuringObservationReapsChild(t *testing.T) {
 			v := requireStartContextChildReaped(t, f.proc)
 			require.True(t, v.Stopped)
 			if mode == "ignore-interrupt" {
-				require.Equal(t, -1, v.ExitCode, "cleanup must force-kill a child that ignores SIGINT")
+				if runtime.GOOS == "windows" {
+					// Windows 强杀进程的退出码通常是 1，不使用 POSIX 信号负数。
+					require.NotEqual(t, 0, v.ExitCode, "cleanup must force-kill a child that ignores SIGINT")
+				} else {
+					require.Equal(t, -1, v.ExitCode, "cleanup must force-kill a child that ignores SIGINT")
+				}
 			}
 			status, statusErr := s.Status(NamespaceHot)
 			require.NoError(t, statusErr)
@@ -244,7 +249,12 @@ func TestRealFactoryDirectContextCancellationStillReapsChild(t *testing.T) {
 	cancel()
 	v := requireStartContextChildReaped(t, f.proc)
 	require.False(t, v.Stopped, "direct RealFactory callers retain CommandContext cancellation")
-	require.Equal(t, -1, v.ExitCode)
+	if runtime.GOOS == "windows" {
+		// Windows 取消 CommandContext 后的强杀退出码通常是 1。
+		require.NotEqual(t, 0, v.ExitCode)
+	} else {
+		require.Equal(t, -1, v.ExitCode)
+	}
 }
 
 type cancelAtLivenessWindowEnd struct {

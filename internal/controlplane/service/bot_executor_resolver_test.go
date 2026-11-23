@@ -51,6 +51,12 @@ func TestBotExecutorResolver_ResolveExecutorOrFallback(t *testing.T) {
 func TestApplyFilter_NodeUsesExecutorNodeWithLegacyFallback(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关则会残留整库
+	// （含已迁移的表），`-count>1` 或整包重跑时同名库复用，AutoMigrate 撞
+	// 「table ... already exists」——这是确定性失败，不是偶发。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.BotLoadBatch{}, &model.Bot{}))
 
 	targetNode := &model.Node{Name: "target", Host: "127.0.0.1", Secret: "target-secret"}
@@ -119,6 +125,10 @@ func (f *fakeExecutorRouteWorker) StreamBotEvents(context.Context, *workerpb.Str
 func TestBotService_RoutesExistingOperationsToExecutorNode(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 同上：不关闭会让同名共享内存库跨轮次残留，AutoMigrate 撞已存在的表。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.BotLoadBatch{}, &model.Bot{}))
 
 	targetNode := &model.Node{Name: "target", UUID: "target-node", Host: "127.0.0.1", Secret: "target-secret"}

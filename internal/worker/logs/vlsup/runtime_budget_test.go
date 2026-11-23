@@ -160,8 +160,10 @@ func TestNamespaceBudgetDefaultsAreIndependentAndSampleUnknown(t *testing.T) {
 		t.Fatal("目录采样错误必须未知")
 	}
 	root := t.TempDir()
+	// Windows 非特权进程默认无法创建符号链接（需开发者模式/管理员）；
+	// 此时该断言无从验证，跳过而不是当成失败。
 	if err := os.Symlink(t.TempDir(), filepath.Join(root, "constructed-link")); err != nil {
-		t.Fatal(err)
+		t.Skipf("本环境不支持符号链接: %v", err)
 	}
 	if _, ok := boundedDirectoryBytes(root); ok {
 		t.Fatal("符号链接目标未采样时不能冒充零占用")

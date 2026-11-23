@@ -353,7 +353,10 @@ func (w *Writer) Close() error {
 
 // openActiveLocked 打开（或创建）活跃文件并初始化 size。调用方须持有锁（Open 早期除外）。
 func (w *Writer) openActiveLocked() error {
-	f, err := os.OpenFile(w.cfg.Path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	// 走平台封装而不是直接 os.OpenFile：Windows 上必须额外申请 FILE_SHARE_DELETE，
+	// 否则本进程持句柄期间外部删不掉也改不了名，reopenIfVanishedLocked 那条自愈
+	// 路径永远不会被触发（详见 open_windows.go）。
+	f, err := openActiveFile(w.cfg.Path)
 	if err != nil {
 		return fmt.Errorf("rollog: 打开日志文件失败: %w", err)
 	}

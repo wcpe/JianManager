@@ -36,8 +36,11 @@ CI 由 `pr-hygiene` 的「绝对路径」检查强制（`/home|/Users/<非占位
 ## 2. 合并方式：只允许 squash merge
 
 - 所有 PR **一律使用 squash merge**（仓库设置已锁定：`allow_squash_merge=true`、`allow_merge_commit=false`、`allow_rebase_merge=false`）。
+- **经 PR 合入的适用范围**：会改变行为、接口、数据结构、配置语义或部署形态的变更必须经 PR。
+  **例外可直接推送 `master`**（判定见 [git-commit.md](git-commit.md) §7）：普通文档、发版提交、无行为变更的杂项。
 - 合并前必须：CI 全绿 + 无冲突（`mergeStateStatus=CLEAN`）+ 用户授权。
 - 合并后删除远端分支（`gh pr merge <n> --squash --delete-branch`）。
+- direct push 到 `master` 的例外提交同样遵守：Conventional Commits 标题、中文描述、无 AI 签名、隐私自检。
 - squash 提交标题遵循 Conventional Commits（type/scope 英文小写，描述中文，无 AI 签名）。
 
 ## 3. 合并前的隐私自检（必做）

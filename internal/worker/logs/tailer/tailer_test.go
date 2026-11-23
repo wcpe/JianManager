@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -257,6 +258,7 @@ func TestCollectorEndToEnd(t *testing.T) {
 		ReadFromHead: true,
 	}
 	c := NewCollector(cfg, reg, sink)
+	t.Cleanup(c.shutdown)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -296,6 +298,7 @@ func TestCollectorReportsGapWhenFileDisappearsUnread(t *testing.T) {
 	}
 	sink := &collectSink{}
 	c := NewCollector(CollectorConfig{Paths: []string{filepath.Join(dir, "*.log")}, ReadFromHead: true}, nil, sink)
+	t.Cleanup(c.shutdown)
 
 	var gapPath string
 	var gapBytes int64
@@ -305,19 +308,46 @@ func TestCollectorReportsGapWhenFileDisappearsUnread(t *testing.T) {
 	if err := c.scanOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// 模拟：文件在被读之前就消失了（例如被压缩成 gz）
-	if err := os.Remove(logPath); err != nil {
-		t.Fatal(err)
-	}
-	// 但先往 harvester 里“看到”有未读内容：追加后立即删，模拟轮转竞态
-	// 这里直接用当前已知状态：size 1 已读 0 ⇒ 有未读
+	// 模拟：文件在被读之前就消失了（例如被压缩成 gz）。
 	h := c.harvesters
 	var target *Harvester
-	for _, v := range h {
-		target = v
+	var targetKey string
+	for key, v := range h {
+		targetKey, target = key, v
+		break
 	}
 	if target == nil {
 		t.Fatal("应已有 harvester")
+	}
+	// Windows 不允许删除仍被 harvester 打开的文件。关闭原句柄后，
+	// 用一个隐藏副本保留“已有未读字节”的观测面，再让原路径消失。
+	if runtime.GOOS == "windows" {
+		identity := target.Identity()
+		if err := target.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(logPath); err != nil {
+			t.Fatal(err)
+		}
+		shadowPath := filepath.Join(dir, "shadow.tmp")
+		shadowData := []byte("line1\n")
+		if err := os.WriteFile(shadowPath, shadowData, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		shadow, err := NewHarvester(DiscoveredFile{
+			Path: shadowPath, Size: int64(len(shadowData)), Identity: identity,
+		}, target.Offset(), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shadow.SetPath(logPath)
+		c.harvesters[targetKey] = shadow
+		t.Cleanup(func() {
+			_ = shadow.Close()
+			_ = os.Remove(shadowPath)
+		})
+	} else if err := os.Remove(logPath); err != nil {
+		t.Fatal(err)
 	}
 
 	// 重新扫一次：文件已不存在 ⇒ 应该上报 gap
@@ -341,23 +371,42 @@ func TestCollectorRotateFollowsFingerprint(t *testing.T) {
 	}
 	sink := &collectSink{}
 	c := NewCollector(CollectorConfig{Paths: []string{filepath.Join(dir, "*.log")}, ReadFromHead: true}, nil, sink)
+	t.Cleanup(c.shutdown)
 	ctx := context.Background()
 
 	if err := c.scanOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// 只读一行，模拟“读到一半就轮转”
-	for _, h := range c.harvesters {
-		h.ReadLines(func(l []byte) error { return nil })
+	// 读取当前文件，保留其 fingerprint 与 offset 供轮转后的旧 harvester 续用。
+	var oldKey string
+	var oldIdentity FileIdentity
+	var oldOffset int64
+	for key, h := range c.harvesters {
+		_, _ = h.ReadLines(func(l []byte) error { return nil })
+		oldKey, oldIdentity, oldOffset = key, h.Identity(), h.Offset()
+		if runtime.GOOS == "windows" {
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 
-	// 轮转：改名（inode/内容不变）+ 新建空的 latest.log
+	// 轮转：改名（fingerprint/内容不变）+ 新建空的 latest.log。
 	rotated := filepath.Join(dir, "2026-11-06-14.log")
 	if err := os.Rename(live, rotated); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(live, []byte("new\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		reopened, err := NewHarvester(DiscoveredFile{
+			Path: rotated, Size: oldOffset, Identity: oldIdentity,
+		}, oldOffset, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.harvesters[oldKey] = reopened
 	}
 
 	if err := c.scanOnce(ctx); err != nil {

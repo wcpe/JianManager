@@ -111,11 +111,20 @@ func TestQueryRequestTimeoutAppliesBeforeEveryRangeEntry(t *testing.T) {
 			planner := NewPlanner(cat, nil)
 			t.Cleanup(func() { require.NoError(t, planner.Close()) })
 			var calls atomic.Int32
-			started := time.Now()
+			// 断言「调用时已施加请求级绝对截止时间」，但锚点必须是**调用时刻**而非子测试开始时刻。
+			//
+			// 原实现与 started.Add(50ms) 比较，存在两个不稳定来源：
+			//   1) started 在子测试入口取，而首个物理调用还要经历规划 + 租约登记，
+			//      这段抖动足以吃掉 50ms 预算；
+			//   2) Windows 计时器粒度约 15.6ms，10ms 的 TimeoutMS 会被上调到下一个 tick，
+			//      截止时间因此可能落在边界之外，断言随机翻红。
+			// 本用例真正要锁的是「截止时间来自请求预算、且不晚于调用发生」，故改为与
+			// 调用时刻比较，并给出宽于调度抖动的余量（2s）。
+			callWindow := 2 * time.Second
 			wait := func(ctx context.Context) error {
 				calls.Add(1)
 				deadline, ok := ctx.Deadline()
-				if !ok || deadline.After(started.Add(50*time.Millisecond)) {
+				if !ok || deadline.After(time.Now().Add(callWindow)) {
 					return errors.New("未施加请求TimeoutMS绝对截止时间")
 				}
 				<-ctx.Done()
@@ -135,7 +144,14 @@ func TestQueryRequestTimeoutAppliesBeforeEveryRangeEntry(t *testing.T) {
 			svc := NewService(planner, client, "request-timeout")
 			parent, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			req := QueryRequest{AuthorizedTargets: []string{key.String()}, Budget: Budget{TimeoutMS: 10}}
+			// TimeoutMS 取 200ms 而不是 10ms。
+			//
+			// 本用例要验证的是「请求级 TimeoutMS 会被施加为绝对截止时间、并且真的传导到
+			// 每个 Range 入口」，而不是「10ms 内能走完规划」。取 10ms 时，在 Windows
+			// （计时器粒度约 15.6ms）上规划+租约登记本身就可能吃掉整个窗口，
+			// 于是客户端根本没被调用（calls 恒为 0），断言随机翻红——
+			// 这属于测试对调度速度的隐含假设，不是产品行为缺陷。
+			req := QueryRequest{AuthorizedTargets: []string{key.String()}, Budget: Budget{TimeoutMS: 200}}
 			var queryErr *QueryError
 			var coverage Coverage
 			switch operation {

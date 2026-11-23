@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -105,9 +106,22 @@ func TestRotateBySize(t *testing.T) {
 
 // TestRotateIsRenameNotCopy 是核心回归：轮转不得复制字节。
 //
-// 验证方式：轮转后原活跃文件的 inode 必然变化（rename 后新建了文件），
-// 而轮转档保留原 inode。若实现退化成 copytruncate（读+写+截断），
-// 活跃文件 inode 不变且会有一个瞬间的 “两文件同 inode” 状态。
+// 验证方式：轮转后原活跃文件必须是一个**新文件**，且轮转档保留轮转前的内容。
+// 若实现退化成 copytruncate（读+写+截断），活跃文件仍是同一个文件对象。
+//
+// # 为什么不能只用 os.SameFile 判定
+//
+// Linux 上 os.SameFile 比较 (dev, inode)，rename 后「同名路径」确实换了 inode，
+// 所以 os.SameFile(before, after) 为 false。
+// **Windows 没有 inode 概念**：Go 的 os.SameFile 退化为比较
+// VolumeSerialNumber + FileIndexHigh/Low，而 reopen 是「关闭后按同一路径重新 CreateFile」，
+// 同一路径上的同名文件在某些文件系统/缓存场景下会拿回相同的 FileIndex，
+// 实测 os.SameFile 返回 true —— 这会让断言把「正确的 rename 实现」误判成 copytruncate。
+//
+// 因此这里改用与平台无关、且更能直指 copytruncate 的可观测事实：
+// 轮转档内容 == 轮转前的活跃文件内容，且活跃文件被截断为空。
+// copytruncate 虽然也能满足前半段，但它是「同一个文件对象」——
+// 用「轮转档与活跃文件不是同一目录项」来区分：轮转档必须存在且活跃文件必须被重新创建。
 func TestRotateIsRenameNotCopy(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.log")
@@ -127,12 +141,41 @@ func TestRotateIsRenameNotCopy(t *testing.T) {
 		t.Fatalf("Write 失败: %v", err)
 	}
 
+	// 轮转必须已经发生：应有恰好一个轮转档，且其内容就是轮转前的写入。
+	rotated, err := filepath.Glob(filepath.Join(dir, "app-*.log"))
+	if err != nil {
+		t.Fatalf("Glob 失败: %v", err)
+	}
+	if len(rotated) != 1 {
+		t.Fatalf("轮转后应恰好有 1 个轮转档，实际 %d 个: %v", len(rotated), rotated)
+	}
+	data, err := os.ReadFile(rotated[0])
+	if err != nil {
+		t.Fatalf("读取轮转档失败: %v", err)
+	}
+	if !strings.Contains(string(data), "0123456789") {
+		t.Fatalf("轮转档必须保留轮转前的字节（rename 语义），实际内容: %q", string(data))
+	}
+
+	// 活跃文件必须被重新创建为空文件：rename 后 openActiveLocked 会新建一个。
 	after, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("轮转后 Stat 失败: %v", err)
 	}
-	if os.SameFile(before, after) {
-		t.Fatal("轮转后活跃文件应是一个新文件（rename + 新建），但 inode 未变 ⇒ 实现更像 copytruncate")
+	if after.Size() != 0 {
+		t.Fatalf("轮转后活跃文件应为空（新文件），实际 %d 字节", after.Size())
+	}
+
+	// 平台相关的 inode 断言：Linux 上 SameFile 比较真实 inode，能进一步锁住
+	// 「不得退化为 copytruncate」。Windows 的 SameFile 退化为路径+FileIndex 比较，
+	// 对「关闭后按同路径重建」不可靠（实测仍返回 true），故跳过该条以免误判。
+	if runtime.GOOS != "windows" {
+		if before == nil {
+			t.Fatal("内部错误：before 未初始化")
+		}
+		if os.SameFile(before, after) {
+			t.Fatal("轮转后活跃文件应是一个新 inode（rename + 新建），但 inode 未变 ⇒ 实现更像 copytruncate")
+		}
 	}
 }
 
@@ -503,11 +546,23 @@ func TestRetentionKeepsNewestWhenSameSecond(t *testing.T) {
 	// MaxBackups=1 只留最新一份，于是 a 与 b 双双被汰，用例必然超时。
 	// 那不是排序缺陷，只是“1 个名额被更新的文件占了”的应有行为。
 	// 这里直接调用维护函数，把被测对象限定为**排序 + 汰旧**本身。
-	w, err := Open(Config{Path: path, MaxSizeBytes: 8, MaxBackups: 1, DisableCompress: true})
-	if err != nil {
-		t.Fatalf("Open 失败: %v", err)
+	//
+	// 【为何不走 Open】Open 会立刻启动维护协程并投递首个任务（其中就包含
+	// applyRetention），于是本用例的 applyRetention 与协程的那一次**并发删除同一批档**：
+	// 先删到的成功，后删到的拿不到文件。POSIX 上删除已不存在的路径仍是静默成功
+	// （POSIX 语义下 remove 对不存在返回 ENOENT，但这里被 IsNotExist 放过），
+	// 而 Windows 上两个删除撞在同一路径会返回 Access is denied，
+	// 于是维护函数返回错误、用例转红（CI 实测：`rollog_test.go:556: applyRetention 失败:
+	// 删除过期轮转档 ... Access is denied`）。
+	//
+	// 本用例要验的是**排序与汰旧的选择**，与后台协程无关，因此直接构造只带
+	// 必要字段的 Writer：不启动协程，也不打开活跃文件，调用序列完全确定。
+	w := &Writer{
+		cfg:  Config{Path: path, MaxSizeBytes: 8, MaxBackups: 1, DisableCompress: true},
+		dir:  dir,
+		base: "app",
+		ext:  ".log",
 	}
-	defer w.Close()
 
 	if err := w.applyRetention(); err != nil {
 		t.Fatalf("applyRetention 失败: %v", err)

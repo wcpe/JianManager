@@ -3,6 +3,7 @@ package grpc
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +25,25 @@ func TestResolveSafePath_RejectsEscape(t *testing.T) {
 	for _, rel := range cases {
 		if _, err := resolveSafePath(workDir, rel); err == nil {
 			t.Fatalf("路径 %q 必须被拒绝", rel)
+		}
+	}
+}
+
+// TestResolveSafePath_RejectsForeignAbsolute 回归锁定 Windows 与 POSIX 路径方言的绝对路径。
+// 该判定必须脱离测试宿主 GOOS：Windows 不能放行 `/etc/passwd`，Linux 也不能把 `\\etc` 或
+// `C:\\Windows` 当成普通工作目录相对路径；安全校验只能收紧，不能放松既有拒绝结论。
+func TestResolveSafePath_RejectsForeignAbsolute(t *testing.T) {
+	workDir := t.TempDir()
+	for _, rel := range []string{
+		"/etc/passwd",
+		`\etc\passwd`,
+		`C:\Windows\system32\drivers\etc\hosts`,
+		`C:/Windows/system32/drivers/etc/hosts`,
+		`C:relative`,
+		`\\server\share\config.yml`,
+	} {
+		if _, err := resolveSafePath(workDir, rel); err == nil {
+			t.Errorf("跨平台绝对路径 %q 必须被拒绝", rel)
 		}
 	}
 }
@@ -114,8 +134,12 @@ func TestAtomicWriteFile_PreservesMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
-		t.Fatalf("权限位应保持 0600，实际 %v", info.Mode().Perm())
+	// 权限位只 POSIX 有意义：Windows 的 Mode().Perm() 恒报 0666（只读 0444），
+	// 与 chmod 无关；这里要验的是「原子写不改回 0644」这一 POSIX 语义。
+	if runtime.GOOS != "windows" {
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("权限位应保持 0600，实际 %v", info.Mode().Perm())
+		}
 	}
 }
 

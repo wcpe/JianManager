@@ -2,8 +2,10 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -194,20 +196,20 @@ func resolveEnvRefMaybePlain(ref string) (string, error) {
 	return ref, nil
 }
 
-// qqTokenEntry QQ AccessToken 的缓存条目（按 appId 维度）。
-// 同一 appId 的条目兼作在途请求的汇合点：inflight 非 nil 表示已有请求在途，
-// 其余调用等待其关闭后复用结果，从而保证「并发不重复取 token」。
+// qqTokenEntry 保存某个 appId 的缓存令牌和在途请求，由 qqMu 保护。
 type qqTokenEntry struct {
-	// token 缓存的 AccessToken（在途请求完成前为空）。
-	token string
-	// expiresAt 绝对过期时间（本地时钟）。
+	token     string
 	expiresAt time.Time
-	// lifetime 该 token 的总有效期，用于按比例算提前刷新窗口。
-	lifetime time.Duration
-	// inflight 非 nil 即在途；关闭即结果就绪。
-	inflight chan struct{}
-	// err 在途请求的失败原因（成功为 nil）。
-	err error
+	lifetime  time.Duration
+	inflight  *qqTokenFlight
+}
+
+// qqTokenFlight 的结果在关闭 done 后只读，等待者不会读到下一次请求的结果。
+type qqTokenFlight struct {
+	done          chan struct{}
+	token         string
+	err           error
+	ownerCanceled bool
 }
 
 // ChannelNotifier 按通道类型把告警通知投递到外部出口。
@@ -473,11 +475,15 @@ func qqTokenNeedsRefresh(expiresAt time.Time, lifetime time.Duration) bool {
 
 // postJSONRaw 以 JSON POST 请求并返回响应状态码与正文（供需读业务错误码的通道使用）。
 func (n *ChannelNotifier) postJSONRaw(api string, headers map[string]string, body interface{}) (int, []byte, error) {
+	return n.postJSONRawContext(context.Background(), api, headers, body)
+}
+
+func (n *ChannelNotifier) postJSONRawContext(ctx context.Context, api string, headers map[string]string, body interface{}) (int, []byte, error) {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return 0, nil, fmt.Errorf("序列化请求载荷失败: %w", err)
 	}
-	req, err := http.NewRequest(http.MethodPost, api, bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api, bytes.NewReader(buf))
 	if err != nil {
 		return 0, nil, fmt.Errorf("构造请求失败: %w", err)
 	}
@@ -499,9 +505,9 @@ func (n *ChannelNotifier) postJSONRaw(api string, headers map[string]string, bod
 
 // fetchQQAccessToken 经开放平台换取 AccessToken，返回 token 与有效期。
 // 失败时 HTTP 状态可能仍是 200 而 body 里 code 非 0，故状态码与 code 都要判。
-func (n *ChannelNotifier) fetchQQAccessToken(baseURL, appID, appSecret string) (string, time.Duration, error) {
+func (n *ChannelNotifier) fetchQQAccessToken(ctx context.Context, baseURL, appID, appSecret string) (string, time.Duration, error) {
 	api := baseURL + "/app/getAppAccessToken"
-	status, body, err := n.postJSONRaw(api, nil, map[string]string{
+	status, body, err := n.postJSONRawContext(ctx, api, nil, map[string]string{
 		"appId":        appID,
 		"clientSecret": appSecret,
 	})
@@ -531,64 +537,70 @@ func (n *ChannelNotifier) fetchQQAccessToken(baseURL, appID, appSecret string) (
 // qqAccessToken 取可用的 AccessToken：缓存未接近过期则直接复用、不发请求；
 // 同一 appId 并发调用时只有一次在途请求，其余等待并复用其结果（单飞）。
 func (n *ChannelNotifier) qqAccessToken(baseURL, appID, appSecret string) (string, error) {
-	n.qqMu.Lock()
-	entry, ok := n.qqTokens[appID]
-	if !ok {
-		entry = &qqTokenEntry{}
-		n.qqTokens[appID] = entry
-	}
-	if entry.inflight != nil {
-		// 已有同 appId 在途请求：等它结束后复用结果，不重复取 token。
-		wait := entry.inflight
-		n.qqMu.Unlock()
-		<-wait
+	return n.qqAccessTokenContext(context.Background(), baseURL, appID, appSecret)
+}
+
+func (n *ChannelNotifier) qqAccessTokenContext(ctx context.Context, baseURL, appID, appSecret string) (string, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		n.qqMu.Lock()
-		entry = n.qqTokens[appID]
-		if entry != nil && entry.err == nil && entry.token != "" {
+		entry := n.qqTokens[appID]
+		if entry == nil {
+			entry = &qqTokenEntry{}
+			n.qqTokens[appID] = entry
+		}
+		if flight := entry.inflight; flight != nil {
+			n.qqMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-flight.done:
+			}
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			// 发起者取消只影响本次 HTTP 请求，其他有效调用重新汇合。
+			if flight.ownerCanceled {
+				continue
+			}
+			n.qqMu.Lock()
+			invalidated := n.qqTokens[appID] != entry
+			n.qqMu.Unlock()
+			if invalidated {
+				continue
+			}
+			return flight.token, flight.err
+		}
+		if entry.token != "" && !qqTokenNeedsRefresh(entry.expiresAt, entry.lifetime) {
 			token := entry.token
 			n.qqMu.Unlock()
 			return token, nil
 		}
-		err := fmt.Errorf("获取 QQ AccessToken 失败")
-		if entry != nil && entry.err != nil {
-			err = entry.err
+		flight := &qqTokenFlight{done: make(chan struct{})}
+		entry.inflight = flight
+		n.qqMu.Unlock()
+
+		token, lifetime, err := n.fetchQQAccessToken(ctx, baseURL, appID, appSecret)
+
+		n.qqMu.Lock()
+		flight.token, flight.err = token, err
+		ctxErr := ctx.Err()
+		flight.ownerCanceled = ctxErr != nil && errors.Is(err, ctxErr)
+		if !flight.ownerCanceled {
+			entry.token = token
+			entry.lifetime = lifetime
+			entry.expiresAt = time.Time{}
+			if err == nil {
+				entry.expiresAt = time.Now().Add(lifetime)
+			}
 		}
+		entry.inflight = nil
+		close(flight.done)
 		n.qqMu.Unlock()
-		return "", err
+		return token, err
 	}
-	if entry.token != "" && !qqTokenNeedsRefresh(entry.expiresAt, entry.lifetime) {
-		// 缓存命中且未接近过期：直接复用，不发请求。
-		token := entry.token
-		n.qqMu.Unlock()
-		return token, nil
-	}
-	// 登记在途请求后释放锁，避免持锁做网络 IO（其余调用会在此汇合）。
-	entry.inflight = make(chan struct{})
-	inflight := entry.inflight
-	n.qqMu.Unlock()
-
-	token, lifetime, err := n.fetchQQAccessToken(baseURL, appID, appSecret)
-
-	n.qqMu.Lock()
-	entry.inflight = nil
-	if err != nil {
-		entry.err = err
-		entry.token = ""
-		entry.expiresAt = time.Time{}
-		entry.lifetime = 0
-	} else {
-		entry.err = nil
-		entry.token = token
-		entry.lifetime = lifetime
-		entry.expiresAt = time.Now().Add(lifetime)
-	}
-	n.qqMu.Unlock()
-	close(inflight)
-
-	if err != nil {
-		return "", err
-	}
-	return token, nil
 }
 
 // sendQQ 经 QQ 开放平台主动推送纯文本消息。

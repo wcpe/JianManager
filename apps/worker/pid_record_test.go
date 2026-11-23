@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,7 +23,10 @@ func TestWriteWorkerPIDRecordPointsAtCurrentProcess(t *testing.T) {
 	path := filepath.Join(root, "logs", "worker.pid")
 	info, err := os.Stat(path)
 	require.NoError(t, err, "应在 data 的同级 logs/ 下写出记录")
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "记录含进程路径信息，权限应为 0600")
+	// 权限位只 POSIX 有意义：Windows 的 os.Stat().Mode().Perm() 恒报 0666，与 chmod 无关。
+	if runtime.GOOS != "windows" {
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "记录含进程路径信息，权限应为 0600")
+	}
 
 	b, err := os.ReadFile(path)
 	require.NoError(t, err)

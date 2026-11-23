@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -155,9 +157,12 @@ type QQDiscoveryService struct {
 	mu      sync.Mutex
 	stopCh  chan struct{}
 	running bool
+	// loopDone 在 loop 协程彻底退出后关闭。Stop 用它等待后台收尾，
+	// 消除「Stop 已记账 → loop 仍在本轮尾部写状态」的窗口（见 Stop 注释）。
+	loopDone chan struct{}
 
 	// 可注入的依赖（测试替换）。
-	dialFunc  func(url string) (*websocket.Conn, error)
+	dialFunc  func(ctx context.Context, url string) (*websocket.Conn, error)
 	newTicker func(d time.Duration) (<-chan time.Time, func())
 	afterFunc func(d time.Duration, f func()) func()
 
@@ -200,10 +205,7 @@ func NewQQDiscoveryService(db *gorm.DB, notifier *ChannelNotifier) *QQDiscoveryS
 		notifier: notifier,
 		stopCh:   make(chan struct{}),
 		status:   model.QQGatewayDisconnected,
-		dialFunc: func(url string) (*websocket.Conn, error) {
-			c, _, err := websocket.DefaultDialer.Dial(url, nil)
-			return c, err
-		},
+		dialFunc: dialQQGateway,
 		newTicker: func(d time.Duration) (<-chan time.Time, func()) {
 			t := time.NewTicker(d)
 			return t.C, func() { t.Stop() }
@@ -607,10 +609,15 @@ func (s *QQDiscoveryService) Start() {
 	}
 	s.running = true
 	s.stopCh = make(chan struct{})
+	s.loopDone = make(chan struct{})
 	stop := s.stopCh
+	done := s.loopDone
 	s.mu.Unlock()
 
-	go s.loop(stop)
+	go func() {
+		defer close(done)
+		s.loop(stop)
+	}()
 	slog.Info("QQ 网关连接管理已启动")
 }
 
@@ -627,16 +634,33 @@ func (s *QQDiscoveryService) Stop() {
 	}
 	close(s.stopCh)
 	s.running = false
+	done := s.loopDone
 	s.mu.Unlock()
 
+	// 先关连接：让阻塞在 serve 读循环里的 loop 立刻返回，否则下面的等待要拖到
+	// 下一次连接事件。关闭顺序不能反——loop 退出依赖连接被中断。
 	s.connMu.Lock()
 	conn := s.conn
 	s.conn = nil
-	prevStatus := s.status
 	s.connMu.Unlock()
 	if conn != nil {
 		_ = conn.Close()
 	}
+
+	// 等 loop 彻底退出后**再**读取最终状态并落定。
+	//
+	// 不等就有竞态（Windows CI 偶发、本地难复现）：loop 在 connectAndServe 返回后
+	// 还有尾巴——可能把本次断开判成致命错误（fatal != ""）并 setStatus(error)，
+	// 也可能走「无 qq 通道」分支写 disconnected。这些都与 Stop 并发，于是
+	// 「Stop 保留人工介入态」的断言会看到被 loop 覆写后的状态而随机变红。
+	// 等待 + 事后统一落定后，Stop 返回时的状态是确定的。
+	if done != nil {
+		<-done
+	}
+
+	s.connMu.Lock()
+	prevStatus := s.status
+	s.connMu.Unlock()
 	if prevStatus == model.QQGatewayError {
 		slog.Info("QQ 网关连接管理已停止（保留人工介入态诊断信息）", "status", prevStatus)
 		return
@@ -693,14 +717,56 @@ func (s *QQDiscoveryService) loop(stop <-chan struct{}) {
 	}
 }
 
+// contextForStop 把服务停止信号映射为可取消的请求上下文。
+// 连接管理的网络阶段尚未登记 s.conn，必须依赖同一个取消信号退出，不能只靠关闭连接收尾。
+func contextForStop(stop <-chan struct{}) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
+// dialQQGateway 在 WebSocket 握手期间让 Stop 能关闭还未登记到服务的底层连接。
+func dialQQGateway(ctx context.Context, gatewayURL string) (*websocket.Conn, error) {
+	dialer := *websocket.DefaultDialer
+	var tcpDialer net.Dialer
+	var stopClose func() bool
+	dialer.NetDialContext = func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := tcpDialer.DialContext(dialCtx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		// Gorilla 的握手读只受 deadline 约束。用外层 context，避免成功后
+		// Gorilla 取消自己的握手超时 context 时误关新连接。
+		stopClose = context.AfterFunc(ctx, func() { _ = conn.Close() })
+		return conn, nil
+	}
+	conn, _, err := dialer.DialContext(ctx, gatewayURL, nil)
+	if stopClose != nil {
+		stopClose()
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return nil, ctxErr
+	}
+	return conn, err
+}
+
 // fetchGatewayURL 经 GET /gateway 拿 WSS 地址（同样 QQBot 鉴权）。
-func (s *QQDiscoveryService) fetchGatewayURL(cred *QQCredentials) (string, error) {
-	token, err := s.notifier.qqAccessToken(cred.BaseURL, cred.AppID, cred.AppSecret)
+func (s *QQDiscoveryService) fetchGatewayURL(ctx context.Context, cred *QQCredentials) (string, error) {
+	token, err := s.notifier.qqAccessTokenContext(ctx, cred.BaseURL, cred.AppID, cred.AppSecret)
 	if err != nil {
 		return "", err
 	}
 	api := strings.TrimRight(cred.BaseURL, "/") + "/gateway"
-	req, err := http.NewRequest(http.MethodGet, api, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
 	if err != nil {
 		return "", fmt.Errorf("构造网关地址请求失败: %w", err)
 	}
@@ -745,20 +811,51 @@ func (s *QQDiscoveryService) failRetryable(msg string, err error) string {
 
 // connectAndServe 建连并服务直到断线；返回非空字符串表示致命错误（停止重连）。
 func (s *QQDiscoveryService) connectAndServe(stop <-chan struct{}, cred *QQCredentials) string {
-	gwURL, err := s.fetchGatewayURL(cred)
+	ctx, cancel := contextForStop(stop)
+	defer cancel()
+
+	gwURL, err := s.fetchGatewayURL(ctx, cred)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ""
+		}
 		return s.failRetryable("QQ 网关地址获取失败，后台重试", err)
 	}
-	conn, err := s.dialFunc(gwURL)
+	conn, err := s.dialFunc(ctx, gwURL)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ""
+		}
 		return s.failRetryable("QQ 网关拨号失败，后台重试", err)
 	}
+	select {
+	case <-ctx.Done():
+		_ = conn.Close()
+		return ""
+	default:
+	}
 	s.connMu.Lock()
+	if ctx.Err() != nil {
+		s.connMu.Unlock()
+		_ = conn.Close()
+		return ""
+	}
 	s.conn = conn
 	s.connMu.Unlock()
+	connDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-connDone:
+		}
+	}()
+	defer close(connDone)
 	defer func() {
 		s.connMu.Lock()
-		s.conn = nil
+		if s.conn == conn {
+			s.conn = nil
+		}
 		s.connMu.Unlock()
 		_ = conn.Close()
 	}()
@@ -778,8 +875,11 @@ func (s *QQDiscoveryService) connectAndServe(stop <-chan struct{}, cred *QQCrede
 		return s.failRetryable("QQ 网关 Hello 负载非法", err)
 	}
 
-	token, err := s.notifier.qqAccessToken(cred.BaseURL, cred.AppID, cred.AppSecret)
+	token, err := s.notifier.qqAccessTokenContext(ctx, cred.BaseURL, cred.AppID, cred.AppSecret)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ""
+		}
 		return s.failRetryable("QQ 网关取 token 失败", err)
 	}
 
