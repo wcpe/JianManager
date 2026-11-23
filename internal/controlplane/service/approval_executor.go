@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"gorm.io/gorm"
@@ -25,7 +26,21 @@ import (
 //
 // 签名刻意收窄成「票据 + 冻结参数」：adapter 不能自己去看请求上下文里的原始参数，
 // 只能执行**批准时冻结的那一份**——否则「批准的」与「执行的」可能不是同一件事。
+//
+// **不返回结果值是刻意的**：绝大多数 adapter 的价值就是「做成了没有」，error 足够。
+// 少数需要回传产出的 action（目前只有 file_issue_transfer_ticket 签发的传输票据）
+// 走另一条路——见 RegisterAdapterWithResult。
 type ApprovalAdapter func(ctx context.Context, t *model.ApprovalTicket, payload map[string]any) error
+
+// ApprovalAdapterWithResult 产出型 adapter：除了执行，还能回传一份给申请人的结果。
+//
+// 【为什么要单独一种类型，而不是给所有 adapter 加 out 参数】
+// 加参数会让 20 多个既有 adapter 全部改签名，而它们**没有一个需要回传结果**。
+// 那种改法把「少数人的需求」摊到所有人头上，也让「这个 adapter 会不会有产出」
+// 变得不可读。单独一个类型后：普通 adapter 原样不动，需要产出的显式声明自己属于这一类。
+//
+// 结果的落库由 RegisterAdapterWithResult 内部完成，adapter 只管把值返回来。
+type ApprovalAdapterWithResult func(ctx context.Context, t *model.ApprovalTicket, payload map[string]any) (any, error)
 
 // ApprovalExecutor 审批执行器。
 type ApprovalExecutor struct {
@@ -55,6 +70,44 @@ func (e *ApprovalExecutor) RegisterAdapter(action string, fn ApprovalAdapter) {
 		e.adapters = map[string]ApprovalAdapter{}
 	}
 	e.adapters[action] = fn
+}
+
+// RegisterAdapterWithResult 登记一个**会产出回传结果**的执行器。
+//
+// 产出在成功时写入票据的 result_json，申请人可经 approval_get 取回。
+// 失败时不写：产出没有真正成立，给出去的是假凭据（见下方包装函数里的说明）。
+//
+// 实现上**直接把结果落库**，不经进程内暂存：执行与取回之间可能隔着进程重启
+// 或多副本切换，任何内存态承载都会在那种场景下静默丢失——而「票据已 succeeded
+// 但结果不见了」正是本次要修的那类缺陷，不能用会重现它的手段去修。
+func (e *ApprovalExecutor) RegisterAdapterWithResult(action string, fn ApprovalAdapterWithResult) {
+	if e.adapters == nil {
+		e.adapters = map[string]ApprovalAdapter{}
+	}
+	e.adapters[action] = func(ctx context.Context, t *model.ApprovalTicket, payload map[string]any) error {
+		result, err := fn(ctx, t, payload)
+		if err != nil {
+			return err
+		}
+		if result == nil {
+			return nil
+		}
+		raw, mErr := json.Marshal(result)
+		if mErr != nil {
+			// 序列化失败不改变执行结论（副作用已真实发生），但必须留痕：
+			// 申请人会看到 succeeded 却取不到结果，这个日志是唯一的解释。
+			slog.Error("审批：执行结果序列化失败，结果将不可取回",
+				"ticketId", t.ID, "action", action, "error", mErr)
+			return nil
+		}
+		if uErr := e.db.Model(&model.ApprovalTicket{}).
+			Where("id = ?", t.ID).
+			Update("result_json", string(raw)).Error; uErr != nil {
+			slog.Error("审批：执行结果写入失败，结果将不可取回",
+				"ticketId", t.ID, "action", action, "error", uErr)
+		}
+		return nil
+	}
 }
 
 // SetTargetVerifier 注入目标漂移校验。

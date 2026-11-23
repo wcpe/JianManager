@@ -73,7 +73,18 @@ const SUB_ROUTE_PARENT: Record<string, string> = {
  */
 const ADDED_NAV_PATHS = new Set<string>(['/my-tokens'])
 
-/** 
+/**
+ * lucide 上游改名兼容表：同一图标组件在新版本换了 displayName（旧名保留为别名导出）。
+ * 快照存的是改名前的 displayName，对比前把新名归一回历史名，避免依赖升级造成假阳性。
+ * 新增条目时写明「新 displayName → 快照里的旧名」。
+ */
+const LUCIDE_RENAMED_DISPLAY_NAMES: Record<string, string> = {
+  // lucide ≥1.x 把 triangle-alert 改名为 triangle-exclamation-point，
+  // TriangleAlert 仍作为同一组件的别名导出，displayName 随之变为新名。
+  TriangleExclamationPoint: 'TriangleAlert',
+}
+
+/**
  * icon 归一：新层是 lucide 组件引用，快照里存的是 `displayName` 字符串。
  * 两个方向都要处理（字符串直回，组件取 displayName），对比前归一到同一字符串。
  */
@@ -81,7 +92,8 @@ function iconName(icon: CollectedEntry['icon']): string | undefined {
   if (icon === undefined || icon === null) return undefined
   if (typeof icon === 'string') return icon
   const c = icon as unknown as { displayName?: string; name?: string }
-  return c.displayName ?? c.name
+  const name = c.displayName ?? c.name
+  return name === undefined ? undefined : (LUCIDE_RENAMED_DISPLAY_NAMES[name] ?? name)
 }
 
 /** 

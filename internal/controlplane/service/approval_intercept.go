@@ -1,9 +1,16 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
+
+// errAgentSubjectOnly 人类（或任何非 Token 主体）申请了 Agent 专属动作。
+//
+// 单独成哨兵错误而不是只靠 message：调用方可能需要据此返回特定状态码，
+// 而匹配中文字符串是不可靠的。
+var errAgentSubjectOnly = errors.New("该动作仅限 Agent Token 主体发起")
 
 // 高危操作的审批拦截。
 //
@@ -109,6 +116,25 @@ func (s *ApprovalService) InterceptForApproval(p ApprovalInterceptParams) Approv
 	}
 	if !req.Required {
 		return ApprovalInterceptResult{Blocked: false}
+	}
+
+	// Agent 专属 action：人类主体在**出票之前**就拒绝。
+	//
+	// 【为什么要在这里拦，而不是靠执行期才发现】执行期（loadTicketPrincipal）虽然
+	// 也会拒，但那时票已经出了、也已经被某人批准了——批准人以为自己批了一件
+	// 会生效的事，实际必然失败。把判定提前到出票前，人类提交会立刻得到一句
+	// 「这是 Agent 专用动作」的明确拒绝，而不是等半天审批再拿到一个谜之失败。
+	//
+	// 【判据】TokenID 为空即视为非 Agent 主体。这与 loadTicketPrincipal 的口径一致：
+	// 助手委托链（ActAsUserID != 0 但无 Token）同样拿不到票据，因为它们也没有
+	// TokenID 可供 Consume 时重建主体。
+	if d, ok := DescribeAgentAction(p.Action); ok && d.AgentSubjectOnly {
+		if strings.TrimSpace(p.TokenID) == "" {
+			msg := fmt.Sprintf(
+				"%s 是 Agent 专用动作，人类不能申请：它产出的凭据只能由 Agent Token 消费。"+
+					"人类如需上传文件，请使用实例文件上传接口（无需审批）", p.ToolName)
+			return ApprovalInterceptResult{Blocked: true, Err: errAgentSubjectOnly, Message: msg}
+		}
 	}
 
 	reason := strings.TrimSpace(p.Reason)
