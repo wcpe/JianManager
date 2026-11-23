@@ -26,18 +26,56 @@ type instanceInfo struct {
 //
 // Worker 把 <uuid>.pid 写到「服务器工作目录根」= 数据根下 var/servers（process.Manager 的
 // pidDir 即 serversDir，见 cmd/worker/main.go）。jmctl 据此发现实例，故按以下优先级解析：
-//  1. flag（--pid-dir）显式指定；
+//  1. flag 显式指定（--data-dir 为正式名，指向数据根；--pid-dir 留作兼容别名，
+//     既可指数据根也可直指 PID 目录，按实际布局识别）；
 //  2. 环境变量 JIANMANAGER_DATA_DIR 指向的数据根下 var/servers；
-//  3. 默认数据根 ./data 下 var/servers（开发环境）。
+//  3. 从可执行文件位置向上逐级找 <祖先>/data/var/servers——jmctl 装在
+//     /opt/jianmanager/bin/ 时数据根在 /opt/jianmanager/data，cwd 推断会落空；
+//  4. 默认数据根 ./data 下 var/servers（开发环境）。
 //
-// 2/3 两档要求目录实际存在才采用，否则继续回退；全部落空报错并提示用 --pid-dir。
-func resolvePIDDir(flag string) (string, error) {
-	if strings.TrimSpace(flag) != "" {
-		return flag, nil
+// 2/3/4 三档要求目录实际存在才采用，否则继续回退；全部落空报错并提示用 --data-dir。
+func resolvePIDDir(dataDirFlag, pidDirFlag string) (string, error) {
+	// --data-dir：指数据根，取 <dir>/var/servers；目录不存在也直返（错误信息含用户给的路径更准确）。
+	if v := strings.TrimSpace(dataDirFlag); v != "" {
+		return filepath.Join(v, "var", "servers"), nil
+	}
+	// --pid-dir（别名）：优先按「直指 PID 目录」保留旧语义；若给出的是数据根（含 var/servers 子目录）则取其下。
+	if v := strings.TrimSpace(pidDirFlag); v != "" {
+		if dirExists(filepath.Join(v, "var", "servers")) {
+			return filepath.Join(v, "var", "servers"), nil
+		}
+		return v, nil
 	}
 
-	// JIANMANAGER_DATA_DIR 优先；为空时 dataroot 回退到默认 ./data。
-	// Resolve 不创建目录，仅求绝对路径，由下方存在性判断决定是否采用。
+	// JIANMANAGER_DATA_DIR 显式设置时优先（存在性检查）。
+	if env := strings.TrimSpace(os.Getenv("JIANMANAGER_DATA_DIR")); env != "" {
+		serversDir := filepath.Join(env, "var", "servers")
+		if dirExists(serversDir) {
+			return serversDir, nil
+		}
+	}
+
+	// 可执行文件向上逐级找 data/var/servers：覆盖 /opt/jianmanager/bin/jmctl（上溯两级
+	// 命中 /opt/jianmanager/data）与 /opt/jianmanager/jmctl（一级）两种部署形态。
+	if exe, err := os.Executable(); err == nil {
+		if real, err2 := filepath.EvalSymlinks(exe); err2 == nil {
+			exe = real
+		}
+		dir := filepath.Dir(exe)
+		for i := 0; i < 5; i++ {
+			cand := filepath.Join(dir, "data", "var", "servers")
+			if dirExists(cand) {
+				return cand, nil
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+
+	// cwd 默认数据根（开发环境）。
 	if root, err := dataroot.Resolve(""); err == nil {
 		serversDir := root.ServersDir()
 		if dirExists(serversDir) {
@@ -45,7 +83,7 @@ func resolvePIDDir(flag string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("未找到 daemon PID 目录（数据根下 var/servers 不存在）；请用 --pid-dir 显式指定")
+	return "", fmt.Errorf("未找到 daemon PID 目录（数据根下 var/servers 不存在）；请用 --data-dir 显式指定数据根")
 }
 
 // dirExists 判断路径是否为已存在目录。
@@ -123,12 +161,13 @@ func resolvePrefix(insts []instanceInfo, prefix string) (instanceInfo, error) {
 func runList(args []string) error {
 	const jmctlName = "jmctl"
 	fs := newFlagSet("list")
-	pidDirFlag := fs.String("pid-dir", "", "daemon PID 目录（默认数据根下 var/servers）")
+	dataDirFlag := fs.String("data-dir", "", "数据根（默认自动推断；--pid-dir 为兼容别名）")
+	pidDirFlag := fs.String("pid-dir", "", "daemon PID 目录（--data-dir 的别名）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	pidDir, err := resolvePIDDir(*pidDirFlag)
+	pidDir, err := resolvePIDDir(*dataDirFlag, *pidDirFlag)
 	if err != nil {
 		return err
 	}

@@ -174,6 +174,12 @@ func LoadAccess(authz *service.AuthzService) gin.HandlerFunc {
 			})
 			return
 		}
+		// 用户令牌（jmut_）收窄：把令牌声明的能力 ∩ 资源 scope 落到 access 上，
+		// 使 RequirePerm / CanAccessInstance / AccessibleInstanceIDs 全链路生效，
+		// 越权统一 403。窄化在请求内完成，降权用户再次请求即自动收窄。
+		if principal := GetUserTokenPrincipal(c); principal != nil {
+			NarrowAccessForUserToken(access, principal)
+		}
 		c.Set(CtxAccess, access)
 		c.Next()
 	}

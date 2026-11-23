@@ -12,6 +12,9 @@ import {
   type CreateUserTokenPayload,
 } from '@/api/userTokens'
 import { copyToClipboard } from '@/lib/shared/clipboard'
+import { CAPABILITY_OPTIONS } from '@/api/agentTokens'
+import { parseIdInput } from '@/components/views/agent/AgentTokensPageView'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { userTokenStatusLevel } from '@/lib/auth/status'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -136,7 +139,7 @@ export default function UserTokensPage() {
                 const status = userTokenStatus(tok)
                 return (
                   <TableRow key={tok.id}>
-                    <TableCell className="font-medium">{tok.name}</TableCell>
+                    <TableCell className="font-medium">{displayTokenName(tok.name, t)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {tok.deviceLabel || '—'}
                     </TableCell>
@@ -194,6 +197,13 @@ export default function UserTokensPage() {
 }
 
 /** 状态到 StatusBadge 档位映射。 */
+/** 令牌名展示：后端设备授权默认名存可本地化标记 `device:<label>`，按 UI 语言渲染。 */
+export function displayTokenName(name: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  if (name === 'device:cli') return t('userTokens.deviceNameCli')
+  if (name.startsWith('device:')) return t('userTokens.deviceName', { label: name.slice(7) })
+  return name
+}
+
 /** 创建令牌对话框；创建成功后原地切换为「明文展示」视图。 */
 function CreateUserTokenDialog({
   open,
@@ -210,11 +220,26 @@ function CreateUserTokenDialog({
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState('')
+  const [capabilities, setCapabilities] = useState<string[]>([])
+  const [nodeScope, setNodeScope] = useState('')
+  const [instScope, setInstScope] = useState('')
+
+  function toggleCapability(v: string, on: boolean) {
+    setCapabilities((cur) => (on ? [...cur, v] : cur.filter((x) => x !== v)))
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
     const trimmed = name.trim()
-    onSubmit({ name: trimmed || t('userTokens.defaultName') })
+    const nodeIds = parseIdInput(nodeScope)
+    const instIds = parseIdInput(instScope)
+    onSubmit({
+      name: trimmed || t('userTokens.defaultName'),
+      // 空数组 = 不限定（继承用户全部权限）；勾选后收窄为所选能力的交集。
+      ...(capabilities.length ? { capabilities } : {}),
+      ...(nodeIds.length ? { scopedNodeIds: nodeIds } : {}),
+      ...(instIds.length ? { scopedInstanceIds: instIds } : {}),
+    })
   }
 
   async function copyPlaintext() {
@@ -276,6 +301,43 @@ function CreateUserTokenDialog({
               />
               <p className="text-xs text-muted-foreground">{t('userTokens.nameHint')}</p>
             </div>
+            <div className="space-y-1.5">
+              <Label>{t('userTokens.capabilitiesLabel')}</Label>
+              <p className="text-xs text-muted-foreground">{t('userTokens.capabilitiesHint')}</p>
+              <div className="grid max-h-40 grid-cols-2 gap-x-3 gap-y-1 overflow-y-auto rounded-md border p-2">
+                {CAPABILITY_OPTIONS.map((opt) => (
+                  <label key={opt.value} className="flex items-center gap-1.5 text-xs">
+                    <Checkbox
+                      checked={capabilities.includes(opt.value)}
+                      onCheckedChange={(v) => toggleCapability(opt.value, v === true)}
+                      aria-label={t(opt.labelKey)}
+                    />
+                    <span>{t(opt.labelKey)}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="user-token-scope-nodes">{t('userTokens.scopeNodes')}</Label>
+                <Input
+                  id="user-token-scope-nodes"
+                  value={nodeScope}
+                  onChange={(e) => setNodeScope(e.target.value)}
+                  placeholder={t('userTokens.scopePlaceholder')}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="user-token-scope-instances">{t('userTokens.scopeInstances')}</Label>
+                <Input
+                  id="user-token-scope-instances"
+                  value={instScope}
+                  onChange={(e) => setInstScope(e.target.value)}
+                  placeholder={t('userTokens.scopePlaceholder')}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">{t('userTokens.scopeHint')}</p>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={pending}>

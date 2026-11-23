@@ -2,9 +2,14 @@ package grpc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -87,6 +92,14 @@ func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerR
 	}
 
 	slog.Info("Worker 二进制已替换，计划重启", "fromVersion", from, "targetVersion", req.TargetVersion)
+
+	// 需求 1.2：同版本 jmctl 随 Worker 同步更新。非阻断——jmctl 是 CP 失联时的救援工具，
+	// 任何一步失败只记日志、不影响本次升级；Windows 上 jmctl 正在运行会因文件锁
+	// 替换失败，旧文件保留、留待下次升级重试。
+	if err := s.syncJmctl(ctx, req, target); err != nil {
+		slog.Warn("jmctl 同步更新失败（不影响 Worker 升级，下次升级重试）", "error", err)
+	}
+
 	// 异步延迟重启：先让本 RPC 响应回到 CP，再重启进程。
 	go func() {
 		time.Sleep(restartDelay)
@@ -151,4 +164,110 @@ func (s *Server) resolveExecutable() (string, error) {
 // SetExecutablePath 覆盖待替换的可执行文件路径（测试用：指向临时「假二进制」避免替换真测试二进制）。
 func (s *Server) SetExecutablePath(path string) {
 	s.execPath = path
+}
+
+// syncJmctl 随 Worker 升级同步更新 <可执行文件目录>/bin/jmctl（需求 1.2）。
+//
+// 目标版本与本次升级同源：CP 内嵌清单 /downloads/jmctl-manifest.json 取该 OS/ARCH
+// 的 sha256，下载 /downloads/<file> 校验后原子替换（临时文件 + rename）。sha256
+// 与本地一致直接跳过；jmctl 不存在时视为初次补装同样走此链路。全程非阻断：
+// 返回 error 由调用方仅记日志——jmctl 是 CP 失联时的救援工具，装不上不碍升级。
+// Windows 上 jmctl 正在运行会因文件锁 rename 失败，旧文件保留，下次升级重试。
+func (s *Server) syncJmctl(ctx context.Context, req *workerpb.UpgradeWorkerRequest, workerExe string) error {
+	// CP HTTP 基址：从本次升级下载地址推导（worker-assets 与 /downloads 同 host）。
+	u := strings.TrimSpace(req.DownloadUrl)
+	i := strings.Index(u, "://")
+	if i < 0 {
+		return fmt.Errorf("升级下载地址不含 scheme: %s", u)
+	}
+	rest := u[i+3:]
+	host := rest
+	if j := strings.IndexByte(rest, '/'); j >= 0 {
+		host = rest[:j]
+	}
+	origin := u[:i+3] + host
+
+	// 目标资产清单条目（与 install-worker 分发平台一致：linux/windows amd64）。
+	file := fmt.Sprintf("jmctl-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		file += ".exe"
+	}
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		return nil // CP 只内嵌 linux/windows amd64；其余平台无资产可同步。
+	}
+	type jmctlManifest struct {
+		Version string `json:"version"`
+		Assets  []struct {
+			File   string `json:"file"`
+			SHA256 string `json:"sha256"`
+		} `json:"assets"`
+	}
+	var man jmctlManifest
+	{
+		req2, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/downloads/jmctl-manifest.json", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := s.outboundClient().Do(req2)
+		if err != nil {
+			return fmt.Errorf("取 jmctl 清单失败: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusNotFound {
+			return nil // CP 未内嵌 jmctl（slim 档/旧版 CP）：无资产可同步，不算失败。
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("jmctl 清单返回 %d", resp.StatusCode)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&man); err != nil {
+			return fmt.Errorf("解析 jmctl 清单失败: %w", err)
+		}
+	}
+	var wantSHA string
+	for _, a := range man.Assets {
+		if a.File == file {
+			wantSHA = a.SHA256
+			break
+		}
+	}
+	if wantSHA == "" {
+		return nil // 清单无本平台条目：跳过。
+	}
+
+	// jmctl 目标路径：与 Worker 同安装目录的 bin/ 下（install-worker 注入同一位置）。
+	jmctlName := "jmctl"
+	if runtime.GOOS == "windows" {
+		jmctlName += ".exe"
+	}
+	binDir := filepath.Join(filepath.Dir(workerExe), "bin")
+	jmctlPath := filepath.Join(binDir, jmctlName)
+
+	// 同版本（sha256 相同）跳过。
+	if cur, err := os.Open(jmctlPath); err == nil {
+		h := sha256.New()
+		if _, err := io.Copy(h, cur); err == nil && hex.EncodeToString(h.Sum(nil)) == wantSHA {
+			cur.Close()
+			return nil
+		}
+		cur.Close()
+	}
+
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return fmt.Errorf("创建 bin 目录失败: %w", err)
+	}
+	tmp := jmctlPath + ".new"
+	if err := selfupdate.DownloadWith(ctx, s.outboundClient(), origin+"/downloads/"+file, wantSHA, tmp, req.AllowInsecure); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("jmctl 下载/校验失败: %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(tmp, 0o755)
+	}
+	// 原子替换；Windows 文件锁失败保留旧文件，下次升级重试。
+	if err := os.Rename(tmp, jmctlPath); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("jmctl 替换失败: %w", err)
+	}
+	slog.Info("jmctl 已随 Worker 升级同步", "version", man.Version, "path", jmctlPath)
+	return nil
 }

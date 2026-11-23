@@ -15,8 +15,10 @@
 | `control-plane.yml` / `worker.yml` | 配置样例 |
 | `README.md` / `DEPLOY.md` / `CHANGELOG.md` | 文档 |
 
-`jm` 与 `jmctl` **不内嵌**在 CP 二进制里：前者是独立演进的人类侧工具，后者恰恰要在
-CP 不可用时使用——指望 CP 携带救援工具没有意义。两者都随 Release 单独发布。
+`jm` 不内嵌在 CP 二进制里：它是独立演进的人类侧工具，随 Release 单独发布（另有 npm 包）。
+`jmctl` 则**内嵌**在 CP 里（`make embed-jmctl`，~3MB）：Worker 安装与升级时经 CP 的
+`/downloads/jmctl-*` 路由同步分发到 `<Worker安装目录>/bin/`——jmctl 只操作本机 daemon 的
+pid/socket，和 Worker 同机部署才有意义，与 CP 同版本发布保证协议兼容。
 
 三进程模型：`浏览器 →(HTTP/WS)→ Control Plane →(gRPC)→ Worker Node →(spawn)→ Bot Worker(Node.js)`。
 Bot Worker 是 Node.js 子进程，其 dist 已内嵌 Control Plane，Worker 注册后**自动下发**到本机，无需手动准备文件（FR-308，见 §6）。
@@ -423,25 +425,21 @@ Worker 仍推荐面板 **「节点 → 添加节点」** 生成的一键命令�
 
 ### 13.1 安装
 
-Linux/macOS：
+jmctl **随 Worker 分发**，一般无需单独安装：
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-jmctl.sh | sh
-```
+- `install-worker.sh` / `install-worker.ps1` 装 Worker 时，自动把对应平台的 jmctl
+  放到 `<Worker安装目录>/bin/jmctl[.exe]`（来源：CP 内嵌路由 `/downloads/jmctl-*`，
+  不依赖 GitHub；`--no-jmctl` / `-NoJmctl` 可跳过；失败不阻断 Worker 安装；
+  已存在且版本相同则跳过）。
+- Worker 每次升级成功后会同步更新同目录 `bin/jmctl` 到同一目标版本
+  （sha256 校验 + 原子替换；失败仅记日志，Windows 文件锁失败留待下次重试）。
 
-Windows（PowerShell）：
+> 注意顺序：**先起 CP，再装 Worker**。jmctl 来自 CP 内嵌路由，若装 Worker 时 CP
+> 还没起来，jmctl 会跳过（Worker 安装不受影响），等 Worker 下次升级时自动补装；
+> 也可届时手动取 `http://<CP>/downloads/jmctl-linux-amd64`（或 `-windows-amd64.exe`）。
 
-```powershell
-irm https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-jmctl.ps1 | iex
-```
-
-两个脚本默认装到**用户级目录**（`~/.local/bin` / `%LOCALAPPDATA%\Programs\jmctl`），
-并自动把该目录注册进 PATH：Unix 写 shell rc（按 `$SHELL` 选 `.zshrc`/`.bashrc`/`.profile`），
-Windows 写用户级 PATH（注册表 `HKCU\Environment`，不需要管理员权限），同时同步当前会话。
-
-重复执行是幂等的：已在 PATH 中则不会重复追加。要跳过 PATH 修改用 `--no-path` / `-NoPath`。
-
-也可直接用 Release 里的 `jmctl-<os>-amd64` 二进制，或 `make dist-jmctl` 本地构建。
+无 Worker 的机器上单独使用（少见），可直接取 CP 下载端点或 Release 里的
+`jmctl-<os>-amd64` 二进制，或 `make dist-jmctl` 本地构建。
 
 ### 13.2 使用
 

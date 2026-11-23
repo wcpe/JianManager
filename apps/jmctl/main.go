@@ -22,15 +22,16 @@ func usage() {
 	fmt.Fprint(os.Stderr, `jmctl — JianManager 紧急控制台（本机直连守护进程，CP/Worker 不可用时应急用）
 
 用法:
-  jmctl list      [--pid-dir DIR]                         列出本机全部 daemon 实例
-  jmctl emergency [--instance <uuid 前缀>] [--pid-dir DIR] 交互式紧急终端（Ctrl+C 优雅停服，连按两次强杀）
-  jmctl stop      <uuid 前缀> [--pid-dir DIR]              单发优雅停服后退出
-  jmctl kill      <uuid 前缀> [--pid-dir DIR]              单发强制终止后退出
+  jmctl list      [--data-dir DIR]                        列出本机全部 daemon 实例
+  jmctl emergency [--instance <uuid 前缀>] [--data-dir DIR] 交互式紧急终端（Ctrl+C 优雅停服，连按两次强杀）
+  jmctl stop      <uuid 前缀> [--data-dir DIR]             单发优雅停服后退出
+  jmctl kill      <uuid 前缀> [--data-dir DIR]             单发强制终止后退出
   jmctl server status [--data-dir DIR] [--json]            本机部署概况（目录/配置/实例/占用）
 
 所有 <uuid 前缀> 支持唯一前缀补全（类 docker/git 短 ID）。
-PID 目录默认取数据根下 var/servers（与 Worker 实际写入路径对齐）：
-  --pid-dir > $JIANMANAGER_DATA_DIR/var/servers > ./data/var/servers
+数据根定位（PID 目录 = 数据根/var/servers，与 Worker 实际写入路径对齐）：
+  --data-dir > $JIANMANAGER_DATA_DIR > 可执行文件上溯找 data/ > ./data
+  --pid-dir 保留为 --data-dir 的兼容别名（直指 PID 目录亦可）
 
   jmctl --version                                         显示版本号
 `)

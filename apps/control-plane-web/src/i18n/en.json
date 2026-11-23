@@ -6856,7 +6856,15 @@
       "active": "Active",
       "revoked": "Revoked",
       "expired": "Expired"
-    }
+    },
+    "capabilitiesLabel": "Capabilities (optional)",
+    "capabilitiesHint": "Unchecked = inherit all your permissions; checked = narrowed to selected ∩ your permissions.",
+    "scopeNodes": "Node scope (IDs, comma separated)",
+    "scopeInstances": "Instance scope (IDs, comma separated)",
+    "scopePlaceholder": "Empty = unrestricted",
+    "scopeHint": "Scope narrows which nodes/instances this token can reach; leave empty for no limit.",
+    "deviceName": "Device: {{label}}",
+    "deviceNameCli": "CLI login"
   },
   "deviceAuth": {
     "title": "Device authorization",

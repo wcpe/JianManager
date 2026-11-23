@@ -48,7 +48,9 @@ function Install-JianManagerWorker {
         # 只下载/准备二进制，不上线。
         [switch]$DownloadOnly,
         # 跳过下载，直接用安装目录已有二进制上线。
-        [switch]$SkipDownload
+        [switch]$SkipDownload,
+        # 不安装 jmctl 紧急控制台 CLI（默认随 Worker 一并装到 <InstallDir>\bin\jmctl.exe）。
+        [switch]$NoJmctl
     )
 
     $ErrorActionPreference = "Stop"
@@ -137,6 +139,56 @@ function Install-JianManagerWorker {
         Invoke-WebRequest -Uri $url -OutFile $binPath -UseBasicParsing
     } else {
         throw "本机无 Worker，且未提供 -DownloadUrl / JIANMANAGER_WORKER_DOWNLOAD_URL（可将 worker-windows-$arch.exe 放到安装目录或当前目录，或用 -Binary / 镜像基址）"
+    }
+
+    # ---- jmctl 注入（需求 1.1）----
+    # 随 Worker 把 jmctl 紧急控制台放到 <InstallDir>\bin\jmctl.exe，供 CP 失联时本机救援。
+    # 来源为 CP 内嵌路由 /downloads/jmctl-windows-amd64.exe（匿名可读，不依赖 GitHub）。
+    # 非阻断：任一步失败只告警，不影响 Worker 安装；已存在且 sha256 相同则跳过。
+    if (-not $NoJmctl) {
+        try {
+            # CP HTTP 基址：仅从 CP-local 下载源推导（GitHub Releases 上没有 jmctl）。
+            $cpOrigin = $null
+            if ($DownloadUrl -match '^(https?://[^/]+)') { $cpOrigin = $Matches[1] }
+            if (-not $cpOrigin) {
+                Write-Host "      (jmctl：下载源非 CP，跳过)"
+            } else {
+                $binDir = Join-Path $InstallDir "bin"
+                New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+                $jmctlPath = Join-Path $binDir "jmctl.exe"
+                $wantSha = ""
+                try {
+                    $manifest = Invoke-RestMethod -Uri "$cpOrigin/downloads/jmctl-manifest.json" -TimeoutSec 15
+                    $asset = $manifest.assets | Where-Object { $_.file -eq 'jmctl-windows-amd64.exe' } | Select-Object -First 1
+                    if ($asset) { $wantSha = $asset.sha256 }
+                } catch { Write-Host "      (jmctl：清单不可达，尝试直接下载)" }
+                if ($wantSha -and (Test-Path $jmctlPath)) {
+                    $haveSha = (Get-FileHash -Algorithm SHA256 $jmctlPath).Hash.ToLower()
+                    if ($haveSha -eq $wantSha) {
+                        Write-Host "      jmctl 已存在且为同版本，跳过 ($jmctlPath)"
+                        $wantSha = "__same__"
+                    }
+                }
+                if ($wantSha -ne "__same__") {
+                    $tmp = Join-Path $binDir ".jmctl.$([guid]::NewGuid().ToString('N')).tmp"
+                    $url = "$cpOrigin/downloads/jmctl-windows-amd64.exe"
+                    try {
+                        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 60
+                        if ($wantSha) {
+                            $gotSha = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
+                            if ($gotSha -ne $wantSha) { throw "sha256 校验不符" }
+                        }
+                        Move-Item -Force $tmp $jmctlPath
+                        Write-Host "      jmctl 已安装到 $jmctlPath"
+                    } catch {
+                        Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+                        Write-Host "      (jmctl：下载/校验失败，不影响 Worker 安装: $_)"
+                    }
+                }
+            }
+        } catch {
+            Write-Host "      (jmctl：注入失败，不影响 Worker 安装: $_)"
+        }
     }
 
     if ($DownloadOnly) {

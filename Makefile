@@ -112,8 +112,17 @@ clear-worker-embed:
 	@find internal/controlplane/embed/worker -type f ! -name '.gitignore' -delete 2>/dev/null || true
 	@test -f internal/controlplane/embed/worker/.gitignore || printf '%s\n' '*' '!.gitignore' > internal/controlplane/embed/worker/.gitignore
 
+# 交叉编译 linux/windows amd64 的 jmctl 并注入 CP 内嵌目录：install-worker 分发与
+# Worker 升级同步从 /downloads/jmctl-* 拉取，不依赖 GitHub。产物与 manifest 不入库；
+# 不跑此目标时 CP 不内嵌 jmctl，下载端点返回 503，Worker 侧跳过 jmctl 同步。
+embed-jmctl:
+	mkdir -p internal/controlplane/embed/jmctl
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/jmctl/jmctl-linux-amd64 ./apps/jmctl
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/jmctl/jmctl-windows-amd64.exe ./apps/jmctl
+	go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/jmctl --version $(VERSION) --prefix jmctl
+
 # 两档共用的前端/botworker 等内嵌（不含 Worker 内嵌）。
-dist-prep: gen-licenses build-web embed-web embed-install-scripts embed-botworker
+dist-prep: gen-licenses build-web embed-web embed-install-scripts embed-botworker embed-jmctl
 
 # dist 默认 = 完整版（兼容旧习惯）：CP 内嵌双平台 Worker。
 dist: dist-full

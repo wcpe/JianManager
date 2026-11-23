@@ -6856,7 +6856,15 @@
       "active": "有效",
       "revoked": "已吊销",
       "expired": "已过期"
-    }
+    },
+    "capabilitiesLabel": "能力（可选）",
+    "capabilitiesHint": "不勾选 = 跟随你的全部权限；勾选后收窄为所选能力 ∩ 你的权限。",
+    "scopeNodes": "节点 scope（ID，逗号分隔）",
+    "scopeInstances": "实例 scope（ID，逗号分隔）",
+    "scopePlaceholder": "留空 = 不限定",
+    "scopeHint": "scope 收窄令牌可见的节点/实例；留空表示不限制。",
+    "deviceName": "设备：{{label}}",
+    "deviceNameCli": "命令行登录"
   },
   "deviceAuth": {
     "title": "设备授权",

@@ -1003,6 +1003,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	// 同样需先于 SPA NoRoute 注册，否则会被回退成 index.html。
 	registerSkillRoutes(r)
 
+	// jmctl 二进制 CP-local 下载端点：install-worker 注入与 Worker 升级同步用。
+	// 匿名可读（二进制不含机密），先于 SPA NoRoute 注册。
+	registerJmctlDownloadRoutes(r)
+
 	// Worker 二进制 CP-local 下载端点：匿名路径由短 token 保护，先于 SPA NoRoute 注册。
 	if svcs.SelfUpdate != nil {
 		NewSelfUpdateHandler(svcs.SelfUpdate, svcs.Audit).RegisterDownloadRoutes(r)

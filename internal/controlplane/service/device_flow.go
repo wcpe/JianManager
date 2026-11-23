@@ -254,9 +254,11 @@ func randomURLSafe(n int) (string, error) {
 }
 
 // deviceLabelOrDefault 把设备标识转成令牌名称。
+// 存可本地化标记「device:<label>」（ASCII），不落「设备：」这类中文硬编码——
+// 前端 UserTokensPage 识别该前缀并按当前 UI 语言渲染为「设备：xx / Device: xx」。
 func deviceLabelOrDefault(label string) string {
 	if strings.TrimSpace(label) == "" {
-		return "命令行登录"
+		return "device:cli"
 	}
-	return "设备：" + label
+	return "device:" + label
 }

@@ -62,6 +62,46 @@ func UserTokenAuth(svc *service.UserTokenService) gin.HandlerFunc {
 	}
 }
 
+// NarrowAccessForUserToken 把 UserAccess 收窄到令牌声明的能力与资源 scope，
+// 使 RequirePerm / RequirePermission / CanAccessInstance 等下游判定自动生效。
+//
+// 收窄规则（与 spec 对齐：能力不放大、scope 取交、越权 403）：
+//   - Capabilities 非空：权限树 Nodes 收敛到令牌声明的节点集合（含冒号→点号兼容）。
+//     平台管理员令牌不裁能力（服务层语义：admin 能力不裁剪，scope 仍生效）。
+//   - NodeIDs / InstanceIDs 非空：写入 access.TokenScoped*，由 AuthzService 的
+//     实例/节点判定与集合投影消费。
+func NarrowAccessForUserToken(access *service.UserAccess, p *service.UserTokenPrincipal) {
+	if access == nil || p == nil {
+		return
+	}
+	if !access.IsPlatformAdmin && len(p.Capabilities) > 0 {
+		allowed := make(map[string]struct{}, len(p.Capabilities)*2)
+		for _, c := range p.Capabilities {
+			allowed[c] = struct{}{}
+			allowed[strings.ReplaceAll(c, ":", ".")] = struct{}{}
+		}
+		nodes := make(map[string]struct{}, len(access.Nodes))
+		for n := range access.Nodes {
+			if _, ok := allowed[n]; ok {
+				nodes[n] = struct{}{}
+			}
+		}
+		access.Nodes = nodes
+	}
+	if len(p.NodeIDs) > 0 {
+		access.TokenScopedNodeIDs = make(map[uint]struct{}, len(p.NodeIDs))
+		for _, id := range p.NodeIDs {
+			access.TokenScopedNodeIDs[id] = struct{}{}
+		}
+	}
+	if len(p.InstanceIDs) > 0 {
+		access.TokenScopedInstanceIDs = make(map[uint]struct{}, len(p.InstanceIDs))
+		for _, id := range p.InstanceIDs {
+			access.TokenScopedInstanceIDs[id] = struct{}{}
+		}
+	}
+}
+
 // GetUserTokenPrincipal 取出用户令牌主体。
 func GetUserTokenPrincipal(c *gin.Context) *service.UserTokenPrincipal {
 	v, ok := c.Get(CtxUserTokenPrincipal)
