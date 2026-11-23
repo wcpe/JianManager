@@ -387,6 +387,44 @@ func TestBot_Batch_Stop_SetsStopped(t *testing.T) {
 	assert.Equal(t, model.BotStatusStopped, b.Status)
 }
 
+// TestBot_Batch_FleetOwnedNotTouchedByStopOrDelete Fleet 归属的 Bot 被批量 stop/delete 时，
+// 必须整条排除（不委托、不改账本），并以稳定错误码报为失败（R10）。
+//
+// 原状：先把 DB 改成 stopped / 软删，再委托 Worker；Worker 对 Fleet Bot 明确拒绝 DeleteBot，
+// 于是「账本已停/已删、Bot 还在跑」——假成功，且后续查询连这行都看不到。
+func TestBot_Batch_FleetOwnedNotTouchedByStopOrDelete(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+	inst := createInstanceViaAPI(t, r, token, 1, createGroupViaAPI(t, r, token, "g"))
+	fleetID := makeBot(t, db, inst, "fleet", model.BotStatusConnected, "idle")
+	loadBatchID := uint(7)
+	require.NoError(t, db.Model(&model.Bot{}).Where("id = ?", fleetID).Update("load_batch_id", loadBatchID).Error)
+
+	// stop：账本状态与 desired_state 都不得改动。
+	w := makeRequest(r, "POST", "/api/v1/bots/batch",
+		map[string]interface{}{"action": "stop", "ids": []uint{fleetID}}, token)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	m := parseJSON(t, w)
+	assert.Equal(t, float64(1), m["failed"], "Fleet Bot 必须报失败而不是静默成功")
+	errs := m["errors"].([]interface{})
+	require.Len(t, errs, 1)
+	assert.Equal(t, service.BotFleetManagedErrorCode, errs[0].(map[string]interface{})["errorCode"])
+
+	var afterStop model.Bot
+	require.NoError(t, db.First(&afterStop, fleetID).Error)
+	assert.Equal(t, model.BotStatusConnected, afterStop.Status, "不得被改成 stopped")
+
+	// delete：行必须还在（没被软删）。
+	w = makeRequest(r, "POST", "/api/v1/bots/batch",
+		map[string]interface{}{"action": "delete", "ids": []uint{fleetID}}, token)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var cnt int64
+	db.Model(&model.Bot{}).Where("id = ?", fleetID).Count(&cnt)
+	assert.Equal(t, int64(1), cnt, "Fleet Bot 不得被批量删除")
+}
+
 // TestBot_Batch_ByFilter 批量按 filter 选目标。
 func TestBot_Batch_ByFilter(t *testing.T) {
 	db := setupTestDB(t)

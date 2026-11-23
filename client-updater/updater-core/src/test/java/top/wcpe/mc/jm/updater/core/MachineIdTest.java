@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** 客户端机器码（FR-092）：格式、稳定（持久化复用 + 容错）、不可逆、never-throw。 */
+/** 客户端机器码：格式、稳定（持久化复用 + 容错）、不可逆、never-throw。 */
 class MachineIdTest {
 
     private boolean isHex64(String s) {

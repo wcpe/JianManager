@@ -16,7 +16,7 @@ function renderPanel() {
   return { user }
 }
 
-describe('InstanceConfigSurfacePanel（FR-451 配置源明面化）', () => {
+describe('InstanceConfigSurfacePanel（配置源明面化）', () => {
   it('明面展示受管项：内联项可编辑、文件引用项只读展示生效值', async () => {
     renderPanel()
 

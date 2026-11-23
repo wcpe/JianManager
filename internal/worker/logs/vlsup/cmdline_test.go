@@ -26,7 +26,9 @@ func TestBuildArgsHotDefaults(t *testing.T) {
 	for _, want := range []string{
 		"-storageDataPath=" + cfg.StorageDataPath,
 		"-httpListenAddr=127.0.0.1:19441",
-		"-retentionPeriod=30d",
+		// 引用常量而非硬编码：默认值会随保留策略调整（2026-10-21 由 30d 改 120d），
+		// 硬编码会让「改默认值」与「测试」永久不同步。
+		"-retentionPeriod=" + DefaultRetentionPeriod,
 		"-memory.allowedBytes=536870912",
 		"-httpAuth.username=jm",
 		"-httpAuth.password=local-only",
@@ -40,24 +42,8 @@ func TestBuildArgsHotDefaults(t *testing.T) {
 	}
 }
 
-func TestBuildArgsColdOmitsDefaultCache(t *testing.T) {
-	cfg := baseCfg(NamespaceCold)
-	args, err := BuildArgs(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range args {
-		if strings.HasPrefix(a, "-memory.allowedBytes=") {
-			t.Fatalf("cold without override must omit cache flag, got %v", args)
-		}
-	}
-	if !containsArg(args, "-httpListenAddr=127.0.0.1:19442") {
-		t.Fatalf("cold port mismatch: %v", args)
-	}
-}
-
 func TestBuildArgsExplicitCache(t *testing.T) {
-	cfg := baseCfg(NamespaceRehydrate)
+	cfg := baseCfg(NamespaceHot)
 	cfg.MemoryAllowedBytes = 64 * 1024 * 1024
 	args, err := BuildArgs(cfg)
 	if err != nil {
@@ -93,12 +79,9 @@ func TestBuildArgsValidation(t *testing.T) {
 func TestEffectiveCacheBytes(t *testing.T) {
 	hot := baseCfg(NamespaceHot)
 	if got := hot.EffectiveCacheBytes(); got != DefaultHotCacheBytes {
-		t.Fatalf("hot default cache: got %d want %d", got, DefaultHotCacheBytes)
+		t.Fatalf("default cache: got %d want %d", got, DefaultHotCacheBytes)
 	}
-	cold := baseCfg(NamespaceCold)
-	if got := cold.EffectiveCacheBytes(); got != 0 {
-		t.Fatalf("cold default should omit cache, got %d", got)
-	}
+	// 2026-10-29：冷热双层已废除，不再有冷层单独的 cache 默认值可断言。
 }
 
 func TestListenAddrLoopbackOnly(t *testing.T) {

@@ -42,7 +42,7 @@ func seedAlertEvents(t *testing.T, svc *MetricService, targetID uint, from time.
 	require.NoError(t, svc.db.Create(&ev).Error)
 }
 
-// TestComputeSLO_AvailabilityIncidentsMTTR 窗口内可用率/故障次数/MTTR/误差预算（FR-463 验收 1/2）。
+// TestComputeSLO_AvailabilityIncidentsMTTR 窗口内可用率/故障次数/MTTR/误差预算（验收 1/2）。
 func TestComputeSLO_AvailabilityIncidentsMTTR(t *testing.T) {
 	svc := newMetricSvc(t)
 	inst := rankSeedInstance(t, svc, "uuid-slo", "slo-inst")

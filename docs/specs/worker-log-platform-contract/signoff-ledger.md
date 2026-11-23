@@ -4,6 +4,14 @@
 > 按 `.claude/rules/gate-merge.md`，FR 验收须由用户确认，**Agent 不得自行标记 done**。
 > 编制日期：2026-09-24　·　分支：`feature/fr-log-platform-foundation`（工作区干净，CI 9/9 全绿）。
 > **签署基线以 PR #16 的最新 head 为准**（本台账会随修订产生新提交，故不在此钉死 commit hash）。
+>
+> **⚠ 本文是一份历史快照，不是当前状态表（2026-11-09 追记）**
+>
+> 本台账记录的是 **2026-09-24 那一刻**的验收证据与判定，用于 Gate-4 签字。它的职责是“证当时交付过”，
+> 不是“描述今天还有什么”。签字后状态的权威来源是 [PRD](../../PRD.md)；系统当前真貌见 [ARCHITECTURE](../../ARCHITECTURE.md) 与 [日志说明书](../../LOGS.md)。
+>
+> 下表部分 FR 已在后续版本中退役（FR-474 采集旧链、FR-478 Deep Archive、FR-481 cutover、FR-484 事件段、FR-496 索引库），
+> 其对应 spec 文件已删除。行内 `✅ 可签` 结论**仅证明 2026-09-24 当时交付过**，不构成现役功能证明。
 
 ## 判定图例
 
@@ -18,7 +26,7 @@
 | FR | 判定 | 已有证据 | 缺口 / 待你决定 |
 |---|---|---|---|
 | FR-473 | ✅ 可签 | Shared Contracts 冻结、ADR-094 accepted、proto 契约冻结。**冻结退出条件逐项核实（2026-09-26）**：① ADR-094 `accepted`；② proto 冻结——`worker.proto` 含 10 个日志 RPC（能力协商 `GetLogCapabilities` + `LogCreateView/LogSearch/LogStats/LogFields/LogFacets`）；③ VL 发行资产正式审批——`worker-victorialogs-runtime/asset-inventory.md` §1「审批基线」v1.52.0；④ 性能判据入契约——本包 `spec.md` 含 8 处 p95/RSS 判据。四项均满足 | 契约类 FR，交付物即契约本身；PRD 自述「不等于已交付」指其下游实现（分别归 FR-474~484 各自验收） |
-| FR-474 | ✅ 可签 | 生产采集/投影/ACK 恢复/reclaim 通过；**Runbook A 真机 `kill -9` 重启通过**；磁盘容量**真实填盘验收通过**（容器内受限 tmpfs `--tmpfs /data:size=48m`：真实越过 80%→`DEGRADED_STORAGE`、91.67%→`PAUSED` 必记缺口；经真实 `Pipeline.Ingest` 落账本 `AcquirePaused`+缺口+未投递；**真实 ENOSPC** 填至 100% 观测 `no space left on device`）。证据 `worker-log-acquisition/acceptance-real.md` | 无 |
+| FR-474 | ✅ 可签 | 生产采集/投影/ACK 恢复/reclaim 通过；**Runbook A 真机 `kill -9` 重启通过**；磁盘容量**真实填盘验收通过**（容器内受限 tmpfs `--tmpfs /data:size=48m`：真实越过 80%→`DEGRADED_STORAGE`、91.67%→`PAUSED` 必记缺口；经真实 `Pipeline.Ingest` 落账本 `AcquirePaused`+缺口+未投递；**真实 ENOSPC** 填至 100% 观测 `no space left on device`）。证据：真机验收记录（已随 FR-474 规格归档删除） | 无 |
 | FR-475 | ✅ 可签 | **真机验收通过**（真 VL v1.52.0）：Multiline 5 行归并为 1 事件且保留 `Caused by`、跨午夜回拨正确（未猜成未来）、半条事件被 Flush 闭合、账本 ready；**修复损坏编码致 hash 与 VL 正文不一致的缺陷**（净化 + `encoding_sanitized` 审计标记，VL 侧重算 hash 一致）；7 条新回归 + 2 项变异验证。证据 `worker-log-normalizer/acceptance-real.md` | **暂缓**：`worker-log-normalizer/spec.md:40` 与 `acceptance-real.md:72` 仍明确写 Windows 证据缺失/未测；按用户裁决暂不标记，待 Windows 验收 |
 | FR-476 | ✅ 可签 | v1.52.0 资产审批、supervisor/CP runtime 面、远程三实例、预算采样与 80/90 降级、**CP 资产上传→签名下载→Worker 安装真机闭环**、GOMEMLIMIT 调优；**Windows 包校验与解包已补真机证据**（真实包经 asset API 下载：双层哈希与审批值一致、`InstallApprovedPackage` 真实 zip 解包 PASS、CP `Cache`/`Open` 校验通过并拒绝篡改）。证据 `worker-victorialogs-runtime/acceptance-windows.md` | **未覆盖的仅是「Windows 主机实机部署验证」**。经差异面盘点：`vlsup` 的 Windows 特有分支**仅 1 处**（zip 格式选择，已验证），其余（优雅停机编排/预算/重启/无 VL 降级）为平台无关逻辑且有 25 例测试覆盖，进程停止信号亦已按平台差异处理（`exec.go` Interrupt + grace + Kill 兜底）→ 不是逻辑未覆盖，而是实机执行未做（本机无 Wine/qemu，容器共享宿主内核）。**用户已裁决接受为已知边界**（2026-09-25）|
 
@@ -27,13 +35,15 @@
 > 经 asset API 端点即可取得该包（详见 `worker-victorialogs-runtime/acceptance-windows.md` §1）。
 > 教训：判定网络不可达必须测足多个端点。
 | FR-477 | ✅ 可签 | 状态机单测绿；**Runbook B 真机迁移链通过**（FROZEN→…→CLEANED、物理迁移、HOT 空/COLD 持有）、逐状态崩溃恢复视图；规格 §5 关键不变量均有直接测试：`TestInvariant_ReattachedOldDirExcludedFromQueryPlanner`（物理存在≠查询权威，崩溃恢复后同样排除）、last-copy 保护 `lifecycle_test.go:459`（未确认接收前拒绝 detach，断言 `BlockedReason` 含 "last-copy"） | 规格头原写「Runbook B 真机待验」为**漂移，已修** |
-| FR-478 | ✅ 可签 | **真机 RustFS S3 验收通过**：登记/幂等/manifest/对象往返/Rehydrate 租约+同键复用+预留拒绝+完成、发布 generation 清理矩阵 | — |
+| FR-478 | ✅ 可签 | **真机 RustFS S3 验收通过**：登记/幂等/manifest/对象往返/Rehydrate 租约+同键复用+预留拒绝+完成、发布 generation 清理矩阵 | —　**⚠ 该能力已于 2026-11-01 退役**（单 VL 后冷层与 Rehydrate 已删，spec 已删除）；本判 ✅ 仅证明当时交付过 |
 | FR-479 | ✅ 可签 | 全查询 RPC 已接线；远程 Search/Stats/Facets/Export 通过；**CP 联邦真机查询通过** | — |
 | FR-480 | ✅ 可签 | logcoord+HTTP+生产 Assemble；**真机联邦查询与延迟取证**（串行 p95 28.5ms、8 并发 p95 15.2ms） | — |
 | FR-481 | ✅ 可签 | cutover+Legacy+DualPath 地基、HTTP 管理面已注册（默认关闭）、单测覆盖；**跨切换查询由 `/logs/legacy` + `/logs/federation` 两条真实路径承担**，其中 `/logs/federation` **已真机验收通过**（`coverage.complete=true`、返回真实事件、契约复合排序；见 `acceptance-record.md` §6） | 无。`DualPath` 的 federated 侧保持 `UnimplementedFederatedQuerier` 是**有意设计**（PRD 已记「由 `/logs/federation` 承担，保留 API 不加投机接线」），确认无生产调用方，非欠账 |
+
+> ⚠ **FR-481 已于 2026-10-29 退役**（CP `logs` 表废弃，cutover 两侧不再存在，spec 已删除）。上表判 ✅ 仅证明当时交付过。
 | FR-482 | ✅ 可签 | **真浏览器验收通过**（真实联邦列表/Stats·Facets 一致、失败态引导；修了 Stats `agg.count` 读法缺陷）；失败态 DOM 矩阵 19 项。**本轮修复真实缺陷**：联邦非 404 失败（401/代理 5xx/无响应）时未降级 → `federationActive` 误判为 true → 以空联邦数据为准，**列表永久空白**而经典 `/logs` 数据已就绪（生产影响：Worker 隧道不可达时用户见空白页而非降级数据）。现 404/401/403/5xx/无响应一律降级，400/422/429 等业务错误不降级（保留真实错误语义）；真实浏览器复验 logs-virtual=true / data-total-count=12004 / 渲染 24 行，并补 `federation-availability.test.ts` 固化四类判定。**逐项点击实测又修一处回归**：联邦路径成为默认数据源后未解析 `level`，用户在日志中心点「错误」筛选**无任何反应**（经典路径本支持该参数，属切数据源时漏接）；已改为在 CP 侧把 level 组合进 filter 表达式（wire 契约只有单一 filter 字段，不改冻结契约），level 走白名单防注入，并修正了与含 OR 关键词组合时的布尔优先级。真机实测：error→3 条、info→11、warn→2，合计 16=全量；注入尝试 4 例全拒。**生产部署复核（2026-09-25 21:00）**：修复已随生产 CP 替换上线并**经产物与数据双重验证**——提交 19:00 < 替换 20:35 < 进程启动 20:36；生产二进制含 `router.federationFilter` 符号；生产 VL 实测 `level:ERROR`=565、`level:WARN`=122528、`level:INFO`=231704，三者合计 354797 = `*` 全量，**完全吻合**，证明 `level:` 表达式在真机 VL v1.52.0 上语义正确。生产栈稳定性：CP/Worker 单次启动无重启（启动 1 次/停止 0 次），VL 内存 349 MiB（较早前 387 MiB 下降，无泄漏迹象），采集持续 ~459 条/秒，DB `integrity_check`=ok（59 用户/153 实例，与替换前备份一致）。**回滚预案已验证可用**：DB 备份 2.0G 自检 `ok`、CP 二进制 57M 与配置齐备（生产 CP 目录下 `{data/jianmanager.db,bin/jianmanager-cp,control-plane.yml}.bak-20260925-203245`，另 Worker 配置 `worker.yml.bak-20260925-204556`），升级路径为 GORM `AutoMigrate`（`database.go:133-135`）天然幂等；11 个受管游戏实例 PID 与替换前基线逐一一致，未受影响。**`source` 缺口已按用户裁决修复（2026-09-25，方案 B 前缀推导）**：原记为「事件结构无类别，信息在采集侧即丢失」**不准确，据生产 VL 实证更正**——`log_source_id` 形如 `inst:<实例ID>/<流>`（生产 10 个源全为 `inst:` 前缀，如 `inst:147/file`；构造点 `ingest/instances.go:64`），类别与 ID 均在，故**无需改已冻结的 wire 契约**即可由前缀推导。真实缺口为两处：① 联邦路由**完全未读取 `source` 查询参数**（`log_federation.go` 原无该参数处理），故下拉选择无任何效果；② 前端下拉取值域为 `instance/control_plane/worker`（`LogsPage.tsx`），与事件实际取值 `inst:<id>/file` 不同构，致 `t(\`logs.source_${log.source}\`)` 查不到 i18n 键而回退显示原始 ID。**已实施**：CP 侧新增 `federationSourcePrefix` 把类别映射为 `log_source_id` 前缀并组合进 filter 表达式（`inst:`/`node:`/`control_plane:`），取值走白名单防注入——`control_plane` 类只落 CP 库、不进联邦数据面，显式给不可能存在的前缀使其诚实返回零结果，而非当作无约束放行全量；前端新增 `normalizeSource` 把原始标识归一为取值域，来源列改显示 i18n 标签（实例/节点/平台）。**实证**：VL 的字段匹配即前缀语义，实测 `log_source_id:"inst:"` 与 `"node:"` 在生产 VL 上分别命中 354797 / 0 条（生产仅实例类源），故无需通配符。**验证**：Go 新增 3 组测试（含 10 子用例）、前端新增 2 个 DOM 用例；两处修复均做**变异验证**（禁用 source 组合、移除 keyword 括号、归一函数直通，三种变异均被测试捕获）；CP 将下发的表达式经生产 VL 实测语义正确。**真浏览器端到端复验**（隔离演示栈，重建含修复的前后端后）：来源列显示可读标签（实例/节点/平台）**不再出现原始 `inst:`/`node:` ID**；选「实例」下发 `source=instance`、选「节点」下发 `source=worker`（各 3 次请求实测）；行数与数据一致——演示栈 VL 仅有 `node:1`/`node:self` 两类源，故选「实例」返回 0 行、选「节点」返回 16 行，**证明筛选真实生效而非无约束放行** | — |
 | FR-483 | ✅ 可签 | 受控文档已补：本规格包内 `recovery-manual.md`、`acceptance-record.md`，以及相邻规格包 `worker-victorialogs-runtime/asset-inventory.md`（资产清单按 VL 运行时归属，故不在本包内）；已对账 ARCHITECTURE/API/CHANGELOG/PRD/规格状态 | 文档类 FR |
-| FR-484 | ✅ 可签 | **真机验收通过**（host-1 + 真 VL v1.52.0）：64/128/150 源稳态 22.5/22.3/20.0MiB、峰值 56.0/62.0/61.8MiB；**342 源逐一核对 1 026 000 条事件零丢失零重复**；五个门禁回归 + 四条累积结构回归（均含变异验证）；受控证据 `worker-log-canonical-eventstore/acceptance-real.md` | — |
+| FR-484 | ✅ 可签 | **真机验收通过**（host-1 + 真 VL v1.52.0）：64/128/150 源稳态 22.5/22.3/20.0MiB、峰值 56.0/62.0/61.8MiB；**342 源逐一核对 1 026 000 条事件零丢失零重复**；五个门禁回归 + 四条结构回归（均含变异验证）；受控证据：真机验收记录（**已随 FR-484 规格于 2026-11-03 退废时删除**） | —　**⚠ 该能力已于 2026-11-03 退役**（canonical 事件体整体删除，VL 成为唯一事实源）；本判 ✅ 仅证明当时交付过 |
 
 ## 汇总
 
@@ -108,7 +118,7 @@
 
 **口径说明**：界面计数（如 994507）为联邦 Stats 聚合值，非列表行数；列表行数由 `items.length` 决定（`LogsPage.tsx:241`），故与 VL 单实例计数口径不同，非缺陷。
 
-**生产二进制与 PR head 的代码等价性证明（2026-09-25，签字前）**：为避免「签的内容与生产在跑的不一致」，以二进制内嵌溯源直接比对（非靠时间推断）：`go version -m` 读出生产 CP 的版本为 `v0.23.1-0.20260925143955-b8ca53936ff4`，后缀即构建时的 HEAD `b8ca5393`；`b8ca5393..当前 HEAD(3c4edae1)` 的差异**仅 `signoff-ledger.md` 一个文档**（+25 行），**代码文件 0 个**。故生产在跑的代码 = PR #16 的代码，签字基线一致。
+**生产二进制与 PR head 的代码等价性证明（2026-09-25，签字前）**：为避免「签的内容与生产在跑的不一致」，以二进制内嵌溯源直接比对（非靠时间推断）：`go version -m` 读出生产 CP 的版本内嵌了构建时 HEAD 的后缀（`v0.23.1-0.20260925143955-<sha>`）；该构建时 HEAD 与当时 HEAD 的差异**仅 `signoff-ledger.md` 一个文档**（+25 行），**代码文件 0 个**。故生产在跑的代码 = PR #16 的代码，签字基线一致。
 
 ## 生产暴露的日志误报（2026-09-26 签字前核查发现，FR-481 范畴）
 
@@ -128,7 +138,7 @@
 
 **动机**：本 PR 涉及 109 个 `internal/worker/` 文件，而生产替换时**只替换了 CP 二进制**，须确认生产 Worker 是否也需同步更新，否则「签的内容」与「生产在跑的」不一致。
 
-**生产 Worker 构建溯源**：`go version -m` 读出 `v0.23.1-0.20260924131238-fae55fa8816a+dirty`，构建自 `fae55fa8`（2026-09-24 13:12，FR 重编号**之前**的旧提交，重编号后已不在 HEAD 历史中）。
+**生产 Worker 构建溯源**：`go version -m` 读出 `v0.23.1-0.20260924131238-fae55fa8816a+dirty`，构建于 2026-09-24 13:12 的旧提交（FR 重编号**之前**，重编号后已不在 HEAD 历史中）。
 
 **判定：无需更新，行为等价**。对 `fae55fa8..当前 HEAD` 的 `internal/worker/` + `apps/worker/` 全量差异做性质分类：共 40 个文件、88 行改动，剔除注释与 FR 编号行后，**实质代码改动为 0 行**——全部是 FR 重编号（FR-476→477、FR-473→474 等）引起的注释同步。故生产 Worker 的**行为**与 PR 内容一致。
 
@@ -154,19 +164,22 @@
 | FR | PRD 点名的验收入口 | 台账证据要点 | 对应 |
 |---|---|---|---|
 | FR-473 | `worker-log-platform-contract/spec.md` | ADR-094 accepted；proto 10 个日志 RPC；资产审批；性能判据入契约 | ✓ |
-| FR-474 | `worker-log-acquisition/spec.md`（**Runbook A**） | 生产采集/投影/ACK 恢复/reclaim；**Runbook A 真机 `kill -9` 重启通过** | ✓ |
+| FR-474 | 采集规格**已归档**（Runbook A 记录随之删除） | 生产采集/投影/ACK 恢复/reclaim；**Runbook A 真机 `kill -9` 重启通过** | ✓ |
 | FR-475 | `worker-log-normalizer/spec.md` | 真 VL v1.52.0：Multiline 5 行归并、跨午夜、半条恢复 | ✓ |
 | FR-476 | `worker-victorialogs-runtime/spec.md`（**Runbook C**） | 资产审批、supervisor/CP runtime、预算采样与 80/90 降级、老 Worker Unimplemented | ✓ |
 | FR-477 | `worker-log-lifecycle/spec.md`（**Runbook B**） | 真机迁移链 FROZEN→…→CLEANED、物理迁移、旧 owner 过滤 | ✓ |
-| FR-478 | `worker-log-deep-archive/spec.md` | 真机 RustFS S3：登记/幂等/manifest/对象往返/Rehydrate 租约 | ✓ |
+| FR-478 | ~~`worker-log-deep-archive/spec.md`~~ **已归档删除** | 真机 RustFS S3：登记/幂等/manifest/对象往返/Rehydrate 租约 | ✓ |
 | FR-479 | `worker-log-query-federation/spec.md` | 全查询 RPC 接线、远程 Search/Stats/Facets/Export、CP 联邦真机 | ✓ |
 | FR-480 | `cp-log-query-coordinator/spec.md` | 生产 Assemble、真机联邦与延迟取证（p95 28.5ms / 8 并发 15.2ms） | ✓ |
-| FR-481 | `log-ingest-cutover/spec.md` | cutover+Legacy+DualPath、跨切换查询经两条真实路径 | ✓ |
+| FR-481 | ~~`log-ingest-cutover/spec.md`~~ **已归档删除** | cutover+Legacy+DualPath、跨切换查询经两条真实路径 | ✓ |
 | FR-482 | `logs-center-tiered-ui/spec.md` | 真浏览器验收 + 逐项点击实测（含本轮 source 修复与生产复验） | ✓ |
 | FR-483 | 本文档（受控文档） | `recovery-manual.md`、`acceptance-record.md`、`asset-inventory.md` 齐备 | ✓ |
-| FR-484 | `worker-log-canonical-eventstore/spec.md` | 真机 v1.52.0：稳态/峰值 RSS、342 源零丢失零重复 | ✓ |
+| FR-484 | ~~`worker-log-canonical-eventstore/spec.md`~~ **已归档删除** | 真机 v1.52.0：稳态/峰值 RSS、342 源零丢失零重复 | ✓ |
 
-**结论**：12 条均有对应证据，无「标准无证据」的空档。另核实 PRD 12 条描述点名的 **11 个 spec 文件全部真实存在**（逐一 `os.path.exists` 验证）。
+**结论**：12 条均有对应证据，无「标准无证据」的空档。另核实 PRD 12 条描述点名的 **11 个 spec 文件在编制时全部真实存在**（逐一 `os.path.exists` 验证）。
+
+> ⚠ **该自证句已过期（2026-11-09）**：其后 FR-474 / FR-478 / FR-481 / FR-484 / FR-496 五条退役，
+> 其 spec 文件已删除，现仅余 6 个。当前存在的 spec 清单以 `docs/specs/` 目录为准，不要以本句为准。
 
 **执行前干跑（2026-09-26）**：对上述替换逻辑做只读干跑（不写入），逐条模拟后校验：**12/12 均可正确替换**，无未知形态、替换后无裸 `✅ 已交付`（`versioning.md` 禁止项）。故签字后执行无技术风险。
 
@@ -291,7 +304,7 @@
 
 **M-7 部署前风险核验（避免「部署即打断采集」）**：`validateWorkDir` 经 `RegisterInstance` 对每个实例生效，故先核 12 个实例工作目录——11 个为相对路径 `var/servers/…`（`EvalSymlinks` 按 Worker cwd 解析、该层无 `var/` → 走报错分支放行），1 个为数据根之外的绝对路径（逐级分量皆实体、`readlink -f` 结果与路径自身一致 → 放行）。结论：无实例会被误拒。
 
-**部署动作**：备份 → SIGTERM（优雅退出 9s）→ `install -m 755` 替换 → 复刻原启动方式（setsid 脱离、日志续写 `logs/worker.out`）。产物取自 `cad0ed88`（`vcs.modified=false`），`writeFrame` 符号在位。
+**部署动作**：备份 → SIGTERM（优雅退出 9s）→ `install -m 755` 替换 → 复刻原启动方式（setsid 脱离、日志续写 `logs/worker.out`）。产物构建自干净工作树（`vcs.modified=false`），`writeFrame` 符号在位。
 
 **部署后实测**：
 
@@ -362,4 +375,4 @@
 
 **保留风险（如实记录，未随手改）**：`internal/controlplane/router` 真机 480–520s，接近 `go test` 默认 10m 上限，与其它重包并行时实测超时（`panic: test timed out after 10m0s`）。仓库已有 `scripts/go-test-race.sh` 对该包单独放宽（race 60m）；非 race 侧同理需要分组时限（本轮已补 `scripts/go-test.sh`）。
 
-**受影响受控文档**：`CHANGELOG.md`（[Unreleased] 修复段）、`docs/specs/worker-log-acquisition/spec.md`（FR-474 截断语义与回归项）、`docs/specs/daemon-wrapper/impl.md`（FR-006 验收行）、`docs/specs/worker-log-platform-contract/code-review-findings.md`（M-7 Windows 补强）、`docs/adr/003-daemon-wrapper.md`（实现细化 2026-09-28）。
+**受影响受控文档**：`CHANGELOG.md`（[Unreleased] 修复段）、FR-474 采集规格（已归档）、`docs/specs/daemon-wrapper/impl.md`（FR-006 验收行）、`docs/specs/worker-log-platform-contract/code-review-findings.md`（M-7 Windows 补强）、`docs/adr/003-daemon-wrapper.md`（实现细化 2026-09-28）。

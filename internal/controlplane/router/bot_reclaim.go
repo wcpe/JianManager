@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BotReclaimHandler 失效 Bot 回收列表与手动确认（FR-460）。
+// BotReclaimHandler 失效 Bot 回收列表与手动确认。
 // 全组挂 admin；处置写审计（由 service 内完成）。
 type BotReclaimHandler struct {
 	svc *service.BotReclaimService

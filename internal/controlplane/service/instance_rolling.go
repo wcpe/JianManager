@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 实例滚动/分批/灰度编排（FR-457）。
+// 实例滚动/分批/灰度编排。
 //
 // 与既有 InstanceBatchService.Batch 的差异：Batch 是一次性并发扇出（无分批/间隔/失败即停/暂停继续/灰度），
 // 对 60+ 台执行重启会同时打满并发、一次失败无可挽回。本服务把编排语义独立成会话实体，持久化进度，
@@ -45,7 +45,7 @@ type InstanceRollingService struct {
 	runtimes map[uint]*rollingRuntime
 
 	// createMu 串行化「活跃编排冲突检查 + 落库」，与 mu（runtimes 映射）分离：
-	// 避免 create 期间的 DB 查询长时间占用 mu、阻塞运行态注册/清理（FR-457 #I）。
+	// 避免 create 期间的 DB 查询长时间占用 mu、阻塞运行态注册/清理（#I）。
 	createMu sync.Mutex
 }
 
@@ -191,7 +191,7 @@ func (s *InstanceRollingService) Create(req RollingRequest, scopeIDs []uint, sco
 
 	// 互斥约束（spec §2.1）：任一活跃编排（pending/running/paused）与本会话目标集合存在重叠即拒绝，
 	// 避免并发创建同一目标集合的编排互相打翻。校验与落库在同一把 createMu 内，防止 TOCTOU；
-	// createMu 与 runtime 映射的 mu 分离，使 DB 查询不阻塞其它会话的运行态注册（FR-457 #I）。
+	// createMu 与 runtime 映射的 mu 分离，使 DB 查询不阻塞其它会话的运行态注册（#I）。
 	s.createMu.Lock()
 	if err := s.ensureNoActiveConflictLocked(targets); err != nil {
 		s.createMu.Unlock()
@@ -242,7 +242,7 @@ func (s *InstanceRollingService) ensureNoActiveConflictLocked(targets []uint) er
 		decodeRollingOp(&active[i])
 		for _, id := range active[i].Targets {
 			if _, ok := want[id]; ok {
-				// 只回「目标存在进行中编排」，不泄露他方会话 id/state（FR-457 越权修复）。
+				// 只回「目标存在进行中编排」，不泄露他方会话 id/state（越权修复）。
 				return errors.New("目标实例存在进行中的编排，请先等待其结束或取消")
 			}
 		}
@@ -279,7 +279,7 @@ func (s *InstanceRollingService) Pause(opID uint) error {
 }
 
 // Resume 继续；进程重启后（内存运行态丢失）由 DB 游标续跑剩余批。
-// 「查询运行态 + 占位」在 s.mu 内原子完成，避免并发两次 Resume 双推进（FR-457 竞态修复）。
+// 「查询运行态 + 占位」在 s.mu 内原子完成，避免并发两次 Resume 双推进（竞态修复）。
 func (s *InstanceRollingService) Resume(opID uint) error {
 	op, err := s.Get(opID)
 	if err != nil {

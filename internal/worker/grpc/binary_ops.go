@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（FR-441 通用二进制运行时搭建）。
+// FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（通用二进制运行时搭建）。
 //
 // 与 DownloadCore 的分工：DownloadCore 只服务 MC 核心 jar（绑定节点核心缓存与组合键），
 // 本 RPC 服务 coreType=binary 的两类 Worker 侧来源：

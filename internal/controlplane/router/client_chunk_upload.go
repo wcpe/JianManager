@@ -12,10 +12,10 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientChunkUploadHandler 客户端分发大文件分块上传端点（FR-251，增强 FR-088 单次上传）。
+// ClientChunkUploadHandler 客户端分发大文件分块上传端点（增强单次上传）。
 //
 // 鉴权与 ClientVersionHandler.PublishFile 同组：JWT 平台管理员（requirePlatformAdmin），
-// 挂 admin 组。与玩家拉取密钥端点物理隔离（ADR-022/023）——分块上传是运营发布动作。
+// 挂 admin 组。与玩家拉取密钥端点物理隔离——分块上传是运营发布动作。
 //
 // 协议：init（声明文件大小得 uploadId/chunkSize/chunkCount）→ PUT 各分片（原始字节，幂等）
 // → complete（校验齐全 + 拼装喂 CAS 得与单次上传一致的 {sha256,md5,size,codec}）→ DELETE 弃单。

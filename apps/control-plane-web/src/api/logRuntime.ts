@@ -32,7 +32,7 @@ export interface ApprovedLogAsset {
 export function useLogRuntime(nodeId: number, active: boolean) {
   return useQuery({
     queryKey: ['log-runtime', nodeId],
-    queryFn: async () => (await api.get<LogRuntimeStatus>(`/nodes/${nodeId}/log-runtime`)).data,
+    queryFn: async ({ signal }) => (await api.get<LogRuntimeStatus>(`/nodes/${nodeId}/log-runtime`, { signal })).data,
     enabled: active && nodeId > 0,
     refetchInterval: active ? 10_000 : false,
   })
@@ -41,7 +41,7 @@ export function useLogRuntime(nodeId: number, active: boolean) {
 export function useApprovedLogAssets(active: boolean) {
   return useQuery({
     queryKey: ['log-vl-assets'],
-    queryFn: async () => (await api.get<{ assets: ApprovedLogAsset[] }>('/log-runtime/assets')).data.assets,
+    queryFn: async ({ signal }) => (await api.get<{ assets: ApprovedLogAsset[] }>('/log-runtime/assets', { signal })).data.assets,
     enabled: active,
   })
 }
@@ -83,9 +83,11 @@ export function useControlLogRuntime(nodeId: number) {
 export function useMigrateLogPartition(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ storageNamespace, utcDay }: { storageNamespace: string; utcDay: string }) =>
-      (await api.post(`/nodes/${nodeId}/log-runtime/migrate`, { storageNamespace, utcDay }, { timeout: 180_000 })).data,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['log-runtime', nodeId] }),
+    // 目标在打开确认时冻结，不能随节点面板切换而漂移；超时也不自动重放写请求。
+    mutationFn: async ({ storageNamespace, utcDay, targetNodeId = nodeId }: { storageNamespace: string; utcDay: string; targetNodeId?: number }) =>
+      (await api.post(`/nodes/${targetNodeId}/log-runtime/migrate`, { storageNamespace, utcDay }, { timeout: 180_000 })).data,
+    retry: false,
+    onSuccess: (_data, variables) => qc.invalidateQueries({ queryKey: ['log-runtime', variables.targetNodeId ?? nodeId] }),
   })
 }
 

@@ -1,0 +1,187 @@
+openapi: 3.1.0
+
+info:
+  title: JianManager 对外 API
+  version: 1.0.0
+  description: |
+    # 面向外部系统的稳定契约
+
+    本文件定义 JianManager（简称 JM）的**对外 API**，供业务台、第三方集成等机器调用方使用。
+    与面向浏览器的对内 API 分属两套契约：对内 API 随版本可变，本文件的契约保持向后兼容。
+
+    ## 职责边界（重要）
+
+    JM 在业务链路中**只做通道**，不理解任何业务语义：
+
+    - 不定义动作名（含快照动作）——由业务台与插件约定
+    - 不规定 `payload` / `output` 的字段结构——是不透明载荷
+    - 不解析 `manifest` 内容——原样透传
+    - 对账只做"拉取并透传"，差异由业务台计算
+
+    这条边界是架构决策（ADR-106）的结果，**不是实现限制**。请勿依赖 JM 提供任何业务语义能力。
+
+    ## 认证
+
+    本文件列出的端点均接受 **Agent Token**（前缀 `jmat_`）：
+
+    ```
+    Authorization: Bearer jmat_xxxxxxxxxxxx
+    ```
+
+    Agent Token 受 scope 收敛与写白名单约束。无权限时返回 `403 FORBIDDEN`。
+
+    > **本文件只覆盖对外面**。业务命令下发、批量、对账、桥状态等路径挂在
+    > `JWTAuth` 组（只接受用户会话 token），属于**对内 API**，不在本文件范围，
+    > 见 `docs/API.md`。早前本文件曾全局声明 AgentToken 并把那些路径收进来，
+    > 导致按文档调用必然 401——现已按实际鉴权面收缩。
+
+    ## 同步模型
+
+    | 场景 | 机制 | 说明 |
+    |---|---|---|
+    | 下发命令 | HTTP POST | 同步等待结果 |
+    | 批量下发 | HTTP POST（可选 SSE 响应） | 逐实例结果 |
+    | 拉取快照 | HTTP POST | 同步等待结果 |
+    | 接收事件 | SSE 长连接 | 异步推送，支持断线补读 |
+    | 查询指标 | HTTP GET | 同步，配合轮询 |
+
+    ## 错误处理
+
+    所有错误响应统一结构：
+
+    ```json
+    { "code": "INSTANCE_OFFLINE", "message": "实例未运行", "requestId": "uuid" }
+    ```
+
+    `code` 为机器可读的稳定标识，`message` 仅供人读。**调用方应按 `code` 分支处理，不要匹配 `message` 文本。**
+
+servers:
+  - url: /api/v1
+    description: 当前实例
+
+tags:
+  - name: stream
+    description: 业务事件流（SSE）
+  - name: stats
+    description: 统计与观测（只读）
+
+security:
+  - AgentToken: []
+
+paths:
+  # ── 对外面（接受 Agent Token）────────────────────────────
+  #
+  # 【为何只有这几条】鉴权实现是判据，不是意图：
+  #   - `/business/stream`、`/business/cursor` → `businessStreamAuth`（Agent Token 优先、JWT 兑底）
+  #   - `/stats/*` → `statsAuth`（同上）+ 限流
+  #   - `/mcp*` → Agent Token 专用（不在本文件范围，见 ADR-096）
+  # 其余路径（`/instances/{id}/business`、`/business/batch`、`/business/reconcile`、
+  # `/instances/{id}/bridge/*` 等）挂在 `protected` 组，而那里是 **JWTAuth**，
+  # 它只接受 HS256 用户会话 token，`jmat_` 会直接 401。
+  #
+  # 早前本文件把这些内部路径也收进来、并在全局声明 `security: AgentToken`，
+  # 结果是“按文档拿 Agent Token 调 9 个端点全部 401”。现在按实际鉴权面收缩：
+  # 对外文档只写真正对外的那几条，其余属于对内 API（docs/API.md）。
+
+  # 事件流（对外）
+  /business/stream:
+    $ref: './paths/stream.yaml#/paths/~1business~1stream'
+  /business/cursor:
+    $ref: './paths/business.yaml#/paths/~1business~1cursor'
+
+  # 统计（对外，只读）
+  /stats/overview:
+    $ref: './paths/stats.yaml#/paths/~1stats~1overview'
+  /stats/instances:
+    $ref: './paths/stats.yaml#/paths/~1stats~1instances'
+  /stats/nodes:
+    $ref: './paths/stats.yaml#/paths/~1stats~1nodes'
+  /stats/crashes:
+    $ref: './paths/stats.yaml#/paths/~1stats~1crashes'
+  /stats/changes:
+    $ref: './paths/stats.yaml#/paths/~1stats~1changes'
+
+
+components:
+  securitySchemes:
+    AgentToken:
+      type: http
+      scheme: bearer
+      bearerFormat: jmat
+      description: Agent Token，前缀 `jmat_`。受 scope 收敛约束。
+
+  schemas:
+    Error:
+      $ref: './components/errors.yaml#/ErrorBase'
+    # 业务
+    BusinessDispatchRequest:
+      $ref: './components/schemas.yaml#/BusinessDispatchRequest'
+    BusinessDispatchResponse:
+      $ref: './components/schemas.yaml#/BusinessDispatchResponse'
+    DomainManifest:
+      $ref: './components/schemas.yaml#/DomainManifest'
+    BatchPreviewRequest:
+      $ref: './components/schemas.yaml#/BatchPreviewRequest'
+    BatchPreviewResponse:
+      $ref: './components/schemas.yaml#/BatchPreviewResponse'
+    BatchExecuteRequest:
+      $ref: './components/schemas.yaml#/BatchExecuteRequest'
+    BatchExecuteResponse:
+      $ref: './components/schemas.yaml#/BatchExecuteResponse'
+    BatchTarget:
+      $ref: './components/schemas.yaml#/BatchTarget'
+    RiskAssessment:
+      $ref: './components/schemas.yaml#/RiskAssessment'
+    ReconcileRequest:
+      $ref: './components/schemas.yaml#/ReconcileRequest'
+    ReconcileResponse:
+      $ref: './components/schemas.yaml#/ReconcileResponse'
+    InstanceResult:
+      $ref: './components/schemas.yaml#/InstanceResult'
+    # 事件
+    BusinessEventFrame:
+      $ref: './components/schemas.yaml#/BusinessEventFrame'
+    PingFrame:
+      $ref: './components/schemas.yaml#/PingFrame'
+    ReplayGapFrame:
+      $ref: './components/schemas.yaml#/ReplayGapFrame'
+    # 统计
+    StatsOverview:
+      $ref: './components/schemas.yaml#/StatsOverview'
+    MetricSeriesResponse:
+      $ref: './components/schemas.yaml#/MetricSeriesResponse'
+    LogQueryResponse:
+      $ref: './components/schemas.yaml#/LogQueryResponse'
+    CrashTrendResponse:
+      $ref: './components/schemas.yaml#/CrashTrendResponse'
+    ChangeListResponse:
+      $ref: './components/schemas.yaml#/ChangeListResponse'
+    # 桥
+    BridgeStatus:
+      $ref: './components/schemas.yaml#/BridgeStatus'
+    SubscriptionRequest:
+      $ref: './components/schemas.yaml#/SubscriptionRequest'
+    BusinessStatus:
+      $ref: './components/schemas.yaml#/BusinessStatus'
+
+  responses:
+    Unauthorized:
+      $ref: './components/common.yaml#/Unauthorized'
+    Forbidden:
+      $ref: './components/common.yaml#/Forbidden'
+    NotFound:
+      $ref: './components/common.yaml#/NotFound'
+    RateLimited:
+      $ref: './components/common.yaml#/RateLimited'
+
+  parameters:
+    Page:
+      $ref: './components/common.yaml#/Page'
+    PageSize:
+      $ref: './components/common.yaml#/PageSize'
+    From:
+      $ref: './components/common.yaml#/From'
+    To:
+      $ref: './components/common.yaml#/To'
+    Resolution:
+      $ref: './components/common.yaml#/Resolution'

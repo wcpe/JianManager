@@ -228,7 +228,7 @@ func TestQueryServerUnavailable(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestBuildQuerySnapshotNumplayersPresence 只有 numplayers 存在且可解析才置可用位（FR-447 不伪造 0）。
+// TestBuildQuerySnapshotNumplayersPresence 只有 numplayers 存在且可解析才置可用位（不伪造 0）。
 func TestBuildQuerySnapshotNumplayersPresence(t *testing.T) {
 	present := buildQuerySnapshot(map[string]string{"numplayers": "0", "maxplayers": "20"}, nil)
 	assert.True(t, present.PlayersOnlineAvailable, "numplayers=0 是真实值，仍算可用")
@@ -241,7 +241,7 @@ func TestBuildQuerySnapshotNumplayersPresence(t *testing.T) {
 	assert.False(t, unparsable.PlayersOnlineAvailable, "numplayers 不可解析不得声称可用")
 }
 
-// TestSplitQueryPluginsStripsServerSoftware 首元素粘连的服务端软件描述应被剥离（FR-446 审计项 8）。
+// TestSplitQueryPluginsStripsServerSoftware 首元素粘连的服务端软件描述应被剥离（审计项 8）。
 func TestSplitQueryPluginsStripsServerSoftware(t *testing.T) {
 	assert.Equal(t, []string{"WorldEdit 5.3", "CommandBook 2.1"},
 		splitQueryPlugins("CraftBukkit on Bukkit 1.2.5-R4.0: WorldEdit 5.3; CommandBook 2.1"))
@@ -253,7 +253,7 @@ func TestSplitQueryPluginsStripsServerSoftware(t *testing.T) {
 	assert.Equal(t, []string{"WorldEdit 5.3"}, splitQueryPlugins("Bukkit: WorldEdit 5.3"))
 }
 
-// TestSplitQueryPluginsKeepsColonInPluginName 无软件描述段、插件名含 ":" 时不得误截（FR-446 复审 N8）：
+// TestSplitQueryPluginsKeepsColonInPluginName 无软件描述段、插件名含 ":" 时不得误截（复审 N8）：
 // 一律剥到首个 ":" 会把 "MyPlugin:v1.0" 截成 "v1.0"。
 func TestSplitQueryPluginsKeepsColonInPluginName(t *testing.T) {
 	assert.Equal(t, []string{"MyPlugin:v1.0", "OtherPlugin"},
@@ -275,7 +275,7 @@ func (c *repeatingDatagramConn) SetDeadline(time.Time) error      { return nil }
 func (c *repeatingDatagramConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *repeatingDatagramConn) SetWriteDeadline(time.Time) error { return nil }
 
-// TestReadQueryFullStatDatagramsFragmentCap 声明 100 片但永远收不齐时，分片数上限兜底而非空转（FR-446 审计项 9）。
+// TestReadQueryFullStatDatagramsFragmentCap 声明 100 片但永远收不齐时，分片数上限兜底而非空转（审计项 9）。
 func TestReadQueryFullStatDatagramsFragmentCap(t *testing.T) {
 	conn := &repeatingDatagramConn{
 		datagram: buildQueryDatagram(queryTypeStat, buildFullStatFragment(100, 0, []byte("x"))),

@@ -13,8 +13,8 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// LogProtocolVersion Worker Log RPC 协议版本（与 FR-473 契约对齐）。
-const LogProtocolVersion = "fr433/v1"
+// LogProtocolVersion Worker Log RPC 协议版本（与契约对齐）。
+const LogProtocolVersion = "log-query/1"
 
 // WorkerClientFactory 按 WorkerID 取得 workerpb 日志查询客户端。
 // 生产实现经 CP 反向 gRPC 隧道（ClientPool）；测试注入 fake。
@@ -22,7 +22,7 @@ type WorkerClientFactory func(ctx context.Context, workerID string) (workerpb.Wo
 
 // TunnelDialer 实现 WorkerDialer：经工厂拿到 workerpb 客户端并适配为 WorkerClient。
 //
-// 生产由 CP ClientPool.Get(workerID) 适配工厂（见 assemble.go PoolClientFactory），经 ADR-081 反向隧道；
+// 生产由 CP ClientPool.Get(workerID) 适配工厂（见 assemble.go PoolClientFactory），经反向隧道；
 // 未配置工厂时 Dial 失败，覆盖侧记 dial_failed，不得静默假完整。
 type TunnelDialer struct {
 	factory WorkerClientFactory
@@ -108,7 +108,7 @@ func (a *WorkerClientAdapter) Fields(ctx context.Context, req WorkerSearchReques
 	if a == nil || a.client == nil {
 		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
 	}
-	resp, err := a.client.LogFields(ctx, &workerpb.LogFieldsRequest{Query: toProtoQueryBase(req)})
+	resp, err := a.client.LogFields(ctx, &workerpb.LogFieldsRequest{Query: toProtoQueryBase(req), ExploreFields: req.ExploreFields})
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
 			return &WorkerFieldsResponse{Unsupported: true, Error: err.Error()}, nil
@@ -118,7 +118,11 @@ func (a *WorkerClientAdapter) Fields(ctx context.Context, req WorkerSearchReques
 	if resp == nil {
 		return &WorkerFieldsResponse{Error: "empty_worker_response"}, nil
 	}
-	out := &WorkerFieldsResponse{Fields: append([]string(nil), resp.GetFields()...)}
+	out := &WorkerFieldsResponse{
+		Fields:   append([]string(nil), resp.GetFields()...),
+		Coverage: coverageFromProto(resp.GetCoverage()),
+	}
+	out.Truncated = coverageBudgetCut(out.Coverage)
 	if resp.GetView() != nil {
 		out.ViewID = resp.GetView().GetViewId()
 	}
@@ -128,6 +132,11 @@ func (a *WorkerClientAdapter) Fields(ctx context.Context, req WorkerSearchReques
 	if e := resp.GetError(); e != nil {
 		out.Error = e.GetMessage()
 		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
+	}
+	if req.ExploreFields && !resp.GetExploreApplied() {
+		out.Fields = nil
+		out.Unsupported, out.Error = true, "document-field exploration unsupported by worker"
+		out.Coverage = unsupportedExplorationCoverage(out.Coverage)
 	}
 	return out, nil
 }
@@ -149,11 +158,12 @@ func (a *WorkerClientAdapter) Stats(ctx context.Context, req WorkerSearchRequest
 		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
 	}
 	base := toProtoQueryBase(req)
-	// metric_field 无独立 proto 字段时经 filter 旁路传递不安全；Stats 预聚合由 Worker 按契约字段处理。
+	// 指标字段独立传递，不能嵌入 filter 改写查询含义。
 	resp, err := a.client.LogStats(ctx, &workerpb.LogStatsRequest{
-		Query:      base,
-		GroupBy:    append([]string(nil), groupBy...),
-		TimeBucket: timeBucket,
+		Query:       base,
+		GroupBy:     append([]string(nil), groupBy...),
+		TimeBucket:  timeBucket,
+		MetricField: req.MetricField,
 	})
 	return mapStatsResponse(resp, err)
 }
@@ -167,8 +177,45 @@ func (a *WorkerClientAdapter) Facets(ctx context.Context, req WorkerSearchReques
 		Query:          toProtoQueryBase(req),
 		Dimensions:     append([]string(nil), dimensions...),
 		DimensionLimit: dimensionLimit,
+		ExploreFields:  req.ExploreFields,
 	})
-	return mapFacetsResponse(resp, err)
+	out, mapErr := mapFacetsResponse(resp, err)
+	if req.ExploreFields && out != nil && resp != nil && !resp.GetExploreApplied() {
+		out.Dimensions = nil
+		out.Unsupported, out.Error = true, "document-field exploration unsupported by worker"
+		out.Coverage = unsupportedExplorationCoverage(out.Coverage)
+	}
+	return out, mapErr
+}
+
+// Streams 实现 WorkerClient（窗内有哪些流、各多少条）。
+func (a *WorkerClientAdapter) Streams(ctx context.Context, req WorkerSearchRequest) (*WorkerStreamsResponse, error) {
+	if a == nil || a.client == nil {
+		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
+	}
+	resp, err := a.client.LogStreams(ctx, &workerpb.LogStreamsRequest{Query: toProtoQueryBase(req)})
+	return mapStreamsResponse(resp, err)
+}
+
+// StreamFieldNames 实现 WorkerClient。
+func (a *WorkerClientAdapter) StreamFieldNames(ctx context.Context, req WorkerSearchRequest) (*WorkerStreamFieldNamesResponse, error) {
+	if a == nil || a.client == nil {
+		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
+	}
+	resp, err := a.client.LogStreamFieldNames(ctx, &workerpb.LogStreamFieldNamesRequest{Query: toProtoQueryBase(req)})
+	return mapStreamFieldNamesResponse(resp, err)
+}
+
+// StreamFieldValues 实现 WorkerClient。
+func (a *WorkerClientAdapter) StreamFieldValues(ctx context.Context, req WorkerSearchRequest, field string) (*WorkerStreamFieldValuesResponse, error) {
+	if a == nil || a.client == nil {
+		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
+	}
+	resp, err := a.client.LogStreamFieldValues(ctx, &workerpb.LogStreamFieldValuesRequest{
+		Query: toProtoQueryBase(req),
+		Field: field,
+	})
+	return mapStreamFieldValuesResponse(resp, err)
 }
 
 func toProtoQueryBase(req WorkerSearchRequest) *workerpb.LogQueryRequestBase {
@@ -199,6 +246,8 @@ func toProtoQueryBase(req WorkerSearchRequest) *workerpb.LogQueryRequestBase {
 		Filter:            req.Filter,
 		PermissionScope:   "",
 		CancellationToken: "",
+		// 请求级豁免标记原样透传到 Worker（仅导出路径会置位）。
+		AllowProjectionDrift: req.AllowProjectionDrift,
 	}
 }
 
@@ -242,6 +291,75 @@ func statsQualityFromProto(v workerpb.LogStatsQuality) StatsQuality {
 	}
 }
 
+func coverageFromProto(c *workerpb.LogCoverage) *Coverage {
+	if c == nil {
+		return nil
+	}
+	out := &Coverage{
+		Complete:         c.GetComplete(),
+		PartialReasons:   append([]string(nil), c.GetPartialReasons()...),
+		EnumerationState: enumerationStateFromProto(c.GetEnumerationState()),
+	}
+	for _, target := range mapCoverageTargets(c.GetTargets()) {
+		out.Targets = append(out.Targets, TargetCoverage{
+			TargetID:          target.TargetID,
+			State:             target.State,
+			Reasons:           append([]string(nil), target.Reasons...),
+			ClosedVisibleSeq:  target.ClosedVisibleSeq,
+			CatalogGeneration: target.CatalogGeneration,
+		})
+	}
+	return out
+}
+
+// coverageBudgetCut 同时检查顶层与逐目标原因，不能用逐目标 success 抹去总预算截断。
+func coverageBudgetCut(c *Coverage) bool {
+	if c == nil {
+		return false
+	}
+	reasons := append([]string(nil), c.PartialReasons...)
+	for _, t := range c.Targets {
+		reasons = append(reasons, t.Reasons...)
+	}
+	for _, r := range reasons {
+		if strings.EqualFold(r, "BUDGET_EXCEEDED") || strings.EqualFold(r, "TRUNCATED") {
+			return true
+		}
+	}
+	return false
+}
+
+func positionGapsFromProto(gaps []*workerpb.IngestPositionGap) []IngestPositionGap {
+	var out []IngestPositionGap
+	for _, g := range gaps {
+		if g == nil {
+			continue
+		}
+		item := IngestPositionGap{
+			StorageNamespace: g.GetStorageNamespace(), From: strconv.FormatUint(g.GetFrom(), 10), To: strconv.FormatUint(g.GetTo(), 10),
+			ReasonCode: g.GetReasonCode(), Operator: g.GetOperator(), AtUTC: g.GetAtUtc(),
+			LogSourceID: g.GetLogSourceId(), SourceGeneration: g.GetSourceGeneration(),
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func enumerationStateFromProto(v workerpb.LogEnumerationState) EnumerationState {
+	switch v {
+	case workerpb.LogEnumerationState_LOG_ENUMERATION_OPEN:
+		return EnumOpen
+	case workerpb.LogEnumerationState_LOG_ENUMERATION_EXHAUSTED:
+		return EnumExhausted
+	case workerpb.LogEnumerationState_LOG_ENUMERATION_STALE:
+		return EnumStale
+	case workerpb.LogEnumerationState_LOG_ENUMERATION_CANCELLED:
+		return EnumCancelled
+	default:
+		return ""
+	}
+}
+
 func mapSearchResponse(resp *workerpb.LogSearchResponse, err error) (*WorkerSearchResponse, error) {
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
@@ -260,18 +378,22 @@ func mapSearchResponse(resp *workerpb.LogSearchResponse, err error) (*WorkerSear
 		if v := resp.GetView(); v != nil {
 			out.ViewID = v.GetViewId()
 		}
+		out.Coverage = coverageFromProto(resp.GetCoverage())
 		out.Targets = mapCoverageTargets(resp.GetCoverage().GetTargets())
 		return out, nil
 	}
 	out := &WorkerSearchResponse{
-		ViewID:     resp.GetView().GetViewId(),
-		NextCursor: resp.GetNextCursor(),
-		Exhausted:  resp.GetExhausted(),
-		Targets:    mapCoverageTargets(resp.GetCoverage().GetTargets()),
-		Quality:    qualityFromProto(resp.GetQuality()),
+		ViewID:             resp.GetView().GetViewId(),
+		NextCursor:         resp.GetNextCursor(),
+		Exhausted:          resp.GetExhausted(),
+		Coverage:           coverageFromProto(resp.GetCoverage()),
+		IngestPositionGaps: positionGapsFromProto(resp.GetIngestPositionGaps()),
+		Targets:            mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Quality:            qualityFromProto(resp.GetQuality()),
 	}
 	// !exhausted + next_cursor 是正常分页，不是资源截断。资源截断由 coverage
 	// 原因显式表达，不能把页大小误报为不完整结果。
+	out.Truncated = coverageBudgetCut(out.Coverage)
 	for _, target := range out.Targets {
 		for _, reason := range target.Reasons {
 			if reason == "BUDGET_EXCEEDED" || reason == "TRUNCATED" {
@@ -328,10 +450,12 @@ func mapStatsResponse(resp *workerpb.LogStatsResponse, err error) (*WorkerStatsR
 		return out, nil
 	}
 	out := &WorkerStatsResponse{
-		ViewID:  resp.GetView().GetViewId(),
-		Targets: mapCoverageTargets(resp.GetCoverage().GetTargets()),
-		Quality: qualityFromProto(resp.GetQuality()),
+		ViewID:   resp.GetView().GetViewId(),
+		Coverage: coverageFromProto(resp.GetCoverage()),
+		Targets:  mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Quality:  qualityFromProto(resp.GetQuality()),
 	}
+	out.Truncated = coverageBudgetCut(out.Coverage)
 	for _, p := range resp.GetPoints() {
 		agg := StatsAggregate{
 			Count: p.GetCount(),
@@ -375,17 +499,16 @@ func mapFacetsResponse(resp *workerpb.LogFacetsResponse, err error) (*WorkerFace
 	if resp == nil {
 		return &WorkerFacetsResponse{Error: "empty_worker_response"}, nil
 	}
-	if e := resp.GetError(); e != nil {
-		out := &WorkerFacetsResponse{Error: e.GetMessage()}
-		if e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED {
-			out.Unsupported = true
-		}
-		out.Targets = mapCoverageTargets(resp.GetCoverage().GetTargets())
-		return out, nil
-	}
 	out := &WorkerFacetsResponse{
-		ViewID:  resp.GetView().GetViewId(),
-		Targets: mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		ViewID:    resp.GetView().GetViewId(),
+		Targets:   mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Coverage:  coverageFromProto(resp.GetCoverage()),
+		Truncated: resp.GetTruncated(),
+	}
+	if e := resp.GetError(); e != nil {
+		out.Error = e.GetMessage()
+		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
+		return out, nil
 	}
 	// proto LogFacetValue 扁平带 dimension；按维重组。
 	order := make([]string, 0, 4)
@@ -407,6 +530,100 @@ func mapFacetsResponse(resp *workerpb.LogFacetsResponse, err error) (*WorkerFace
 	}
 	for _, dim := range order {
 		out.Dimensions = append(out.Dimensions, *byDim[dim])
+	}
+	return out, nil
+}
+
+// mapStreamsResponse 把 proto → logcoord。
+//
+// Complete 直传不重算：它是 Worker 侧「条数是否可信」的唯一判据，
+// CP 不掌握 VL 的截断细节，在这里重新推导只会引入第二个真相。
+func mapStreamsResponse(resp *workerpb.LogStreamsResponse, err error) (*WorkerStreamsResponse, error) {
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return &WorkerStreamsResponse{Unsupported: true, Error: err.Error()}, nil
+		}
+		return nil, err
+	}
+	if resp == nil {
+		return &WorkerStreamsResponse{Error: "empty_worker_response"}, nil
+	}
+	out := &WorkerStreamsResponse{
+		ViewID:   resp.GetView().GetViewId(),
+		Targets:  mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Coverage: coverageFromProto(resp.GetCoverage()),
+		Complete: resp.GetComplete(),
+	}
+	if e := resp.GetError(); e != nil {
+		out.Error = e.GetMessage()
+		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
+		return out, nil
+	}
+	out.Streams = make([]WorkerStream, 0, len(resp.GetStreams()))
+	for _, s := range resp.GetStreams() {
+		if s == nil {
+			continue
+		}
+		out.Streams = append(out.Streams, WorkerStream{
+			LogSourceID: s.GetLogSourceId(),
+			Stream:      s.GetStream(),
+			Raw:         s.GetRaw(),
+			Hits:        s.GetHits(),
+		})
+	}
+	return out, nil
+}
+
+func mapStreamFieldNamesResponse(resp *workerpb.LogStreamFieldNamesResponse, err error) (*WorkerStreamFieldNamesResponse, error) {
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return &WorkerStreamFieldNamesResponse{Unsupported: true, Error: err.Error()}, nil
+		}
+		return nil, err
+	}
+	if resp == nil {
+		return &WorkerStreamFieldNamesResponse{Error: "empty_worker_response"}, nil
+	}
+	out := &WorkerStreamFieldNamesResponse{
+		ViewID:   resp.GetView().GetViewId(),
+		Fields:   append([]string(nil), resp.GetFields()...),
+		Targets:  mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Coverage: coverageFromProto(resp.GetCoverage()),
+	}
+	if e := resp.GetError(); e != nil {
+		out.Error = e.GetMessage()
+		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
+	}
+	return out, nil
+}
+
+func mapStreamFieldValuesResponse(resp *workerpb.LogStreamFieldValuesResponse, err error) (*WorkerStreamFieldValuesResponse, error) {
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return &WorkerStreamFieldValuesResponse{Unsupported: true, Error: err.Error()}, nil
+		}
+		return nil, err
+	}
+	if resp == nil {
+		return &WorkerStreamFieldValuesResponse{Error: "empty_worker_response"}, nil
+	}
+	out := &WorkerStreamFieldValuesResponse{
+		ViewID:   resp.GetView().GetViewId(),
+		Targets:  mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Coverage: coverageFromProto(resp.GetCoverage()),
+		Complete: resp.GetComplete(),
+	}
+	if e := resp.GetError(); e != nil {
+		out.Error = e.GetMessage()
+		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
+		return out, nil
+	}
+	out.Values = make([]FacetValue, 0, len(resp.GetValues()))
+	for _, v := range resp.GetValues() {
+		if v == nil {
+			continue
+		}
+		out.Values = append(out.Values, FacetValue{Value: v.GetValue(), Count: v.GetHits()})
 	}
 	return out, nil
 }
@@ -435,6 +652,13 @@ func eventFromProto(e *workerpb.LogEvent) Event {
 	if e == nil {
 		return Event{}
 	}
+	var fields map[string]string
+	if len(e.GetFields()) > 0 {
+		fields = make(map[string]string, len(e.GetFields()))
+		for key, value := range e.GetFields() {
+			fields[key] = value
+		}
+	}
 	return Event{
 		EventID:          e.GetEventId(),
 		LogSourceID:      e.GetLogSourceId(),
@@ -447,6 +671,7 @@ func eventFromProto(e *workerpb.LogEvent) Event {
 		Stream:           e.GetStream(),
 		Message:          e.GetMessage(),
 		CanonicalHash:    e.GetCanonicalContentHash(),
+		Fields:           fields,
 	}
 }
 
@@ -569,11 +794,16 @@ func StatsQualityFromProto(q workerpb.LogStatsQuality) StatsQuality {
 }
 
 // QualityBlocksExport 判定质量是否阻断导出成功附件。
-// duplicate=unresolved/conflict 或 stats=partial/unavailable 均阻断；
-// 枚举值大小写不敏感。
+//
+// 口径是 fail-closed：duplicate 与 stats 都**明确为 exact** 才放行，其余一律阻断。
+// 枚举值大小写不敏感（解析统一走 Parse*）。
+//
+// 为什么不能反过来只列举已知的坏值：Worker 未上报质量（proto 为 nil）或上报了本版本
+// 不认识的未来枚举时，解析结果都是 unspecified。若 unspecified 被当作「无信息、可放行」，
+// 任何未识别质量都会以良好状态通过导出闸门——这正是 M-3 要求避免的 fail-open。
+// 写成「非 exact 即阻断」后，未识别取值与将来新增的坏值天然落在阻断侧，
+// 不再需要维护一份容易漏项的枚举清单（原实现漏了 unspecified 即属此类）。
 func QualityBlocksExport(q Quality) bool {
-	dq := ParseDuplicateQuality(string(q.DuplicateQuality))
-	sq := ParseStatsQuality(string(q.StatsQuality))
-	return dq == DupUnresolved || dq == DupConflict ||
-		sq == StatsQPartial || sq == StatsQUnavailable
+	return ParseDuplicateQuality(string(q.DuplicateQuality)) != DupExact ||
+		ParseStatsQuality(string(q.StatsQuality)) != StatsQExact
 }

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestExitEvent_FrameRoundTrip 退出事件经控制通道事件帧编解码往返无损（FR-313）。
+// TestExitEvent_FrameRoundTrip 退出事件经控制通道事件帧编解码往返无损。
 func TestExitEvent_FrameRoundTrip(t *testing.T) {
 	fr, err := EncodeExitEventFrame(ExitEvent{Event: EventJavaExit, ExitCode: 137, Signal: "killed", DurationMs: 4200})
 	require.NoError(t, err)

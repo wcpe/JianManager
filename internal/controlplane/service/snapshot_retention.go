@@ -9,14 +9,14 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 快照保留策略与启动清扫（FR-466 §2.4 / m6）。
+// 快照保留策略与启动清扫（§2.4 / m6）。
 //
 // 与 snapshot.go 同属 SnapshotService，拆出的理由：原文件同时承载「创建」「回滚」
 // 「保留裁剪」「启动清扫」「底链校验」五块职责（R26）。本文件只放保留策略与启动清扫
 // ——即「把行纳入终态与裁剪管辖」的那一半，与回滚编排（snapshot.go）天然分层。
 // 纯机械搬迁，无行为变化。
 
-// ---- 保留策略（FR-466 §2.4）----
+// 保留策略（§2.4）----
 
 // snapshotRetentionTick 保留裁剪巡检周期（与备份裁剪同量级；按天/按条数的策略不需要更密的巡检）。
 const snapshotRetentionTick = time.Hour

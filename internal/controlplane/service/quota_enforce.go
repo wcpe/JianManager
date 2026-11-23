@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 运行期配额强制循环（FR-467 §2.3）。
+// 运行期配额强制循环（§2.3）。
 //
 // 结构参照 alert_evaluator.go 的 Start/Stop/evaluate 巡检形态：周期取样 → 连续 K 次超限
 // 才处置（抗抖动）→ 按档位分发 → 回落正常连续 K 次解除。
@@ -66,7 +66,7 @@ type quotaSample struct {
 type quotaMetricSource interface {
 	// LatestProcessSample 取实例最近一拍进程样本（心跳 TOPN，仅作 CPU 兜底）。
 	LatestProcessSample(instanceUUID string, since time.Time) (*quotaSample, error)
-	// InstanceWorkDirBytes 取实例工作目录占用（FR-467 新增采集）；0 表示不可用。
+	// InstanceWorkDirBytes 取实例工作目录占用（新增采集）；0 表示不可用。
 	//
 	// ctx 用于向下传递取消/超时（m-1）；传 context.Background() 即等同改造前行为。
 	InstanceWorkDirBytes(ctx context.Context, instanceID uint, instanceUUID string) (int64, error)
@@ -102,7 +102,7 @@ type quotaInstanceState struct {
 	Fired map[quotaKind]bool
 }
 
-// QuotaEnforcer 运行期配额强制巡检（FR-467 §2.3）。
+// QuotaEnforcer 运行期配额强制巡检（§2.3）。
 type QuotaEnforcer struct {
 	db      *gorm.DB
 	quotas  *QuotaService

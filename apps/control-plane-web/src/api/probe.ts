@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 探针在线更新状态（FR-068/409）：连接状态 + 当前解析版本 + 上次推送时间。 */
+/** 探针在线更新状态（409）：连接状态 + 当前解析版本 + 上次推送时间。 */
 export interface ProbeUpdateStatus {
   instanceId: number
   instanceUuid: string
@@ -21,7 +21,7 @@ export interface ProbeUpdateStatus {
   lastPushedAt: string | null
 }
 
-/** 探针推送结果（FR-068）。 */
+/** 探针推送结果。 */
 export interface ProbeUpdateResult {
   instanceId: number
   deployed: boolean
@@ -38,7 +38,7 @@ export interface ProbeUpdateResult {
   message: string
 }
 
-/** 查询某实例探针在线更新状态（连接/内嵌版本/上次推送），FR-068。 */
+/** 查询某实例探针在线更新状态（连接/内嵌版本/上次推送）。 */
 export function useProbeUpdateStatus(instanceId: number) {
   return useQuery({
     queryKey: ['probe-update', instanceId],
@@ -48,7 +48,7 @@ export function useProbeUpdateStatus(instanceId: number) {
   })
 }
 
-/** 推送当前解析的探针版本到实例（restart=true 推送并重启使其立即生效），FR-068/409。 */
+/** 推送当前解析的探针版本到实例（restart=true 推送并重启使其立即生效）409。 */
 export function useUpdateProbe(instanceId: number) {
   const qc = useQueryClient()
   return useMutation({

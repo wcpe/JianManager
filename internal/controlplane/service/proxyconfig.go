@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// proxyServerEntry 是写入代理配置的单条后端 server（由 ServerRegistration + 后端地址派生，FR-035）。
+// proxyServerEntry 是写入代理配置的单条后端 server（由 ServerRegistration + 后端地址派生）。
 // 由 ProxyService 预先按 priority 升序排列、过滤掉 disabled，并解析好 Address（host:port）。
 type proxyServerEntry struct {
 	Alias      string
@@ -37,9 +37,15 @@ func tomlEscapeString(s string) string {
 // buildVelocityToml 生成 velocity.toml：modern 转发 + 监听端口 + 由注册关系派生的 servers/try/forced-hosts。
 // onlineMode 决定代理是否向 Mojang 校验正版（离线模式群组服传 false）。
 // secret 不写入此文件，而是写入 forwarding-secret-file 指向的 forwarding.secret。
-func buildVelocityToml(listenPort int, motd string, onlineMode bool, entries []proxyServerEntry) string {
+//
+// listenPort 必须为正：0 会生成 `bind = "0.0.0.0:0"`，Velocity 随即绑定随机端口，
+// 玩家入口直接消失（与 buildBungeeConfig 同因，两边必须一起守）。
+func buildVelocityToml(listenPort int, motd string, onlineMode bool, entries []proxyServerEntry) (string, error) {
+	if listenPort <= 0 {
+		return "", fmt.Errorf("代理监听端口非法（%d）：拒绝生成会让入口失效的 velocity 配置", listenPort)
+	}
 	var b strings.Builder
-	b.WriteString("# 由 JianManager 生成（FR-035）。servers/try/forced-hosts 由平台注册关系同步管理。\n")
+	b.WriteString("# 由 JianManager 生成。servers/try/forced-hosts 由平台注册关系同步管理。\n")
 	b.WriteString("config-version = \"2.7\"\n")
 	fmt.Fprintf(&b, "bind = \"0.0.0.0:%d\"\n", listenPort)
 	fmt.Fprintf(&b, "motd = \"%s\"\n", tomlEscapeString(motd))
@@ -68,10 +74,10 @@ func buildVelocityToml(listenPort int, motd string, onlineMode bool, entries []p
 			fmt.Fprintf(&b, "\"%s\" = [\"%s\"]\n", tomlEscapeString(e.ForcedHost), e.Alias)
 		}
 	}
-	return b.String()
+	return b.String(), nil
 }
 
-// bungee config.yml 的最小可用结构（FR-035）。BungeeCord/Waterfall 启动时会补全其余默认键。
+// bungee config.yml 的最小可用结构。BungeeCord/Waterfall 启动时会补全其余默认键。
 type bungeeServerCfg struct {
 	Motd       string `yaml:"motd"`
 	Address    string `yaml:"address"`
@@ -103,7 +109,13 @@ type bungeeConfigCfg struct {
 
 // buildBungeeConfig 生成 BungeeCord/Waterfall config.yml：ip_forward + 监听端口 + servers/priorities/forced-hosts。
 // onlineMode 决定代理是否向 Mojang 校验正版（离线模式群组服传 false）。
+//
+// listenPort 必须为正：0 会生成 `host: "0.0.0.0:0"`，BungeeCord 随即绑定随机端口，
+// 玩家入口直接消失且日志只有一行 `Listening on 0.0.0.0:0`（真实事故，见 proxy_test）。
 func buildBungeeConfig(listenPort int, motd string, onlineMode bool, entries []proxyServerEntry) (string, error) {
+	if listenPort <= 0 {
+		return "", fmt.Errorf("代理监听端口非法（%d）：拒绝生成会让入口失效的 bungee 配置", listenPort)
+	}
 	servers := make(map[string]bungeeServerCfg, len(entries))
 	priorities := make([]string, 0, len(entries))
 	forced := map[string]string{}
@@ -138,7 +150,7 @@ func buildBungeeConfig(listenPort int, motd string, onlineMode bool, entries []p
 	if err != nil {
 		return "", fmt.Errorf("生成 bungee config.yml 失败: %w", err)
 	}
-	return "# 由 JianManager 生成（FR-035）。servers/priorities/forced_hosts 由平台注册关系同步管理。\n" + string(out), nil
+	return "# 由 JianManager 生成。servers/priorities/forced_hosts 由平台注册关系同步管理。\n" + string(out), nil
 }
 
 // setNestedYAML 在 YAML 文本中设置嵌套键（缺失路径自动创建），保留其它键。

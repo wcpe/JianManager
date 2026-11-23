@@ -1,6 +1,6 @@
 # 功能规格：CI/CD 发布管线（GitHub Actions）
 
-> 状态：工作区已实现，远端 Actions 待验　·　关联 PRD：FR-173　·　关联 ADR：[ADR-036](../../adr/036-release-pipeline-github.md)、[ADR-074](../../adr/074-release-version-provenance-and-smoke.md)
+> 状态：工作区已实现，远端 Actions 待验　·　关联 PRD：FR-173　·　关联 ADR：[ADR-036](../../adr/036-release-pipeline-github.md)、[ADR-108](../../adr/108-release-version-provenance-and-smoke.md)
 
 ## 1. 目标与当前边界
 

@@ -187,7 +187,7 @@ func TestGroup_RemoveMember_Success(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-// TestGroup_UpdateQuota_EnforceMode 组级运行期配额强制档位（FR-467 §2.6）：
+// TestGroup_UpdateQuota_EnforceMode 组级运行期配额强制档位（§2.6）：
 // 合法三档可写可读；非法值 400 拒绝（写进库的值会被配额巡检直接当处置力度用）。
 func TestGroup_UpdateQuota_EnforceMode(t *testing.T) {
 	db := setupTestDB(t)

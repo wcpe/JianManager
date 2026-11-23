@@ -2,9 +2,9 @@ package grpc
 
 import "sync"
 
-// evidenceReconcileDispatcher 按节点单飞 + 异步派发「进程侧证据对账」任务（FR-456 F10）。
+// evidenceReconcileDispatcher 按节点单飞 + 异步派发「进程侧证据对账」任务（F10）。
 //
-// 背景：FR-455③ 的证据对账需向 Worker 拉取进程侧证据，最长阻塞 evidenceProbeTimeout（8s）。
+// 背景：③ 的证据对账需向 Worker 拉取进程侧证据，最长阻塞 evidenceProbeTimeout（8s）。
 // 该对账原先在心跳处理内同步执行，使单节点心跳应答最长阻塞 8s，与 spec §2.4「重推不应阻塞心跳」
 // 相冲突。本派发器把对账移出心跳应答关键路径：异步执行 + 同节点单飞（上一拍对账未完成则跳过本拍，
 // 避免对慢节点堆积重复任务）。对账本身幂等（每拍重查缺失集合），跳过一拍仅等价于延迟一拍。

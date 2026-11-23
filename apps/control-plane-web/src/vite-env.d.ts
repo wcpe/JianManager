@@ -4,6 +4,6 @@
 declare const __APP_VERSION__: string
 
 interface ImportMetaEnv {
-  /** mock 模式开关：VITE_MOCK=1 时 main.tsx 启 MSW worker、整站打到内存假后端（FR-196）。 */
+  /** mock 模式开关：VITE_MOCK=1 时 main.tsx 启 MSW worker、整站打到内存假后端。 */
   readonly VITE_MOCK?: string
 }

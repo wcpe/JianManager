@@ -41,8 +41,8 @@ func TestRealVLPartitionDayIsolation(t *testing.T) {
 	require.Eventually(t, func() bool { return vl.Health(ctx) == nil }, 10*time.Second, 100*time.Millisecond)
 	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-48 * time.Hour)
 	next := day.Add(24 * time.Hour)
-	payload := fmt.Sprintf("{\"_time\":%q,\"_msg\":\"first\",\"event_id\":\"E\",\"log_source_id\":\"node:test\",\"source_generation\":\"s1\",\"projection_generation\":\"p1\",\"level\":\"INFO\"}\n"+
-		"{\"_time\":%q,\"_msg\":\"second\",\"event_id\":\"F\",\"log_source_id\":\"node:test\",\"source_generation\":\"s1\",\"projection_generation\":\"p1\",\"level\":\"ERROR\"}\n",
+	payload := fmt.Sprintf("{\"_time\":%q,\"_msg\":\"first\",\"event_id\":\"E\",\"log_source_id\":\"node:test\",\"source_generation\":\"s1\",\"projection_generation\":\"p1\",\"record_start\":0,\"record_end\":1,\"level\":\"INFO\"}\n"+
+		"{\"_time\":%q,\"_msg\":\"second\",\"event_id\":\"F\",\"log_source_id\":\"node:test\",\"source_generation\":\"s1\",\"projection_generation\":\"p1\",\"record_start\":0,\"record_end\":1,\"level\":\"ERROR\"}\n",
 		day.Add(12*time.Hour).Format(time.RFC3339Nano), next.Format(time.RFC3339Nano))
 	_, err = vl.InsertJSONLines(ctx, []byte(payload))
 	require.NoError(t, err)
@@ -50,8 +50,9 @@ func TestRealVLPartitionDayIsolation(t *testing.T) {
 	require.NoError(t, err)
 	for i, date := range []time.Time{day, next} {
 		rng := query.AuthoritativeRange{Key: catalog.PartitionKey{StorageNamespace: "node:test", UTCDay: date.Format("2006-01-02")},
-			Projection: &catalog.PublishedProjection{ProjectionGenerations: []string{"p1"}}}
-		q := query.RangeQuery{Budget: query.Budget{Limit: 10}, GroupBy: []string{"level"}}
+			ClosedVisibleSeq: 1,
+			Projection:       &catalog.PublishedProjection{ProjectionGenerations: []string{"p1"}}}
+		q := query.RangeQuery{ClosedVisibleSeq: 1, Budget: query.Budget{Limit: 10}, GroupBy: []string{"level"}}
 		require.Eventually(t, func() bool {
 			result, err := client.Search(ctx, rng, q)
 			return err == nil && len(result.Items) == 1 && result.Items[0].EventID == []string{"E", "F"}[i]

@@ -11,7 +11,7 @@
 | 上游项目 | VictoriaLogs（VictoriaMetrics）|
 | Tag | `v1.52.0` |
 | 构建标识（build_id） | `20260716-022147-tags-v1.52.0-0-g46a54c9` |
-| 发布提交（release commit） | `46a54c9` |
+| 发布提交（release commit） | 见对应 release tag |
 | 版本串（`victoria-logs-prod --version`） | `victoria-logs-20260716-022147-tags-v1.52.0-0-g46a54c976f` |
 | 许可证 | `Apache-2.0` |
 | 构建日期 | `2026-07-16` |

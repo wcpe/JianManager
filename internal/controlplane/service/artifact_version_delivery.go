@@ -63,7 +63,7 @@ func (s *ArtifactVersionService) ValidateProbeDownloadToken(token string, expect
 }
 
 // signScopedToken 把任意 scope 结构签为 `<base64url(payload)>.<base64url(HMAC)>`。
-// probe（FR-010）与二进制分发（FR-441）共用同一实现与同一密钥，仅 scope 结构不同——
+// probe与二进制分发共用同一实现与同一密钥，仅 scope 结构不同——
 // 分发 token 的编解码只有一条真源。
 func signScopedToken(key []byte, scope any) string {
 	payload, err := json.Marshal(scope)

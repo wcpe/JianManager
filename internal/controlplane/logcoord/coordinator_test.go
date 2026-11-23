@@ -16,6 +16,8 @@ import (
 )
 
 type cursorWorker struct {
+	// noStreamWorker 提供 stream 三方法的「未实现」实现（接口扩展时不用逐个改 fake）。
+	noStreamWorker
 	id     string
 	target string
 	items  []Event
@@ -50,8 +52,9 @@ func (w *cursorWorker) Search(_ context.Context, req WorkerSearchRequest) (*Work
 		items = items[:limit]
 		exhausted = false
 	}
-	return &WorkerSearchResponse{ViewID: req.ViewID, Items: items, Exhausted: exhausted,
-		NextCursor: "worker-next", Targets: []WorkerTargetResult{{TargetID: w.target, State: CoverageSuccess, CatalogGeneration: "1"}}}, nil
+	return &WorkerSearchResponse{ViewID: firstNonEmpty(req.ViewID, "wv-"+w.id), Items: items, Exhausted: exhausted,
+		NextCursor: "worker-next", Targets: []WorkerTargetResult{{TargetID: w.target, State: CoverageSuccess, CatalogGeneration: "1"}},
+		Quality: exactQuality}, nil
 }
 
 func (w *cursorWorker) Tail(ctx context.Context, req WorkerSearchRequest, _ string) (*WorkerSearchResponse, error) {
@@ -1113,4 +1116,534 @@ func TestNewViewIDIsOpaqueAndUnique(t *testing.T) {
 		}
 		prev = id
 	}
+}
+
+// WarmSearch 保留当前与下一分钟的预热候选，但候选不等于新窗口安全分页凭据。
+// 精确相同窗口保持命中；同分钟扩窗或下一分钟查询必须回源，防止跳过尚未读取的新行。
+func TestWarmSearchExactWindowHitsButShiftedBucketsRefetch(t *testing.T) {
+	worker := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "n", "g", 1, "2026-10-08T07:00:00Z", "INFO", "x")},
+		searchTarget: []WorkerTargetResult{{TargetID: "node:1", State: CoverageSuccess, CatalogGeneration: "1"}}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = worker
+	coord := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}, dialer)
+
+	base := Query{AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "p",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z",
+		Budget: QueryBudget{Limit: 100}, Fast: true}
+	_, err := coord.WarmSearch(context.Background(), base)
+	require.NoError(t, err)
+
+	worker.mu.Lock()
+	afterWarm := worker.searchCalls
+	worker.mu.Unlock()
+	require.Equal(t, 1, afterWarm, "预热必须实际执行一次查询")
+
+	// 精确窗口仍命中，预热候选的保留不改变原有热缓存。
+	require.Len(t, coord.searchCache, 2, "保留当前与下一分钟桶的预热候选")
+	_, err = coord.Search(context.Background(), base)
+	require.NoError(t, err)
+	worker.mu.Lock()
+	exactCalls := worker.searchCalls
+	worker.mu.Unlock()
+	require.Equal(t, 1, exactCalls)
+	// 同分钟的窗口变化必须回源，旧窗口不具备新窗口的安全排序前缀。
+	same := base
+	same.FromUTC, same.ToUTC = "2026-10-08T06:30:55Z", "2026-10-08T07:30:55Z"
+	_, err = coord.Search(context.Background(), same)
+	require.NoError(t, err)
+
+	// 下一分钟的候选同样必须先回源，不能以旧窗口承诺完整或推进游标。
+	next := base
+	next.FromUTC, next.ToUTC = "2026-10-08T06:31:10Z", "2026-10-08T07:31:10Z"
+	_, err = coord.Search(context.Background(), next)
+	require.NoError(t, err)
+
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	require.Equal(t, 3, worker.searchCalls,
+		"精确窗口命中，同分钟变化与下一分钟窗口都必须重新读取")
+}
+
+// 缓存 TTL 分档：短窗保持短档保新鲜；长窗（含无界 all）走长档以覆盖预热周期。
+func TestSearchCacheTTLForWindowTiers(t *testing.T) {
+	pendingTTL := func(from, to string) time.Duration {
+		return searchCacheTTLFor(Query{FromUTC: from, ToUTC: to}, true)
+	}
+	require.Equal(t, searchCacheTTLPending, pendingTTL("2026-10-08T06:45:00Z", "2026-10-08T07:00:00Z"), "15m 短窗")
+	require.Equal(t, searchCacheTTLPendingLong, pendingTTL("2026-10-08T06:00:00Z", "2026-10-08T07:00:00Z"), "1h")
+	require.Equal(t, searchCacheTTLPendingLong, pendingTTL("2026-10-07T07:00:00Z", "2026-10-08T07:00:00Z"), "24h")
+	require.Equal(t, searchCacheTTLPendingLong, pendingTTL("2026-10-01T07:00:00Z", "2026-10-08T07:00:00Z"), "7d")
+	require.Equal(t, searchCacheTTLPendingLong, pendingTTL("", ""), "无界 all")
+	require.Equal(t, searchCacheTTLCompletedLong,
+		searchCacheTTLFor(Query{FromUTC: "2026-10-07T07:00:00Z", ToUTC: "2026-10-08T07:00:00Z"}, false), "长窗完整校验")
+	require.Equal(t, searchCacheTTLCompleted,
+		searchCacheTTLFor(Query{FromUTC: "2026-10-08T06:45:00Z", ToUTC: "2026-10-08T07:00:00Z"}, false), "短窗完整校验")
+}
+
+// 雪球回归：预热必须每轮真正扇出（BypassCache），不得命中自己上一轮的条目后
+// 把旧结果（含启动早期 dial 失败的空结果）原样续写进新桶——那会让用户落进
+// 这些桶时持续拿到 0 条/陈旧数据（2026-10-08 面板恒冷复盘）。
+func TestWarmSearchBypassesOwnCacheAndRefreshes(t *testing.T) {
+	worker := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "n", "g", 1, "2026-10-08T07:00:00Z", "INFO", "x")},
+		searchTarget: []WorkerTargetResult{{TargetID: "node:1", State: CoverageSuccess, CatalogGeneration: "1"}}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = worker
+	coord := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}, dialer)
+
+	base := Query{AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "warm",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z",
+		Budget: QueryBudget{Limit: 100}, Fast: true}
+	for i := 0; i < 3; i++ {
+		q := base
+		q.FromUTC, q.ToUTC = shiftMinutes(base.FromUTC, i), shiftMinutes(base.ToUTC, i)
+		_, err := coord.WarmSearch(context.Background(), q)
+		require.NoError(t, err)
+	}
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	require.Equal(t, 3, worker.searchCalls,
+		"每轮预热都必须真正扇出，不得命中自身旧条目（雪球）")
+}
+
+// authzFilteringResolver 只返回本次被请求的授权目标（贴近真实 resolver 的收敛语义）：
+// 用于构造「两个不同授权集合」的场景，验证缓存不跨集合命中。
+type authzFilteringResolver struct{ byID map[string]TargetInfo }
+
+func (r authzFilteringResolver) Resolve(_ context.Context, ids []string) ([]TargetInfo, error) {
+	out := make([]TargetInfo, 0, len(ids))
+	for _, id := range ids {
+		if t, ok := r.byID[id]; ok {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// CP-1 回归：预热条目必须能被**同参的真实用户**命中。
+//
+// 预热器没有真实用户身份（占位 PrincipalKey/PermissionScope），若身份段参与缓存键，
+// 预热条目与真实用户条目**永不同键** ⇒ 预热零命中，却仍按窗口周期对全部 Worker 全量扇出
+// （与「限制宽窗查询抢占」的初衷相反）。本用例在旧行为（键含主体/scope）下必然失败：
+// 用户查询会因未命中而二次扇出（searchCalls 2 ≠ 1）。
+func TestWarmEntryHitsSameParamUserQueryAcrossPrincipals(t *testing.T) {
+	worker := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "n", "g", 1, "2026-10-08T07:00:00Z", "INFO", "x")},
+		searchTarget: []WorkerTargetResult{{TargetID: "node:1", State: CoverageSuccess, CatalogGeneration: "1"}}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = worker
+	coord := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}, dialer)
+
+	// 预热器：身份为占位值，其余入参与用户请求逐字相同。
+	warmQ := Query{AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "warm", PermissionScope: "warm",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z",
+		Budget: QueryBudget{Limit: 100}, Fast: true}
+	_, err := coord.WarmSearch(context.Background(), warmQ)
+	require.NoError(t, err)
+	worker.mu.Lock()
+	require.Equal(t, 1, worker.searchCalls, "预热必须实际执行一次查询")
+	worker.mu.Unlock()
+
+	// 真实用户：同 targets/窗口/limit/Fast，仅身份不同 ⇒ 必须命中预热条目。
+	userQ := warmQ
+	userQ.PrincipalKey = "user:7|role:10|targets:deadbeef"
+	userQ.PermissionScope = "platform_admin|role:admin|auth:1|nodes:cafe|targets:deadbeef"
+	resp, err := coord.Search(context.Background(), userQ)
+	require.NoError(t, err)
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	require.Equal(t, 1, worker.searchCalls, "预热后同参用户查询必须命中，不得再次扇出")
+	require.Len(t, resp.Items, 1, "命中必须回放预热读到的行")
+	// 命中不得把预热者的身份交给调用方：View 一律换绑为本次请求自己的视图。
+	require.Equal(t, userQ.PrincipalKey, resp.View.PrincipalKey)
+	require.Equal(t, userQ.PermissionScope, resp.View.PermissionScope)
+	require.NotEqual(t, warmQ.PrincipalKey, resp.View.PrincipalKey, "不得回放预热者身份")
+}
+
+// CP-1 反向回归：去身份段后仍**不跨授权集合命中**（越权不可能）。
+// 预热 inst:1 后查询 inst:2，必须重新扇出，且覆盖集只含本次授权目标。
+func TestWarmEntryNotHitByDifferentAuthorizedSet(t *testing.T) {
+	worker := &fakeWorker{workerID: "w1",
+		searchItems: []Event{mkEvent("e1", "n", "g", 1, "2026-10-08T07:00:00Z", "INFO", "x")},
+		searchTarget: []WorkerTargetResult{
+			{TargetID: "node:1", State: CoverageSuccess, CatalogGeneration: "1"},
+			{TargetID: "node:2", State: CoverageSuccess, CatalogGeneration: "1"},
+		}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = worker
+	coord := New(authzFilteringResolver{byID: map[string]TargetInfo{
+		"node:1": {ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline},
+		"node:2": {ID: "node:2", WorkerID: "w1", Readiness: ReadyOnline},
+	}}, dialer)
+
+	warmQ := Query{AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "warm", PermissionScope: "warm",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z",
+		Budget: QueryBudget{Limit: 100}, Fast: true}
+	_, err := coord.WarmSearch(context.Background(), warmQ)
+	require.NoError(t, err)
+
+	otherQ := warmQ
+	otherQ.AuthorizedTargetIDs = []string{"node:2"}
+	otherQ.PrincipalKey = "user:9|role:10|targets:cafebabe"
+	resp, err := coord.Search(context.Background(), otherQ)
+	require.NoError(t, err)
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	require.Equal(t, 2, worker.searchCalls, "不同授权集合不得命中预热条目，必须重新扇出")
+	require.Len(t, resp.Coverage.Targets, 1)
+	require.Equal(t, "node:2", resp.Coverage.Targets[0].TargetID, "命中条目不得把其它集合的目标带进来")
+}
+
+// Fast 首屏也必须保留已经观察到的 dial 失败，Pending 不能遮掉具体覆盖证据。
+func TestFastSearchPreservesObservedCoverageFailures(t *testing.T) {
+	dialer := newFakeDialer()
+	coord := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}, dialer)
+	resp, err := coord.Search(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "p",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z",
+		Budget: QueryBudget{Limit: 100}, Fast: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.True(t, resp.Coverage.Pending)
+	require.NotEmpty(t, resp.Coverage.Targets)
+	require.Equal(t, CoverageOffline, resp.Coverage.Targets[0].State)
+	require.Contains(t, resp.Coverage.Targets[0].Reasons, "dial_failed")
+}
+
+// 空覆盖结果不得写入同参缓存：否则 CP 启动早期 dial 失败的空结果会被用户与
+// 预热器持续命中（面板长期 0 条）。
+func TestEmptyIncompleteResultIsNotCached(t *testing.T) {
+	dialer := newFakeDialer() // 不注册任何 worker → dial 失败 → 空 items + 不完整覆盖
+	coord := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}, dialer)
+	q := Query{AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "p",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z", Budget: QueryBudget{Limit: 100}}
+	resp, err := coord.Search(context.Background(), q)
+	require.NoError(t, err)
+	require.Empty(t, resp.Items)
+	require.False(t, resp.Coverage.Complete)
+
+	coord.searchCacheMu.Lock()
+	defer coord.searchCacheMu.Unlock()
+	require.Empty(t, coord.searchCache, "空覆盖结果不得写入同参缓存")
+}
+
+// reviewWindowWorker 只复用本包内存假 Worker，不打开网络连接。
+type reviewWindowWorker struct{ *fakeWorker }
+
+func (w *reviewWindowWorker) Search(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error) {
+	resp, err := w.fakeWorker.Search(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	from := MustParseRFC3339(req.FromUTC)
+	to := MustParseRFC3339(req.ToUTC)
+	items := make([]Event, 0, len(resp.Items))
+	for _, event := range resp.Items {
+		ts := MustParseRFC3339(event.EventTimeUTC)
+		if (from.IsZero() || !ts.Before(from)) && (to.IsZero() || ts.Before(to)) {
+			items = append(items, event)
+		}
+	}
+	resp.Items = items
+	return resp, nil
+}
+
+func reviewCoordinator(items []Event) (*Coordinator, *fakeWorker) {
+	worker := &fakeWorker{workerID: "review-worker", searchItems: items,
+		searchTarget: []WorkerTargetResult{{TargetID: "inst:901", State: CoverageSuccess, CatalogGeneration: "100"}}}
+	dialer := newFakeDialer()
+	dialer.clients["review-worker"] = &reviewWindowWorker{worker}
+	resolver := &fakeTargetResolver{targets: []TargetInfo{{ID: "inst:901", WorkerID: "review-worker", Readiness: ReadyOnline}}}
+	return New(resolver, dialer), worker
+}
+
+func reviewCPQuery() Query {
+	return Query{FromUTC: "2026-09-22T00:00:00Z", ToUTC: "2026-09-22T01:00:00Z",
+		AuthorizedTargetIDs: []string{"inst:901"}, PrincipalKey: "user:review-a",
+		PermissionScope: "scope:review-a", Budget: QueryBudget{Limit: 1}}
+}
+
+// 缓存命中不得把预热主体或其他主体的 View 交给当前调用方。
+func TestReviewCacheViewBinding(t *testing.T) {
+	cases := []struct {
+		name      string
+		warm      bool
+		fast      bool
+		scopeOnly bool
+	}{
+		{name: "不同主体Search", fast: false},
+		{name: "预热主体到真实用户", warm: true, fast: true},
+		{name: "同主体不同PermissionScope", fast: false, scopeOnly: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			coord, worker := reviewCoordinator([]Event{
+				mkEvent("review-2", "review-source", "g1", 20, "2026-09-22T00:30:00Z", "INFO", "new"),
+				mkEvent("review-1", "review-source", "g1", 10, "2026-09-22T00:20:00Z", "INFO", "old"),
+			})
+			firstQ := reviewCPQuery()
+			firstQ.Fast = tc.fast
+			var first *SearchResponse
+			var err error
+			if tc.warm {
+				firstQ.PrincipalKey = "warm:review"
+				first, err = coord.WarmSearch(context.Background(), firstQ)
+			} else {
+				first, err = coord.Search(context.Background(), firstQ)
+			}
+			require.NoError(t, err)
+			require.NotNil(t, first)
+			require.NotEmpty(t, first.NextCursor)
+
+			secondQ := firstQ
+			if tc.scopeOnly {
+				secondQ.PermissionScope = "scope:review-b"
+			} else {
+				secondQ.PrincipalKey = "user:review-b"
+			}
+			second, err := coord.Search(context.Background(), secondQ)
+			require.NoError(t, err)
+			require.Equal(t, secondQ.PrincipalKey, second.View.PrincipalKey)
+			require.Equal(t, secondQ.PermissionScope, second.View.PermissionScope)
+
+			pageQ := secondQ
+			pageQ.ViewID, pageQ.Cursor = second.View.ViewID, second.NextCursor
+			_, err = coord.Search(context.Background(), pageQ)
+			require.NoError(t, err)
+
+			exportQ := secondQ
+			exportQ.Fast = false
+			exportQ.ViewID = second.View.ViewID
+			_, err = coord.Export(context.Background(), exportQ)
+			require.NoError(t, err)
+			_ = worker
+		})
+	}
+}
+
+// 同一时间桶的缓存命中必须重绑精确窗口，并过滤下界之外的旧行。
+func TestReviewCachedWindowBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		warm  bool
+		shift time.Duration
+	}{
+		{name: "预写下一分钟", warm: true, shift: time.Minute},
+		{name: "同分钟截断", shift: 30 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			coord, _ := reviewCoordinator([]Event{
+				mkEvent("before-lower-2", "review-source", "g1", 20, "2026-09-22T00:00:20Z", "INFO", "old2"),
+				mkEvent("before-lower-1", "review-source", "g1", 10, "2026-09-22T00:00:10Z", "INFO", "old1"),
+			})
+			q := reviewCPQuery()
+			var first *SearchResponse
+			var err error
+			if tc.warm {
+				first, err = coord.WarmSearch(context.Background(), q)
+			} else {
+				first, err = coord.Search(context.Background(), q)
+			}
+			require.NoError(t, err)
+			require.NotNil(t, first)
+			require.NotEmpty(t, first.NextCursor)
+			nextQ := q
+			nextQ.FromUTC = MustParseRFC3339(q.FromUTC).Add(tc.shift).Format(time.RFC3339)
+			nextQ.ToUTC = MustParseRFC3339(q.ToUTC).Add(tc.shift).Format(time.RFC3339)
+			resp, err := coord.Search(context.Background(), nextQ)
+			require.NoError(t, err)
+			require.Equal(t, nextQ.FromUTC, resp.View.FromUTC)
+			require.Equal(t, nextQ.ToUTC, resp.View.ToUTC)
+			from, to := MustParseRFC3339(nextQ.FromUTC), MustParseRFC3339(nextQ.ToUTC)
+			for _, event := range resp.Items {
+				ts := MustParseRFC3339(event.EventTimeUTC)
+				require.False(t, ts.Before(from))
+				require.True(t, ts.Before(to))
+			}
+			pageQ := nextQ
+			pageQ.ViewID, pageQ.Cursor = resp.View.ViewID, resp.NextCursor
+			_, err = coord.Search(context.Background(), pageQ)
+			require.NoError(t, err)
+		})
+	}
+}
+
+// 回归（B-3，2026-10-12 修复）：**零行窗口**的导出必须给出**非 nil** 附件。
+//
+// 缺陷形态：`bytes.Buffer{}.Bytes()` 在零写入时返回 `nil`（已实测），而 router 侧
+// `blocks := ... || res.Artifact == nil` 把 nil 判为「导出未通过完整性校验」⇒
+// 「窗口内 0 行 + 覆盖 complete + quality exact」这一**完全合法**的导出被谎报为不完整，
+// 返回 JSON 而非 NDJSON，且没有任何可执行的补救动作（缩小范围/调大上限都无效）。
+// 空窗口是常见场景（该实例该时段确实无日志），方向虽 fail-closed，但命中的是正常情形。
+//
+// 转红方式（实测）：把 `if res.Artifact == nil { res.Artifact = []byte{} }` 删掉 ⇒
+// 断言①（附件必须非 nil）立即红。
+func TestExportEmptyWindowYieldsNonNilArtifact(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "t1", WorkerID: "w1", Readiness: ReadyOnline},
+	}}
+	w1 := &fakeWorker{
+		workerID: "w1",
+		// 零事件，但覆盖完整（该窗口确实无日志）。
+		searchItems: []Event{},
+		searchTarget: []WorkerTargetResult{
+			successTarget("t1", "w1", "s/g:1", "1"),
+		},
+	}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	coord := New(resolver, dialer)
+
+	res, err := coord.Export(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"t1"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+
+	// ① 核心断言：空窗口的附件必须非 nil（否则 router 会判 blocks=true 谎报不完整）。
+	require.NotNil(t, res.Artifact,
+		"零行窗口必须给出非 nil 附件：nil 会被 router 判为「导出未通过完整性校验」并返回 JSON 而非 NDJSON")
+	require.Empty(t, res.Artifact, "空窗口的附件内容应为空")
+
+	// ② 完整性判定不得因空窗口而翻转。
+	assert.False(t, res.ExportIncomplete, "空窗口不是「导出不完整」")
+	assert.True(t, res.Coverage.Complete, "前置：该窗口覆盖完整")
+	assert.False(t, res.BudgetExceeded)
+}
+
+// M-3 回归：Worker 未上报质量时导出必须判为不完整且不产出附件。
+//
+// 缺陷形态：Worker 上报 nil 的 LogQuality（或未来枚举）经 qualityFromProto 解析为
+// unspecified，而导出闸门只拦 unresolved/conflict/partial/unavailable ⇒ 放行，
+// 最终在覆盖完整时交出一个「质量未知」的成功附件。数据本身可能不缺，但「这份导出
+// 是否可信」没有任何来源断言过，属于典型的 fail-open。
+//
+// 转红方式（实测）：让 QualityBlocksExport 回退成只列举已知坏值的写法，
+// 本用例的 ExportIncomplete / Artifact 断言立即红（旧行为：完整 + 有附件）。
+func TestExportBlocksWhenWorkerOmitsQuality(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "t1", WorkerID: "w1", Readiness: ReadyOnline},
+	}}
+	w1 := &fakeWorker{
+		workerID:    "w1",
+		searchItems: []Event{mkEvent("e1", "s", "g", 1, "2026-09-20T12:00:00Z", "I", "hello")},
+		searchTarget: []WorkerTargetResult{
+			successTarget("t1", "w1", "s/g:1", "1"),
+		},
+		// 模拟 Worker 未上报 LogQuality：proto 为 nil 时适配层得到的就是零值 Quality。
+		searchQuality: &Quality{},
+	}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	coord := New(resolver, dialer)
+
+	res, err := coord.Export(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"t1"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+
+	assert.True(t, res.ExportIncomplete, "质量未知的导出不得判为完整")
+	assert.Nil(t, res.Artifact, "质量未知时不得下发成功附件")
+	assert.Contains(t, res.IncompleteReasons, "stats_unspecified",
+		"阻断原因需可归因到「统计质量未指定」")
+	// 覆盖本身是完整的：本用例证明质量闸门独立生效，不是被 coverage 顺带拦下。
+	assert.True(t, res.Coverage.Complete, "前置：覆盖完整，阻断只能来自质量闸门")
+}
+
+// M-3 跨 Worker 回归：任一 Worker **未上报质量**时，另一个 Worker 的 exact 不得把它掩盖。
+//
+// 缺陷形态（本轮修复）：worstDuplicateQuality/worstStatsQuality 把 unspecified（含零值
+// 空串与未来枚举）排在 **exact 之下**，于是「w1=exact、w2=未上报」被聚合成 exact，
+// 导出闸门看到 exact 就放行——而 QualityBlocksExport 自身已是 fail-closed，这等于从
+// **聚合侧**绕过它。单 Worker 场景此前能拦住，纯粹因为 stats 聚合种子恰好是空串：
+// 那是种子在替聚合结果表态，属另一个缺陷（种子不该参与语义，见修复后的显式种子）。
+//
+// 转红方式（实测）：把 worstDuplicateQuality/worstStatsQuality 的 rank 改回
+// default:return 0 的旧写法（unspecified 落在 exact 之下），本用例的
+// ExportIncomplete / Artifact / IncompleteReasons 断言立即红。
+func TestExportBlocksWhenAnyWorkerOmitsQuality(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: ReadyOnline},
+		{ID: "inst:2", WorkerID: "w2", Readiness: ReadyOnline},
+	}}
+	// w1 正常上报 exact/exact；w2 模拟旧版 Worker / proto 缺省 ⇒ 零值 Quality。
+	w1 := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "inst:1/stdout", "g1", 1, "2026-09-20T12:00:00Z", "INFO", "ok")},
+		searchTarget: []WorkerTargetResult{successTarget("inst:1", "w1", "1", "1")}}
+	w2 := &fakeWorker{workerID: "w2",
+		searchItems:   []Event{mkEvent("e2", "inst:2/stdout", "g1", 1, "2026-09-20T12:00:01Z", "INFO", "ok")},
+		searchTarget:  []WorkerTargetResult{successTarget("inst:2", "w2", "1", "1")},
+		searchQuality: &Quality{}} // 未上报质量
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	dialer.clients["w2"] = w2
+	coord := New(resolver, dialer)
+
+	res, err := coord.Export(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"inst:1", "inst:2"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+
+	assert.True(t, res.ExportIncomplete, "任一 Worker 未上报质量时导出必须判为不完整")
+	assert.Nil(t, res.Artifact, "未上报质量的来源不得被另一个 Worker 的 exact 掩盖后放行")
+	assert.True(t, res.Coverage.Complete, "前置：覆盖完整，阻断只能来自质量闸门")
+	// 两个维度都是「未上报」，阻断原因必须可归因（rather than 只丢一个笼统码）。
+	assert.Contains(t, res.IncompleteReasons, "quality_unspecified",
+		"重复质量未上报必须被聚合成 unspecified 并阻断")
+	assert.Contains(t, res.IncompleteReasons, "stats_unspecified",
+		"统计质量未上报必须被聚合成 unspecified 并阻断")
+}
+
+// 反向约束（防过度收紧）：全部 Worker 都上报 exact/exact 时导出必须照常放行。
+//
+// 为什么必须有这条：把 unspecified 提到 exact 之上后，若聚合**种子**仍是零值空串
+// （fanoutSearch 的 stats 种子、Export 的 exportQuality 初值），种子本身会被解析成
+// unspecified ⇒ **每次** Search/Export 都被判不完整，全 exact 的集群再也导不出任何东西。
+// 种子必须显式表示「尚无 Worker 表态时先按最好」。
+//
+// 转红方式（实测）：把 fanoutSearch 的 StatsQuality 种子或 Export 的 exportQuality
+// 初值改回零值，本用例立即红（Artifact 变 nil）。
+func TestExportPassesWhenAllWorkersReportExact(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: ReadyOnline},
+		{ID: "inst:2", WorkerID: "w2", Readiness: ReadyOnline},
+	}}
+	w1 := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "inst:1/stdout", "g1", 1, "2026-09-20T12:00:00Z", "INFO", "ok")},
+		searchTarget: []WorkerTargetResult{successTarget("inst:1", "w1", "1", "1")}}
+	w2 := &fakeWorker{workerID: "w2",
+		searchItems:  []Event{mkEvent("e2", "inst:2/stdout", "g1", 1, "2026-09-20T12:00:01Z", "INFO", "ok")},
+		searchTarget: []WorkerTargetResult{successTarget("inst:2", "w2", "1", "1")}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	dialer.clients["w2"] = w2
+	coord := New(resolver, dialer)
+
+	// 先经 Search 断言聚合结果本身是 exact/exact：否则「放行」只能证明闸门被削弱。
+	searchResp, err := coord.Search(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"inst:1", "inst:2"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, DupExact, ParseDuplicateQuality(string(searchResp.Quality.DuplicateQuality)),
+		"全 exact 场景的聚合重复质量必须是 exact")
+	assert.Equal(t, StatsQExact, ParseStatsQuality(string(searchResp.Quality.StatsQuality)),
+		"全 exact 场景的聚合统计质量必须是 exact（种子不得引入 unspecified）")
+
+	res, err := coord.Export(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"inst:1", "inst:2"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+	assert.False(t, res.ExportIncomplete, "全 exact 的导出必须判为完整")
+	assert.NotNil(t, res.Artifact, "全 exact 的导出必须下发成功附件")
 }

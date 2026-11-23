@@ -233,3 +233,26 @@ Go（`client_upload_efficiency_test.go`，service 级，沿 FR-251 范式）：
   不做逐文件 partial-result 协议（YAGNI）。
 - **预查降级**：预查请求失败静默降级为全量上传，不阻断发布（优化失效 ≠ 功能失效）。
 - **axios 超时**：聚合批显式 120s；分块单片沿用现状（10s 默认）不动。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-346 客户端分发上传协议增效
+
+**需求补充**：秒传预查 + 小文件聚合 + 有限并发（feat，增强 FR-250/251，真机反馈：数千文件整合包发布逐文件串行 init→chunk→complete 请求过多）：新增批量 sha256 预查端点（前端上传前算哈希、一请求查 N 个、命中制品库 CAS 者跳过上传直接引用既有制品）+ 小文件聚合上传端点（一请求携带多个小文件，免三段协议）+ 前端文件级有限并发与进度整合；大文件保留 FR-251 分块协议（需 spec）→ `docs/specs/client-upload-efficiency/spec.md`
+
+**交付状态**：✅ 已交付@v0.18.0
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-346~350（客户端分发上传增效与外置对象存储 2026-07-17 迭代批：上传秒传/聚合/并发 + BlobStore 抽象与 S3[rustfs] 存储渠道 + 存量迁移 + 一致性对账 + 编排器多级目录/右键定点添加；关联 ADR-073 + 增强 FR-250/251/088/191；BUG「0 字节文件上传被拒 totalSize 须为正」走 sdd-fix-bug 不占 §4）
+
+FR-346~350（客户端分发上传增效与外置对象存储 2026-07-17 迭代批：上传秒传/聚合/并发 + BlobStore 抽象与 S3[rustfs] 存储渠道 + 存量迁移 + 一致性对账 + 编排器多级目录/右键定点添加；关联 ADR-073 + 增强 FR-250/251/088/191；BUG「0 字节文件上传被拒 totalSize 须为正」走 sdd-fix-bug 不占 §4）→ FR-346 `docs/specs/client-upload-efficiency/spec.md`、FR-347 `docs/specs/artifact-external-storage/spec.md`、FR-348 `docs/specs/artifact-storage-migration/spec.md`、FR-349 `docs/specs/artifact-s3-reconcile/spec.md`（四项均已交付@v0.18.0）；FR-350 免 spec（纯前端，已交付@v0.18.0）
+
+### FR-346~350（客户端分发上传增效与外置对象存储 2026-07-17 迭代批…
+
+FR-346~350（客户端分发上传增效与外置对象存储 2026-07-17 迭代批：上传秒传/聚合/并发 + BlobStore 抽象与 S3[rustfs] 存储渠道 + 存量迁移 + 一致性对账 + 编排器多级目录/右键定点添加；关联 ADR-073 + 增强 FR-250/251/088/191；BUG「0 字节文件上传被拒 totalSize 须为正」走 sdd-fix-bug 不占 §4） → `docs/specs/client-upload-efficiency/spec.md`
+

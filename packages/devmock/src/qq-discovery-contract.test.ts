@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { server } from '@jianmanager/devmock/server'
 import { resetDb } from '@jianmanager/devmock/db'
 
-/**
- * QQ 扫码接入（FR-495）三端点的 mock 契约测试。
+/** 
+ * QQ 扫码接入三端点的 mock 契约测试。
  *
  * 存在的理由：`GET /alerts/qq/groups` 的真实后端（internal/controlplane/router/alert.go，
  * docs/API.md 同）返回分页信封 `{items,total}`，而 devmock 曾返回纯数组——前端
@@ -42,7 +42,7 @@ afterEach(() => {
 })
 afterAll(() => server.close())
 
-describe('QQ 接入 mock 契约（FR-495）', () => {
+describe('QQ 接入 mock 契约', () => {
   it('GET /alerts/qq/groups 返回 {items,total} 分页信封（非纯数组）', async () => {
     const token = await login()
     const r = await fetch(`${BASE}/alerts/qq/groups`, { headers: auth(token) })
@@ -78,14 +78,14 @@ describe('QQ 接入 mock 契约（FR-495）', () => {
   })
 })
 
-/**
- * FR-494 接入体验改造：扫码绑定的两个假端点。
+/** 
+ *接入体验改造：扫码绑定的两个假端点。
  *
  * 存在的理由：前端「扫码 → 自动填表」整条链路只在 mock 上跑得起来，mock 的形状一旦偏离
  * 后端契约（qrUrl 缺 task_id、completed 缺 secretEnv、密钥明文外泄），前端的回归就全成了
  * 自证。这里钉住形状 + 钉住「响应绝不含 appSecret 明文」这条密钥安全验收。
  */
-describe('QQ 扫码绑定 mock 契约（FR-494）', () => {
+describe('QQ 扫码绑定 mock 契约', () => {
   /** 建一个绑定任务，返回其 taskId（每个用例都从零开始：afterEach 已 resetDb）。 */
   async function createBindTask(token: string): Promise<{ taskId: string; qrUrl: string }> {
     const r = await fetch(`${BASE}/alerts/qq/bind-task`, {

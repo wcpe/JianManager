@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-444 拉取端点的路由层测试。核心断言是「可选协同」边界：
+// 拉取端点的路由层测试。核心断言是「可选协同」边界：
 // 未配置 beacon.endpoint 时端点仍注册但返回 503 明确提示（不静默成功、不 500），
 // 且不影响平台其余功能。
 

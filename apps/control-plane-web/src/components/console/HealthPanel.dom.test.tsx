@@ -8,8 +8,8 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import { HealthPanel } from './HealthPanel'
 
-/**
- * FR-450 §2.3.2 / FR-447：端口健康可达性按连接态派生四态（可达/不可达/超时/未知）。
+/** 
+ *§2.3.2：端口健康可达性按连接态派生四态（可达/不可达/超时/未知）。
  * 探针「在位但本次取不回」应呈现「超时」而非笼统「未知」——这是审计补的缺失态。
  */
 function serverState(connected: boolean, available: boolean) {
@@ -24,7 +24,7 @@ function serverState(connected: boolean, available: boolean) {
   )
 }
 
-describe('HealthPanel 可达性四态（FR-450 / FR-447）', () => {
+describe('HealthPanel 可达性四态', () => {
   beforeEach(() => {
     loginMockUser()
   })

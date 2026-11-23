@@ -115,3 +115,37 @@ func diagnosticCodes(diagnostics []ManagedProcessDiagnostic) []string {
 	}
 	return out
 }
+
+// The same PID can belong to two process generations inside the history window.
+// Only samples at or after the inspected process's actual start belong to it.
+func TestManagedProcessHistory_ExcludesPreviousPIDGeneration(t *testing.T) {
+	metrics := newMetricSvc(t)
+	now := time.Now().UTC()
+	require.NoError(t, metrics.db.Create(&[]model.ProcessMetricSnapshot{
+		{NodeUUID: "history-node", InstanceUUID: "history-inst", PID: 123, CPUPercent: 100, RSSBytes: 1000, SampledAt: now.Add(-10 * time.Minute)},
+		{NodeUUID: "history-node", InstanceUUID: "history-inst", PID: 123, CPUPercent: 20, RSSBytes: 200, SampledAt: now.Add(-2 * time.Minute)},
+		{NodeUUID: "history-node", InstanceUUID: "history-inst", PID: 123, CPUPercent: 0, RSSBytes: 100, SampledAt: now.Add(-time.Minute)},
+		{NodeUUID: "history-node", InstanceUUID: "other-inst", PID: 123, CPUPercent: 100, RSSBytes: 9000, SampledAt: now},
+	}).Error)
+	service := &InstanceService{db: metrics.db}
+	for _, tc := range []struct {
+		name  string
+		start time.Time
+		count int
+	}{
+		{name: "current generation", start: now.Add(-5 * time.Minute), count: 2},
+		{name: "legacy unknown start", count: 3},
+		{name: "new generation before first sample", start: now.Add(-30 * time.Second), count: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			history, rows, err := service.managedProcessHistory("history-inst", 123, tc.start)
+			require.NoError(t, err)
+			require.Len(t, rows, tc.count)
+			require.Equal(t, tc.count, history.SampleCount)
+			if tc.count == 2 {
+				require.InDelta(t, 10.0, history.AvgCPUPercent, 1e-6)
+				require.Equal(t, int64(-100), history.RSSDeltaBytes)
+			}
+		})
+	}
+}

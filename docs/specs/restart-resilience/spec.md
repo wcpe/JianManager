@@ -22,11 +22,32 @@
 - **更长退避**：`recoverRetryBackoff` 从 `{1s,2s,4s}` 扩为覆盖分钟级的递增序列（如 `{1s,2s,4s,8s,16s,32s,64s}` ≈ 127s），并可经配置注入（测试用小值）。理由：交接窗口的 socket 未就绪/资源紧张常是瞬时的，多等一轮即可接管，无需牺牲服务器。
 - **处置前 cmdline/环境存活复核**：新增 `verifyProcessOwnership(pid int, instanceUUID string, workDir string, expectWrapper bool) bool`，在 `reapOrphanWrapper` **任何** `killTree` 之前调用：
   - Unix：读 `/proc/<pid>/cmdline`，校验其确含该实例工作目录/启动命令特征；wrapper 分支再读 `/proc/<pid>/environ` 校验 `JM_DAEMON_WRAPPER_CONFIG` 内的实例 UUID（wrapper argv 仅 `<worker> daemon`、不含 UUID，单凭 argv 会把**任何**实例的 wrapper 都判真）；
-  - Windows：以 PID 查进程镜像路径与命令行做同口径匹配，wrapper 分支同样要求命令行携带实例 UUID（wrapper argv 携带 UUID）；
+  - Windows：以 PID 查进程镜像路径与命令行做同口径匹配（`proc.Cmdline()` 跨平台可用）；但 wrapper 分支**同样只认进程环境里的实例 UUID，不认命令行**——UUID 仅经 `JM_DAEMON_WRAPPER_CONFIG` 注入 env，wrapper 的 argv 恒为 `<worker 二进制> daemon`、**对本节点所有实例完全相同**，单凭 argv 判真等于把任何一个 wrapper 都认成本实例（wrapper 自身也不切 cwd，故「cwd 等于工作目录」这条弱特征对它同样不成立）。
+    - **Windows 降级行为（fail-closed，安全方向，勿当 bug 修）**：`readProcessEnviron` 只有 `/proc/<pid>/environ` 一条读取实现（`owner_verify.go`，无平台分支），Windows 无 `/proc` ⇒ 读取恒失败 ⇒ 环境强特征恒为 false ⇒ wrapper 分支永不成立。后果分两侧：收养路径 `DefaultVerifyAdoptOwnership` 返回 `env_uuid_missing` 并**拒绝收养**；强杀路径 `DefaultVerifyProcessOwnership` 因「argv 形如 daemon **且** env 携带 UUID」的合取不成立而**判不出归属、不杀**（只告警）。净效果：Windows 上「wrapper 已死、仅剩 Java 孤儿」仍可靠 Java 的 cmdline/cwd 特征确证并处置，而**存活 wrapper 永远不会被自动收养、wrapper 孤儿也永不被自动强杀**。要解除该降级须补一条 Windows 进程环境读取实现（如 gopsutil `Process.Environ()`），当前有意不做；macOS 无 `/proc`，同理。
   - **复核不通过 → 只告警 + 落审计，不杀**，保留 PID 文件等下一轮扫描或人工介入（PID 被 OS 复用给无关进程时，杜绝误杀）。
 
 > **ADR-093 决策（本节旧表述「复核不通过→只告警」的对齐）**：处置判据是「**确属真孤儿**」——即 **wrapper 已确证死亡、仅剩 Java 孤儿**。当复核**通过**（确属本实例）但进程**仍存活/仅瞬时不可达**时（典型：接管 `reconnectWithRetry` 重试耗尽、wrapper 进程未死），**只告警、保留 PID 文件、不杀**——绝不强杀一个 wrapper 与 Java 都健康、只是 socket 一时拨不通的运行中服务器。存活判据优先于「socket 是否拨通」。
 - `pidAlive`（`daemon.IsPIDAlive`）保留用于「是否还活着」判断；`verifyProcessOwnership` 用于「是否确属目标实例」判断，二者正交。
+
+#### 2.1.1 启动接管两阶段化（扫描器不再被重试拖住，2026-11-03 可用性缺陷修复）
+
+**缺陷（实测确认）**：旧实现把「初拨 + 就地 127s 递增重试」串行摊在启动主流程上，而运行期孤儿扫描器（§2.2）在其后才启动。于是一条不可达的 PID 记录就把扫描器推迟到 Worker 启动后约 127 秒（N 条僵死记录线性累加），该窗口内**完全没有运行期扫描能力**。实测证据：T7 的 D 臂因一条不可达记录，扫描器直到 Worker 启动后 127 秒才启用。
+
+**修复**：`RecoverDaemonInstances` 拆成两个阶段，**重试窗口与收尾语义逐字保留**，只把「等待」移出启动主流程：
+
+1. **快速首拨**（同步）：每条记录只拨一次，可达者当场登记为 RUNNING —— 与旧实现的首次拨号一致；返回值 `recovered` 只统计此刻已完成的接管数；
+2. **后台有界重试**（首拨失败者，`startStartupTakeoverRetries`）：按同一 `recover.retry_backoff` 序列、同一串行顺序继续重试，成功则登记，耗尽则照旧落 `orphan.dispose_blocked`（`alive_unreachable`）或 `orphan.startup_detected_not_reaped` —— 审计与「只告警不强杀」语义不变。
+
+**并发隔离（本修复的必要配套）**：接管重试与扫描器并行后，原先靠「扫描器在接管之后才启动」规避的两处竞争必须显式处理，否则修复本身会引入误杀：
+
+| 竞争面 | 后果 | 对策 |
+|---|---|---|
+| 扫描器第 0 相自动收养 vs 接管重试**并发拨号**同一 wrapper | wrapper 只保留**最新**一条控制连接（`wrapper.acceptLoop` 接到新连接即替换旧连接），两个策略对象争抢 → 可能双输 | `Manager.takeoverPending` 声明「在飞接管」，第 0 相跳过该实例（`takeoverPendingHas`）；`registerAdoptedDaemon` 登记前在锁内二次确认未纳管，输者 `strategy.Close()` 只断连不杀 |
+| direct 相把**尚未登记**的在飞实例进程判为「无主进程」 | `dispose_policy=auto` 时直接强杀正在服务的服务器 | `managedInstanceRuntime` 把在飞记录的 wrapper/java PID 与工作目录并入受管集合；`handleDirectOrphan` 在 **killTree 前**再复核一次 `takeoverProtects`（关闭「轮首取集合 → 处置」之间的 TOCTOU 窗口） |
+
+**不变的安全语义**：启动路径仍不杀任何进程（FR-471）；归属复核不过仍只告警（护栏五.1）；`orphan_scan.auto_adopt=false` 仍不收养；接管重试耗尽但 wrapper 仍存活仍落 `alive_unreachable` 审计并保留 PID 文件。
+
+**回归**：`internal/worker/process/startup_takeover_scan_decoupling_test.go` —— 一条「永不成功」的接管记录 + 被阻塞的退避等待下，断言 ①`RecoverDaemonInstances` < 2s 返回 ②扫描器 < 5s 内完成首轮并真的处置了一个**无关**无主进程 ③在飞实例的 wrapper/java 一次都没被 killTree ④放行后接管仍完整收尾（`alive_unreachable` 审计、PID 文件保留、不登记、不补杀）。对照实验（把接管改回就地阻塞）该用例 10s 转红。
 
 ### 2.2 运行期周期孤儿扫描（FR-456）
 
@@ -37,7 +58,7 @@
   - 复用启动期 `RecoverDaemonInstances` 的扫描基座与 `daemon.KillPIDTree`。
 - 扫描三态孤儿，按策略处置：
   1. **wrapper 死 / Java 活**：遍历 PID 目录，`!pidAlive(WrapperPID) && pidAlive(JavaPID)` → 走 `reapOrphanWrapper(..., errOrphanedWrapperGone)`（经 2.1 复核）。
-  2. **direct 孤儿**：Worker 内存表已丢失该实例（Worker 曾硬崩），故需按进程命令行匹配本节点所有受管实例的启动命令/工作目录，发现无主 Java → 按策略告警/清理。判据以内存表为准：**受保护工作目录集合只收「可能仍有活进程」的状态（RUNNING/STARTING/STOPPING）**——含 STOPPING 可避免优雅停止期 Java 被误杀、绕过优雅关服；STOPPED/CRASHED 的进程已死，其工作目录**不**受保护（其 WorkDir 下的残留 Java 须能被识别：Worker 硬崩重启后 CP 会把 direct 实例按 STOPPED + WorkDir 重登记，若一并保护则残留 Java 被漏报）。根 PID 集合按「管理器记名」收（实例 strategy 报出的 PID 即受管）。与 FR-326 反向对账（`orphanRuntimeSvc`）互补。
+  2. **direct 孤儿**：Worker 内存表已丢失该实例（Worker 曾硬崩），故需按进程命令行匹配本节点所有受管实例的启动命令/工作目录，发现无主 Java → 按策略告警/清理。判据以内存表为准：**受保护工作目录集合只收「可能仍有活进程」的状态（RUNNING/STARTING/STOPPING）**——含 STOPPING 可避免优雅停止期 Java 被误杀、绕过优雅关服；STOPPED/CRASHED 的进程已死，其工作目录**不**受保护（其 WorkDir 下的残留 Java 须能被识别：Worker 硬崩重启后 CP 会把 direct 实例按 STOPPED + WorkDir 重登记，若一并保护则残留 Java 被漏报）。根 PID 集合按「管理器记名」收（实例 strategy 报出的 PID 即受管）。与 FR-326 反向对账（`orphanRuntimeSvc`）互补。**`orphan_scan.auto_adopt=false` 时的处置降级**：本轮由第 0 相发现的「未纳管 + 活」进程对（wrapper 与 Java 均活、PID 记录有效）也满足上述 direct 判据（cwd 即实例工作目录），但不得被 auto 档处置——开关关闭的意图是「这些进程我来管」，自动处置等于用处置策略绕过运维的明示意图。故命中保护快照（PID 或工作目录双口径）即降级为 warn：WARN + `orphan.scan_dispose_blocked`（`reason=auto_adopt_disabled`、`effectivePolicy=warn`、success=false），不 `killTree`。边界：只降级这一类；已纳管实例照旧走 `dispose_policy`；`auto_adopt=true` 与 `dispose_policy=warn` 下行为不变。详见 [自动收养规格 §2.5](../auto-adopt-orphans/spec.md#25-开关关闭时的处置降级组合风险修复)。
   3. **docker 残留**：列本机容器（名字 `jianmanager-<uuid>`，见 `dockerStrategy.containerName`），DB/内存表未认作 RUNNING 却容器在跑（含已退出容器）→ 按策略告警/清理。**auto 档保守**：`Running=true` 的容器或内存表仍登记该实例时只告警不删（避免误删启动中/停止中实例的容器），仅删「已退出且内存表无该实例」的平台容器。
 - **任何 killTree/removeContainer 前先做归属复核**（FR-455①）：direct 走 `verifyProcessOwnership`；docker 走 `verifyContainerOwnership`——**显式两级证据**：(a) 容器带平台受管标签（`com.jianmanager.managed=true`）且标签内实例 UUID 与容器名一致 = 强归属确证；(b) 标签与容器名不一致 = 归属不通过、拒绝删除；(c) 无标签（本 FR 之前创建的存量容器）= 退化为**容器名格式校验**（`name_format_only`），不构成强归属证明，该降级如实写入审计 detail 的 `evidence` 字段供运维核查。复核不通过只告警不杀，审计 success 依逐项实际结果判定。
 - 处置动作一律落审计（`internal/controlplane/service/audit.go` 的 `RecordResultSafe`，经 Worker→CP 出站信道 `ReportOrphanAudit` 上报），保证「不静默」。
@@ -54,8 +75,18 @@
 - `onOpen`（`tunnel.go`）去掉 `n == 1` 限制：隧道**每次**建立都触发 `onConnected`（幂等重推，由 `ResyncDeduper` 按节点去重），避免瞬时 active=2 漏推。
 - 长驻订阅类副作用（`EventService.StartWorkerStream` / `PlayerEventService.StartWorkerStream` / `recoverConnectedBotFleetSubscriptions`）与重推**语义分离**：走 `onFirstConnected`，仅在节点「从无到有」（active 0→1）时触发**一次**，避免瞬时 active=2 重复建立长驻订阅流（stdout/stderr 双写、事件重复扇出）；两个 `StartWorkerStream` 另加 per-node 单飞守卫做纵深防御。
 - 追加触发源：`Register` 成功后与心跳（低频，作自然兜底）均可触发同一幂等重推入口。
-- Worker 侧 `ResyncInstances`（`internal/worker/grpc/server.go`）已是「只补不覆盖」语义，天然幂等，无需改动。
+- Worker 侧 `ResyncInstances`（`internal/worker/grpc/server.go`）保持「不覆盖运行态和工作目录、不擅自启动」；已在表实例不再仅跳过，而是复用幂等注册补完整启动规格与端口，当前控制连接不中断、下一代策略按 stale/rebuild 生效；skipped 仍表示未新建实例。未知启动规格的收养实例在补齐前不能先停后启，详细规格与 `SetLaunchConfig` 兼容接口见 [自动收养规格 §2.2](../auto-adopt-orphans/spec.md#22-收养动作非破坏幂等)。
 - 心跳里 `syncInstanceStates` 的**证据对账异步化**（`NewEvidenceReconcileDispatcher`，按节点单飞）：最长 8s 的进程侧证据拉取移出心跳应答关键路径（重推/心跳不被阻塞）。
+
+### 2.5 生命周期取消与不确定结果收敛（RV-016）
+
+- **实例操作闸**：零值可用的 `lifecycleGate` 保持同一实例生命周期操作串行，排队直接等待令牌或 ctx 取消，不创建后台 goroutine 代等 Mutex。取得令牌后再次检查取消，防止取消与取闸同时就绪产生迟到操作。
+- **生产入口**：Worker `StartInstance/RestartInstance/StopInstance/KillInstance` 分别调用 Manager 的 `StartContext/RestartContext/StopContext/KillContext`，使用请求 RPC ctx；无 ctx 的旧入口保持 Background 包装兼容。已开始的优雅停止正常收尾，排队 Stop/Kill 被取消时不迟到停服或强杀。
+- **取消三阶段**：①取闸或停止/启动提交前取消＝未执行，不改变真实运行事实；②Restart 已完成停止但新启动提交前取消＝保留 STOPPED、不再启动新一代；③实际 `cmd.Start` 已提交＝进程已启动，不把请求 ctx 绑定为进程寿命、不为取消误杀，丢失响应交 CP 确认。取消/等待失败不是 CRASHED 的证据，不能据此触发错误自愈。
+- **CP 单实例与批量**：成功和不确定结果都以派发前观察的 `id/uuid/node_id/status/updated_at` 作条件 CAS 回写；任一已变化即放弃迟到结果，不能覆盖期间心跳、迁移或并发操作。传输失败/取消先用已有 `GetInstanceStatus` 在独立 2s 窗口确认；查询失败保持观察态并记待确认原因，继续由现有心跳收敛，不新增状态枚举或 RPC。Worker 未连接同样只记待确认，不直接标崩溃。
+- **批量兼容**：`BatchContext(ctx, req, scopeIDs, scope)` 传播调用方取消与委托超时；旧 `Batch(req, scopeIDs, scope)` 仍为 Background 包装，权限与目标筛选语义不变。
+
+**本轮验证边界**：本地新增 RV 回归重复 3 轮、相关 race、授权范围全包及 vet 已由执行组报告通过；旧 CP 内存 DB 用例重复 `-count=2` 遇共享夹具唯一 UUID 冲突，不能称所有重复测试均无环境问题（旧单轮 race 通过）。可选 native cgroup 实验因本轮授权范围排除，假 cgroupfs/本地 helper 不等于真实 systemd/cgroup 验收；未据此勾选下列真机项。运行时 RV-018/022 的最终证据另行核对，不以本节进程回归代替。
 
 ## 3. 任务拆分
 
@@ -77,6 +108,7 @@
 | 4 | 心跳清单缺项但进程侧证据显示在跑时，状态不翻 STOPPED | 单测 + 真机 |
 | 5 | 隧道瞬时 active=2 时新连仍触发重推，且重复触发幂等无副作用 | 单测 |
 | 6 | 配置开关可关闭周期扫描/切告警档 | 单测 |
+| 7 | 部署含状态 / 迁移类变更时，**部署后立刻再重启一次**（二启）验证通过；重启类改动的验收含「迁移 → 首启 → 停 → 二启 → 三启」+ 脏环境（`2026-10-01` 事故纪律） | 真机（规则：`.claude/rules/gate-merge.md`「部署后复验」、`.claude/rules/testing-and-quality.md`「状态 / 迁移类变更」） |
 
 **真机五场景清单（必须真机过，逐场景确认「服务器不受影响、状态不误判、无孤儿遗留」）**：
 
@@ -99,14 +131,14 @@
 
 下表把实现中的关键常量、配置键与审计 action 名统一登记，供 reviewer 与文档核对（实现为准，文档随实现更新）。
 
-**配置键**（`internal/worker/config.go`，`worker.yml` 下 `orphan_scan.*`，Viper `SetDefault`）：
+**配置键**（`internal/worker/config.go`，`worker.yml` 下 `orphan_scan.*` / `recover.*`，Viper `SetDefault`）：
 
 | 键 | 默认 | 语义 |
 |---|---|---|
 | `orphan_scan.disabled` | `false` | `true` = 关闭周期扫描（应急逃生口）。注意：本文早前误写为 `worker.orphan_scan_enabled`（默认开），**以实现为准**——语义等价（都表示「默认启用」）。 |
 | `orphan_scan.interval` | `60s` | 扫描周期；非法/空回退 60s。 |
 | `orphan_scan.dispose_policy` | `warn` | `warn` 只告警 + 落审计 / `auto` 自动清理。 |
-
+| `recover.retry_backoff` | `1s,2s,4s,8s,16s,32s,64s` | 启动接管存活 wrapper 的重试退避序列（逗号分隔 duration，总窗口 ≈127s）。缺省与进程包 `DefaultRecoverRetryBackoff` 同源；越界/空值回退默认。**注入须在 `RecoverDaemonInstances` 之前装配**（见 `apps/worker/main.go`），否则该轮接管用不到配置。 |
 **关键常量**：
 
 | 常量 | 值 | 位置 | 语义 |
@@ -135,3 +167,27 @@
 **Worker→CP 上报通道**：`ReportOrphanAudit`（`proto/worker.proto`；CP 实现 `internal/controlplane/grpc/orphan_audit.go`；Worker 侧 `internal/worker/orphanaudit`）——与 `ReportCrashSnapshot` 同源的出站信道 + 节点身份鉴权，落 `RecordResultSafe`。
 
 **主要装配入口**：`Manager.SetOrphanAuditHandler`（Worker 审计回调）、`ControlPlaneHandler.SetOrphanAuditRecorder`、`ControlPlaneHandler.SetReconcileDispatcher`、`TunnelRegistry.SetOnConnected` / `SetOnFirstConnected`。
+
+## 7. Worker 关闭路径契约与 cgroup 边界（FR-500）
+
+> 完整设计、证据与验收见 `docs/specs/daemon-cgroup-isolation/spec.md`（2026-10-01 生产事故根因修复）。
+
+**契约（三条，正式表述）**：
+
+1. **只断连**：Worker 因信号 / 重启进入关闭序列时，对 daemon 实例**只关闭与 wrapper 的连接**（`daemonStrategy.Close()`），不下发停止帧、不发信号、不杀进程树；游离 wrapper 与其 java 子树必须存活，并可被下一次启动接管（`RecoverDaemonInstances`）。
+2. **显式例外**：用户显式「停止 / 删除 / 重启实例」照旧终止进程（停止=控制帧优雅关服 + 超时强杀兜底；删除=按 PID/进程组强杀两棵树）。二者正交，本契约不得改变其语义。
+3. **cgroup 边界**：daemon 子树必须位于 Worker 的 **systemd 单元 cgroup 之外**（`…/app.slice/jianmanager-daemons/<实例 UUID>`）。理由：`setsid` 只逃脱**进程组**，而 `systemctl restart` 按 `KillMode=control-group`（默认，`KillSignal=15`）对该单元 cgroup 内**全部**进程发 SIGTERM——2026-10-01 的 11 台实例即由此全灭（Worker 关闭路径当时已正确只断连，逐行日志见上引 spec §1）。
+
+**读者须知（易误判点）**：`KillMode=process`（`scripts/install-worker.sh:333`）只是**部署期**对策，单元漂移即失效；本契约要求运行期自身成立（wrapper 启动时自迁 + 接管已运行 wrapper 时迁移），不依赖 unit 配置。
+
+## 8. 数据目录迁移后的控制通道恢复与明确失败（2026-11-12）
+
+开发现场因数据目录移动，存活 wrapper 的 PID 记录仍保存旧绝对 socket 地址，恢复/周期收养一直拨旧地址；旧进程持续存活而新一代启动被防双开守卫拒绝。恢复入口继续优先兼容记录地址，失败后才读取当前 PID 目录的同 UUID 记录；wrapper 存活及现有强归属复核通过、存活 Java 也复核通过后，尝试当前数据目录的 canonical 实例 socket。复核不足或双方均不可达时保留原进程和记录，不能仅凭目录不同自动停止或强杀。
+
+迁移回退只修复控制通道，不重写旧 wrapper 配置、PID 记录工作目录或数据库启动命令；部署搬迁时仍须核对实例启动脚本的绝对路径。旧代未退出时保留等待与防双开，不以 socket 路径漂移代替真实进程存活判断。
+
+控制面区分两类结果：Worker 明确返回 `Success=false` 时记录明确动作失败，状态查询失败只表示“操作失败，运行状态待心跳收敛”；传输断开、取消或超时导致动作结果未知时才使用“操作结果待确认”。单实例与批量路径一致，条件回写继续避免覆盖新心跳或后续动作。
+
+回归包含真实移动 socket/PID/工作目录后的启动恢复与运行期收养、强归属负例、恢复后 Stop/下一代 Start，以及明确拒绝与未知传输的单实例/批量语义；实机验收另核对开发实例原进程、新启动脚本及最近日志，不能以单测替代用户最终验收。
+
+本轮开发现场处理：旧部署残留进程经 UUID、PID 记录、命令行、实例 cgroup 与工作目录交叉确认后，单独完成停止；两台开发实例的启动命令从已失效旧目录改为当前开发脚本路径，随后两台均成功启动、原因清空。目标实例在 Worker 更新后的 wrapper/子进程 PID 均保持不变，节点身份、资源 RPC、最近日志与 VL 健康复验通过。开发实例是既有日志采集测试脚本，运行状态不等于真实 Minecraft 监听/探针就绪；未改生产实例。代码回归已覆盖两 Go 包整包、定向 race、真实移动 socket 后恢复、延迟优雅停止与下一代启动、防双开及归属负例。

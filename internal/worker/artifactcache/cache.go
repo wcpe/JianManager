@@ -1,4 +1,4 @@
-// Package artifactcache 提供 Worker 节点本地的内容寻址制品缓存（FR-178）。
+// Package artifactcache 提供 Worker 节点本地的内容寻址制品缓存。
 //
 // 痛点：建实例时 DownloadCore 每次都把核心 jar 重新下载到实例工作目录、不查本地有没有，
 // 删实例再建 = 重下大 jar 等很久。本缓存按 sha256 持久缓存下载过的核心 jar，建实例命中
@@ -11,7 +11,7 @@
 // 范围（首版写死）：仅服务于 DownloadCore 的服务端核心 jar，不缓存插件/其它下载路径。
 // 并发安全：写用临时文件 + 原子 rename；同 sha256 并发写「最后 rename 胜」，内容一致无害。
 //
-// FR-330 增强：meta 增加组合缓存键 CoreKey（core|mcVersion|build），无 sha256 的下载源
+// 增强：meta 增加组合缓存键 CoreKey（core|mcVersion|build），无 sha256 的下载源
 // （Sponge Maven 等）经 LookupCoreKey 反查命中；GetTo 命中时全量校验内容，损坏即作废回退。
 package artifactcache
 
@@ -46,7 +46,7 @@ type Meta struct {
 	CachedAt time.Time `json:"cachedAt"`
 	// LastUsedAt 最近命中（GetTo）或存入时间，LRU 淘汰依据。
 	LastUsedAt time.Time `json:"lastUsedAt"`
-	// CoreKey 组合缓存键（FR-330）：sha256 未知的下载源（Sponge Maven 等）按
+	// CoreKey 组合缓存键：sha256 未知的下载源（Sponge Maven 等）按
 	// `core|mcVersion|build` 反查缓存条目；可空（sha 键之外的补充索引）。
 	CoreKey string `json:"coreKey,omitempty"`
 }
@@ -61,7 +61,7 @@ type Entry struct {
 	Size       int64     `json:"size"`
 	CachedAt   time.Time `json:"cachedAt"`
 	LastUsedAt time.Time `json:"lastUsedAt"`
-	// CoreKey 组合缓存键（FR-330），meta 缺失时为空。
+	// CoreKey 组合缓存键，meta 缺失时为空。
 	CoreKey string `json:"coreKey,omitempty"`
 }
 
@@ -130,7 +130,7 @@ func (c *Cache) Has(sha string) bool {
 // 未命中返回 (false, nil) 且不创建 dest，调用方据此走下载路径。
 // 拷贝用临时文件 + 原子 rename，避免半成品文件被实例读到。
 //
-// 命中校验（FR-330）：拷贝时全量核算内容 sha256，与缓存键不符（磁盘损坏/外部篡改）
+// 命中校验：拷贝时全量核算内容 sha256，与缓存键不符（磁盘损坏/外部篡改）
 // 即作废该条目并按未命中返回——绝不把脏内容交付给实例，调用方回退下载重建缓存。
 func (c *Cache) GetTo(sha, dest string) (bool, error) {
 	if !validSHA(sha) {
@@ -185,7 +185,7 @@ func (c *Cache) GetTo(sha, dest string) (bool, error) {
 	return true, nil
 }
 
-// LookupCoreKey 按组合缓存键（FR-330：`core|mcVersion|build`）反查已缓存的 sha256。
+// LookupCoreKey 按组合缓存键（：`core|mcVersion|build`）反查已缓存的 sha256。
 // 多条命中（异常态：重复缓存）取 LastUsedAt 最新一条；空键/未命中返回 ("", false)。
 // 缓存条目量级小（个位数~几十个核心 jar），全量扫描 meta 即可，不另建索引文件。
 func (c *Cache) LookupCoreKey(key string) (string, bool) {

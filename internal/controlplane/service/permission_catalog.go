@@ -15,7 +15,7 @@ type PermNodeDef struct {
 	Risk bool `json:"risk,omitempty"`
 }
 
-// PermissionCatalog 静态权限目录（FR-432）。API 与导航共用；实例级隔离仍由用户组决定。
+// PermissionCatalog 静态权限目录。API 与导航共用；实例级隔离仍由用户组决定。
 var PermissionCatalog = []PermissionDomain{
 	{
 		Domain: "platform", Label: "平台",
@@ -36,6 +36,10 @@ var PermissionCatalog = []PermissionDomain{
 			{ID: "audit.read", Label: "审计读取"},
 			{ID: "rbac.read", Label: "权限配置读取"},
 			{ID: "rbac.manage", Label: "权限配置管理"},
+			// 493：平台审批中心。读与决定分开——
+			// 「能看待审列表」与「能批准高危操作」是两种权力，合并会让只读审计员也能批准。
+			{ID: "approval.read", Label: "审批查看"},
+			{ID: "approval.decide", Label: "审批批准 / 驳回", Risk: true},
 		},
 	},
 	{
@@ -129,7 +133,7 @@ func IsValidPermissionNode(id string) bool {
 	return false
 }
 
-// systemRoleNodes 预置角色模板授予的节点（FR-432 种子）。
+// systemRoleNodes 预置角色模板授予的节点（种子）。
 var systemRoleNodes = map[string][]string{
 	"platform_admin": AllPermissionNodes(),
 	"group_admin": filterNodes(func(id string) bool {

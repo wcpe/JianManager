@@ -9,13 +9,13 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import BotsPage from './BotsPage'
 
-/**
- * BotsPage 强断言（FR-209 域簇验收三条）：
+/** 
+ * BotsPage 强断言（域簇验收三条）：
  *  ① 渲染出 seed 派生的分组（含 seed bot 名）；
  *  ② 通过新建对话框创建 Bot → 实例分组计数联动 +1；
  *  ③ 注入 500 → 页面显示错误态（不崩溃、不整页刷新）。
  *
- * 跨域依赖（/nodes 归 FR-200、/instances 归 FR-201）本域不定义，改在测试内用 server.use
+ * 跨域依赖（/nodes 归instances 归）本域不定义，改在测试内用 server.use
  * 临时桩注入（test-local，确定性，且对最终聚合的真实 instances/nodes handler 取优先级），
  * 终端 WS 回显属真机项（jsdom 不稳），不在本测试范围 —— 只测 bots REST。
  */
@@ -42,6 +42,19 @@ function stubCrossDomain() {
       HttpResponse.json([
         { id: 1, uuid: 'n-1', name: '主节点', host: '127.0.0.1', grpcPort: 9100, wsPort: 9200, status: 1, maintenance: false, os: 'linux', arch: 'amd64', cpuCores: 4, memoryMb: 8192, diskTotalMb: 100000, cpuUsage: 0, memoryUsage: 0, diskUsage: 0, networkBytesSent: 0, networkBytesRecv: 0, loadAvg1: 0, lastHeartbeat: null, createdAt: '2026-06-28T00:00:00Z' },
       ]),
+    ),
+    // InstancePicker 走服务端搜索（/instances/search），返回分页信封；
+    // /instances 也保留，供页面其它位置使用。
+    http.get(API('/instances/search'), () =>
+      HttpResponse.json({
+        items: [
+          { id: 1, uuid: 'i-1', nodeId: 1, name: '生存服', type: 'minecraft', role: 'universal', processType: 'direct', status: 'RUNNING', startCommand: '', workDir: '/srv/1', serverPort: 25565, autoStart: false, autoRestart: false, tags: '', createdAt: '2026-06-28T00:00:00Z' },
+          { id: 2, uuid: 'i-2', nodeId: 2, name: '空岛服', type: 'minecraft', role: 'universal', processType: 'direct', status: 'RUNNING', startCommand: '', workDir: '/srv/2', serverPort: 25566, autoStart: false, autoRestart: false, tags: '', createdAt: '2026-06-28T00:00:00Z' },
+        ],
+        total: 2,
+        page: 1,
+        pageSize: 50,
+      }),
     ),
     http.get(API('/instances'), () =>
       HttpResponse.json([
@@ -137,7 +150,7 @@ describe('BotsPage（mock 假后端）', () => {
   it('⑤ 创建并启动压测会话，展示聚合状态分布', async () => {
     loginMockUser()
     stubCrossDomain()
-    // FR-371 后会话列表在「压测会话」tab；舰队「压测」仍可创建，创建后切 tab 验收列表。
+    // 后会话列表在「压测会话」tab；舰队「压测」仍可创建，创建后切 tab 验收列表。
     renderWithProviders(<BotsPage />, { route: '/bots' })
 
     await userEvent.click(await screen.findByRole('button', { name: '压测' }))

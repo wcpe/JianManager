@@ -15,9 +15,9 @@ type fakeStrategy struct {
 	startCount int
 	stopCount  int
 	killCount  int
-	// disarmCount 记录收到「禁用自动重启」的次数（FR-459 熔断的 daemon 生效路径）。
+	// disarmCount 记录收到「禁用自动重启」的次数（熔断的 daemon 生效路径）。
 	disarmCount int
-	// rearmCount 记录收到「恢复自动重启」的次数（FR-459 终验 Major：人工解除熔断的复位路径）。
+	// rearmCount 记录收到「恢复自动重启」的次数（终验 Major：人工解除熔断的复位路径）。
 	rearmCount int
 	state      InstanceState
 	// onStart 可选钩子：在 Start 记账为 RUNNING 后、返回前同步触发，用于确定性地模拟
@@ -50,6 +50,7 @@ func (f *fakeStrategy) EnableAutoRestart() error { f.rearmCount++; return nil }
 // 策略异步崩溃经 markStrategyState 同步后，Manager 记账须转为 CRASHED 且可重启（复用已注入策略）。
 func TestManager_MarkStrategyState_AllowsRestart(t *testing.T) {
 	m := NewManager(t.TempDir())
+	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "fake-crash"
 	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
 
@@ -78,6 +79,7 @@ func TestManager_MarkStrategyState_AllowsRestart(t *testing.T) {
 // 即撞 Paper SessionLock$ExceptionWorldConflict（真机复现）。运行中 Restart 必须发一次 Stop、零 Kill。
 func TestManager_Restart_GracefulStopsNotKills(t *testing.T) {
 	m := NewManager(t.TempDir())
+	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "restart-graceful"
 	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
 
@@ -100,6 +102,7 @@ func TestManager_Restart_GracefulStopsNotKills(t *testing.T) {
 // TestManager_Restart_StoppedInstanceJustStarts 已停止/崩溃实例 Restart 直接启动、不误发 Kill/Stop。
 func TestManager_Restart_StoppedInstanceJustStarts(t *testing.T) {
 	m := NewManager(t.TempDir())
+	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "restart-stopped"
 	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
 
@@ -127,6 +130,7 @@ func TestManager_Restart_StoppedInstanceJustStarts(t *testing.T) {
 // 把负载敏感的时序竞态固化为确定性用例（修复前必失败、修复后必通过）。
 func TestManager_Start_PreservesCrashDuringStartWindow(t *testing.T) {
 	m := NewManager(t.TempDir())
+	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "crash-in-start-window"
 	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
 
@@ -155,6 +159,7 @@ func TestManager_Start_PreservesCrashDuringStartWindow(t *testing.T) {
 // 旧代讣告忽略，重启收尾记账 RUNNING。
 func TestManager_Restart_IgnoresStalePriorStopDuringStartWindow(t *testing.T) {
 	m := NewManager(t.TempDir())
+	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "restart-stale-stop"
 	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
 
@@ -185,6 +190,7 @@ func quickCrashCmd() string { return "exit 1" }
 // 启动窗口竞态（崩溃抢在 Start 收尾前）的根因回归见 TestManager_Start_PreservesCrashDuringStartWindow。
 func TestManager_RestartAfterCrash(t *testing.T) {
 	m := NewManager(t.TempDir())
+	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "crash-restart"
 	// AutoRestart=false：只验证「崩溃后可手动重启」，排除自动重启对断言的干扰。
 	require.NoError(t, createDirect(m, uuid, "Crash", quickCrashCmd(), t.TempDir()))

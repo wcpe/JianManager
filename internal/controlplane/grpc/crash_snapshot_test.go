@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// newCrashSnapshotHandler 建 handler + 一个已注册节点及其上的一个实例（FR-313 用例基座）。
+// newCrashSnapshotHandler 建 handler + 一个已注册节点及其上的一个实例（用例基座）。
 func newCrashSnapshotHandler(t *testing.T) (*cpgrpc.ControlPlaneHandler, *gorm.DB, *model.Node, *model.Instance) {
 	t.Helper()
 	h, db, _ := newIdentityRegisterHandler(t)
@@ -117,7 +117,7 @@ func TestReportCrashSnapshot_AuthRejects(t *testing.T) {
 	assert.Zero(t, count)
 }
 
-// TestReportCrashSnapshot_ClassifiesAndStats 入库时同步分类并 upsert 统计（FR-470 §2.2）。
+// TestReportCrashSnapshot_ClassifiesAndStats 入库时同步分类并 upsert 统计（§2.2）。
 func TestReportCrashSnapshot_ClassifiesAndStats(t *testing.T) {
 	h, db, node, inst := newCrashSnapshotHandler(t)
 	req := crashReq(node, inst, time.Now(), 1)
@@ -141,7 +141,7 @@ func TestReportCrashSnapshot_ClassifiesAndStats(t *testing.T) {
 	assert.Equal(t, snap.Signature, stat.Signature)
 }
 
-// TestReportCrashSnapshot_TrendSurvivesPrune 趋势不受 K=5 裁剪影响（FR-470 spec §4 验收 ④）。
+// TestReportCrashSnapshot_TrendSurvivesPrune 趋势不受 K=5 裁剪影响（spec §4 验收 ④）。
 func TestReportCrashSnapshot_TrendSurvivesPrune(t *testing.T) {
 	h, db, node, inst := newCrashSnapshotHandler(t)
 	base := time.Now().Add(-time.Hour).Truncate(time.Millisecond)

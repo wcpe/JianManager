@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-440 实例标签 MCP 工具测试。
+// 实例标签 MCP 工具测试。
 //
 // 覆盖三层：① 工具注册与能力面（含 V1 不扩权）；② 三态语义（缺省/空数组/非空）；
 // ③ 严格入参解析（错类型显式失败而非静默丢弃）。

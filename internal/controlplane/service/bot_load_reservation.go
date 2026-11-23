@@ -26,7 +26,7 @@ type BotLoadReservationStore struct {
 	leases   map[uint]BotLoadReservationLease
 }
 
-// NewBotLoadReservationStore 创建软预留存储；CP 重启丢失是 ADR-074 接受的边界。
+// NewBotLoadReservationStore 创建软预留存储；CP 重启丢失是接受的边界。
 func NewBotLoadReservationStore(clock BotLoadClock, ttl time.Duration) *BotLoadReservationStore {
 	if ttl <= 0 {
 		ttl = time.Minute

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// FR-475 Windows 就绪：行终止符归一——CRLF 的行尾 '\r' 属于终止符而非正文。
+// Windows 就绪：行终止符归一——CRLF 的行尾 '\r' 属于终止符而非正文。
 //
 // 背景：Windows 上 Java 经 log4j2 `%n` 写出 CRLF；采集侧按 '\n' 拆行、只剥 '\n'
 // （FileTailer / 归档读取），故行尾会残留 '\r'。修复前它进入事件正文，并使同一逻辑

@@ -35,6 +35,61 @@ func TestParseFlatYAML_DotPath(t *testing.T) {
 	}
 }
 
+// TestParseFlatYAML_DeepNestingPathOrder 守护 ≥3 层嵌套时的路径顺序。
+//
+// `parseFlatYAML` 用一个「外层在前」的缩进栈拼路径；若正向遍历栈去前缀，
+// 前缀会整段反序：`servers: {lobby: {motd: x}}` 产出 `lobby.servers.motd`，
+// 而正确结果是 `servers.lobby.motd`。
+//
+// 2 层时栈里只有一个元素，正向反向结果相同，所以这个 bug 长期无人发现；
+// 而 BungeeCord 的 `servers`、Paper 的 `world-settings` 都是 3 层，真实配置一律错位：
+// schema 绑不上（form 显示空值）、补丁写不进去（路径找不到父级）。
+func TestParseFlatYAML_DeepNestingPathOrder(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			name: "两层（回归：本来就正确）",
+			src:  "settings:\n  bungeecord: true\n",
+			want: []string{"settings.bungeecord"},
+		},
+		{
+			name: "三层：BungeeCord servers 表",
+			src:  "servers:\n  lobby:\n    address: localhost:25566\n",
+			want: []string{"servers.lobby.address"},
+		},
+		{
+			name: "三层：Paper world-settings",
+			src:  "world-settings:\n  default:\n    view-distance: 10\n",
+			want: []string{"world-settings.default.view-distance"},
+		},
+		{
+			name: "四层",
+			src:  "a:\n  b:\n    c:\n      d: v\n",
+			want: []string{"a.b.c.d"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fields := parseFlatYAML(c.src)
+			got := make([]string, 0, len(fields))
+			for _, f := range fields {
+				got = append(got, f.Key)
+			}
+			if len(got) != len(c.want) {
+				t.Fatalf("字段数不符: got=%v want=%v", got, c.want)
+			}
+			for i := range c.want {
+				if got[i] != c.want[i] {
+					t.Errorf("路径顺序错误: got=%q want=%q", got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestParseFlatTOML_Section(t *testing.T) {
 	src := "motd = \"Velocity\"\n\n[server]\nbind = \"0.0.0.0:25577\"\n"
 	fields := parseFlatTOML(src)
@@ -118,7 +173,7 @@ func TestCrossFileConsistency_PortUnique(t *testing.T) {
 }
 
 func TestCrossFileConsistency_QueryPortUnique(t *testing.T) {
-	// FR-451：query.port 纳入端口唯一性校验（与 server-port 同口径）。
+	// query.port 纳入端口唯一性校验（与 server-port 同口径）。
 	cfgs := []ParsedConfig{
 		{Path: "a/server.properties", Fields: []*workerpb.ConfigField{{Key: "query.port", Value: "25566"}}},
 		{Path: "b/server.properties", Fields: []*workerpb.ConfigField{{Key: "query.port", Value: "25566"}}},
@@ -166,5 +221,106 @@ func TestCrossFileConsistency_ForwardingSecretMatch(t *testing.T) {
 	issues := CheckForwardingSecret(cfgs)
 	if len(issues) == 0 {
 		t.Fatalf("secret 不一致应触发警告")
+	}
+}
+
+// TestBungeeCordYAMLModel_KeysMatchParsedDotPaths 守护§2.2.4 的键名契约。
+//
+// 背景：该 schema 早先用 `listeners[].host` 这类 JSONPath 风格键名，而 `parseFlatYAML`
+// 产出的是点号路径 `listeners.host`。两边对不上时 form 模式的每个字段都绑不到真实值，
+// 但**没有任何报错**——只是表单显示空值、保存后原样覆盖，属最难发现的一类缺陷。
+//
+// 这条测试用一份**贴近真实 BungeeCord config.yml 的片段**（servers 是三层嵌套、permissions
+// 是列表）跑一遍解析，断言 schema 里**每一个**声明的键都精确出现在解析产物中。
+//
+// 这里刻意不再保留任何「前缀放行」豁免：`servers` 与 `permissions.*` 已从 schema 移除，
+// 留下的全是真正的标量键，就不该有配不上的理由。此前正是因为豁免逻辑存在，才掩盖了两个
+// 更深的问题——解析器在 ≥3 层嵌套时把路径前缀写反（`servers.lobby.motd` 变成
+// `lobby.servers.motd`），以及 servers/permissions 这类非标量字段被当成标量渲染。
+func TestBungeeCordYAMLModel_KeysMatchParsedDotPaths(t *testing.T) {
+	src := `listeners:
+- host: 0.0.0.0:25577
+  max_players: 100
+  motd: '&1BungeeCord'
+  query_port: 25577
+ip_forward: true
+online_mode: true
+connection_throttle: 4000
+connection_throttle_limit: 3
+servers:
+  lobby:
+    address: localhost:25566
+    motd: 'lobby'
+    restricted: false
+permissions:
+  default:
+  - bungeecord.command.server
+  admin:
+  - bungeecord.command.alert
+`
+	parsed := parseFlatYAML(src)
+	byKey := make(map[string]struct{}, len(parsed))
+	for _, f := range parsed {
+		byKey[f.Key] = struct{}{}
+	}
+
+	model := BungeeCordYAMLModel()
+
+	// 精确绑定：schema 里出现的每个键都必须能在这份真实形态的配置里解析出来。
+	// 不再有「前缀放行」或「列表条目豁免」——那些豁免正是此前掩盖问题的原因：
+	// 只要允许「大致能对上」，解析器把路径写反、把映射当标量渲染都不会被发现，
+	// 而 form 模式会显示一个真实配置里并不存在的输入框，保存即破坏。
+	for key := range model.Fields {
+		if _, ok := byKey[key]; ok {
+			continue
+		}
+		t.Errorf("schema 键 %q 在 parseFlatYAML 产物中不存在（form 模式将无法绑定）", key)
+	}
+
+	// 反向守护：schema 不得再出现 JSONPath 风格键名。
+	for key := range model.Fields {
+		if strings.Contains(key, "[]") {
+			t.Errorf("schema 键 %q 含 JSONPath 风格（[]），与 parseFlatYAML 的点号路径不一致", key)
+		}
+	}
+}
+
+// TestVelocityTomlModel_KeysMatchParsedPaths 是 BungeeCord 那条守护的对称补充。
+//
+// 背景：`VelocityTomlModel` 曾声明 `enabled` 与 `forwarding-secret` 两个真实文件里
+// **根本不存在**的键——前者 Velocity 的 toml 从来没有；后者 JM 走的是
+// `forwarding-secret-file = "forwarding.secret"`，密钥落在独立文件而非内联字段。
+//
+// 后果与 BC 那批相同且更隐蔽：form 模式会渲染出这两个输入框，而 `patchTOML` 对缺失键是
+// **追加到文件末尾**，用户一保存就往 velocity.toml 里写进 `enabled = true` 与
+// `forwarding-secret = ""`，污染代理配置。这条测试把「schema 键 ⊆ 解析产物」钉死。
+//
+// 样例取自 JM 自己生成的 velocity.toml（proxyconfig.go 的 buildVelocityToml），
+// 即运行时真正会看到的形态。
+func TestVelocityTomlModel_KeysMatchParsedPaths(t *testing.T) {
+	src := `# 由 JianManager 生成。servers/try/forced-hosts 由平台注册关系同步管理。
+config-version = "2.7"
+bind = "0.0.0.0:25577"
+motd = "Velocity"
+show-max-players = 500
+online-mode = true
+player-info-forwarding-mode = "modern"
+forwarding-secret-file = "forwarding.secret"
+announce-forge = false
+
+[servers]
+lobby = "127.0.0.1:25566"
+`
+	parsed := parseFlatTOML(src)
+	byKey := make(map[string]struct{}, len(parsed))
+	for _, f := range parsed {
+		byKey[f.Key] = struct{}{}
+	}
+
+	for key := range VelocityTomlModel().Fields {
+		if _, ok := byKey[key]; ok {
+			continue
+		}
+		t.Errorf("schema 键 %q 在 parseFlatTOML 产物中不存在（form 模式会渲染幽灵字段，保存即向文件追加污染行）", key)
 	}
 }

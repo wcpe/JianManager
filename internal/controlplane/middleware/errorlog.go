@@ -24,7 +24,7 @@ func (w *respCaptureWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// ErrorLog API 错误统一落平台日志（FR-320）：4xx 业务拒绝记 warn、5xx 记 error，
+// ErrorLog API 错误统一落平台日志：4xx 业务拒绝记 warn、5xx 记 error，
 // 附路径/状态码/响应体/用户/IP——经 log_slog 桥自动进日志中心 platform 源，
 // 用户在 /logs 页即可追查「某个操作为什么报错」（此前错误只回 HTTP 响应，平台日志恒空）。
 // 401（token 过期常态）/404（探路噪音）/429（限流自身会刷）跳过，避免淹没真问题。

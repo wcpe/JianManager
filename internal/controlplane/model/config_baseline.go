@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ConfigBaseline 配置基线（模板）（FR-458）。
+// ConfigBaseline 配置基线（模板）。
 // 键为 (ScopeKey, FilePath)：ScopeKey 限定「哪些实例应共享该基线」（如 group:1 / network:2 / tag:prod / all）。
 // ContentHash 为 sha256(content)，与 InstanceConfigVersion.ContentHash 同口径，供漂移检测比对。
 type ConfigBaseline struct {

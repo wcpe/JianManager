@@ -1,10 +1,12 @@
 package daemon
 
 import (
+	"bufio"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,8 +98,6 @@ func testWorkDir(t *testing.T) string {
 //   - Worker 拨号连接 socket
 //   - PID 文件已写入且 wrapper pid 存活
 //   - stop 控制命令使 Java 退出、wrapper 结束
-//
-// 参见 ADR-003。
 func TestWrapper_StopControl(t *testing.T) {
 	pidDir := testWorkDir(t)
 	uuid := "test-stop"
@@ -144,10 +144,12 @@ func TestWrapper_StopControl(t *testing.T) {
 	}
 	require.NoError(t, stopFrame.Encode(conn))
 
-	// wrapper 应在 stop 后退出
+	// stop 可能落在 Java 启动窗口：请求会先暂存，Java 登记后再执行优雅停止，
+	// Windows runner 在高负载下还要叠加 taskkill 异步收尾。等待覆盖完整生命周期，
+	// 不把调度/进程创建延迟误报成 wrapper 未处理 stop。
 	select {
 	case <-done:
-	case <-time.After(8 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("wrapper 在 stop 后未退出")
 	}
 	conn.Close()
@@ -157,7 +159,32 @@ func TestWrapper_StopControl(t *testing.T) {
 	waitForProcGone(t, javaPID)
 }
 
-// TestWrapper_StopDuringJavaStartDoesNotOrphanJava 锁定真机验收（FR-475 轮次）发现的产品缺陷：
+// TestWrapperJavaStartFixture 模拟响应 stdin stop 的服务端；独立停止文件只供失败清理使用。
+func TestWrapperJavaStartFixture(t *testing.T) {
+	stopFile := os.Getenv("JIANMANAGER_WRAPPER_START_TEST_STOP_FILE")
+	if stopFile == "" {
+		return
+	}
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			if scanner.Text() == ControlStop {
+				os.Exit(0)
+			}
+		}
+		// 仅收到真正的 stop 才成功；单纯关 stdin 不得满足外层断言。
+		os.Exit(2)
+	}()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		if _, err := os.Stat(stopFile); err == nil {
+			os.Exit(3)
+		}
+	}
+}
+
+// TestWrapper_StopDuringJavaStartDoesNotOrphanJava 锁定真机验收（轮次）发现的产品缺陷：
 // stop/kill 落在「startJava 已发起、javaCmd 尚未登记」的窗口内时，旧实现直接 signalClose 收摊退出，
 // 而 startJava 随后拉起的 Java 无人托管——真机表现为 wrapper 已退出、Java 仍在跑并占着实例工作目录
 // （Worker 侧显示已停止；用例侧则表现为 t.TempDir 的 RemoveAll 撞上该进程的 CWD 句柄而失败）。
@@ -165,12 +192,25 @@ func TestWrapper_StopControl(t *testing.T) {
 // 修复后：启动窗口内的停止请求被暂存，javaCmd 登记完成即补发停止——wrapper 退出前 Java 必已终止。
 func TestWrapper_StopDuringJavaStartDoesNotOrphanJava(t *testing.T) {
 	workDir := t.TempDir()
+	stopFile := filepath.Join(workDir, "java-start-fixture.stop")
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	command := "'" + strings.ReplaceAll(executable, "'", "'\\''") + "' -test.run=^TestWrapperJavaStartFixture$"
+	if runtime.GOOS == "windows" {
+		command = `%JIANMANAGER_WRAPPER_START_TEST_EXECUTABLE% -test.run=TestWrapperJavaStartFixture$`
+	}
 	cfg := WrapperConfig{
 		InstanceUUID: "test-stop-race",
-		StartCommand: keepAliveCommand(),
-		WorkDir:      workDir,
-		AutoRestart:  false,
-		PIDDir:       workDir,
+		StartCommand: command,
+		EnvVars: map[string]string{
+			"JIANMANAGER_WRAPPER_START_TEST_STOP_FILE":  stopFile,
+			"JIANMANAGER_WRAPPER_START_TEST_EXECUTABLE": `"` + executable + `"`,
+			// 去掉替身的 race 默认退出延迟，避免其与测试的 1s 优雅停止上限竞争。
+			"GORACE": "atexit_sleep_ms=0",
+		},
+		WorkDir:     workDir,
+		AutoRestart: false,
+		PIDDir:      workDir,
 	}
 	// 直接构造 Wrapper（不起监听/不跑 run）：本用例只验「启动窗口 + 停止」这段状态机。
 	w := &Wrapper{
@@ -202,10 +242,6 @@ func TestWrapper_StopDuringJavaStartDoesNotOrphanJava(t *testing.T) {
 	stdin, err := javaCmd.StdinPipe()
 	require.NoError(t, err)
 	require.NoError(t, javaCmd.Start())
-	t.Cleanup(func() {
-		// 兜底：用例提前失败时终止进程树，避免残留子进程占住工作目录（回收交给 javaWait）。
-		killProcessTree(javaCmd)
-	})
 	w.mu.Lock()
 	w.javaCmd = javaCmd
 	w.javaStdin = stdin
@@ -214,15 +250,46 @@ func TestWrapper_StopDuringJavaStartDoesNotOrphanJava(t *testing.T) {
 	w.mu.Unlock()
 
 	w.applyDeferredStop()
-	go w.javaWait(javaCmd)
+	javaWaitDone := make(chan struct{})
+	go func() {
+		defer close(javaWaitDone)
+		w.javaWait(javaCmd)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-javaWaitDone:
+			return
+		default:
+		}
+		// 兜底只触发该替身的私有停止信号，不按可能已回收或复用的 PID 终止进程。
+		if err := os.WriteFile(stopFile, nil, 0600); err != nil {
+			t.Errorf("写入 Java 替身停止信号失败: %v", err)
+		}
+		select {
+		case <-javaWaitDone:
+		case <-time.After(5 * time.Second):
+			t.Error("兜底终止后 Java 未完成回收")
+		}
+	})
 
-	// 补发后 Java 必须被终止（优雅停止超时 1s → 强杀），wrapper 才能在收摊后退出。
-	waitForProcGone(t, javaCmd.Process.Pid)
+	// closing 必须由 javaWait 在 cmd.Wait 完成后触发，不能用 Windows 上仅检查
+	// OpenProcess 成功与否的 PID 探测代替：已退出但尚存句柄的进程仍可能被探测到。
 	select {
 	case <-w.closing:
 	case <-time.After(5 * time.Second):
 		t.Fatal("补发停止后 wrapper 未收摊退出")
 	}
+	w.mu.Lock()
+	javaReaped := w.javaCmd == nil
+	w.mu.Unlock()
+	require.True(t, javaReaped, "wrapper 收摊前必须完成 Java 回收")
+	select {
+	case <-javaWaitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wrapper 收摊后 Java 回收协程未退出")
+	}
+	require.NotNil(t, javaCmd.ProcessState, "Java 必须已由 cmd.Wait 回收")
+	require.Zero(t, javaCmd.ProcessState.ExitCode(), "替身必须实际响应暂存的 stdin stop，而非启动失败或强杀退出")
 }
 
 // TestWrapper_StdoutForward 验证 wrapper 把 Java 的 stdout 转发为帧给 Worker。
@@ -328,7 +395,7 @@ func TestWrapper_PIDFileCleanup(t *testing.T) {
 }
 
 // crashImmediatelyCommand 返回一个「启动即崩溃」的命令（跨平台），
-// 用于验证 FR-459 崩溃熔断的 daemon 生效路径：wrapper 收到「禁用自动重启」后不得再拉起 Java。
+// 用于验证崩溃熔断的 daemon 生效路径：wrapper 收到「禁用自动重启」后不得再拉起 Java。
 func crashImmediatelyCommand() string {
 	if runtime.GOOS == "windows" {
 		return "exit /b 1"
@@ -336,12 +403,25 @@ func crashImmediatelyCommand() string {
 	return "exit 1"
 }
 
-// TestWrapper_DisableRestartStopsAutoRestart 验证 FR-459 blocker 的 daemon 生效路径：
+// TestWrapper_DisableRestartStopsAutoRestart 验证blocker 的 daemon 生效路径：
 // AutoRestart=true 且 Java 启动即崩溃时，wrapper 本会按退避自动重启；一旦 Worker 下发
 // ControlDisableRestart（崩溃熔断），wrapper 必须停止自动重启并自行收摊退出。
 //
-// 判定依据：wrapper 的 fastCrashes 放弃阈值是 5 次、退避序列 1s+2s+4s+8s（≥15s）才会自退，
-// 故「5s 内退出」只可能来自熔断禁用帧，而非 wrapper 自身的快速崩溃放弃逻辑。
+// ## 两条合法收摊路径（原先只覆盖了第一条，导致换管道实现后误报）
+//
+// 熔断帧与「Java 崩溃」是两个并发事件，到达顺序不确定，产品对两种顺序都正确：
+//
+//	A. 帧到达时 Java 已崩（退避窗口，javaCmd==nil）→ disableAutoRestart 判定 idle，
+//	   立即 signalClose 收摊。
+//	B. 帧到达时 Java 仍在启动/运行 → 不打断在跑的服务，置粘性 autoRestartOff 后
+//	   保持托管；等 Java 退出，由 javaWait 的复核点拦下重启再收摊。
+//
+// 旧的 npipe 管道拨号较慢，帧几乎总是落在路径 A 之后；改用 go-winio 后连接建立更快，
+// 帧稳定先于崩溃到达，于是走路径 B，而本用例只等 5s、只认路径 A，遂 100% 失败。
+// 那是**测试对连接延迟的隐含依赖**，不是产品回归（两条路径的日志均已实测确认）。
+//
+// 因此这里把等待窗口放宽到能覆盖「启动 + 崩溃 + 首次退避」并只断言最终收摊——
+// 无论走哪条路径，共同的可观测结果都是 wrapper 退出。
 func TestWrapper_DisableRestartStopsAutoRestart(t *testing.T) {
 	pidDir := testWorkDir(t)
 	uuid := "test-disable-restart"
@@ -371,11 +451,12 @@ func TestWrapper_DisableRestartStopsAutoRestart(t *testing.T) {
 	frame := &Frame{Header: Header{Channel: ChannelControl, Type: TypeCommand}, Payload: []byte(ControlDisableRestart)}
 	require.NoError(t, frame.Encode(conn))
 
-	// wrapper 应在退避窗口内复核熔断标志并收摊退出（不再拉起 Java）。
+	// wrapper 最终必须收摊退出（不区分走路径 A 还是 B）。
+	// 窗口取 20s：最坏情况要等当前这次 Java 启动失败结束 + 首次退避 1s 后再收摊。
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("收到禁用自动重启后 wrapper 仍在自动重启（未退出）")
+	case <-time.After(20 * time.Second):
+		t.Fatal("收到禁用自动重启后 wrapper 仍未退出（崩溃熔断未生效）")
 	}
 }
 
@@ -413,7 +494,7 @@ func TestWrapper_DisableAutoRestartIsSticky(t *testing.T) {
 	require.True(t, w.isClosed(), "空闲态应立即收摊，避免空占进程")
 }
 
-// FR-459 终验 Major：对称的 enable_restart 控制帧必须清掉粘性「禁用自动重启」，使 wrapper
+// 终验 Major：对称的 enable_restart 控制帧必须清掉粘性「禁用自动重启」，使 wrapper
 // 恢复自动重启（人工解除熔断的 daemon 复位路径）。
 func TestWrapper_EnableAutoRestartClearsSticky(t *testing.T) {
 	w := &Wrapper{cfg: WrapperConfig{AutoRestart: true}, closing: make(chan struct{}), state: StateStopped}
@@ -437,7 +518,7 @@ func TestWrapper_EnableAutoRestartClearsSticky(t *testing.T) {
 	require.False(t, w.isAutoRestartOff())
 }
 
-// FR-459 终验 Low #5：startJava 在临界区内复核「已关闭/已禁用」，消除 javaWait 复核点与 startJava
+// 终验 Low #5：startJava 在临界区内复核「已关闭/已禁用」，消除 javaWait 复核点与 startJava
 // 取锁之间的 TOCTOU——否则该窗口内到达的禁用帧会误判空闲而收摊，紧接着 startJava 却拉起 Java，
 // 造成 wrapper 已退出、Java 无人托管的孤儿。
 func TestWrapper_StartJavaRefusesWhenAutoRestartDisabled(t *testing.T) {

@@ -14,24 +14,29 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Agent 写白名单与动作常量（FR-384 / FR-395，见 ADR-076/080）。
+// Agent 写白名单与动作常量。
 const (
 	AgentWriteInstanceLife    = "instance.life"
 	AgentWriteNodeMaintenance = "node.maintenance"
 
-	AgentActionWhoami               = "agent.whoami"
-	AgentActionListNodes            = "agent.list_nodes"
-	AgentActionListInstances        = "agent.list_instances"
-	AgentActionGetInstance          = "agent.get_instance"
-	AgentActionGetInstanceMetrics   = "agent.get_instance_metrics"
-	AgentActionGetInstanceLogs      = "agent.get_instance_logs"
+	AgentActionWhoami             = "agent.whoami"
+	AgentActionListNodes          = "agent.list_nodes"
+	AgentActionListInstances      = "agent.list_instances"
+	AgentActionGetInstance        = "agent.get_instance"
+	AgentActionGetInstanceMetrics = "agent.get_instance_metrics"
+	AgentActionGetInstanceLogs    = "agent.get_instance_logs"
+	// 助手概览类只读（补回）：只回聚合值、按调用者权限收敛，不暴露逐台明细。
+	// 它们不属于 Agent Token 运维面（HTTPInContract=false），只给助手经 MCP 目录使用。
+	AgentActionClusterOverview      = "agent.cluster_overview"
+	AgentActionListTasksBrief       = "agent.list_tasks_brief"
+	AgentActionListAlertsBrief      = "agent.list_alerts_brief"
 	AgentActionInstanceStart        = "agent.instance_start"
 	AgentActionInstanceStop         = "agent.instance_stop"
 	AgentActionInstanceRestart      = "agent.instance_restart"
 	AgentActionNodeMaintenanceEnter = "agent.node_maintenance_enter"
 	AgentActionNodeMaintenanceLeave = "agent.node_maintenance_leave"
 
-	// FR-396：节点与实例全生命周期扩展 action。
+	// 节点与实例全生命周期扩展 action。
 	AgentActionNodeGet                    = "agent.node_get"
 	AgentActionNodeGetMetrics             = "agent.node_get_metrics"
 	AgentActionNodeCheckDocker            = "agent.node_check_docker"
@@ -41,7 +46,7 @@ const (
 	AgentActionInstanceSearch             = "agent.instance_search"
 	AgentActionInstanceGetEnv             = "agent.instance_get_env"
 	AgentActionInstanceListCrashSnapshots = "agent.instance_list_crash_snapshots"
-	// FR-470：崩溃趋势读（同类聚合/根因/日粒度），观测面只读。
+	// 崩溃趋势读（同类聚合/根因/日粒度），观测面只读。
 	AgentActionInstanceCrashTrend      = "agent.instance_crash_trend"
 	AgentActionInstanceCreate          = "agent.instance_create"
 	AgentActionInstanceProvisionServer = "agent.instance_provision_server"
@@ -50,22 +55,28 @@ const (
 	AgentActionInstanceClone           = "agent.instance_clone"
 	AgentActionInstanceRebuild         = "agent.instance_rebuild"
 	AgentActionInstanceUpdateConfig    = "agent.instance_update_config"
-	// FR-468：实例二进制/Beacon 版本读取与受控升级/一级回滚。
+	// 实例二进制/Beacon 版本读取与受控升级/一级回滚。
 	AgentActionInstanceBinaryVersionGet = "agent.instance_binary_version_get"
 	AgentActionInstanceBinaryUpgrade    = "agent.instance_binary_upgrade"
 	AgentActionInstanceBinaryRollback   = "agent.instance_binary_rollback"
-	// FR-467：实例运行期配额与实时用量读取。
+	// 实例运行期配额与实时用量读取。
 	AgentActionInstanceQuotaStatus = "agent.instance_quota_status"
-	// FR-466：实例整机快照列表 / 创建 / 一键回滚。
+	// 实例整机快照列表 / 创建 / 一键回滚。
 	AgentActionInstanceSnapshotList     = "agent.instance_snapshot_list"
 	AgentActionInstanceSnapshotCreate   = "agent.instance_snapshot_create"
 	AgentActionInstanceSnapshotRollback = "agent.instance_snapshot_rollback"
-	// 实例标签维护（FR-440）：与 UpdateConfig 分离为独立动作，使打标签与改配置各有清晰授权面
+	// 实例标签维护：与 UpdateConfig 分离为独立动作，使打标签与改配置各有清晰授权面
 	// （UpdateConfig 走 instance.configure，本动作走 instance.write，语义更轻）。
-	AgentActionInstanceUpdateTags  = "agent.instance_update_tags"
-	AgentActionTaskGet             = "agent.task_get"
+	AgentActionInstanceUpdateTags = "agent.instance_update_tags"
+	AgentActionTaskGet            = "agent.task_get"
+	// 审批票据自查（spec §8.4 补齐）：Agent 提交高危操作后能自己查票据结果，
+	// 而不是「提交完只能盲等」。按 TokenID 严格限域——同一用户的多把 Token
+	// 互相看不到对方的票（比按 applicant 更窄，避免越界）。
+	AgentActionApprovalList        = "agent.approval_list"
+	AgentActionApprovalGet         = "agent.approval_get"
+	AgentActionApprovalWithdraw    = "agent.approval_withdraw"
 	AgentActionInstanceSendCommand = "agent.instance_send_command"
-	// 实例分组（FR-165 / ADR-033）：分组仅承载运维归类，读走 instance.read、写走 instance.write。
+	// 实例分组：分组仅承载运维归类，读走 instance.read、写走 instance.write。
 	AgentActionInstanceGroupList          = "agent.instance_group_list"
 	AgentActionInstanceGroupRead          = "agent.instance_group_read"
 	AgentActionInstanceGroupCreate        = "agent.instance_group_create"
@@ -73,12 +84,12 @@ const (
 	AgentActionInstanceGroupDelete        = "agent.instance_group_delete"
 	AgentActionInstanceGroupAddMembers    = "agent.instance_group_add_members"
 	AgentActionInstanceGroupRemoveMembers = "agent.instance_group_remove_members"
-	// Beacon 拓扑拉取（FR-444，见 ADR-090）：手动触发把 Beacon 区服结构树映射为
+	// Beacon 拓扑拉取：手动触发把 Beacon 区服结构树映射为
 	// 本地分组树并补 region:/zone:/role: 标签。改的是实例归属与分组，故与实例分组同权限面
 	// （instance.write）；不做 destructive——它是幂等对账而非删除语义。
 	AgentActionBeaconTopologyPull   = "agent.beacon_topology_pull"
 	AgentActionBeaconTopologyStatus = "agent.beacon_topology_status"
-	// 群组服 Network 软标签与代理注册（FR-032 / FR-335）：仅承载运维归类与代理↔后端关系，
+	// 群组服 Network 软标签与代理注册：仅承载运维归类与代理↔后端关系，
 	// 读走 instance.read、写走 instance.write（与实例分组同权限面）。
 	AgentActionNetworkList         = "agent.network_list"
 	AgentActionNetworkRead         = "agent.network_read"
@@ -95,7 +106,7 @@ const (
 	AgentActionInstanceKill        = "agent.instance_kill"
 	AgentActionInstanceDelete      = "agent.instance_delete"
 
-	// FR-397 文件域 action（MCP 专属，不进 HTTP 契约投影）。
+	// 文件域 action（MCP 专属，不进 HTTP 契约投影）。
 	AgentActionFileList                = "agent.file_list"
 	AgentActionFileCheckAccess         = "agent.file_check_access"
 	AgentActionFileReadText            = "agent.file_read_text"
@@ -112,7 +123,7 @@ const (
 	// 刻意不进 action 目录：它不可被授权、不可被发现，凭据是票据本身。
 	AgentActionFileTransferConsume = "agent.file_transfer_consume"
 
-	// FR-397 配置域 action。
+	// 配置域 action。
 	AgentActionConfigDiscover    = "agent.config_discover"
 	AgentActionConfigRead        = "agent.config_read"
 	AgentActionConfigWriteText   = "agent.config_write_text"
@@ -122,13 +133,21 @@ const (
 	AgentActionConfigDiff        = "agent.config_diff"
 	AgentActionConfigRollback    = "agent.config_rollback"
 
-	// FR-397 插件域 action。
+	// 插件域 action。
 	AgentActionPluginList            = "agent.plugin_list"
 	AgentActionPluginDeployFromAsset = "agent.plugin_deploy_from_asset"
 	AgentActionPluginToggle          = "agent.plugin_toggle"
 	AgentActionPluginDelete          = "agent.plugin_delete"
 
-	// FR-398：普通 Bot 舰队 action（resource=bot）。
+	// ServerProbe 诊断代理 action（经探针桥下发）。
+	//
+	// 为什么要走 MCP 代理而不是让调用方直连探针：托管模式下探针**零监听**，
+	// 9267/9943/9945 一个端口都不开，外部没有任何办法直连它。
+	// 唯一可达路径就是 Worker 上的反向 WS 桥，而 CP 是那座桥的持有者。
+	// 把 42 个诊断工具经 CP 代理出去，调用方只需一个 MCP 端点。
+	AgentActionProbeDiagnose = "agent.probe_diagnose"
+
+	// 普通 Bot 舰队 action（resource=bot）。
 	AgentActionBotList        = "agent.bot_list"
 	AgentActionBotGet         = "agent.bot_get"
 	AgentActionBotCreate      = "agent.bot_create"
@@ -136,14 +155,14 @@ const (
 	AgentActionBotSendCommand = "agent.bot_send_command"
 	AgentActionBotDelete      = "agent.bot_delete"
 
-	// FR-398：压测模板 action（resource=none，平台级视角，见 ADR-080 附注）。
+	// 压测模板 action（resource=none，平台级视角，附注）。
 	AgentActionLoadTestTemplateList   = "agent.loadtest_template_list"
 	AgentActionLoadTestTemplateGet    = "agent.loadtest_template_get"
 	AgentActionLoadTestTemplateCreate = "agent.loadtest_template_create"
 	AgentActionLoadTestTemplateUpdate = "agent.loadtest_template_update"
 	AgentActionLoadTestTemplateDelete = "agent.loadtest_template_delete"
 
-	// FR-398：压测运行编排与观测 action（resource=botrun）。
+	// 压测运行编排与观测 action（resource=botrun）。
 	AgentActionLoadTestRunCreate      = "agent.loadtest_run_create"
 	AgentActionLoadTestRunList        = "agent.loadtest_run_list"
 	AgentActionLoadTestRunGet         = "agent.loadtest_run_get"
@@ -187,7 +206,7 @@ const (
 )
 
 // 硬拒绝 action 集合（永不 allow）。
-// FR-395 起生产授权以 action 目录为准；本集合继续供 FR-388 契约与兼容测试枚举。
+// 起生产授权以 action 目录为准；本集合继续供契约与兼容测试枚举。
 var agentHardDeny = map[string]struct{}{
 	AgentHardDenyUserWrite:      {},
 	AgentHardDenyGroupWrite:     {},
@@ -204,7 +223,7 @@ var agentHardDeny = map[string]struct{}{
 	"settings.write": {}, "db.query": {}, "system.update": {},
 }
 
-// AgentOpsAction 运维面可暴露的 action 契约行（FR-388 / FR-395）。
+// AgentOpsAction 运维面可暴露的 action 契约行。
 type AgentOpsAction struct {
 	// Action 策略引擎动作名。
 	Action string
@@ -275,6 +294,16 @@ func IsAgentHardDeny(action string) bool {
 type AgentPrincipal struct {
 	TokenID uint
 	Name    string
+	// ActAsUserID 该 principal 代表哪个**人类用户**行事（仅有非 Token 场景会填）。
+	//
+	// 【为何需要】审批票要记“申请人是谁”。 Agent Token 场景下能从 TokenID 反查
+	// created_by；但助手派生出的用户委托身份**没有 Token**（明确不为人类
+	// 用户签发 jmat_），TokenID 恒为 0 —— 只靠 TokenID 反查会让所有助手触发的
+	// 审批票 applicant_user_id=0，进而：① 幂等唯一索引把不同用户的同参数请求当成
+	// 同一张票；② own.* 接口按 applicant 过滤，真申请人看不到自己的申请也撤回不了。
+	//
+	// 因此这里显式带上用户 id，由审批拦截层优先采用。
+	ActAsUserID uint
 	// TokenPrefix 明文前缀（如 jmat_ab12），供 MCP 会话列表展示；不泄露全文。
 	TokenPrefix       string
 	PolicyVersion     int
@@ -284,7 +313,7 @@ type AgentPrincipal struct {
 	Capabilities      []string
 }
 
-// AgentTokenService Agent Token 管理与策略引擎（FR-384 / FR-395，见 ADR-076/080）。
+// AgentTokenService Agent Token 管理与策略引擎。
 type AgentTokenService struct {
 	db *gorm.DB
 }
@@ -404,6 +433,21 @@ func (s *AgentTokenService) Issue(req IssueAgentTokenRequest) (*model.AgentToken
 }
 
 // List 列出全部 agent token 元数据（无明文）。
+// TokenOwnerUserID 查 Token 的签发人（：审批申请人要落到一个真实的人）。
+//
+// 查不到返回 0 而不是报错：审批仍会落票，只是申请人显示为未知。
+// **不能**因为查不到归属就跳过审批——那是把「数据缺失」变成「安全豁免」。
+func (s *AgentTokenService) TokenOwnerUserID(tokenID uint) uint {
+	if tokenID == 0 {
+		return 0
+	}
+	var tok model.AgentToken
+	if err := s.db.Select("created_by").First(&tok, tokenID).Error; err != nil {
+		return 0
+	}
+	return tok.CreatedBy
+}
+
 func (s *AgentTokenService) List() ([]model.AgentToken, error) {
 	var tokens []model.AgentToken
 	if err := s.db.Order("created_at DESC").Find(&tokens).Error; err != nil {
@@ -462,7 +506,7 @@ func (s *AgentTokenService) Authenticate(plaintext string) (*AgentPrincipal, err
 	return p, nil
 }
 
-// PrincipalByID 按 Token ID 实时重建主体（FR-397 票据消费重验用）：
+// PrincipalByID 按 Token ID 实时重建主体（票据消费重验用）：
 // 吊销或过期一律返回 ErrAgentTokenInvalid，无需票据撤销列表。
 func (s *AgentTokenService) PrincipalByID(tokenID uint) (*AgentPrincipal, error) {
 	if s == nil || s.db == nil {

@@ -14,19 +14,26 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// newNodeTestDB 为节点服务测试准备隔离内存库（FR-048）。
+// newNodeTestDB 为节点服务测试准备隔离内存库。
 // 每测独立 DSN，避免 file::memory:?cache=shared 跨测串库。
 func newNodeTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := "file:node-" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+
+	// 关闭底层连接（共享内存库在最后一个连接关闭后才释放，见 testdb_test.go）。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{},
 		&model.Instance{},
 		&model.GroupInstance{},
 		&model.ServerRegistration{},
 		&model.NetworkMember{},
+		// Purge 会顺带清理该节点的 Worker 级日志采集覆盖键（见 node.go）。
+		&model.PlatformSetting{},
 	))
 	return db
 }
@@ -163,9 +170,9 @@ func TestNodeService_Drain_StopsRunning(t *testing.T) {
 	db := newNodeTestDB(t)
 	nodeSvc := NewNodeService(db)
 	instSvc := NewInstanceService(db, NewGroupService(db), cpgrpc.NewClientPool())
-	// 无 Worker 连接：禁用后台异步委托，否则 Stop 的同步 STOPPING 会被异步覆盖为 CRASHED
-	// （节点不可达），与下方断言竞态，并向共享内存库泄漏写入。见 InstanceService.Shutdown。
-	instSvc.Shutdown()
+	// 无 Worker 连接：走委托旁路，否则 Stop 的同步 STOPPING 会被异步覆盖为 CRASHED
+	// （节点不可达），与下方断言竞态，并向共享内存库泄漏写入。
+	instSvc.SetDelegateBypassForTest(true)
 	nodeSvc.SetInstanceService(instSvc)
 
 	node := newTestNode(t, db, "n1")
@@ -248,7 +255,7 @@ func TestNodeService_Delete_OnlineRejected(t *testing.T) {
 	require.Equal(t, int64(1), total)
 }
 
-// Delete 实例守卫（FR-309）：离线节点名下仍有实例、未 force 时拒绝，
+// Delete 实例守卫：离线节点名下仍有实例、未 force 时拒绝，
 // 错误携带实例清单（id/name/status），节点与实例均不动。
 func TestNodeService_Delete_WithInstances_Rejected(t *testing.T) {
 	db := newNodeTestDB(t)
@@ -277,7 +284,7 @@ func TestNodeService_Delete_WithInstances_Rejected(t *testing.T) {
 	require.Equal(t, int64(1), instCount)
 }
 
-// Delete force 级联（FR-309）：离线节点 force=true 时软删名下实例记录及其关联行，
+// Delete force 级联：离线节点 force=true 时软删名下实例记录及其关联行，
 // 只清平台记录不触碰远端文件；其它节点的实例不受影响。
 func TestNodeService_Delete_ForceCascadesOfflineNode(t *testing.T) {
 	db := newNodeTestDB(t)
@@ -319,7 +326,7 @@ func TestNodeService_Delete_ForceCascadesOfflineNode(t *testing.T) {
 	require.Equal(t, int64(1), count)
 }
 
-// Delete 在线节点 force 无效（FR-309 语义）：在线节点无论是否 force 一律拒绝——
+// Delete 在线节点 force 无效（语义）：在线节点无论是否 force 一律拒绝——
 // force 仅为离线节点的孤儿记录兜底，活节点必须先排空断开 Worker 走正常下线。
 func TestNodeService_Delete_OnlineForceStillRejected(t *testing.T) {
 	db := newNodeTestDB(t)
@@ -339,7 +346,7 @@ func TestNodeService_Delete_OnlineForceStillRejected(t *testing.T) {
 	require.Equal(t, int64(1), count)
 }
 
-// ListArchived（FR-393）：仅返回已软删节点；活跃节点不出现；按 deleted_at 倒序。
+// ListArchived：仅返回已软删节点；活跃节点不出现；按 deleted_at 倒序。
 func TestNodeService_ListArchived_OnlySoftDeleted(t *testing.T) {
 	db := newNodeTestDB(t)
 	svc := NewNodeService(db)
@@ -371,7 +378,7 @@ func TestNodeService_ListArchived_OnlySoftDeleted(t *testing.T) {
 	require.Equal(t, active.ID, activeList[0].ID)
 }
 
-// GetArchived（FR-393）：仅软删行可取；活跃或不存在 → ErrNodeNotFound。
+// GetArchived：仅软删行可取；活跃或不存在 → ErrNodeNotFound。
 func TestNodeService_GetArchived(t *testing.T) {
 	db := newNodeTestDB(t)
 	svc := NewNodeService(db)
@@ -392,7 +399,7 @@ func TestNodeService_GetArchived(t *testing.T) {
 	require.ErrorIs(t, err, ErrNodeNotFound)
 }
 
-// Purge（FR-394）：无实例硬删后 Unscoped 不可见。
+// Purge：无实例硬删后 Unscoped 不可见。
 func TestNodeService_Purge_HardDeletesArchived(t *testing.T) {
 	db := newNodeTestDB(t)
 	svc := NewNodeService(db)
@@ -411,6 +418,44 @@ func TestNodeService_Purge_HardDeletesArchived(t *testing.T) {
 	list, err := svc.ListArchived()
 	require.NoError(t, err)
 	require.Empty(t, list)
+}
+
+// 彻底清理节点时顺带删除该节点的 Worker 级日志采集覆盖键；
+// 另一节点的同键覆盖与平台级键必须保留（键后缀含完整 UUID，不得误伤）。
+func TestNodeService_Purge_RemovesNodeScopedLogAcqSettings(t *testing.T) {
+	db := newNodeTestDB(t)
+	svc := NewNodeService(db)
+	node := newTestNode(t, db, "gone")
+	other := newTestNode(t, db, "keep")
+	require.NoError(t, db.Model(node).Update("status", model.NodeStatusOffline).Error)
+
+	scoped := func(nodeUUID, key, val string) model.PlatformSetting {
+		return model.PlatformSetting{Key: NodeScopedSettingKey(key, nodeUUID), Value: val}
+	}
+	require.NoError(t, db.Create(&[]model.PlatformSetting{
+		scoped(node.UUID, SettingKeyLogAcqRulesEnabled, "false"),
+		scoped(node.UUID, SettingKeyLogAcqRealtimeTail, "false"),
+		scoped(other.UUID, SettingKeyLogAcqRulesEnabled, "false"),
+		{Key: SettingKeyLogAcqRulesEnabled, Value: "false"}, // 平台级：必须保留
+	}).Error)
+
+	_, err := svc.Delete(node.ID, false)
+	require.NoError(t, err)
+	_, err = svc.Purge(node.ID, false)
+	require.NoError(t, err)
+
+	var rows []model.PlatformSetting
+	require.NoError(t, db.Find(&rows).Error)
+	keys := make([]string, 0, len(rows))
+	for _, r := range rows {
+		keys = append(keys, r.Key)
+	}
+	require.NotContains(t, keys, NodeScopedSettingKey(SettingKeyLogAcqRulesEnabled, node.UUID),
+		"被彻底清理节点的覆盖键应删除")
+	require.NotContains(t, keys, NodeScopedSettingKey(SettingKeyLogAcqRealtimeTail, node.UUID))
+	require.Contains(t, keys, NodeScopedSettingKey(SettingKeyLogAcqRulesEnabled, other.UUID),
+		"其它节点的同键覆盖必须保留")
+	require.Contains(t, keys, SettingKeyLogAcqRulesEnabled, "平台级键必须保留")
 }
 
 // Purge 有残留实例未 force → 409 型错误；force 后级联硬删实例与关联。

@@ -111,6 +111,13 @@ func excludedQueryDirs(rec *Record) []string {
 			out = append(out, d.ID)
 		}
 	}
+	// 已归档并回收的热层目录：物理上可能仍被 VL 重新 attach，
+	// 但其中的数据正本已迁入归档，任何查询都不得再指向它。
+	for _, d := range rec.RetiredHotDirs {
+		if d.ID != ownerDir {
+			out = append(out, d.ID)
+		}
+	}
 	// 去重
 	seen := map[string]struct{}{}
 	uniq := make([]string, 0, len(out))

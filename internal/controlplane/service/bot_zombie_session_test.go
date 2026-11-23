@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 本文件复现并守护「僵尸压测会话」缺陷（FR-472）。
+// 本文件复现并守护「僵尸压测会话」缺陷。
 //
 // 现场事实（2026-09-24 真机）：CP 重启/Worker 死亡后，会话的生命周期终结路径（Stop 调用）丢失，
 // 于是会话永久停留在 status=running。`refillRunningSessions` 无条件捞取全部 running 会话做补足，
@@ -84,7 +84,7 @@ func TestZombieSession_RefillDoesNotLoopForever(t *testing.T) {
 		"长期无在线 Bot 的僵尸会话必须被收敛为终态，否则每拍都会重建期望行并失败（写放大）")
 }
 
-// TestZombieSession_ConvergenceIsAudited 守护 FR-472 的审计要求：收敛动作必须留痕。
+// TestZombieSession_ConvergenceIsAudited 守护的审计要求：收敛动作必须留痕。
 func TestZombieSession_ConvergenceIsAudited(t *testing.T) {
 	db, node, _, session := newZombieSessionHarness(t)
 	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)

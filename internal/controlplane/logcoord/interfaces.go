@@ -16,15 +16,19 @@ type WorkerDialer interface {
 
 // WorkerSearchRequest 单 Worker Search 请求。
 type WorkerSearchRequest struct {
-	TargetIDs    []string    `json:"target_ids"`
-	FromUTC      string      `json:"from_utc"`
-	ToUTC        string      `json:"to_utc"`
-	Filter       string      `json:"filter"`
-	Budget       QueryBudget `json:"budget"`
-	ViewID       string      `json:"view_id"`
-	Cursor       string      `json:"cursor,omitempty"`
-	OrderVersion string      `json:"order_version"`
-	MetricField  string      `json:"metric_field,omitempty"`
+	TargetIDs     []string    `json:"target_ids"`
+	FromUTC       string      `json:"from_utc"`
+	ToUTC         string      `json:"to_utc"`
+	Filter        string      `json:"filter"`
+	Budget        QueryBudget `json:"budget"`
+	ViewID        string      `json:"view_id"`
+	Cursor        string      `json:"cursor,omitempty"`
+	OrderVersion  string      `json:"order_version"`
+	MetricField   string      `json:"metric_field,omitempty"`
+	ExploreFields bool        `json:"explore_fields,omitempty"`
+	// AllowProjectionDrift 请求 Worker 豁免「投影清单版本变化」判 VIEW_STALE。
+	// 只有「单次操作自己创建视图、自己读完」的导出路径置位；见 Query.AllowProjectionDrift。
+	AllowProjectionDrift bool `json:"allow_projection_drift,omitempty"`
 }
 
 // WorkerTargetResult Worker 侧单目标覆盖/查询结果。
@@ -43,11 +47,14 @@ type WorkerTargetResult struct {
 
 // WorkerSearchResponse 单 Worker Search 响应。
 type WorkerSearchResponse struct {
-	ViewID     string               `json:"view_id"`
-	Items      []Event              `json:"items"`
-	Targets    []WorkerTargetResult `json:"targets"`
-	Exhausted  bool                 `json:"exhausted"`
-	NextCursor string               `json:"next_cursor,omitempty"`
+	ViewID  string               `json:"view_id"`
+	Items   []Event              `json:"items"`
+	Targets []WorkerTargetResult `json:"targets"`
+	// Coverage 保留 Worker 的跨目标完整性与枚举摘要；Targets 仍作为兼容的逐目标投影。
+	Coverage           *Coverage           `json:"coverage,omitempty"`
+	IngestPositionGaps []IngestPositionGap `json:"ingest_position_gaps,omitempty"`
+	Exhausted          bool                `json:"exhausted"`
+	NextCursor         string              `json:"next_cursor,omitempty"`
 	// Truncated Worker 侧因预算/上限截断。
 	Truncated   bool   `json:"truncated"`
 	Unsupported bool   `json:"unsupported"`
@@ -67,9 +74,10 @@ type WorkerStatsPoint struct {
 
 // WorkerStatsResponse 单 Worker Stats 响应。
 type WorkerStatsResponse struct {
-	ViewID  string               `json:"view_id"`
-	Points  []WorkerStatsPoint   `json:"points"`
-	Targets []WorkerTargetResult `json:"targets"`
+	ViewID   string               `json:"view_id"`
+	Points   []WorkerStatsPoint   `json:"points"`
+	Targets  []WorkerTargetResult `json:"targets"`
+	Coverage *Coverage            `json:"coverage,omitempty"`
 	// Truncated 统计输入不完整等。
 	Truncated   bool   `json:"truncated"`
 	Unsupported bool   `json:"unsupported"`
@@ -91,11 +99,13 @@ type WorkerFacetsResponse struct {
 	ViewID      string                 `json:"view_id"`
 	Dimensions  []WorkerFacetDimension `json:"dimensions"`
 	Targets     []WorkerTargetResult   `json:"targets"`
+	Coverage    *Coverage              `json:"coverage,omitempty"`
+	Truncated   bool                   `json:"truncated"`
 	Unsupported bool                   `json:"unsupported"`
 	Error       string                 `json:"error,omitempty"`
 }
 
-// WorkerClient 单 Worker 日志查询面（FR-479 契约的协调器侧投影）。
+// WorkerClient 单 Worker 日志查询面（契约的协调器侧投影）。
 // 本包不实现隧道传输；测试注入 fake。
 type WorkerClient interface {
 	OpenView(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error)
@@ -104,12 +114,71 @@ type WorkerClient interface {
 	Fields(ctx context.Context, req WorkerSearchRequest) (*WorkerFieldsResponse, error)
 	Stats(ctx context.Context, req WorkerSearchRequest, groupBy []string, timeBucket string) (*WorkerStatsResponse, error)
 	Facets(ctx context.Context, req WorkerSearchRequest, dimensions []string, dimensionLimit uint32) (*WorkerFacetsResponse, error)
+	Streams(ctx context.Context, req WorkerSearchRequest) (*WorkerStreamsResponse, error)
+	StreamFieldNames(ctx context.Context, req WorkerSearchRequest) (*WorkerStreamFieldNamesResponse, error)
+	StreamFieldValues(ctx context.Context, req WorkerSearchRequest, field string) (*WorkerStreamFieldValuesResponse, error)
 }
 
+// WorkerStream 单 Worker 上报的一条流。
+//
+// 与 Worker 侧 query.StreamValue 同形；CP 只做合并与转发，不重新定义语义。
+type WorkerStream struct {
+	LogSourceID string `json:"log_source_id"`
+	Stream      string `json:"stream"`
+	Raw         string `json:"raw,omitempty"`
+	Hits        uint64 `json:"hits"`
+}
+
+// WorkerStreamsResponse 单 Worker 的 stream 枚举响应。
+//
+// Complete=false 表示**条数不可信**（上游截断时 VL 会把所有 hits 归零）。
+type WorkerStreamsResponse struct {
+	ViewID      string               `json:"view_id"`
+	Streams     []WorkerStream       `json:"streams"`
+	Targets     []WorkerTargetResult `json:"targets"`
+	Coverage    *Coverage            `json:"coverage,omitempty"`
+	Complete    bool                 `json:"complete"`
+	Unsupported bool                 `json:"unsupported"`
+	Error       string               `json:"error,omitempty"`
+}
+
+// WorkerStreamFieldNamesResponse 单 Worker 的 stream 标签维度名。
+type WorkerStreamFieldNamesResponse struct {
+	ViewID      string               `json:"view_id"`
+	Fields      []string             `json:"fields"`
+	Targets     []WorkerTargetResult `json:"targets"`
+	Coverage    *Coverage            `json:"coverage,omitempty"`
+	Unsupported bool                 `json:"unsupported"`
+	Error       string               `json:"error,omitempty"`
+}
+
+// WorkerStreamFieldValuesResponse 单 Worker 的 stream 标签维度取值分布。
+type WorkerStreamFieldValuesResponse struct {
+	ViewID      string               `json:"view_id"`
+	Field       string               `json:"field"`
+	Values      []FacetValue         `json:"values"`
+	Targets     []WorkerTargetResult `json:"targets"`
+	Coverage    *Coverage            `json:"coverage,omitempty"`
+	Complete    bool                 `json:"complete"`
+	Unsupported bool                 `json:"unsupported"`
+	Error       string               `json:"error,omitempty"`
+}
+
+// WorkerFieldsResponse 保留字段枚举的顶层覆盖与截断，空字段也不能丢失不完整证据。
 type WorkerFieldsResponse struct {
 	ViewID      string               `json:"view_id"`
 	Fields      []string             `json:"fields"`
 	Targets     []WorkerTargetResult `json:"targets"`
+	Coverage    *Coverage            `json:"coverage,omitempty"`
+	Truncated   bool                 `json:"truncated"`
 	Unsupported bool                 `json:"unsupported"`
 	Error       string               `json:"error,omitempty"`
+}
+
+// WorkerSnapshotBinding 是单次读取实际使用的 Worker 快照；仅在扇出汇总后发布。
+type WorkerSnapshotBinding struct {
+	WorkerID string
+	ViewID   string
+	Targets  []WorkerTargetResult
+	Error    string
 }

@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  buildGroupTree,
-  groupBranchKey,
-  subtreeGroupIds,
-  flattenVisibleGroups,
-  type GroupTreeNode,
-} from './instance-group-tree'
+import { buildGroupTree, groupBranchKey, subtreeGroupIds, flattenVisibleGroups } from '@/lib/instances/instance-group-tree'
+import type { GroupTreeNode } from '@/lib/instances/instance-group-tree'
 import type { InstanceGroupNode } from '@/api/instanceGroups'
 
 function gnode(id: number, parentId: number | null, sort = 0): InstanceGroupNode {

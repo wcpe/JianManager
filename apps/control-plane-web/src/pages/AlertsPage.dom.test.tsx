@@ -6,8 +6,8 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import AlertsPage from './AlertsPage'
 
-/**
- * AlertsPage 强断言（FR-208 可观测日志域）：验种子规则/事件/通道渲染、写操作联动、错误注入。
+/** 
+ * AlertsPage 强断言（可观测日志域）：验种子规则/事件/通道渲染、写操作联动、错误注入。
  * 渲染前 loginMockUser() 让 requireAuth 保护的 alerts 端点放行。
  * RuleDialog/ChannelDialog 统一走共享 Dialog，必须有 role=dialog 并支持 Esc 关闭。
  * 事件筛选栏统一走 @jianmanager/ui 的 Select（Radix 组合控件），原生 select 直选不适用。
@@ -92,12 +92,13 @@ describe('AlertsPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: '新建通道' })).not.toBeInTheDocument())
   })
 
-  it('③ 注入 500 → 规则列表显示空态（非崩溃）', async () => {
+  it('③ 注入 500 → 规则列表显示错误与重试（不再谎报「暂无规则」）', async () => {
     loginMockUser()
     mockInject('get', '/alerts/rules', { kind: 'status', status: 500 })
     renderWithProviders(<AlertsPage />)
-    // 规则查询失败 → rules 为 undefined → 走空态文案，页面不崩溃。
-    expect(await screen.findByText('暂无告警规则')).toBeInTheDocument()
+    // 查询失败必须与「真的没有规则」区分：显示失败文案与重试，而不是空态。
+    expect(await screen.findByText('暂时无法读取告警数据，可重试')).toBeInTheDocument()
+    expect(screen.queryByText('暂无告警规则')).not.toBeInTheDocument()
   })
 
   it('② 通道页不再内嵌「QQ 接入」小节：群聊下线后该节整体移除', async () => {

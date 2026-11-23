@@ -124,11 +124,38 @@ func parseClientDistExportFilter(c *gin.Context, now time.Time) (service.ClientD
 	if !ok {
 		return service.ClientDistExportFilter{}, false
 	}
+	// 运行态维度（R34）：`runtimeVersion`/`coreVersion`/`platform`/`lag` 此前被完全忽略，
+	// 于是「筛 Linux 行」的列表导出出来的 CSV 里混着 Windows 行。
+	// 非法数值一律 400：静默忽略会让用户拿到比预期更宽的数据却不自知。
+	runtimeVersion, ok := parseExportOptionalInt(c.Query("runtimeVersion"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "runtimeVersion 非法"})
+		return service.ClientDistExportFilter{}, false
+	}
+	lag, ok := parseExportOptionalInt(c.Query("lag"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "lag 非法"})
+		return service.ClientDistExportFilter{}, false
+	}
 	return service.ClientDistExportFilter{
 		Kind: kind, EventKind: eventKind, ChannelID: c.Query("channelId"), Range: rng, ErrCode: c.Query("errCode"),
 		Outcome: outcome, IP: c.Query("ip"), MachineID: c.Query("machineId"), PlayerName: c.Query("playerName"),
-		LogType: logType, Version: version, From: from, To: to,
+		LogType: logType, Version: version,
+		RuntimeVersion: runtimeVersion, CoreVersion: c.Query("coreVersion"), Platform: c.Query("platform"), Lag: lag,
+		From: from, To: to,
 	}, true
+}
+
+// parseExportOptionalInt 解析可缺省的非负整数筛选（空=不约束，非法=false）。
+func parseExportOptionalInt(raw string) (*int, bool) {
+	if raw == "" {
+		return nil, true
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return nil, false
+	}
+	return &value, true
 }
 
 func parseClientDistExportSelectors(c *gin.Context) (string, string, string, *int, bool) {

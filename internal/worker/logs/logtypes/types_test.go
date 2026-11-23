@@ -29,35 +29,6 @@ func TestBuildEventPopulatesIDs(t *testing.T) {
 	}
 }
 
-func TestCanReclaimRejectsBareRequestDone(t *testing.T) {
-	// 请求完成但恢复分段仍在 STAGED/DURABLE_VERIFIED：不得 reclaim
-	pos := Positions{Durable: 100, Delivery: 100, Reclaim: 0}
-	if CanReclaim(pos, RecoveryStaged, ReleaseProjectionBacked, false) {
-		t.Fatal("STAGED recovery segment must block reclaim")
-	}
-	if CanReclaim(pos, RecoveryDurableVerified, "", false) {
-		t.Fatal("DURABLE_VERIFIED without responsibility transfer must block reclaim")
-	}
-}
-
-func TestCanReclaimAfterResponsibilityTransfer(t *testing.T) {
-	// 契约 §4.3：WAL_RESPONSIBILITY_TRANSFERRED 即可 reclaim；reason 仅用于 RELEASED
-	pos := Positions{Durable: 100, Delivery: 100, Reclaim: 0}
-	if !CanReclaim(pos, RecoveryWALResponsibilityXfer, "", false) {
-		t.Fatal("WAL_RESPONSIBILITY_TRANSFERRED must allow reclaim without release reason")
-	}
-	if !CanReclaim(pos, RecoveryWALResponsibilityXfer, ReleaseNextCopyVerified, false) {
-		t.Fatal("transfer + reason must still allow reclaim")
-	}
-}
-
-func TestCanReclaimBlockedByHold(t *testing.T) {
-	pos := Positions{Durable: 100, Delivery: 100, Reclaim: 0}
-	if CanReclaim(pos, RecoveryWALResponsibilityXfer, ReleaseProjectionBacked, true) {
-		t.Fatal("active hold must block reclaim")
-	}
-}
-
 func TestStreamFieldAllowlist(t *testing.T) {
 	// 契约 §6.5 白名单
 	for _, ok := range []string{

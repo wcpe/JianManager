@@ -167,6 +167,7 @@ func EventToProto(ev logtypes.Event) *workerpb.LogEvent {
 		Stream:               ev.Stream,
 		Message:              ev.Message,
 		CanonicalContentHash: ev.CanonicalHash,
+		Fields:               cloneEventFields(ev.Fields),
 	}
 }
 
@@ -185,6 +186,7 @@ func EventFromProto(ev *workerpb.LogEvent) logtypes.Event {
 		Stream:        ev.GetStream(),
 		Message:       ev.GetMessage(),
 		CanonicalHash: ev.GetCanonicalContentHash(),
+		Fields:        cloneEventFields(ev.GetFields()),
 	}
 }
 
@@ -303,6 +305,8 @@ func QueryRequestFromBase(qb *workerpb.LogQueryRequestBase) query.QueryRequest {
 		Filter:          qb.GetFilter(),
 		PermissionScope: qb.GetPermissionScope(),
 		CancelToken:     qb.GetCancellationToken(),
+		// 请求级豁免标记：老 CP 不发该字段时取零值 false，即维持原有全部校严。
+		AllowProjectionDrift: qb.GetAllowProjectionDrift(),
 	}
 	if at := qb.GetAuthorizedTargets(); at != nil {
 		req.AuthorizedTargets = append([]string(nil), at.GetTargetIds()...)
@@ -438,4 +442,16 @@ func parseUint(s string) uint64 {
 		return 0
 	}
 	return v
+}
+
+// cloneEventFields prevents protobuf messages from aliasing mutable query rows.
+func cloneEventFields(fields map[string]string) map[string]string {
+	if len(fields) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(fields))
+	for key, value := range fields {
+		copy[key] = value
+	}
+	return copy
 }

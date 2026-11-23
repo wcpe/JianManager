@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// adoptCaptureWorker 记录 AdoptForeignRuntime 调用并可控失败，覆盖 CP 侧接管编排（FR-471）。
+// adoptCaptureWorker 记录 AdoptForeignRuntime 调用并可控失败，覆盖 CP 侧接管编排。
 type adoptCaptureWorker struct {
 	workerpb.WorkerServiceClient
 	// resp 非 nil 时作为成功/失败响应返回；nil 则按 rpcErr 处理。

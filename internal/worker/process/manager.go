@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -39,20 +40,20 @@ type Instance struct {
 	RCONPort     int
 	RCONPassword string
 	// ProbePort 是实例 ServerProbe /metrics 端口（CP 分配后随 Create 下发）。
-	// 心跳采集器据此自采每实例富指标（FR-060）；0=未部署探针，心跳跳过该实例。
+	// 心跳采集器据此自采每实例富指标；0=未部署探针，心跳跳过该实例。
 	ProbePort int
-	// ServerPort 是实例 server-port（MC 游戏端口），用于 SLP 直探（FR-446）；0=未知。
+	// ServerPort 是实例 server-port（MC 游戏端口），用于 SLP 直探；0=未知。
 	ServerPort int
-	// QueryPort 是实例 query.port（Query/GameSpy4 端口），用于 Query 直探（FR-446）；0=未开启。
+	// QueryPort 是实例 query.port（Query/GameSpy4 端口），用于 Query 直探；0=未开启。
 	QueryPort int
-	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发，FR-063）。daemon 启动时
+	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发）。daemon 启动时
 	// 透传到 wrapper 做超时强杀兜底；0=未指定，wrapper 回退 env/默认。值在启动时随 spec 定型。
 	GracefulStopTimeoutSeconds int
-	// Image 是 docker 模式的容器镜像引用（ADR-019）；仅 docker 实例使用。
+	// Image 是 docker 模式的容器镜像引用；仅 docker 实例使用。
 	Image string
-	// PortMappings 是 docker 模式的容器端口↔宿主端口映射（ADR-019）；仅 docker 实例使用。
+	// PortMappings 是 docker 模式的容器端口↔宿主端口映射；仅 docker 实例使用。
 	PortMappings []PortMapping
-	// CPULimit / MemLimitMB / DiskLimitMB 是 docker 模式的资源限额（FR-079，见 ADR-019）；
+	// CPULimit / MemLimitMB / DiskLimitMB 是 docker 模式的资源限额；
 	// 仅 docker 实例使用，值在 Start 时随 spec 定型。0=不限制；DiskLimitMB v1 仅记账不注入。
 	CPULimit    float64
 	MemLimitMB  int64
@@ -60,11 +61,21 @@ type Instance struct {
 	State       InstanceState
 	AutoRestart bool
 	CrashCount  int
-	// StartedAt 是最近一次跨入 RUNNING 的时刻（FR-459 启动宽限期的纪元起点）。
+	// StartedAt 是最近一次跨入 RUNNING 的时刻（启动宽限期的纪元起点）。
 	// 零值=未知（PID 恢复等路径），此时巡检不做宽限、保持既有判定。
 	StartedAt time.Time
 	// operationMu 串行同一实例的生命周期操作，不阻塞其他实例。
-	operationMu sync.Mutex
+	operationMu lifecycleGate
+	// launchSpecPending 只凭 PID 收养时为真，CP 补齐前不得先停后启。
+	launchSpecPending bool
+	// AdoptedPID 是「就地收养」持有的外部进程 PID（0 = 非就地收养）。
+	//
+	// 就地导入（in_place）的实例可能由运维用 tmux/systemd 在平台外启动。
+	// 此时平台**不能**去重启它（端口已被占、业务不能断），只能把现有进程登记下来观测。
+	// 本字段就是那条通道的句柄：它存在即表示“平台看着一个不属于它 spawn 的进程”，
+	// 因此终端输入与优雅停止不可用，生命周期仍归外部管理器。
+	// 见 AdoptInPlaceRuntime / ReleaseInPlaceRuntime。
+	AdoptedPID int
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
 	// nil 表示实例已创建但尚未启动（或已 Close）。
 	strategy IProcessCommand
@@ -76,7 +87,7 @@ type Instance struct {
 	processType ProcessType
 }
 
-// CrashInfo 进程非正常退出的现场信息（FR-313）：退出码 ≠ 0，或 RUNNING/STARTING 态
+// CrashInfo 进程非正常退出的现场信息：退出码 ≠ 0，或 RUNNING/STARTING 态
 // 意外退出时由策略捕获，经 Manager 崩溃回调扇出、组装崩溃快照上报 CP。
 type CrashInfo struct {
 	// ExitCode 进程退出码；无法获知（Wait 出错无退出状态 / 容器 Wait 错误）时为 -1。
@@ -85,7 +96,7 @@ type CrashInfo struct {
 	Signal string
 	// DurationMs 本次运行时长（毫秒）。
 	DurationMs int64
-	// OOMKilled 容器被 cgroup OOM killer 终止（FR-467）。仅 docker 模式可判定：
+	// OOMKilled 容器被 cgroup OOM killer 终止。仅 docker 模式可判定：
 	// 容器退出码恒为 137 且宿主侧无信号，只有 ContainerInspect 的 State.OOMKilled 能给出这个事实。
 	OOMKilled bool
 	// OccurredAt 崩溃发生时刻。
@@ -94,7 +105,7 @@ type CrashInfo struct {
 
 // Manager 进程管理器。
 // 它通过 IProcessCommand 策略接口支持多种启动方式（direct/daemon/docker），
-// 参见 ADR-003: 守护进程 Wrapper 模式。
+// 守护进程 Wrapper 模式。
 type Manager struct {
 	mu         sync.RWMutex
 	instances  map[string]*Instance
@@ -104,37 +115,59 @@ type Manager struct {
 	pidDir string
 	// onStateChange 实例状态变更回调，用于 StreamInstanceEvents 推送。
 	onStateChange func(instanceUUID string, oldState, newState InstanceState)
-	// onCrash 进程非正常退出回调（FR-313），用于组装崩溃快照上报 CP。
+	// onCrash 进程非正常退出回调，用于组装崩溃快照上报 CP。
 	onCrash func(instanceID string, info CrashInfo)
-	// onInstanceStart 「新一轮运行开始」回调（FR-471 缺陷修复）；用于按本次运行重置跨运行共享状态。
+	// onInstanceStart 「新一轮运行开始」回调（缺陷修复）；用于按本次运行重置跨运行共享状态。
 	onInstanceStart func(instanceID string)
-	// memGuard 启动内存闸配置；readMem 系统内存读数器（nil=真读数，测试注入，FR-317）。
+	// memGuard 启动内存闸配置；readMem 系统内存读数器（nil=真读数，测试注入）。
 	memGuard MemGuardConfig
 	readMem  readSysMem
 	// recoverDial / recoverKillTree / recoverPIDAlive / recoverSleep 是接管扫描兜底路径
-	// （FR-325）的可注入桩：nil=真实现（strategy.Reconnect / daemon.KillPIDTree /
+	// 的可注入桩：nil=真实现（strategy.Reconnect / daemon.KillPIDTree /
 	// daemon.IsPIDAlive / time.Sleep），测试注入以免真拨号、真杀进程、真等待。
 	recoverDial     func(s *daemonStrategy, addr string) error
 	recoverKillTree func(pid int) error
 	recoverPIDAlive func(pid int) bool
 	recoverSleep    func(d time.Duration)
-	// recoverVerifyOwner 是「处置前置存活复核」（FR-455①）的可注入桩：nil=真实现
+	// recoverMigrate 隔离接管子树的测试接缝；nil 使用现有 cgroup 迁移实现。
+	recoverMigrate func(pid int, instanceUUID string) (int, error)
+	// recoverBackoff 是接管 reconnect 的有界重试间隔序列（①）的注入点：
+	// 空/nil=默认 DefaultRecoverRetryBackoff（≈127s，覆盖分钟级瞬时故障）；
+	// 由 worker main 按配置 recover.retry_backoff 经 SetRecoverRetryBackoff 装配（测试注入小值）。
+	// 由 mu 保护（装配期写入、运行期重试路径读取）。
+	recoverBackoff []time.Duration
+	// recoverVerifyOwner 是「处置前置存活复核」（①）的可注入桩：nil=真实现
 	// （DefaultVerifyProcessOwnership，读 cmdline/cwd）。返回 false=无法确认 PID 确属目标实例 → 不杀。
 	recoverVerifyOwner func(pid int, instanceUUID, workDir string, expectWrapper bool) bool
-	// recoverTermTree 是「向外来进程树发 SIGTERM」的可注入桩（FR-471 接管动作）：
+	// adoptVerifyOwner 是「自动收养」专用归属复核（③）的可注入桩：nil=真实现
+	// （DefaultVerifyAdoptOwnership，只认强特征）。与 recoverVerifyOwner 分开是因为两者判据不同：
+	// 强杀路径容忍宽口径（放过真孤儿只多等一轮），收养路径必须按强特征判真（会迁移 cgroup、夺控制权）。
+	// 第二个返回值是复核口径，落进 orphan.adopt_blocked 审计 detail 的 evidence 字段。
+	adoptVerifyOwner func(pid int, instanceUUID, workDir string, expectWrapper bool) (bool, string)
+	// recoverTermTree 是「向外来进程树发 SIGTERM」的可注入桩（接管动作）：
 	// nil=真实现（signalPIDTree），测试注入以免真向无关进程发信号。
 	recoverTermTree func(pid int) error
-	// onOrphanAudit 是孤儿处置/误杀拦截的审计回调（FR-455/456）：由 worker main 注入落结构化审计。
-	// nil 时回退 slog（仍保证「不静默」）。FR-459 的健康/自愈审计复用同一通道（action 前缀 health.*）。
+	// onOrphanAudit 是孤儿处置/误杀拦截的审计回调（456）：由 worker main 注入落结构化审计。
+	// nil 时回退 slog（仍保证「不静默」）。的健康/自愈审计复用同一通道（action 前缀 health.*）。
 	onOrphanAudit func(action, targetID, detail string, success bool, errMsg string)
-	// health FR-459 健康记账：逐实例健康故障 + 崩溃重启窗口 + 熔断锁（自有锁，见 health_scan.go）。
+	// health健康记账：逐实例健康故障 + 崩溃重启窗口 + 熔断锁（自有锁，见 health_scan.go）。
 	health *healthState
 	// healthOnce 惰性初始化 health（零值 Manager / 直接结构体构造时的防御）。
 	healthOnce sync.Once
-	// foreignRuntimes 是「已注册实例工作目录下存在外来活进程」的观测缓存（FR-471）：
+	// foreignRuntimes 是「已注册实例工作目录下存在外来活进程」的观测缓存：
 	// 由孤儿扫描每轮经 SetForeignRuntimes 写入（60s 一拍），心跳每拍经 GetAllInstanceStates 读取
 	// 填充快照（避免心跳自己每拍全机枚举进程）。key=实例 UUID；空/nil 表示无漂移。由 mu 保护。
 	foreignRuntimes map[string]ForeignRuntime
+	// takeoverPending 记录「启动接管首拨失败、仍由后台按序列重试」的实例（见 recover_orphan.go）。
+	//
+	// 这些实例**尚未进入 instances 表**，但磁盘上确有属于本平台的活进程对（wrapper + Java）。
+	// 运行期孤儿扫描若不知情，会踩两个坑：①第 0 相自动收养并发拨号，与接管重试争抢 wrapper 只保留
+	// 最新一条的控制连接；②direct 相把它们的进程判为「无主进程」，auto 档直接强杀在跑的服务器。
+	// 故在此显式声明「该实例由启动接管负责，扫描让路」，接管收尾（成功登记 / 失败落审计）后撤销。
+	// 由 mu 保护。
+	takeoverPending map[string]takeoverPeer
+	// takeoverWG 跟踪后台接管重试协程，供测试与关闭路径等待其收敛。
+	takeoverWG sync.WaitGroup
 }
 
 // healthState 返回健康记账，必要时惰性初始化（对非 NewManager 构造的 Manager 亦安全）。
@@ -147,7 +180,7 @@ func (m *Manager) healthState() *healthState {
 	return m.health
 }
 
-// SetOrphanAuditHandler 注入孤儿处置审计回调（FR-455/456）。
+// SetOrphanAuditHandler 注入孤儿处置审计回调（456）。
 // worker main 装配时调用一次；不调用则回退 slog。
 func (m *Manager) SetOrphanAuditHandler(handler func(action, targetID, detail string, success bool, errMsg string)) {
 	m.mu.Lock()
@@ -155,7 +188,19 @@ func (m *Manager) SetOrphanAuditHandler(handler func(action, targetID, detail st
 	m.onOrphanAudit = handler
 }
 
-// verifyProcessOwnership 判定 pid 是否确属 instanceUUID 的受管进程（FR-455①）。
+// verifyAdoptOwnership 判定 pid 是否确属 instanceUUID 的受管进程——**收养专用**（③）。
+//
+// 与 verifyProcessOwnership 的分工见 DefaultVerifyAdoptOwnership 的注释：收养会迁移 cgroup 并取得
+// 控制权，故只认强特征（实例 UUID 出现在 cmdline 或进程环境）；cwd / cmdline 含工作目录这类弱特征
+// 单独不足以判真。第二个返回值是复核口径，供审计解释「为什么没收养」。
+func (m *Manager) verifyAdoptOwnership(pid int, instanceUUID, workDir string, expectWrapper bool) (bool, string) {
+	if m.adoptVerifyOwner != nil {
+		return m.adoptVerifyOwner(pid, instanceUUID, workDir, expectWrapper)
+	}
+	return DefaultVerifyAdoptOwnership(pid, instanceUUID, workDir, expectWrapper)
+}
+
+// verifyProcessOwnership 判定 pid 是否确属 instanceUUID 的受管进程（①）。
 // 处置任何 killTree 之前调用；false=无法确认（只告警不杀）。
 func (m *Manager) verifyProcessOwnership(pid int, instanceUUID, workDir string, expectWrapper bool) bool {
 	if pid <= 0 {
@@ -167,11 +212,11 @@ func (m *Manager) verifyProcessOwnership(pid int, instanceUUID, workDir string, 
 	return DefaultVerifyProcessOwnership(pid, instanceUUID, workDir, expectWrapper)
 }
 
-// auditOrphan 记录一条孤儿处置审计（FR-455/456）：优先经注入回调，缺省回退 slog。
+// auditOrphan 记录一条孤儿处置审计（456）：优先经注入回调，缺省回退 slog。
 // 保证孤儿处置/误杀拦截「不静默」。
 //
 // 回调经 RLock 读取（与 SetOrphanAuditHandler 的写锁配对）：装配期 SetOrphanAuditHandler 在
-// 锁内写入，运行期扫描/处置路径并发读取——不加锁读取 m.onOrphanAudit 属数据竞争（FR-456）。
+// 锁内写入，运行期扫描/处置路径并发读取——不加锁读取 m.onOrphanAudit 属数据竞争。
 // 回调在锁外执行，避免回调内再触达 Manager 造成重入死锁。
 func (m *Manager) auditOrphan(action, targetID, detail string, success bool, errMsg string) {
 	m.mu.RLock()
@@ -184,7 +229,7 @@ func (m *Manager) auditOrphan(action, targetID, detail string, success bool, err
 	slog.Warn("孤儿处置审计", "action", action, "target", targetID, "detail", detail, "success", success, "error", errMsg)
 }
 
-// ForeignRuntime 一条「已注册实例工作目录下的外来活进程」观测（FR-471）。
+// ForeignRuntime 一条「已注册实例工作目录下的外来活进程」观测。
 //
 // 背景：服务器可能被运维在平台之外启动（真机场景：/home/<user>/server 下 60 台农场由 tmux 拉起），
 // 平台 DB 记 STOPPED 而磁盘进程在跑。扫描观测到这种「记账与磁盘不一致」后写入本缓存，
@@ -236,6 +281,10 @@ func (m *Manager) clearForeignRuntime(uuid string) {
 
 // NewManager 创建进程管理器。
 func NewManager(serversDir string) *Manager {
+	// 启动清扫：回收被强杀（kill -9）的 wrapper 留下的**空**隔离 cgroup 目录
+	// （见 internal/worker/daemon/cgroup.go「daemon 子树脱离 Worker 单元 cgroup」）。
+	// 只删空目录、失败静默，对非 systemd 环境与测试环境均为无副作用的空操作。
+	daemon.SweepEmptyDaemonCgroupDirs()
 	return &Manager{
 		instances:  make(map[string]*Instance),
 		serversDir: serversDir,
@@ -256,7 +305,7 @@ func (m *Manager) SetStateChangeHandler(handler func(instanceUUID string, oldSta
 	m.onStateChange = handler
 }
 
-// SetInstanceStartHandler 设置「实例开始新一轮运行」回调（FR-471 缺陷修复）。
+// SetInstanceStartHandler 设置「实例开始新一轮运行」回调（缺陷修复）。
 //
 // 与 SetStateChangeHandler 的区别：后者是通用状态流转通知（含 STOPPING/CRASHED 等），
 // 本回调只在**一次新的运行真正开始**时触发一次（startLocked 置 STARTING 之后），语义等同
@@ -266,14 +315,14 @@ func (m *Manager) SetInstanceStartHandler(handler func(instanceID string)) {
 	m.onInstanceStart = handler
 }
 
-// SetCrashHandler 设置进程非正常退出回调（FR-313）。// 各策略在崩溃判定路径（direct/docker waitLoop、daemon 经 wrapper 退出事件）捕获现场后
+// SetCrashHandler 设置进程非正常退出回调。// 各策略在崩溃判定路径（direct/docker waitLoop、daemon 经 wrapper 退出事件）捕获现场后
 // 经此扇出；回调须快速返回（上报本身应异步），不得阻塞策略的崩溃处理。
 func (m *Manager) SetCrashHandler(handler func(instanceID string, info CrashInfo)) {
 	m.onCrash = handler
 }
 
 // emitCrash 触发崩溃回调（未设置则忽略）。
-// FR-459：同时把本次崩溃计入熔断滚动窗口（覆盖 direct/docker waitLoop 与 daemon 退出事件三条崩溃来源）。
+// 同时把本次崩溃计入熔断滚动窗口（覆盖 direct/docker waitLoop 与 daemon 退出事件三条崩溃来源）。
 func (m *Manager) emitCrash(instanceID string, info CrashInfo) {
 	m.noteProcessCrash(instanceID)
 	if m.onCrash != nil {
@@ -325,16 +374,16 @@ func (m *Manager) markStrategyState(uuid string, newState InstanceState) {
 type InstanceSnapshot struct {
 	UUID       string
 	State      string // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
-	ProbePort  int    // ServerProbe /metrics 端口；>0 且 RUNNING 时心跳采集器自采富指标（FR-060）
-	ServerPort int    // server-port（MC 游戏端口）；>0 时心跳做 SLP 直探（FR-446）
-	QueryPort  int    // query.port；>0 时心跳做 Query 直探（FR-446）
-	PID        int    // 受管实例根进程 PID；>0 时心跳可采集进程 TOPN（FR-170）
-	// Health 是 FR-459 健康巡检结论标识（healthy/suspected_dead/dead/crashed/circuit_broken；空=无结论）。
-	// 经心跳上报 CP，供健康总览墙（FR-461）与动态基线（FR-462）消费。
+	ProbePort  int    // ServerProbe /metrics 端口；>0 且 RUNNING 时心跳采集器自采富指标
+	ServerPort int    // server-port（MC 游戏端口）；>0 时心跳做 SLP 直探
+	QueryPort  int    // query.port；>0 时心跳做 Query 直探
+	PID        int    // 受管实例根进程 PID；>0 时心跳可采集进程 TOPN
+	// Health 是健康巡检结论标识（healthy/suspected_dead/dead/crashed/circuit_broken；空=无结论）。
+	// 经心跳上报 CP，供健康总览墙与动态基线消费。
 	Health string
-	// StatusReason 是健康巡检给出的原因说明（假死/熔断等，FR-459）；空=正常。
+	// StatusReason 是健康巡检给出的原因说明（假死/熔断等）；空=正常。
 	StatusReason string
-	// ForeignPID 是「已注册实例工作目录下存在活进程、但本实例未认作运行」时该进程 PID（0=无漂移，FR-471）。
+	// ForeignPID 是「已注册实例工作目录下存在活进程、但本实例未认作运行」时该进程 PID（0=无漂移）。
 	// 由孤儿扫描第 4 相观测、经 SetForeignRuntimes 缓存供本快照读取；仅观测，不表示平台已处置。
 	ForeignPID int
 	// ForeignCmdline 上述漂移进程的命令行摘要（已截断）。
@@ -359,7 +408,7 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 			pid = inst.strategy.GetPID()
 		}
 		fault, reason := m.healthFault(uuid)
-		// FR-471 漂移观测：识别由扫描每轮写入本缓存，此处只做搬运（缓存无该 UUID 即零值 0/空）。
+		// 漂移观测：识别由扫描每轮写入本缓存，此处只做搬运（缓存无该 UUID 即零值 0/空）。
 		foreign := m.foreignRuntimes[uuid]
 		states = append(states, InstanceSnapshot{
 			UUID:           uuid,
@@ -377,11 +426,10 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 	return states
 }
 
-// Create 创建实例（但不启动）。processType 决定启动方式（direct/daemon/docker/rcon）。
-// jdkPath / jdkBinPath 非空时会被注入到实例启动时的环境。
+// Create 创建实例（但不启动）。processType 决定启动方式（direct/daemon/docker/rcon）。// jdkPath / jdkBinPath 非空时会被注入到实例启动时的环境。
 // stopCommand 为优雅停止命令（按角色派生：MC 后端 stop / 代理 end），空时回退默认 stop。
-// probePort 为实例 ServerProbe /metrics 端口（CP 分配），供心跳采集器自采富指标（FR-060）；0=未部署。
-// gracefulStopTimeoutSeconds 为优雅停止超时（秒，CP 从平台设置下发，FR-063）；0=未指定，wrapper 回退默认。
+// probePort 为实例 ServerProbe /metrics 端口（CP 分配），供心跳采集器自采富指标；0=未部署。
+// gracefulStopTimeoutSeconds 为优雅停止超时（秒，CP 从平台设置下发）；0=未指定，wrapper 回退默认。
 func (m *Manager) Create(uuid, name, startCommand, stopCommand, workDir string, envVars map[string]string, autoRestart bool, processType ProcessType, jdkPath, jdkBinPath string, probePort, gracefulStopTimeoutSeconds int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -390,7 +438,7 @@ func (m *Manager) Create(uuid, name, startCommand, stopCommand, workDir string, 
 		return fmt.Errorf("实例 %s 已存在", uuid)
 	}
 	// 同 UUID 重新登记时回收上一代健康记账（健康故障/崩溃窗口/熔断态/自愈计数），
-	// 避免历史崩溃污染新实例的熔断判定（FR-459 复审项 10）。
+	// 避免历史崩溃污染新实例的熔断判定（复审项 10）。
 	m.dropHealthAccounting(uuid)
 
 	m.instances[uuid] = &Instance{
@@ -424,7 +472,7 @@ func (m *Manager) SetGracefulStopTimeout(uuid string, seconds int) {
 	}
 }
 
-// SetProbePort 更新已登记实例的 ServerProbe /metrics 端口（FR-411 补口）。
+// SetProbePort 更新已登记实例的 ServerProbe /metrics 端口（补口）。
 // 供 CP 幂等重注册时刷新：导入/历史实例起初 probe_port=0，CP 部署探针前补分配端口后经
 // 重注册下发，Worker 内存表随即生效——心跳下一拍即开始采集该实例指标，无需等待实例重启。
 // 实例不存在则忽略（容错风格与 SetGracefulStopTimeout 一致）。
@@ -436,7 +484,7 @@ func (m *Manager) SetProbePort(uuid string, port int) {
 	}
 }
 
-// SetServerPort 更新已登记实例的 server-port（MC 游戏端口），供 SLP 直探（FR-446）。
+// SetServerPort 更新已登记实例的 server-port（MC 游戏端口），供 SLP 直探。
 // 供 CP 幂等重注册时刷新：端口迁移/导入实例后经重注册下发，Worker 内存表随即生效，
 // 心跳下一拍即按新端口直探（无需重启进程）。实例不存在则忽略（容错风格与 SetProbePort 一致）。
 func (m *Manager) SetServerPort(uuid string, port int) {
@@ -447,7 +495,7 @@ func (m *Manager) SetServerPort(uuid string, port int) {
 	}
 }
 
-// SetQueryPort 更新已登记实例的 query.port，供 Query 直探（FR-446）。容错风格与 SetProbePort 一致。
+// SetQueryPort 更新已登记实例的 query.port，供 Query 直探。容错风格与 SetProbePort 一致。
 func (m *Manager) SetQueryPort(uuid string, port int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -456,7 +504,7 @@ func (m *Manager) SetQueryPort(uuid string, port int) {
 	}
 }
 
-// SetDockerConfig 设置已登记实例的 docker 镜像、端口映射与资源限额（ADR-019 / FR-079）。
+// SetDockerConfig 设置已登记实例的 docker 镜像、端口映射与资源限额。
 // 由 CP 在创建/重注册 docker 实例时下发，使镜像/端口/限额对下一次启动生效（值在 Start 时随 spec 定型）。
 // 实例不存在则忽略（与 SetGracefulStopTimeout 容错风格一致，不阻塞启动路径）。
 func (m *Manager) SetDockerConfig(uuid, image string, mappings []PortMapping, cpuLimit float64, memLimitMB, diskLimitMB int64) {
@@ -501,9 +549,20 @@ func (m *Manager) SetResourceLimits(uuid string, cpuLimit float64, memLimitMB in
 	}
 }
 
-// SetLaunchConfig 刷新已存在实例的启动配置，供 CP 幂等重注册时下发（FR-233）。
+// SetLaunchConfig 刷新已存在实例的启动配置，供 CP 幂等重注册时下发。
 // 运行中的策略继续服务且仅标记过期；停止/崩溃态则立即丢弃旧策略，确保下一次启动采用新规格。
-func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string, envVars map[string]string, autoRestart bool) {
+//
+// **熔断保护（CP-5，2026-10-12 修复）**：入参 autoRestart 是 CP 的**配置**，而熔断禁用是运行时
+// 的**保护态**，两者语义不同。熔断期间 CP 重推（隧道重连的 onOpen/Register/心跳兜底都会触发
+// ResyncNode → 本方法）若无条件写回 `inst.AutoRestart = autoRestart`，就会把 breakCircuit
+// 刚设的禁用重新打开 ⇒ 崩溃循环实例在熔断后继续自愈重启（的「熔断粘性」被打破）。
+// 故熔断期间强制保持禁用，配置意图记在下方注释的语义里，等显式解除熔断（ReleaseCircuitBreaker）
+// 后再由 CP 的后续重推（或解除路径自身的 rearm）恢复。
+func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string, envVars map[string]string, autoRestart bool, stopCommand ...string) {
+	// 先取熔断态（h.mu 独立于 m.mu，且此处不嵌套持有，无锁序风险）。
+	if _, broken := m.isCircuitBroken(uuid); broken {
+		autoRestart = false
+	}
 	var stale IProcessCommand
 	var resetting *Instance
 	m.mu.Lock()
@@ -513,6 +572,12 @@ func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string
 		inst.JDKBinPath = jdkBinPath
 		inst.EnvVars = envVars
 		inst.AutoRestart = autoRestart
+		if len(stopCommand) > 0 {
+			inst.StopCommand = stopCommand[0]
+		}
+		if strings.TrimSpace(startCommand) != "" || inst.processType == ProcessTypeDocker {
+			inst.launchSpecPending = false
+		}
 		if inst.strategy != nil {
 			switch inst.State {
 			case StateRunning, StateStarting, StateStopping:
@@ -605,36 +670,67 @@ func (m *Manager) GetInstanceDockerStats(ctx context.Context, uuid string) (cpuP
 
 // lockInstanceOperation 获取实例级生命周期锁，并复核等待期间实例未被移除或替换。
 func (m *Manager) lockInstanceOperation(uuid string) (*Instance, bool) {
+	inst, err := m.lockInstanceOperationContext(context.Background(), uuid)
+	return inst, err == nil
+}
+
+// lockInstanceOperationContext 排队可取消，获得 gate 后仍须复核实例身份。
+func (m *Manager) lockInstanceOperationContext(ctx context.Context, uuid string) (*Instance, error) {
 	m.mu.RLock()
 	inst, exists := m.instances[uuid]
 	m.mu.RUnlock()
 	if !exists {
-		return nil, false
+		return nil, fmt.Errorf("实例 %s 不存在", uuid)
 	}
 
-	inst.operationMu.Lock()
+	if err := inst.operationMu.LockContext(ctx); err != nil {
+		return nil, fmt.Errorf("实例 %s 操作排队取消: %w", uuid, err)
+	}
 	m.mu.RLock()
 	current, stillExists := m.instances[uuid]
 	m.mu.RUnlock()
 	if !stillExists || current != inst {
 		inst.operationMu.Unlock()
-		return nil, false
+		return nil, fmt.Errorf("实例 %s 不存在或已被替换", uuid)
 	}
-	return inst, true
+	return inst, nil
 }
 
 // Start 启动实例。按实例的 ProcessType 选择策略；首次启动时惰性构造策略。
+//
+// 无 ctx 形态：等价于 StartContext(context.Background(), uuid)（既有调用方沿用）。
 func (m *Manager) Start(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 不存在", uuid)
+	return m.StartContext(context.Background(), uuid)
+}
+
+// StartContext 是可取消的启动形态：ctx 被取消时启动等待立即收手，
+// 返回可重试错误（daemon.ErrStartWaitCanceled）且**不把实例记为崩溃**。
+//
+// 为什么要区分（复审 P1-5）：daemon 策略启动前要等上一代进程退出（预算可达分钟级）。
+// 若把「调用方取消」也当作「启动失败」置 CRASHED，一次取消就会污染实例状态，
+// 让运维以为是实例崩溃而非请求被取消。
+//
+// 生产 RPC 传入请求 ctx；进程成功启动后不再受该请求生命周期影响。
+func (m *Manager) StartContext(ctx context.Context, uuid string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
-	return m.startLocked(uuid, inst)
+	return m.startLocked(ctx, uuid, inst)
 }
 
 // startLocked 在已持有实例生命周期锁时启动实例。
-func (m *Manager) startLocked(uuid string, inst *Instance) error {
+func (m *Manager) startLocked(ctx context.Context, uuid string, inst *Instance) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("启动实例 %s 未执行: %w", uuid, err)
+	}
 	m.mu.Lock()
 	current, exists := m.instances[uuid]
 	if !exists || current != inst {
@@ -648,6 +744,10 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 	if inst.strategyResetting {
 		m.mu.Unlock()
 		return fmt.Errorf("实例 %s 正在刷新启动策略，请稍后重试", uuid)
+	}
+	if inst.launchSpecPending {
+		m.mu.Unlock()
+		return fmt.Errorf("实例 %s 尚未收到完整启动规格，保留现有控制通道", uuid)
 	}
 
 	// Stop 收尾与配置更新可能交错：Stop 已检查 stale 后，SetLaunchConfig 才在 STOPPING 窗口
@@ -676,7 +776,7 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 	// 启动前校验 java 版本（仅宿主进程模式；docker 的 java 在容器内不适用）。
 	// 避免无绑定 JDK / 版本不符的 MC 实例以 UnsupportedClassVersionError 静默崩在
 	// 游戏服自身日志、面板只见 CRASHED 无因（BUG-012）。校验失败保持原状态、返回明确错误。
-	// 启动前实时内存闸（FR-317，先于 Java 预检——对所有 processType 普适）：
+	// 启动前实时内存闸（先于 Java 预检——对所有 processType 普适）：
 	// 可用内存不足以再塞下这个实例即拒绝，保持原状态返回明确错误。
 	// docker 模式同样过闸（容器内存也吃宿主，按 MemLimitMB 估算）。
 	if err := m.preflightMemory(inst); err != nil {
@@ -729,11 +829,11 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 	inst.State = StateStarting
 	m.mu.Unlock()
 
-	// FR-459：启动即开启新的健康纪元——上一代的假死/崩溃故障标识不再适用，先清空，
+	// 启动即开启新的健康纪元——上一代的假死/崩溃故障标识不再适用，先清空，
 	// 避免重启后在启动宽限期内继续对外暴露陈旧原因（宽限期内巡检不动故障标识）。
 	m.clearHealthFault(uuid)
 
-	// FR-471 缺陷修复：同属「新纪元」的还有终端环形缓冲——它跨运行共享，不清空会把上一轮的
+	// 缺陷修复：同属「新纪元」的还有终端环形缓冲——它跨运行共享，不清空会把上一轮的
 	// 输出（含崩溃文本）带进本轮崩溃快照，使根因归类指向上一轮的原因而非本次。与健康纪元同理，
 	// 此处一并重置（回调由装配层接至 ws.TerminalServer.ResetBuffer）。
 	if m.onInstanceStart != nil {
@@ -742,7 +842,21 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 
 	m.emitStateChange(uuid, oldState, StateStarting)
 
-	if err := strategy.Start(context.Background()); err != nil {
+	startErr := ctx.Err()
+	if startErr == nil {
+		startErr = strategy.Start(ctx)
+	}
+	if err := startErr; err != nil {
+		if errors.Is(err, daemon.ErrStartWaitCanceled) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// 调用方取消 ⇒ 本次既未启动、也未判定失败（可重试）：**不是崩溃**，保持原状态。
+			// 置 CRASHED 会把「请求被取消」污染成「实例崩溃」，运维据此排查会南辕北辙。
+			m.mu.Lock()
+			prevState := inst.State
+			inst.State = oldState
+			m.mu.Unlock()
+			m.emitStateChange(uuid, prevState, oldState)
+			return fmt.Errorf("启动实例 %s 被取消（可重试）: %w", uuid, err)
+		}
 		m.mu.Lock()
 		prevState := inst.State
 		inst.State = StateCrashed
@@ -759,7 +873,7 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 	startedClean := inst.State == StateStarting
 	if startedClean {
 		inst.State = StateRunning
-		// FR-459 启动宽限期的纪元起点：Start 返回 RUNNING 即开始计时，宽限期内不做假死判定
+		// 启动宽限期的纪元起点：Start 返回 RUNNING 即开始计时，宽限期内不做假死判定
 		// （慢启动 MC 常达 90s+，否则会被连续探针失败误判并反复重启）。
 		inst.StartedAt = time.Now()
 	}
@@ -776,11 +890,19 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 
 // Stop 停止实例。
 func (m *Manager) Stop(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 未运行", uuid)
+	return m.StopContext(context.Background(), uuid)
+}
+
+// StopContext 在下发停止前可取消；已经开始的优雅停止仍正常收尾。
+func (m *Manager) StopContext(ctx context.Context, uuid string) error {
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return m.stopLocked(uuid, inst)
 }
 
@@ -819,7 +941,7 @@ func (m *Manager) stopLocked(uuid string, inst *Instance) error {
 	inst.State = StateStopped
 	inst.CrashCount = 0
 	m.mu.Unlock()
-	// FR-459：人工/正常停止清空崩溃重启窗口（给予一次干净的重启配额，避免历史崩溃影响后续熔断判定）。
+	// 人工/正常停止清空崩溃重启窗口（给予一次干净的重启配额，避免历史崩溃影响后续熔断判定）。
 	m.clearRestartWindow(uuid)
 	m.emitStateChange(uuid, oldState, StateStopped)
 	return nil
@@ -835,35 +957,61 @@ func (m *Manager) stopLocked(uuid string, inst *Instance) error {
 // daemon.WaitForPriorExit 依 PID 文件等旧 wrapper/Java 全退出（best-effort 上限）再拉起新进程，
 // reapWrapper 的 `d.wrapperCmd != cmd` 陈旧守卫保证旧 reaper 不误改新实例状态。
 func (m *Manager) Restart(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 不存在", uuid)
+	return m.RestartContext(context.Background(), uuid)
+}
+
+// RestartContext 排队与停止前可取消；停止已经执行时保留 STOPPED，绝不迟到启动。
+func (m *Manager) RestartContext(ctx context.Context, uuid string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
-	return m.restartLocked(uuid, inst)
+	return m.restartLockedContext(ctx, uuid, inst)
 }
 
 // restartLocked 在已持有实例生命周期锁时优雅重启：运行类先优雅停止、等旧进程退出，再启动。
 func (m *Manager) restartLocked(uuid string, inst *Instance) error {
+	return m.restartLockedContext(context.Background(), uuid, inst)
+}
+
+func (m *Manager) restartLockedContext(ctx context.Context, uuid string, inst *Instance) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.RLock()
 	state := inst.State
+	pending := inst.launchSpecPending
 	m.mu.RUnlock()
+	// PID 收养只证明当前控制通道可用，不能据此先停服务器再用空规格自愈。
+	if pending {
+		return fmt.Errorf("实例 %s 尚未收到完整启动规格，拒绝重启且保留当前运行时", uuid)
+	}
 	// 运行中（含启动/停止中）先优雅停止、等旧进程退出；STOPPED/CRASHED 无活跃进程，直接（重）启动。
 	if state == StateRunning || state == StateStarting || state == StateStopping {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := m.stopLocked(uuid, inst); err != nil {
 			return err
 		}
 	}
-	return m.startLocked(uuid, inst)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("实例 %s 已停止但本次重启被取消，未启动新一代: %w", uuid, err)
+	}
+	return m.startLocked(ctx, uuid, inst)
 }
 
-// RestartIfRunning 是 FR-459 假死自愈的受锁入口：与 Restart 相同地优雅重启，但**仅当**实例在
+// RestartIfRunning 是假死自愈的受锁入口：与 Restart 相同地优雅重启，但**仅当**实例在
 // 持锁复核时仍处 `RUNNING` 才动作。
 //
 // 只接受 RUNNING（spec §5：自愈不得与人工操作抢状态）：
 //   - STOPPED/CRASHED 已被人工停掉或本就未运行 → 拒绝，绝不把「已被人工停止的实例」误启动；
 //   - STARTING/STOPPING 是过渡态：假死判定的前提是「进程在跑且不响应」，而过渡态本身尚未定型，
-//     此时重启会与人工 Start/Stop 抢生命周期（原实现允许过渡态，与 spec 意图相悖，FR-459 复审项 4）。
+//     此时重启会与人工 Start/Stop 抢生命周期（原实现允许过渡态，与 spec 意图相悖复审项 4）。
 //
 // 复用 stopLocked/startLocked 既有优雅路径，**不新增杀进程路径**（spec §1/§5）。
 func (m *Manager) RestartIfRunning(uuid string) error {
@@ -884,11 +1032,19 @@ func (m *Manager) RestartIfRunning(uuid string) error {
 
 // Kill 强制终止实例。
 func (m *Manager) Kill(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 不存在", uuid)
+	return m.KillContext(context.Background(), uuid)
+}
+
+// KillContext 排队取消不能变成迟到强杀。
+func (m *Manager) KillContext(ctx context.Context, uuid string) error {
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return m.killLocked(uuid, inst)
 }
 
@@ -918,13 +1074,13 @@ func (m *Manager) killLocked(uuid string, inst *Instance) error {
 	oldState := inst.State
 	inst.State = StateStopped
 	m.mu.Unlock()
-	// FR-459：强制终止同样清空崩溃重启窗口。
+	// 强制终止同样清空崩溃重启窗口。
 	m.clearRestartWindow(uuid)
 	m.emitStateChange(uuid, oldState, StateStopped)
 	return nil
 }
 
-// FR-471 接管：SIGTERM 之后等待进程退出的有界轮询（约 30s）。
+// 接管：SIGTERM 之后等待进程退出的有界轮询（约 30s）。
 // Paper 的 shutdown hook 需保存世界、释放 world/session.lock，秒级到十几秒属正常；
 // 超时即升级强杀（进程已不响应，继续等只会拖住 CP 的同步调用）。
 const (
@@ -932,13 +1088,13 @@ const (
 	adoptTermWaitInterval = time.Second
 )
 
-// AdoptForeignRuntime 接管实例工作目录下的外来活进程（FR-471）。
+// AdoptForeignRuntime 接管实例工作目录下的外来活进程。
 //
 // 语义 = 「先让外来进程优雅退场，再以受管方式拉起」：对外来进程树发 SIGTERM（Paper 走 shutdown hook
 // 保存世界后正常退出），有界等待其退出，超时升级 SIGKILL 强杀整棵进程树，随后按正常路径 Start，
 // 使平台记账与磁盘事实对齐、此后由本平台掌管该实例生命周期。
 //
-// 与孤儿扫描（FR-456）的分工：那里处置的是**无主**进程（Worker 内存表已丢失该实例），默认只观测；
+// 与孤儿扫描的分工：那里处置的是**无主**进程（Worker 内存表已丢失该实例），默认只观测；
 // 这里处置的是**已注册实例**目录下的进程，是人工确认后的显式接管动作，故允许停止进程。
 //
 // 返回被停止的外来进程 PID（0=接管前本无漂移，等价于一次正常启动）。
@@ -953,7 +1109,7 @@ func (m *Manager) AdoptForeignRuntime(uuid string) (int, error) {
 	fr := m.foreignRuntime(uuid)
 	if fr.PID <= 0 {
 		// 无漂移：直接走正常启动路径（幂等；已 RUNNING 时由 startLocked 的状态守卫拒绝并给出明确错误）。
-		if err := m.startLocked(uuid, inst); err != nil {
+		if err := m.startLocked(context.Background(), uuid, inst); err != nil {
 			return 0, err
 		}
 		return 0, nil
@@ -970,7 +1126,7 @@ func (m *Manager) AdoptForeignRuntime(uuid string) (int, error) {
 	// 漂移进程已退场：先清该实例的观测，避免下一次心跳仍报旧 PID（扫描下一轮也会自然收敛）。
 	m.clearForeignRuntime(uuid)
 
-	if err := m.startLocked(uuid, inst); err != nil {
+	if err := m.startLocked(context.Background(), uuid, inst); err != nil {
 		return fr.PID, fmt.Errorf("外来进程 pid=%d 已退出，但以受管方式启动实例 %s 失败: %w", fr.PID, uuid, err)
 	}
 	m.auditOrphan("orphan.foreign_runtime_adopted", uuid,
@@ -979,16 +1135,16 @@ func (m *Manager) AdoptForeignRuntime(uuid string) (int, error) {
 	return fr.PID, nil
 }
 
-// foreignDriftDetail 组装漂移/接管审计的 detail JSON（FR-471）。
+// foreignDriftDetail 组装漂移/接管审计的 detail JSON。
 func (m *Manager) foreignDriftDetail(uuid string, fr ForeignRuntime, phase string) string {
 	return fmt.Sprintf(`{"instanceUuid":%q,"pid":%d,"cmdline":%q,"phase":%q,"policy":"adopt"}`,
 		uuid, fr.PID, fr.Cmdline, phase)
 }
 
-// terminateForeignProcessTree 先对外来进程树发 SIGTERM 等其优雅退出，超时升级 SIGKILL 强杀整树（FR-471）。
+// terminateForeignProcessTree 先对外来进程树发 SIGTERM 等其优雅退出，超时升级 SIGKILL 强杀整树。
 // 返回 nil 表示该 PID（连同其进程组）已退出。
 //
-// 处置前置归属复核（与 FR-455① 同一纪律）：漂移观测与人工点击之间可能间隔数十秒（扫描 60s 一拍），
+// 处置前置归属复核（与① 同一纪律）：漂移观测与人工点击之间可能间隔数十秒（扫描 60s 一拍），
 // 期间该 PID 可能已被 OS 回收给无关进程。发信号前先用 cmdline/cwd 复核它仍属该实例目录；复核不通过
 // 即拒绝处置并返回错误（宁可不接管，也不误杀无关进程）。
 func (m *Manager) terminateForeignProcessTree(uuid, workDir string, fr ForeignRuntime) error {
@@ -1120,14 +1276,14 @@ func (m *Manager) removeLocked(uuid string, inst *Instance) error {
 	if current, ok := m.instances[uuid]; ok && current == inst {
 		delete(m.instances, uuid)
 	}
-	// FR-459 复审项 10：实例移除时回收健康记账，避免残留记录随 UUID 复用污染后续熔断判定。
+	// 复审项 10：实例移除时回收健康记账，避免残留记录随 UUID 复用污染后续熔断判定。
 	m.dropHealthAccounting(uuid)
 	return nil
 }
 
 // StopAll 停止所有运行中的实例。
 // direct 模式：终止游戏服进程（Worker 退出时一并清理）。
-// daemon 模式：仅断开与 wrapper 的连接，wrapper 继续托管游戏服（ADR-003 进程隔离目标）。
+// daemon 模式：仅断开与 wrapper 的连接，wrapper 继续托管游戏服（进程隔离目标）。
 func (m *Manager) StopAll() {
 	m.mu.RLock()
 	uuids := make([]string, 0)
@@ -1163,8 +1319,21 @@ func (m *Manager) StopAll() {
 
 // RecoverDaemonInstances 在 Worker 重启后扫描 PID 目录，恢复仍存活的 daemon wrapper 连接。
 // 对每个 PID 文件：wrapper pid 存活且 socket 可达则 reconnect 并登记实例为 RUNNING；
-// 否则删除 PID 文件与残留 socket（清理）。返回成功恢复的实例数。
-// 参见 ADR-003: 平台重启后通过 PID 文件重新连接已有 daemon。
+// 否则删除 PID 文件与残留 socket（清理）。
+// 平台重启后通过 PID 文件重新连接已有 daemon。
+//
+// **两阶段执行（可用性缺陷修复）**：把旧实现的「初拨 + 就地 127s 递增重试」拆成
+//  1. **快速首拨**（本函数内同步）：每条记录只拨一次，可达者立刻登记 —— 与旧实现的首次拨号完全一致；
+//  2. **后台有界重试**（首拨失败者，见 startStartupTakeoverRetries）：沿用
+//     DefaultRecoverRetryBackoff / 配置注入序列，逐字保留旧实现的重试窗口与收尾审计。
+//
+// 为什么要拆：旧实现把每条记录的最长 ~127s 重试**串行阻塞**在启动主流程上，于是一条不可达记录就把
+// 运行期孤儿扫描器的启用推迟 127s（N 条僵死记录线性累加），整个启动窗口完全没有扫描能力。
+// 现在本函数只在「首拨」上花时间，等待交还调用方——扫描器得以立即启用；接管本身仍然该成功的成功、
+// 该落 alive_unreachable 审计的照旧落，语义不变，只是慢的那部分不再挡路。
+//
+// 返回值 recovered 只统计**本函数返回前**已完成接管的实例数；后台补做的接管另行登记并打日志
+// （状态正确性不受影响，只影响启动日志里的即时计数）。
 func (m *Manager) RecoverDaemonInstances() (int, error) {
 	entries, err := os.ReadDir(m.pidDir)
 	if err != nil {
@@ -1175,6 +1344,8 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 	}
 
 	recovered := 0
+	// pending 收集「首拨失败、需后台继续重试」的记录；非空时在返回前启动后台重试协程。
+	pending := make([]startupTakeoverTask, 0)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".pid") {
 			continue
@@ -1191,17 +1362,17 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 
 		// wrapper 不存活：先看 Java 是否还在。
 		if rec.WrapperPID <= 0 || !m.pidAlive(rec.WrapperPID) {
-			// wrapper 已死但 Java 仍活：**启动期不再强杀**（FR-471 语义修订）。
+			// wrapper 已死但 Java 仍活：**启动期不再强杀**（语义修订）。
 			//
-			// 旧行为（FR-325/FR-455）按 PID 记录强杀 Java 树，理由是「wrapper 一走就再没人能
+			// 旧行为按 PID 记录强杀 Java 树，理由是「wrapper 一走就再没人能
 			// stop 它，活着的 Java 会占着服务端口与 Paper session.lock，面板显示 STOPPED 却
 			// 再也起不来」。真机事故（2026-09-23）证明该强杀会直接打断正在服务的服务器：换二进制
 			// 重启 Worker 时，一条陈旧 PID 记录即触发对在跑农场的强杀（一次 54 台）。
-			// 而它原本要解决的问题已有非破坏出口：FR-471 的启动冲突预检（work_dir_busy / port_free）
+			// 而它原本要解决的问题已有非破坏出口：的启动冲突预检（work_dir_busy / port_free）
 			// 拦住双开，漂移观测 + 接管入口把它纳入管理。
 			//
-			// 故与 FR-456 的 `warn` 默认策略同口径：**只观测、保留 PID 文件**，交由周期孤儿扫描
-			// （按 policy 处置，默认 warn 仅告警）与 FR-471 的接管流程处理；显式 `auto` 策略仍由
+			// 故与的 `warn` 默认策略同口径：**只观测、保留 PID 文件**，交由周期孤儿扫描
+			// （按 policy 处置，默认 warn 仅告警）与的接管流程处理；显式 `auto` 策略仍由
 			// 周期扫描负责强杀，启动路径不再有任何静默破坏。
 			if rec.JavaPID > 0 && rec.JavaPID != rec.WrapperPID && m.pidAlive(rec.JavaPID) {
 				m.observeOrphanAtStartup(instanceUUID, rec, "startup_wrapper_gone_java_alive")
@@ -1215,51 +1386,79 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 			continue
 		}
 
-		// wrapper 存活：构造 daemon 策略并 reconnect。
+		// wrapper 存活：构造 daemon 策略并做**快速首拨**（语义与旧实现的首次拨号一致）。
 		// WorkDir 从 PID 记录恢复，否则文件/配置操作会因空工作目录失败（open :）。
 		strategy := newDaemonStrategy(m, CommandSpec{UUID: instanceUUID, WorkDir: rec.WorkDir, ProcessType: ProcessTypeDaemon, ProbePort: rec.ProbePort})
-		if err := m.reconnectWithRetry(strategy, rec.SocketAddr, instanceUUID); err != nil {
-			// FR-325 / ADR-093：重试耗尽仍拨不通。
-			//   - wrapper 仍存活：属「确属本实例、仅 socket 瞬时不可达」，按 ADR-093 只告警 + 落审计、
-			//     保留 PID 文件，不杀（强杀会误杀一个 wrapper 与 Java 都健康、只是暂时拨不通的服务器）。
-			//   - wrapper 已在重试期间死亡：旧行为按 PID 记录强杀 Java 树；FR-471 起改为**只观测不强杀**
-			//     （启动路径不再有任何静默破坏），交由周期扫描按 policy 与 FR-471 接管流程处置。
-			if rec.WrapperPID > 0 && m.pidAlive(rec.WrapperPID) {
-				detail := fmt.Sprintf(`{"instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"reason":"alive_unreachable"}`,
-					instanceUUID, rec.WrapperPID, rec.JavaPID)
-				m.auditOrphan("orphan.dispose_blocked", instanceUUID, detail, false,
-					"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），按 ADR-093 只告警不杀")
-				slog.Warn("接管重试耗尽但 wrapper 仍存活，按 ADR-093 只告警不杀，保留 PID 文件等下一轮/人工介入",
-					"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "error", err)
-				continue
-			}
-			m.observeOrphanAtStartup(instanceUUID, rec, "startup_reconnect_failed")
+		if err := m.dialWrapper(strategy, rec.SocketAddr); err != nil {
+			// 首拨失败：不再就地阻塞重试，转入后台按配置序列继续（见 startStartupTakeoverRetries）。
+			//
+			// 先登记「启动接管在飞」：该实例此刻既未进入 instances 表、磁盘上又确有活进程对，
+			// 运行期扫描必须在它身上让路（否则会并发拨号争抢控制连接，或把它的进程当无主进程强杀）。
+			// 旧实现不需要这一步——它靠「扫描器在接管之后才启动」的时序来规避；本修复打破该时序，
+			// 故改为显式声明。
+			m.markTakeoverPending(instanceUUID, rec)
+			pending = append(pending, startupTakeoverTask{
+				instanceUUID: instanceUUID,
+				rec:          rec,
+				strategy:     strategy,
+				firstErr:     err,
+			})
 			continue
 		}
-		strategy.SetWrapperPID(rec.WrapperPID)
-
-		// FR-459 终验 Low #3：若 Worker 重启前该实例已熔断，从状态文件恢复熔断态——否则 Worker
-		// 会「忘掉」熔断（以为可自动重启）而 wrapper 粘性 autoRestartOff 仍在拒绝重启，形成反向 desync。
-		restored := m.restorePersistedCircuit(instanceUUID)
-
-		m.mu.Lock()
-		m.instances[instanceUUID] = &Instance{
-			UUID:        instanceUUID,
-			State:       StateRunning,
-			AutoRestart: !restored,
-			WorkDir:     rec.WorkDir,
-			ProbePort:   rec.ProbePort,
-			strategy:    strategy,
-			processType: ProcessTypeDaemon,
+		if m.registerAdoptedDaemon(instanceUUID, rec, strategy) {
+			recovered++
 		}
-		m.mu.Unlock()
-		if restored {
-			// 恢复熔断后须让 wrapper 与 Worker 记账对齐：worker 重启前 wrapper 的粘性开关可能已置位，
-			// 也可能因重启窗口丢失该帧——幂等补发一次禁用帧（wrapper 已置位时无副作用）。
-			m.disarmAutoRestart(instanceUUID, "恢复熔断态（Worker 重启）")
-		}
-		recovered++
-		slog.Info("已恢复 daemon 实例", "instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "circuitRestored", restored)
+	}
+	if len(pending) > 0 {
+		m.startStartupTakeoverRetries(pending)
 	}
 	return recovered, nil
+}
+
+// isolateAdoptedWrapper 把接管到的 wrapper 及其 java 子树迁出 Worker 的 systemd 单元 cgroup
+// （机制与理由见 internal/worker/daemon/cgroup.go）。
+//
+// 为什么接管路径必须做这件事：迁移前 spawn 的 wrapper 一律留在 Worker 单元 cgroup 内，systemd
+// 重启该单元时按 KillMode=control-group 向其 cgroup 内全部进程发 SIGTERM，wrapper 与 java 一起毙命。
+// 新代码 spawn 的 wrapper 会自迁（wrapper.run 开头），但**已在运行**的那些只能由接管方迁移——否则
+// 「部署新版本 → 重启 Worker」这一步（本缺陷的验收场景）依旧全灭。
+//
+// 语义边界：只改 cgroup 归属，不发任何信号、不改 PID 记录与 socket；失败仅告警保持原状，
+// 因此与① 接管自动收养、orphan_scan 孤儿治理都不冲突。
+func (m *Manager) isolateAdoptedWrapper(instanceUUID string, rec *daemon.PIDRecord) {
+	if rec.WrapperPID <= 0 {
+		return
+	}
+	migrate := m.recoverMigrate
+	if migrate == nil {
+		migrate = daemon.MigratePIDTreeToCgroup
+	}
+	moved, err := migrate(rec.WrapperPID, instanceUUID)
+	if err != nil {
+		slog.Warn("接管实例的 daemon 子树迁出 Worker 单元 cgroup 失败，保持原状",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "error", err)
+		m.auditOrphan("cgroup.isolate_failed", instanceUUID,
+			fmt.Sprintf(`{"wrapperPid":%d,"moved":%d,"reason":"迁移调用失败"}`, rec.WrapperPID, moved), false, err.Error())
+		return
+	}
+	if moved > 0 {
+		slog.Info("已把接管的 daemon 子树迁出 Worker 单元 cgroup（单元重启不再连坐）",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "moved", moved)
+		return
+	}
+	// moved==0 且 wrapper 仍存活 = **一个进程都没迁成**，实例仍在 Worker 单元 cgroup 内，下一次
+	// `systemctl restart` 会被连坐杀掉。此前这里没有任何输出（`moved > 0` 分支不成立即静默返回），
+	// 真机后果（2026-10-09 事故）：13 个 wrapper 因源在当前用户无写权限的单元（如 /system.slice）
+	// 而无从迁移，逐进程 WARN 只落在 wrapper 侧日志里，CP 侧看不到「这批实例已无保护」。
+	//
+	// 因此显式落审计（非静默），让「无隔离保护」成为可观测事实而非隐性风险。注意与「wrapper 已退出」
+	// 区分：后者无需保护，不算失败。
+	if !m.pidAlive(rec.WrapperPID) {
+		return
+	}
+	m.auditOrphan("cgroup.isolate_failed", instanceUUID,
+		fmt.Sprintf(`{"wrapperPid":%d,"javaPid":%d,"moved":0,"reason":"实例仍在 Worker 单元 cgroup 内，重启该单元会被连坐"}`,
+			rec.WrapperPID, rec.JavaPID), false, "")
+	slog.Warn("接管实例未能获得 cgroup 隔离，实例仍在 Worker 单元 cgroup 内（重启该单元会被连坐）",
+		"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID)
 }

@@ -21,7 +21,8 @@ func TestFollowLiveReplansNewProjectionAndNewUTCDay(t *testing.T) {
 	key := catalog.PartitionKey{StorageNamespace: "inst:1", UTCDay: "2026-09-22"}
 	rec := catalog.NewStableRecord(key, catalog.OwnerHot, 1, "hot")
 	rec.PublishedProjection = &catalog.PublishedProjection{ManifestVersion: "p1", ProjectionGeneration: "p1", CoverageComplete: true,
-		QueryLocationDirID: "hot", QueryGeneration: 1, ClosedVisibleSeq: map[string]uint64{"default": 10}}
+		CoveredSourceGenerations: []catalog.SourceGenerationRef{{LogSourceID: "inst:1", SourceGeneration: "g1"}},
+		QueryLocationDirID:       "hot", QueryGeneration: 1, ClosedVisibleSeq: map[string]uint64{"default": 10}}
 	require.NoError(t, cat.Put(rec))
 	p := NewPlanner(cat, nil)
 	calls := 0
@@ -31,7 +32,8 @@ func TestFollowLiveReplansNewProjectionAndNewUTCDay(t *testing.T) {
 		if calls == 1 {
 			next := catalog.NewStableRecord(catalog.PartitionKey{StorageNamespace: "inst:1", UTCDay: "2026-09-23"}, catalog.OwnerHot, 1, "next-day")
 			next.PublishedProjection = &catalog.PublishedProjection{ManifestVersion: "p2", ProjectionGeneration: "p2", CoverageComplete: true,
-				QueryLocationDirID: "next-day", QueryGeneration: 1, ClosedVisibleSeq: map[string]uint64{"default": 20}}
+				CoveredSourceGenerations: []catalog.SourceGenerationRef{{LogSourceID: "inst:1", SourceGeneration: "g1"}},
+				QueryLocationDirID:       "next-day", QueryGeneration: 1, ClosedVisibleSeq: map[string]uint64{"default": 20}}
 			require.NoError(t, cat.Put(next))
 		}
 		id := "old"

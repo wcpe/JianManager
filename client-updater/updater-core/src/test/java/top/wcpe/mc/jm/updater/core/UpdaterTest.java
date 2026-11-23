@@ -20,10 +20,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * updater-core reconcile 端到端测试（FR-090 / FR-256 简化后）：用本地临时 gameDir + 内存 Transport，
+ * updater-core reconcile 端到端测试（简化后）：用本地临时 gameDir + 内存 Transport，
  * 不依赖真端点。覆盖增量/减量、托管区/玩家区隔离、sync 策略、fail-static、平台过滤、并发锁。
  *
- * <p>FR-256 起 manifest 不再签名（去 TestSigner），CAS/验签/防降级相关测试已删；
+ * <p>manifest 不再签名（去 TestSigner），CAS/验签/防降级相关测试已删；
  * 保留 reconcile / 快筛 / clean-all / 平台过滤 / 单实例锁 / 非法路径测试。
  */
 class UpdaterTest {
@@ -36,7 +36,7 @@ class UpdaterTest {
         return new Updater(gameDir, transport, false);
     }
 
-    /** 构造 manifest 并挂到 transport（FR-256 起 manifest 不再签名，直接 canonical JSON）。 */
+    /** 构造 manifest 并挂到 transport（manifest 不再签名，直接 canonical JSON）。 */
     private void install(TestFixtures.MemoryTransport transport,
                          long version, List<String> managedDirs,
                          List<TestFixtures.FileSpec> specs) throws Exception {
@@ -222,9 +222,9 @@ class UpdaterTest {
         assertArrayEquals(bytes("png"), Files.readAllBytes(gameDir.resolve("screenshots/shot.png")));
     }
 
-    // ── FR-255：clean-all（"*" 哨兵）+ 自定义排除 ──────────────────────────
+    // ── clean-all（"*" 哨兵）+ 自定义排除 ─────────────────────────────────
 
-    /** 带 cleanExclude 的 install 辅助（FR-255）。 */
+    /** 带 cleanExclude 的 install 辅助。 */
     private void installWithExclude(TestFixtures.MemoryTransport transport,
                                     long version, List<String> managedDirs, List<String> cleanExclude,
                                     List<TestFixtures.FileSpec> specs) throws Exception {

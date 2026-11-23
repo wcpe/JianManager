@@ -22,6 +22,12 @@ func newBeaconTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Instance{},
 		&model.InstanceGroupNode{},
@@ -154,7 +160,7 @@ func TestBeaconPull_BuildsFullTree(t *testing.T) {
 	result, err := svc.PullTopology(context.Background(), 1, "127.0.0.1")
 	require.NoError(t, err)
 
-	// bc_cluster 是根分组（FR-444 §4.1）。
+	// bc_cluster 是根分组（§4.1）。
 	byName := groupsByName(t, db)
 	bc := byName["bc-main"]
 	require.Nil(t, bc.ParentID, "BC 集群应是根分组")

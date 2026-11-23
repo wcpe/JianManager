@@ -18,7 +18,7 @@ func TestAlertService_CreateRule_MultiType(t *testing.T) {
 	require.NoError(t, db.Create(&inApp).Error)
 	require.NoError(t, db.Create(&webhook).Error)
 
-	// 日志关键字触发规则（FR-085）。
+	// 日志关键字触发规则。
 	rule, err := svc.CreateRule(CreateRuleRequest{
 		Name:        "log-error",
 		TriggerType: model.AlertTriggerLogKeyword,
@@ -44,7 +44,7 @@ func TestAlertService_CreateRule_MultiType(t *testing.T) {
 func TestAlertService_CreateRule_DefaultsMetric(t *testing.T) {
 	db := newAlertTestDB(t)
 	svc := NewAlertService(db)
-	// 不传 triggerType/level → 默认 metric/warn（FR-011 兼容）。
+	// 不传 triggerType/level → 默认 metric/warn（兼容）。
 	rule, err := svc.CreateRule(CreateRuleRequest{
 		Name: "cpu", TargetType: "node", Metric: "cpu", Operator: ">", Threshold: 90,
 	})
@@ -107,7 +107,7 @@ func TestAlertService_CreateRule_Validation(t *testing.T) {
 		mut  func(*CreateRuleRequest)
 	}{
 		{"非法目标类型", func(r *CreateRuleRequest) { r.TargetType = "cluster" }},
-		// 注：「指标规则必须绑定节点目标」的旧断言已移除——FR-462 补齐了实例级
+		// 注：「指标规则必须绑定节点目标」的旧断言已移除——补齐了实例级
 		// `evaluateInstanceMetricRule`，metric 在 node/instance 两个维度都合法。
 		// 正向覆盖见 alert_metric_target_test.go（instance 可建 + node 不回归）。
 		{"节点离线规则必须绑定节点目标", func(r *CreateRuleRequest) { r.TriggerType = model.AlertTriggerNodeOffline; r.TargetType = "instance" }},
@@ -273,7 +273,7 @@ func TestAlertService_ListEvents_Filters(t *testing.T) {
 	assert.Equal(t, "r", all[0].Rule.Name)
 }
 
-// TestAlertService_ListEvents_KeywordTimePaging 覆盖 FR-149 新增的关键字 / 时间范围 / 分页筛选。
+// TestAlertService_ListEvents_KeywordTimePaging 覆盖新增的关键字 / 时间范围 / 分页筛选。
 func TestAlertService_ListEvents_KeywordTimePaging(t *testing.T) {
 	db := newAlertTestDB(t)
 	svc := NewAlertService(db)

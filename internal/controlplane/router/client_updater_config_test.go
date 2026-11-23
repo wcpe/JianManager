@@ -13,8 +13,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// setupUpdaterConfigRouter 建一个含 jm-updater.json 生成端点的最小引擎（FR-253）。
-// FR-256 起该端点不再依赖签名器（验签已去）。
+// setupUpdaterConfigRouter 建一个含 jm-updater.json 生成端点的最小引擎。
+// 起该端点不再依赖签名器（验签已去）。
 func setupUpdaterConfigRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -30,7 +30,7 @@ func setupUpdaterConfigRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 }
 
 // TestGetUpdaterConfig_AdminReturnsConfig 平台管理员取 jm-updater.json →
-// 200 + 含 channel / endpoint / key。FR-256 起不再返回 signPublicKey/signKeyId。
+// 200 + 含 channel / endpoint / key。起不再返回 signPublicKey/signKeyId。
 func TestGetUpdaterConfig_AdminReturnsConfig(t *testing.T) {
 	db := setupTestDB(t)
 	// 建测试频道。
@@ -57,7 +57,7 @@ func TestGetUpdaterConfig_AdminReturnsConfig(t *testing.T) {
 	if _, ok := resp["coreEndpoint"]; ok {
 		t.Fatalf("jm-updater.json 不应再含 coreEndpoint，楔子应由 endpoint 自动拼接")
 	}
-	// FR-256 起 jm-updater.json 不再含签名公钥字段。
+	// 起 jm-updater.json 不再含签名公钥字段。
 	if _, ok := resp["signPublicKey"]; ok {
 		t.Fatalf("jm-updater.json 不应再含 signPublicKey（验签已去）")
 	}

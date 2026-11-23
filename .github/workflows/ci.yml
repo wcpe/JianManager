@@ -5,10 +5,18 @@
 #   的门禁由 pull_request 承担，master 上的门禁用于确认主干始终可发布。
 #   正式 tag 产生与发布提交相同 SHA 的 CI，release.yml 复用其结果，不重复执行前端质量门禁。
 #
-# 闸：前端 workspace 的 lint（tsc + eslint）+ vitest（全 workspace，含 devmock 包自检）+ build，
+# 闸：前端 workspace 的 lint（tsc + eslint）+ vitest（node 项目 / dom 项目 / devmock 包自检分处三个 job 并行）+ build，
 #   Playwright E2E 按文件分成四个独立 runner 并行执行；任一失败 → web-quality 失败 → check 红。
 #   仓库**分支保护**勾选 `web-quality` 为必需 check 即合并前硬挡
 #   （分支保护是仓库设置，CI 只提供 check；见 README.md「前端 mock 模式与测试」）。
+#
+# E2E 不再用重试兜底（2026-10-20 用户裁定）：`playwright.config.ts` 已设
+#   `retries: 0` + `failOnFlakyTests: true`，任何一次失败都让门禁红。
+#   原配置是重试一次、恢复后仍算通过，把时序竞态藏了起来（表现为「不同用例轮流 flaky、
+#   重跑就绿」）。真正的根因是断言默认超时 5s 太短——全仓 93 处用例都经 helpers.login()
+#   等首屏，本地实测 7s 级、4 分片并行下再翻倍 ⇒ 必然偶发。现统一为 expect 15s / 用例 60s，
+#   并收敛了 56 处逐处打补丁的 timeout。若日后又出现裸的 `timeout: 15_000` 补丁，
+#   说明基准被改坏了，应回头查配置而不是再贴补丁。
 #
 # 路径与命令对齐 monorepo 真貌：前端位于 apps/control-plane-web，由 pnpm workspace 管理；
 #   pnpm 版本由根 package.json 的 packageManager 字段经 corepack 锁定，各步骤与 Taskfile.yml
@@ -20,6 +28,21 @@
 #
 # go-quality：Go 编译与静态检查门禁，并固定执行日志联邦回归测试；
 #   使用 Go 1.26.2 与模块缓存，避免后端质量回归只在发布工作流暴露。
+#
+# go-test-router / go-test-shard：Go **全量单元测试**，分片并行。
+#   router 单独一个 job（它是规模问题包，单包 ~880s）、其余包按包名哈希切 4 片；
+#   6 个 runner 并行，总墙钟≈ router 的时长。分片口径与本地 `scripts/go-test.sh` 共用一个脚本，
+#   不另维护一份包列表（两边走同一个函数，防止口径漂移）。
+#   在此之前 PR 只有 build/vet 与两个 -run 窄子集，全量只在 release 跑——
+#   导致间歇红的 Go 用例可以一路绿灯合入。
+#
+# go-test-windows / go-test-windows-router：同一套测试在 **windows-latest** 上再跑一遍。
+#   CP 与 Worker 都发 windows 产物，而在此之前没有任何 job 在 Windows 上跑 go test
+#   （release.yml 的 windows-latest 只跑二进制 `--version` 冒烟）。于是
+#   「Linux 上恰好对、Windows 上失效」的判据可以无限期存在——filepath.IsAbs 的
+#   GOOS 绑定就这样养出一条真实的信任边界绕过。分片口径与 Linux 完全共用
+#   scripts/go-test.sh，同一个包在两平台落同一片，便于对比红/绿。
+#   注意：windows-latest 按 CPU 核数计费倍率高于 linux，这是为堵住平台分叉付的成本。
 #
 # workflow-contract：发布工作流契约闸（脚本 release-metadata.test.mjs）。
 #   断言 ci.yml / release.yml 的触发条件、runner 与版本来源；原先只在 release.yml 里跑，
@@ -44,6 +67,48 @@ env:
   NODE_VERSION: '22'
 
 jobs:
+  # vitest 的 node 项目（纯逻辑，无 DOM）单独成一个 job，与 web-static 并行。
+  # 为什么拆：web-static 里 vitest 全 workspace 占 397s（占该 job 511s 的 77%），
+  # 而 node 项目自身只要 ~10s——把纯逻辑测试挪到独立 runner 上并行，关键路径不再叠加。
+  # 注意：这里刻意**不**跑 dom 项目（dom 留在 web-static），两边都显式 --project，
+  # 避免任何一侧静默跑全量导致重复计时。
+  web-test-node:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout（不需子模块，纯前端门禁）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 缓存 pnpm store
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: 安装依赖（pnpm workspace）
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: 纯逻辑测试（vitest node 项目）
+        run: pnpm --filter control-plane-web exec vitest run --project node
+
+      # devmock 的测试**不在** control-plane-web 的 vitest 项目里（它是独立 workspace 包，
+      # 有自管 test 脚本）。拆分 job 时曾漏掉这一步，导致 8 个文件 / 60 个用例（含本 PR
+      # 新增的 log-acq-contract 契约测试）从 CI 中完全消失——假绿。
+      - name: 假后端自检（devmock 包）
+        run: pnpm --filter @jianmanager/devmock test
+
   web-static:
     runs-on: ubuntu-24.04
     steps:
@@ -79,8 +144,11 @@ jobs:
           pnpm --filter control-plane-web exec tsc -b --noEmit
           pnpm --filter control-plane-web lint
 
-      - name: 单元 / 组件测试（vitest 全 workspace，等价 task web:test）
-        run: pnpm -r test
+      # node 与 dom 两个项目分开跑、分属不同 job（见 web-test-node）：
+      # web-static 只负责 dom（组件/页面强断言），node 项目并行到另一个 runner 上，
+      # 关键路径因此少一段串行。两者都用 --project 显式指定，避免任一 job 静默跑全量。
+      - name: 组件 / 页面测试（vitest dom 项目）
+        run: pnpm --filter control-plane-web exec vitest run --project dom
 
       - name: 构建（主控台 + 组件博物馆，等价 task web:build）
         shell: bash
@@ -141,17 +209,19 @@ jobs:
 
   web-quality:
     if: always()
-    needs: [web-static, web-e2e]
+    needs: [web-static, web-test-node, web-e2e]
     runs-on: ubuntu-24.04
     steps:
       - name: 汇总前端质量门禁
         shell: bash
         env:
           STATIC_RESULT: ${{ needs.web-static.result }}
+          NODE_TEST_RESULT: ${{ needs.web-test-node.result }}
           E2E_RESULT: ${{ needs.web-e2e.result }}
         run: |
           set -euo pipefail
           [[ "${STATIC_RESULT}" == "success" ]]
+          [[ "${NODE_TEST_RESULT}" == "success" ]]
           [[ "${E2E_RESULT}" == "success" ]]
 
   bot-quality:
@@ -229,6 +299,156 @@ jobs:
   #   但前者不依赖 TestMCP_ 命名前缀，避免后续 MCP 用例换个前缀就被静默漏跑。
   # 仅 mcp 包加 -race：SSE 连接注册表是多协程并发读写的共享状态；实测 -race 增量约
   #   +13s（热缓存）/ +43s（含 race 插桩重建），在 job 预算内，故不拆 job 也不全量加 -race。
+  # Go 单元测试（分片并行）。
+  #
+  # 为何要加：在此之前 PR 阶段只有 `go build` + `go vet` + 两个 `-run` 窄子集，
+  # **全量 `go test` 只在 release.yml 跑**。代价是 PR 阶段没有任何测试能拦住 Go 回归：
+  # 实测曾有一条间歇红的 daemon 用例（FR-455 两阶段化后测试漏改）在 CI 全绿的情况下
+  # 未被发现。release 才拦 = 问题晚了一个部门。
+  #
+  # 为何分片而不是一个大 job：本机串行跑全量约 20 分钟，其中
+  # `internal/controlplane/router` 独占 ~880s（893 处 setupTestDB × 每次 AutoMigrate
+  # 115 个模型）。不拆的话单 job 要跑满并容易撑爆 timeout。拆成
+  # 「router 一个 job + core 四片」后**全部并行**，总墙钟 ≈ max(router, 单片 core)。
+  #
+  # 口径与本地完全一致（不另立一份）：
+  #   本地复现单片：bash scripts/go-test.sh shard 0 4
+  #   本地复现全量：bash scripts/go-test.sh
+  go-test-router:
+    runs-on: ubuntu-24.04
+    # go-test.sh 的 ROUTER_TIMEOUT 默认 25m；本机实测 880s，留余量给慢机。
+    timeout-minutes: 30
+    steps:
+      - name: Checkout（不需子模块，Go 单元测试）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: go test（router，单独一组）
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 必须用 bash 而不是 sh：脚本用 `set -uo pipefail`，而 Ubuntu runner 的
+          # /bin/sh 是 dash，**不支持 pipefail** ⇒ 报 `set: Illegal option -o pipefail`
+          # 并直接 exit 2（不是测试失败，是脚本没跑起来）。
+          # 本地常用发行版的 sh 软链到 bash，所以这个坑在本地发现不了。
+          bash scripts/go-test.sh router
+
+  go-test-shard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      # 一片红不影响其他片继续跑完：一次看到全部失败面，而不是修一个 rebuild 一次。
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Checkout（不需子模块，Go 单元测试）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: go test（core shard ${{ matrix.shard }}/4）
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 同上：必须 bash（Ubuntu 的 sh 是 dash，不支持 pipefail）。
+          bash scripts/go-test.sh shard ${{ matrix.shard }} 4
+
+  # Windows 单元测试门禁（2026-11-16 补）。
+  #
+  # 【为何必须有】CP 与 Worker 都发布 windows 产物（见 release.yml 的 build 矩阵），
+  # 但在此之前**没有任何一个 job 在 Windows 上跑过 go test**：release.yml 里那三个
+  # windows-latest 只对二进制跑 `--version` 冒烟。代价是「在 Linux 上恰好正确、在
+  # Windows 上失效」的判据可以无限期存在——实测就养出了一条真缺陷：
+  # path_overrides 的绝对路径校验用 filepath.IsAbs，而 path/filepath 的语义
+  # **编译期按 GOOS 绑定**，Windows 版对上 /etc/shadow 返回 false，于是 CP 的
+  # 信任边界被绕过（该值下发后在节点上被照读）。Linux 全量测试对此完全无感。
+  #
+  # 【为何矩阵而不是一个 job】与 Linux 同理：router 在 Windows 真机实测单包
+  # 480–520s，与其它重包并行会撞 go test 默认 10m 包级超时（超时会把真正的
+  # 用例失败一起掩盖）。故与 Linux 同一分片口径。
+  #
+  # 【为何复用同一个脚本】分片口径（包名 cksum 取模）必须与 Linux 完全一致，
+  # 否则同一个包在两平台落在不同片上，「对比历史红/绿」这件事就没了意义。
+  # 脚本注释开头即言明它是「真机/Windows 可用的全量门禁运行方式」。
+  # windows-latest 自带 Git Bash（bash 4.4+，含 mapfile / cksum / awk），
+  # `shell: bash` 解析到它，无需额外安装。
+  go-test-windows:
+    runs-on: windows-latest
+    # 单片 core 在 Windows 上的实测耗时高于 Linux（文件系统与进程创建更慢），
+    # 给足余量；超时会把用例失败伪装成包级超时。
+    timeout-minutes: 30
+    strategy:
+      # 与 Linux 同：一片红不阻止其余片跑完，一次看到全部失败面。
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Checkout（不需子模块）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      # Windows 默认启用 cgo，而 windows-latest 若没有 C 工具链会让任何
+      # 误引入 cgo 的依赖当场编译失败。本仓的 sqlite 走纯 Go 实现
+      # （glebarez/sqlite → modernc.org/sqlite），显式关掉 cgo 既消除该不确定性，
+      # 也让 Windows 门禁与「发布产物必须 CGO_ENABLED=0」口径一致（Makefile 即此口径）。
+      # 若将来真有人加进 cgo 依赖，这里会立刻报错，而不是等到发布才发现。
+      - name: go test（Windows · core shard ${{ matrix.shard }}/4）
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          bash scripts/go-test.sh shard ${{ matrix.shard }} 4
+
+  # router 在 Windows 上是独立 job：时限与分片阈值都不同（单包 480–520s）；
+  # 与 Linux 的 go-test-router 对称。
+  go-test-windows-router:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout（不需子模块）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: go test（Windows · router）
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          # Windows 真机实测 480–520s；runner 常更慢，放宽到 30m 避免包级超时
+          # 把真实用例失败伪装成超时（Linux 侧默认 25m）。
+          ROUTER_TIMEOUT: 30m
+        run: |
+          set -euo pipefail
+          bash scripts/go-test.sh router
+
   agent-gate:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -270,3 +490,56 @@ jobs:
 
       - name: 校验发布工作流契约（触发条件 / runner / 版本来源）
         run: node --test scripts/release-metadata.test.mjs
+
+      # cp-lifecycle.sh 的契约测试（2026-10-20 接入）：该脚本的 awk 转义曾把 comm
+      # 字段解析错（2026-10-12 生产实测：CP 拒绝 stop/start），而行为测试发现不了这类
+      # 缺陷——所以测试直接检查源码形态。但它此前**没有任何自动执行路径**（不在任何
+      # workflow、也不在 Taskfile 里），等于门禁对它零保护。放在本 job 是因为语义相近
+      # （都是「脚本/工作流的形态契约」）且已有 shell 环境。
+      - name: 校验 cp-lifecycle 脚本契约（comm 字段解析）
+        run: bash scripts/cp-lifecycle.test.sh
+      # 对外 API 契约：声明的路径必须在 Gin 里真实存在，且对外面的每条路由都已声明。
+      #
+      # 【为何必须在这里】早前 `scripts/check-openapi.sh` 只告警、恒退出 0，
+      # 且没有任何 workflow 调它——`docs/API.md` 里写的“路由不一致会导致 CI 失败”是一句空话。
+      # 后果是四类断裂都能全绿合入：文档写了没实现（node_repair）、实现没文档（config-deliveries）、
+      # 对外声明错鉴权（把 JWTAuth 路径写成 AgentToken）、契约与实现相反（business 的 requestId）。
+      - name: 校验对外 API 契约（docs/openapi）
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          bash scripts/check-openapi.sh
+
+      # 代码/文件名/注释里不得出现 FR 或 ADR 编号（.claude/rules/no-ref-in-code.md）。
+      #
+      # 用 --stock 全量比对，而不是只看本次 diff：编号会随重构/搬包被复制到新位置，
+      # 只看 diff 会让存量在每轮大重构里悄悄回潮（实测从「0 命中」回潮到 2000+ 处）。
+      - name: 代码内 FR/ADR 编号检查（--stock）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh .claude/scripts/check-no-ref-in-code.sh --stock
+
+      # 文档里不得出现 git commit hash（.claude/rules/no-hash-in-docs.md）。
+      #
+      # 用 --all 全量比对而不是只看 diff：hash 常整段搬动（spec 重组、PRD 压缩），
+      # 只看 diff 会让存量随搬动重新流入。仓库用 squash merge，分支 hash 合并后
+      # 不会被保留，写进文档就是注定失效的死引用（可读性换取零收益）。
+      - name: 文档内 git hash 检查（--all）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh .claude/scripts/check-no-hash-in-docs.sh --all
+
+      # Go 源码必须过 gofmt（.claude/rules/code-format.md）。
+      #
+      # 立此门前全仓有 34 个不合规文件，而 CI 与 golangci-lint 都没查格式
+      # （.golangci.yml 未启用 gofmt/gofumpt）—— 这批不一致可以无限期存在。
+      # 格式噪音还会淹没真实 diff：下一个改动者用 IDE 自动格式化就会带出一批
+      # 与本次无关的空白改动。
+      - name: Go 源码格式检查（gofmt）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh .claude/scripts/check-gofmt.sh

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- FR-459 巡检/自愈/熔断单测辅助 ---
+// 巡检/自愈/熔断单测辅助 ---
 
 // addInstance 直接登记一个实例（绕过 Create 的长签名），供巡检测试构造运行时态。
 func addInstance(m *Manager, uuid string, state InstanceState, autoRestart bool, probePort, serverPort int) {
@@ -59,6 +59,57 @@ func hasAudit(audits []scanAudit, action string) bool {
 		}
 	}
 	return false
+}
+
+// TestHealthScan_AdoptedSkipsProbePort 就地收养（托管模式）实例不得用 probePort 做响应探测。
+//
+// 守的是真机踩到的那条：托管模式探针承诺**零监听**，`probe_port` 只是照 config.yml 写进去的
+// 数字，那个端口实际一个都不监听。若仍拿它做 HTTP 探测，每台托管实例都会被刷成
+// 「假死：进程在但 http 响应探测连续失败 N 次」。
+// 真机现象：bc-proxy（BungeeCord 端口在 config.yml，导入探测不到 → serverPort=0）
+// 顶着 RUNNING 挂着假死原因。
+//
+// 修正后：adopted 实例只用 serverPort；连 serverPort 也没有时**不探**（port<=0 →
+// 上层「仅存活即健康」兜底），绝不去敲一个根本不存在的 probePort。
+func TestHealthScan_AdoptedSkipsProbePort(t *testing.T) {
+	alive, responsive := true, false // 响应恒失败：只有「不去探」才可能判健康
+	s, m, audits, _ := newHealthTestScanner(t, HealthActionWarn, 3, &alive, &responsive)
+	const uuid = "u-adopted-noport"
+	// probePort 有值（29945），serverPort 为 0：旧逻辑会走 HTTP 探测并恒失败。
+	addInstance(m, uuid, StateRunning, true, 29945, 0)
+	m.mu.Lock()
+	m.instances[uuid].AdoptedPID = 9601
+	m.mu.Unlock()
+
+	for i := 0; i < 5; i++ {
+		s.ScanOnce()
+	}
+
+	fault, reason := m.healthFault(uuid)
+	assert.NotEqual(t, HealthFaultDead, fault,
+		"收养实例不得因探一个不存在的 probePort 被判假死（reason=%q）", reason)
+	assert.False(t, hasAudit(*audits, "health.dead_detected"), "不探就无从告假死")
+}
+
+// TestHealthScan_AdoptedUsesServerPort adopted 实例仍保留 serverPort 的 TCP 探测：
+// serverPort 在时，响应失败仍应如实判假死（不能因为「是收养实例」就把响应维全关了）。
+func TestHealthScan_AdoptedUsesServerPort(t *testing.T) {
+	alive, responsive := true, false
+	s, m, audits, _ := newHealthTestScanner(t, HealthActionWarn, 3, &alive, &responsive)
+	const uuid = "u-adopted-withport"
+	addInstance(m, uuid, StateRunning, true, 29945, 30034)
+	m.mu.Lock()
+	m.instances[uuid].AdoptedPID = 9602
+	m.mu.Unlock()
+
+	for i := 0; i < 4; i++ {
+		s.ScanOnce()
+	}
+
+	fault, reason := m.healthFault(uuid)
+	assert.Equal(t, HealthFaultDead, fault, "serverPort 在时响应失败仍须如实判假死")
+	assert.Contains(t, reason, "tcp", "应走 TCP（serverPort），而不是已零监听的 probePort")
+	assert.True(t, hasAudit(*audits, "health.dead_detected"))
 }
 
 // 验收 1：连续 N 次判假死 → 标原因（warn 档仅告警 + 落审计）。
@@ -205,7 +256,7 @@ func TestHealthScan_CircuitBreakerNotAutoReleasedOnWindowExpiry(t *testing.T) {
 }
 
 // 验收 5（规格对齐）：熔断只经**显式人工解除**入口恢复（ReleaseCircuitBreaker），
-// 且任意配置编辑（SetLaunchConfig）都不得静默清熔断（FR-459 复审项 6）。
+// 且任意配置编辑（SetLaunchConfig）都不得静默清熔断（复审项 6）。
 func TestHealthScan_CircuitBreakerManualRelease(t *testing.T) {
 	alive, responsive := true, true
 	s, m, audits, _ := newHealthTestScanner(t, HealthActionWarn, 3, &alive, &responsive)
@@ -349,7 +400,7 @@ func TestHealthScan_LivenessFalseIsCrashNotDead(t *testing.T) {
 	assert.Empty(t, *restarts)
 }
 
-// RestartIfRunning 仅对 RUNNING 动作（避免把人工已停止/过渡态的实例误重启，FR-459 复审项 4）。
+// RestartIfRunning 仅对 RUNNING 动作（避免把人工已停止/过渡态的实例误重启复审项 4）。
 func TestRestartIfRunning_RefusesStopped(t *testing.T) {
 	m := NewManager(t.TempDir())
 	addInstance(m, "u-stop", StateStopped, true, 0, 0)
@@ -370,7 +421,7 @@ func TestRestartIfRunning_RefusesTransitionalStates(t *testing.T) {
 	}
 }
 
-// --- FR-459 复审 blocker：daemon 崩溃熔断必须对所有在册实例生效 ---
+// 复审 blocker：daemon 崩溃熔断必须对所有在册实例生效 ---
 
 // daemon 下 Java 崩溃时 wrapper 存活、只上抛退出事件，Worker 记账**恒为 RUNNING**；
 // 崩溃熔断的判定必须对所有在册实例（含 RUNNING）评估，否则判定永不执行 = 熔断完全不成立。
@@ -421,7 +472,7 @@ func TestHealthScan_CircuitBreakerBlocksAutoRestartGuard(t *testing.T) {
 	assert.False(t, m.autoRestartAllowed("u-guard"), "熔断期间 direct/docker 自动重启守卫必须拦住")
 }
 
-// --- FR-459 复审 major：启动宽限期 ---
+// 复审 major：启动宽限期 ---
 
 // 慢启动 MC（Start 返回 RUNNING 后仍在加载世界）连续多拍探针失败，不得被误判假死/重启。
 func TestHealthScan_StartupWarmupSuppressesDeadDetection(t *testing.T) {
@@ -479,7 +530,7 @@ func TestHealthScan_WarmupEpochResetsOnCrash(t *testing.T) {
 	assert.Empty(t, *restarts, "崩溃后的启动纪元应重新获得宽限，不得误判假死")
 }
 
-// --- FR-459 复审 minor 7：假死自愈重启风暴护栏 ---
+// 复审 minor 7：假死自愈重启风暴护栏 ---
 
 func TestHealthScan_SelfHealRestartCap(t *testing.T) {
 	alive, responsive := true, false
@@ -525,7 +576,7 @@ func TestHealthScan_SelfHealQuotaResetsOnRecovery(t *testing.T) {
 	assert.Len(t, *restarts, 2, "恢复后应重新获得自愈配额")
 }
 
-// --- FR-459 复审 minor 10：实例移除回收健康记账 ---
+// 复审 minor 10：实例移除回收健康记账 ---
 
 func TestManager_RemoveDropsHealthAccounting(t *testing.T) {
 	m := NewManager(t.TempDir())
@@ -550,9 +601,9 @@ func TestManager_RemoveDropsHealthAccounting(t *testing.T) {
 	assert.Equal(t, HealthFaultNone, fault)
 }
 
-// --- FR-459 终验 Major #2 / Low #3/#4/#6 回归 ---
+// 终验 Major #2 / Low #3/#4/#6 回归 ---
 
-// FR-459 终验 Major：人工解除熔断必须向仍在托管的 daemon wrapper 下发对称的「恢复自动重启」帧，
+// 终验 Major：人工解除熔断必须向仍在托管的 daemon wrapper 下发对称的「恢复自动重启」帧，
 // 否则 Java 下次崩溃仍被 wrapper 的粘性开关拒绝重启，而记账/CP 却以为已解除。
 func TestHealthScan_ReleaseCircuitBreakerRearmsDaemonWrapper(t *testing.T) {
 	alive, responsive := true, true
@@ -579,7 +630,7 @@ func TestHealthScan_ReleaseCircuitBreakerRearmsDaemonWrapper(t *testing.T) {
 	assert.Equal(t, 0, len(mustListBroken(m)), "解除后熔断记账应清空")
 }
 
-// FR-459 终验 Low #4：熔断持续期间每拍幂等补发禁用帧，兜底首帧丢失导致的哑火。
+// 终验 Low #4：熔断持续期间每拍幂等补发禁用帧，兜底首帧丢失导致的哑火。
 func TestHealthScan_CircuitBrokenRedisarmsEachScan(t *testing.T) {
 	alive, responsive := true, true
 	s, m, _, _ := newHealthTestScanner(t, HealthActionWarn, 3, &alive, &responsive)
@@ -603,7 +654,7 @@ func TestHealthScan_CircuitBrokenRedisarmsEachScan(t *testing.T) {
 	assert.Equal(t, 3, fake.disarmCount, "熔断持续期间每拍应幂等补发禁用帧")
 }
 
-// FR-459 终验 Low #6：巡检开关由开→关时清一次健康记账，避免 CP 残留陈旧「假死」原因。
+// 终验 Low #6：巡检开关由开→关时清一次健康记账，避免 CP 残留陈旧「假死」原因。
 func TestHealthScanner_ToggleOffClearsHealthRecords(t *testing.T) {
 	alive, responsive := true, false
 	s, m, _, _ := newHealthTestScanner(t, HealthActionWarn, 2, &alive, &responsive)
@@ -634,7 +685,7 @@ func TestHealthScanner_ToggleOffClearsHealthRecords(t *testing.T) {
 	assert.Equal(t, HealthFaultDead, fault, "重新开启后应恢复巡检记账")
 }
 
-// FR-459 终验 Low #3：熔断态持久化——break 落盘，人工解除清盘，Worker 重启后可恢复。
+// 终验 Low #3：熔断态持久化——break 落盘，人工解除清盘，Worker 重启后可恢复。
 func TestManager_CircuitBreakerPersistenceRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(dir)
@@ -669,7 +720,7 @@ func mustListBroken(m *Manager) map[string]string {
 	return out
 }
 
-// --- FR-459 终验（L2 竞态）：scan 补发 disable 与人工解除 enable 的交错 ---
+// 终验（L2 竞态）：scan 补发 disable 与人工解除 enable 的交错 ---
 
 // racingStrategy 是线程安全的 IProcessCommand 替身，模拟 daemon wrapper 的**粘性** autoRestartOff：
 //   - DisableAutoRestart → off=true（记录 "disable"）；
@@ -843,7 +894,7 @@ func TestHealthScan_ReleaseWhenNotBroken_StoppedWrapperUntouched(t *testing.T) {
 // TestHealthScan_ScanReleaseConcurrent_NoBadTerminalState 以受限并发循环压测两把锁的交错，
 // 供 -race 暴露数据竞争，并断言「broken 与 wrapper 禁用态」在反复 scan/release 后一致收敛。
 //
-// FR-459 终验 L2 回归修复：原实现每轮只灌崩溃计数后就并发 scan/release，但 ReleaseCircuitBreaker
+// 终验 L2 回归修复：原实现每轮只灌崩溃计数后就并发 scan/release，但 ReleaseCircuitBreaker
 // 会清空崩溃窗口（health_scan.go delete(h.windows)），并发下 scan 常读不到 crashRestartCount>=阈值
 // → 熔断从未触发、审计恒 0（用例空转，末尾非空转断言恒失败）。现改为每轮：
 //  1. **先确定性熔断**（emitCrash×阈值 + ScanOnce），保证熔断/审计路径确实被执行；
@@ -934,4 +985,60 @@ func TestHealthScan_ScanReleaseConcurrent_NoBadTerminalState(t *testing.T) {
 	assert.False(t, fake.isOff(),
 		"并发 scan/release 后不得残留「broken==false ∧ wrapper 禁用」的终态")
 	assert.Greater(t, auditTotal(), auditBefore, "并发交错轮次应持续触发审计下发（用例非空转）")
+}
+
+// 回归（CP-5，2026-10-12 终审修复）：熔断期间 CP 的**重推**不得把 `Instance.AutoRestart` 重新打开。
+//
+// 现场形态：隧道重连（onOpen / Register / 心跳兜底）都会触发 ResyncNode → SetLaunchConfig，
+// 而 CP 下发的 autoRestart 恒为 true（CP 不知道 Worker 侧的熔断保护态）。旧实现无条件写回
+// `inst.AutoRestart = autoRestart`，把 breakCircuit 刚设的禁用重新打开。
+//
+// 为什么这条断言必须落在 `inst.AutoRestart` 本身：direct/docker 策略在**构造时**把
+// `inst.AutoRestart` 快照进 CommandSpec（manager.go 惰性构造块），停止/崩溃态下
+// SetLaunchConfig 会丢弃 strategy ⇒ 下次启动按新快照重建 ⇒ 被写回的 true 直接放行自动重启。
+// 既有的 TestHealthScan_CircuitBreakerManualRelease 只断言 autoRestartAllowed/isCircuitBroken，
+// 两者都只看 healthState.broken、**不看** AutoRestart ⇒ 抓不到本缺陷（实测：改回旧行为它仍绿）。
+//
+// 转红方式（实测）：删除 SetLaunchConfig 顶部「熔断期间强制 autoRestart=false」的判定
+// ⇒ 本用例断言的 inst.AutoRestart 变回 true，立即红。
+func TestManager_SetLaunchConfigMustNotRearmAutoRestartWhileCircuitBroken(t *testing.T) {
+	alive, responsive := true, true
+	_, m, _, _ := newHealthTestScanner(t, HealthActionWarn, 3, &alive, &responsive)
+	addInstance(m, "u-resync", StateCrashed, true, 0, 25566)
+
+	// 制造熔断（崩溃窗口超限）。
+	for i := 0; i < 5; i++ {
+		m.emitCrash("u-resync", CrashInfo{ExitCode: 1})
+	}
+	require.True(t, m.breakCircuit("u-resync", "持续崩溃已熔断：测试原因", false), "应触发熔断")
+	inst, ok := m.GetInstance("u-resync")
+	require.True(t, ok)
+	require.False(t, inst.AutoRestart, "前置：熔断必须禁用自动重启")
+
+	// CP 重推（隧道重连）：入参 autoRestart=true，模拟 CP 不知熔断态。
+	m.SetLaunchConfig("u-resync", "java -jar server.jar", "", "", nil, true)
+
+	inst, ok = m.GetInstance("u-resync")
+	require.True(t, ok)
+	require.False(t, inst.AutoRestart,
+		"熔断期间 CP 重推不得重新打开 AutoRestart（否则崩溃循环实例在熔断后继续自愈重启）")
+	require.False(t, m.autoRestartAllowed("u-resync"), "熔断保护态必须仍然有效")
+
+	// 对照组：显式人工解除熔断后，CP 重推必须能恢复正常配置（不得把修复写成永久禁用）。
+	_, released := m.ReleaseCircuitBreaker("u-resync")
+	require.True(t, released)
+	m.SetLaunchConfig("u-resync", "java -jar server.jar", "", "", nil, true)
+	inst, ok = m.GetInstance("u-resync")
+	require.True(t, ok)
+	require.True(t, inst.AutoRestart,
+		"解除熔断后 CP 重推必须能恢复自动重启（修复不得造成永久禁用）")
+
+	// 对照组 2：未熔断实例的重推必须原样生效（含 CP 主动关闭的场景）。
+	addInstance(m, "u-fresh", StateStopped, false, 0, 25567)
+	m.SetLaunchConfig("u-fresh", "java -jar server.jar", "", "", nil, true)
+	fresh, _ := m.GetInstance("u-fresh")
+	require.True(t, fresh.AutoRestart, "未熔断实例的重推必须原样生效")
+	m.SetLaunchConfig("u-fresh", "java -jar server.jar", "", "", nil, false)
+	fresh, _ = m.GetInstance("u-fresh")
+	require.False(t, fresh.AutoRestart, "CP 主动关闭自动重启必须生效")
 }

@@ -8,8 +8,8 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import InstanceConsolePage from './InstanceConsolePage'
 
-/**
- * 无探针可用性语义（FR-343 + FR-446/447）：探针不可用时 TPS/在线数在概览 KPI 卡与顶栏指标条
+/** 
+ * 无探针可用性语义（447）：探针不可用时 TPS/在线数在概览 KPI 卡与顶栏指标条
  * 显式渲染「不可用」，**不再**显示 0 / -1 / 「需探针」伪值；顶栏折叠为一枚 ServerProbe 未连接芯片。
  * CPU/RSS/运行时长与探针无关，仍展示真实值。
  */
@@ -21,7 +21,7 @@ function kpiValue(label: string): HTMLElement {
   return within(container).getAllByRole('paragraph')[1] as HTMLElement
 }
 
-describe('InstanceConsolePage 无探针可用性契约（FR-343 / FR-446/447）', () => {
+describe('InstanceConsolePage 无探针可用性契约（447）', () => {
   beforeEach(() => {
     loginMockUser()
   })
@@ -62,7 +62,7 @@ describe('InstanceConsolePage 无探针可用性契约（FR-343 / FR-446/447）'
 
     renderWithProviders(<InstanceConsolePage instanceId={1} />, { route: '/instances/1' })
 
-    // CPU 现在顶栏指标条与概览 KPI 卡各一份（FR-412）；RSS/运行时长与探针无关，仍显示真实值。
+    // CPU 现在顶栏指标条与概览 KPI 卡各一份；RSS/运行时长与探针无关，仍显示真实值。
     expect(await screen.findAllByText('37%')).toHaveLength(2)
     expect(screen.getByText('1536 MB')).toBeInTheDocument()
     expect(screen.getByText('RSS')).toBeInTheDocument()
@@ -83,7 +83,9 @@ describe('InstanceConsolePage 无探针可用性契约（FR-343 / FR-446/447）'
     // MSPT（方案 B）：探针缺失时不渲染任何分段/KPI 单元格。
     expect(screen.queryAllByText('MSPT').filter((el) => el.tagName === 'P' || el.tagName === 'SPAN')).toHaveLength(0)
 
-    const chart = screen.getByRole('heading', { name: 'TPS / MSPT' }).closest('section') as HTMLElement
+    // 该卡片容器已由手写 `<section>` 换成共享 Card（渲染为 div + data-slot="card"），
+    // 故定位方式随之改为按 data-slot 取整块卡片，断言内容不变。
+    const chart = screen.getByRole('heading', { name: 'TPS / MSPT' }).closest('[data-slot="card"]') as HTMLElement
     expect(within(chart).getByText('探针未连入，部分在线玩家与世界数据为预览值')).toBeInTheDocument()
     expect(chart.querySelector('.grid-cols-24')).not.toBeInTheDocument()
     expect(screen.queryByText('TPS 低于 18，建议检查插件或实体数量')).not.toBeInTheDocument()

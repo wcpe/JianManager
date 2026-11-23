@@ -12,23 +12,23 @@ import java.util.Map;
  * 楔子配置（契约 §6.2）：楔子同目录 {@code jm-updater.json}
  * = {@code {channel, key, endpoint, timeoutSec}}。
  *
- * <p>FR-258 起：去掉 {@code coreJar}/{@code coreVersion}/{@code signPublicKey}/{@code signKeyId}；
+ * <p>去掉 {@code coreJar}/{@code coreVersion}/{@code signPublicKey}/{@code signKeyId}；
  * 本轮修复起继续移除 {@code coreEndpoint}，只允许 {@code endpoint} 配 API 根路径（如 {@code /api/v1}）。
  * 楔子据 {@code endpoint + channel} 自动拼接 updater-core 端点。{@code timeoutSec} 默认 120（契约 §6.3）。
  */
 final class WedgeConfig {
 
     static final int DEFAULT_TIMEOUT_SEC = 120;
-    /** boot-confirm 看门狗默认等待秒数（FR-091）：游戏存活此长即判首启成功。 */
+    /** boot-confirm 看门狗默认等待秒数：游戏存活此长即判首启成功。 */
     static final int DEFAULT_BOOT_CONFIRM_SEC = 30;
 
     final String channel;
     final String key;
     final String endpoint;
     final int timeoutSec;
-    /** boot-confirm 看门狗等待秒数（FR-091）；默认 {@link #DEFAULT_BOOT_CONFIRM_SEC}。 */
+    /** boot-confirm 看门狗等待秒数；默认 {@link #DEFAULT_BOOT_CONFIRM_SEC}。 */
     final int bootConfirmSec;
-    /** 遥测上报开关（FR-094 隐私 opt-out）；默认 true，置 false 关闭上报。 */
+    /** 遥测上报开关（隐私 opt-out）；默认 true，置 false 关闭上报。 */
     final boolean telemetry;
 
     WedgeConfig(String channel, String key, String endpoint,

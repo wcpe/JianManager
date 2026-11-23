@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 实例整机快照与一键回滚（FR-466）。
+// 实例整机快照与一键回滚。
 //
 // 现状痛点：平台已有四套各自独立的「回滚」（备份链 / 文件版本 / 配置版本 / 自更新二进制），
 // 但没有「整机时间点」概念，运维要人工组合「停服 → 找备份 → 恢复 → 判断是否重建二进制」。
@@ -58,10 +58,10 @@ func snapshotStateLabel(s model.SnapshotState) string {
 	return string(s)
 }
 
-// SnapshotService 实例整机快照服务（FR-466）。
+// SnapshotService 实例整机快照服务。
 type SnapshotService struct {
 	db *gorm.DB
-	// backups 归档/回放实现（复用 FR-013/056/057 的备份体系，不重建一套）。
+	// backups 归档/回放实现（复用056/057 的备份体系，不重建一套）。
 	backups *BackupService
 	// instances 停服编排（回滚前必须停服；复用既有优雅停止路径）。
 	instances *InstanceService
@@ -82,6 +82,17 @@ type SnapshotService struct {
 	// 也不会把本进程正在归档的快照误判为孤儿。
 	inFlightMu sync.Mutex
 	inFlight   map[uint]struct{}
+
+	// forceSyncCreateForTest 让 Create 即使没传 Synchronous 也同步执行。
+	//
+	// 【为什么需要】测试里的 TempDir / DB 连接会在用例结束时被 t.Cleanup 关闭，
+	// 而默认路径是「后台 goroutine 打包工作目录」。两者一叠加就会出现
+	// “TempDir cleanup: directory not empty” 与 “sql: database is closed”——
+	// 不是被测逻辑错，而是测试生命周期与异步任务赛跑。
+	//
+	// 生产路径永不置位（只经 SetForceSyncCreateForTest 由测试装配设置），
+	// 所以 HTTP 仍是「立即返回 202 + 任务中心可见进度」的语义。
+	forceSyncCreateForTest bool
 }
 
 // NewSnapshotService 创建快照服务。
@@ -146,7 +157,7 @@ type SnapshotCreateOptions struct {
 	Stage func(int, string)
 }
 
-// Create 创建实例整机快照（FR-466 §2.2）。
+// Create 创建实例整机快照（§2.2）。
 //
 // 同步段：校验实例存在 → 登记 InstanceSnapshot → 登记/启动任务；
 // 后台段：登记全量 Backup → 打包工作目录 → 回填 RootBackupID → 采集二进制指纹。
@@ -207,7 +218,7 @@ func (s *SnapshotService) Create(instanceID uint, name string, opts SnapshotCrea
 		return "", nil
 	}
 
-	if opts.Synchronous {
+	if opts.Synchronous || s.forceSyncCreateForTest {
 		s.markSnapshotInFlight(snap.ID)
 		defer s.clearSnapshotInFlight(snap.ID)
 		if err := s.runCreate(inst, snap, opts.Stage); err != nil {
@@ -367,9 +378,9 @@ func (s *SnapshotService) sweepState(state model.SnapshotState, orphanReason, qu
 	return marked
 }
 
-// binaryFingerprint 从启动命令首 token 解析启动二进制名与摘要（FR-466 §2.2 步骤 3，含 FR-468 协同）。
+// binaryFingerprint 从启动命令首 token 解析启动二进制名与摘要（§2.2 步骤 3，含协同）。
 //
-// 摘要来源：FR-468 的版本绑定（若已登记）优先——那是经制品库校验过的权威摘要；
+// 摘要来源：的版本绑定（若已登记）优先——那是经制品库校验过的权威摘要；
 // 无绑定（url/node_file 来源或非 binary 实例）时只给文件名，摘要留空（不猜测）。
 func (s *SnapshotService) binaryFingerprint(inst *model.Instance) (string, string) {
 	cmd := strings.TrimSpace(inst.StartCommand)
@@ -479,16 +490,16 @@ type RollbackResult struct {
 	FinalStatus string `json:"finalStatus"`
 }
 
-// Rollback 一键回滚到指定快照（FR-466 §2.3 核心闭环）。
+// Rollback 一键回滚到指定快照（§2.3 核心闭环）。
 //
 // 顺序**强制**为：
 //  1. 校验目标快照可回滚 + 底链存在（B-1：底链缺失显式降级，不带病入队）+ 实例存在；
 //  2. 控制面互斥：同实例在途 snapshot_*/binary_upgrade 任务则拒绝（M-4）；
 //  3. 【强制】创建 pre_rollback 快照（失败即中止，不留无退路的操作）；
-//  4. 运行态处置：RUNNING/STARTING/STOPPING → 先优雅停止（非拒绝；与 FR-013 Restore 不同，
+//  4. 运行态处置：RUNNING/STARTING/STOPPING → 先优雅停止（非拒绝；与Restore 不同，
 //     此处由快照负责停服编排）；
 //  5. 回放目标快照的 RootBackupID（委托 BackupService.ExecuteRestore，复用 RestoreBackup RPC）；
-//  6. 二进制不一致 → 提示「数据已回滚，二进制未动」（二进制回滚走 FR-468，不自动执行）；
+//  6. 二进制不一致 → 提示「数据已回滚，二进制未动」（二进制回滚走不自动执行）；
 //  7. 恢复实例状态：恒回 STOPPED（不自动拉起）；终态站内信 + 审计 instance.snapshot_rollback。
 //
 // 并发与审计（M-4/M-6）：任务执行体内部再取一次实例互斥锁，且**回放前重验实例状态**——
@@ -621,7 +632,7 @@ func (s *SnapshotService) Rollback(ctx context.Context, snapshotID, operatorID u
 
 // stopForRollback 运行态处置：需要时先优雅停服；已停止则原样返回。
 //
-// 与 FR-013 `BackupService.Restore` 的「运行态直接拒绝」不同：快照回滚由本服务承担停服编排，
+// 与`BackupService.Restore` 的「运行态直接拒绝」不同：快照回滚由本服务承担停服编排，
 // 因为「一键回滚」的用户预期就是「不用自己先停服再回来点」。
 func (s *SnapshotService) stopForRollback(ctx context.Context, inst *model.Instance) (bool, error) {
 	switch inst.Status {
@@ -848,6 +859,14 @@ func (s *SnapshotService) Delete(snapshotID uint) error {
 	if err != nil {
 		return err
 	}
+	// 非终态快照不得删除：pending/running 的归档协程仍在写底链备份，
+	// 删掉记录后协程还会继续写归档并回写已不存在的行，结果就是
+	// 「用户看不到、空间却被占住」的孤儿归档。
+	// 除了看 DB 里的 state，还要看本进程的 inFlight：状态回写有延迟，
+	// 刚发起的创建可能还没把 state 改成 running。
+	if !snap.Rollable() || s.snapshotInFlight(snapshotID) {
+		return fmt.Errorf("%w：快照尚未完成（%s）", ErrSnapshotOperationInFlight, snap.State)
+	}
 	if snap.RootBackupID != 0 {
 		switch shared, serr := s.backlinkSharedByOtherSnapshot(snap.RootBackupID, snapshotID); {
 		case serr != nil:
@@ -859,7 +878,7 @@ func (s *SnapshotService) Delete(snapshotID uint) error {
 				"snapshotId", snapshotID, "backupId", snap.RootBackupID)
 		default:
 			// 底层备份删除失败（被增量链引用等）不阻断快照记录清理。
-			if err := s.backups.Delete(snap.RootBackupID); err != nil {
+			if err := s.backups.DeleteForSnapshotCascade(snap.RootBackupID); err != nil {
 				slog.Warn("删除快照底层备份失败（继续清理快照记录）", "snapshotId", snapshotID, "error", err)
 			}
 		}
@@ -924,4 +943,19 @@ func (s *SnapshotService) ensureSnapshotCapacity(inst *model.Instance) error {
 		}
 	}
 	return nil
+}
+
+// SetForceSyncCreateForTest 让快照创建同步执行（仅测试装配使用）。
+//
+// 【为什么必须同步】默认路径把打包丢给后台 goroutine，而测试的 t.TempDir 与 DB 连接
+// 在用例结束时就被 t.Cleanup 拆掉。两者重叠会出现：
+//   - `TempDir cleanup: directory not empty`（后台还在写数据根）
+//   - `sql: database is closed`（后台还在回写快照状态）
+//
+// 这类失败与业务逻辑无关，纯粹是测试生命周期与异步任务赛跑。
+// 同步执行让 Create 返回时副作用已结束，测试清理不会撞车。
+//
+// 生产路径不调用它：HTTP 仍是「立即 202 + 任务中心看进度」。
+func (s *SnapshotService) SetForceSyncCreateForTest(enabled bool) {
+	s.forceSyncCreateForTest = enabled
 }

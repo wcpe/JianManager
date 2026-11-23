@@ -49,6 +49,12 @@ func sloEventQueryPlanLines(t *testing.T, db *gorm.DB, sql string, args ...any) 
 func TestSLOSlEventQuery_UsesFiredAtIndex(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.AlertRule{}, &model.AlertEvent{}))
 
 	var idxNames []string
@@ -90,6 +96,12 @@ func TestSLOSlEventQuery_UsesFiredAtIndex(t *testing.T) {
 func TestSLOSlEventQuery_FiredAtIndexAppliedOnLegacyDB(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关会残留整库，
+	// 重复运行或整包重跑时同名库复用，下面的手工 CREATE TABLE 撞
+	// 「table alert_events already exists」——确定性失败，不是偶发。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 
 	// 1) 模拟存量库：手工建**无 fired_at 索引**的老表结构 + 若干历史事件。
 	require.NoError(t, db.Exec(`CREATE TABLE alert_events (
@@ -155,6 +167,10 @@ func TestSLOSlEventQuery_IndexNotAbusedByFullRangeScan(t *testing.T) {
 		t.Helper()
 		db, err := gorm.Open(sqlite.Open("file:"+t.Name()+strconv.FormatBool(withIndex)+"?mode=memory&cache=shared"), &gorm.Config{})
 		require.NoError(t, err)
+		// 关闭底层连接，理由同其余用例：不关会让同名库跨轮次残留。
+		if sqlDB, derr := db.DB(); derr == nil {
+			t.Cleanup(func() { _ = sqlDB.Close() })
+		}
 		require.NoError(t, db.AutoMigrate(&model.AlertRule{}, &model.AlertEvent{}))
 		if !withIndex {
 			require.NoError(t, db.Exec("DROP INDEX idx_alert_events_fired_at").Error)

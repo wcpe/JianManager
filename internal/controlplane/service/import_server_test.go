@@ -26,6 +26,20 @@ type fakeImportWorker struct {
 	importResp   *workerpb.ImportServerDirResponse
 	created      []*workerpb.CreateInstanceRequest
 	removed      []*workerpb.RemoveInstanceRequest
+	// adoptedInPlace 记录“不重启收养”的调用（导入流程会自动收养目录里的活进程）。
+	// adoptInPlaceResp 为 nil 时回“无活进程”——多数导入用例的目录本来就是停着的，
+	// 那是正常结果（导入成 STOPPED），不是错误。
+	adoptedInPlace   []string
+	adoptInPlaceResp *workerpb.InstanceActionResponse
+}
+
+// AdoptInPlaceRuntime 不重启地收养外部进程（导入后自动调）。
+func (f *fakeImportWorker) AdoptInPlaceRuntime(_ context.Context, req *workerpb.InstanceActionRequest, _ ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
+	f.adoptedInPlace = append(f.adoptedInPlace, req.InstanceUuid)
+	if f.adoptInPlaceResp != nil {
+		return f.adoptInPlaceResp, nil
+	}
+	return &workerpb.InstanceActionResponse{Success: false, Error: "工作目录下没有可收养的活进程"}, nil
 }
 
 func (f *fakeImportWorker) InspectServerDir(_ context.Context, req *workerpb.InspectServerDirRequest, _ ...grpc.CallOption) (*workerpb.InspectServerDirResponse, error) {
@@ -74,6 +88,12 @@ func newImportEnv(t *testing.T) (*ImportServerService, *fakeImportWorker, *gorm.
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Instance{}, &model.Node{}, &model.NodeJDK{},
 		&model.GroupInstance{}, &model.ServerRegistration{}, &model.NetworkMember{},
 		&model.Backup{}, &model.InstanceSnapshot{}))
@@ -200,7 +220,7 @@ func TestImportServer_JdkRegistrationGuards(t *testing.T) {
 	assert.EqualValues(t, 1, count, "已登记不重复、非候选跳过")
 }
 
-// 端到端锁死（FR-302 关键守则）：删除就地实例时 CP 必须显式传 skip_work_dir=true；
+// 端到端锁死（关键守则）：删除就地实例时 CP 必须显式传 skip_work_dir=true；
 // 非就地实例不传。
 func TestDeleteInPlaceInstanceSendsSkipWorkDir(t *testing.T) {
 	svc, worker, db, node := newImportEnv(t)

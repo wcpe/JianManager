@@ -1,12 +1,8 @@
 package query
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"errors"
 	"fmt"
-	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,11 +11,13 @@ import (
 
 // PlanRequest 是 QueryPlanner 输入。
 type PlanRequest struct {
-	// Transient avoids registering an immutable view for an internal live cycle.
+	// Transient 使用每轮短租约，不登记可跨请求复用的实时尾流视图。
 	Transient bool
 	RequestID string
 	// TimeRange 绝对 UTC；为空表示不限制分区日。
 	TimeRange TimeRange
+	// Filter is frozen for explicit document-field exploration.
+	Filter string
 	// TargetIDs CP 计算后的授权目标（storage_namespace 或 ns/day）；空 = 本 Worker 全部 Catalog 分区。
 	TargetIDs []string
 	Budget    Budget
@@ -29,6 +27,9 @@ type PlanRequest struct {
 	RequireCold bool
 	// RequireArchive 为 true 时，若 ARCHIVE 未恢复 → partial / ARCHIVE_NOT_RESTORED。
 	RequireArchive bool
+	// AllowProjectionDrift 保留旧导出请求的线缆兼容；不再豁免原集合或租约校验。
+	// 正常追加统一读取冻结投影，任何请求都不能把最新逐源列表混入旧 view。
+	AllowProjectionDrift bool
 }
 
 // PlanResult 是 planner 输出。
@@ -46,14 +47,19 @@ type PlanResult struct {
 type Planner struct {
 	cat    CatalogSource
 	status StatusFunc
-	// mu 保护 views/viewSeq（并发 Search/Stats/Tail）。
+	// mu 保护本进程活动视图与到期回收器（并发 Search/Stats/Tail）。
 	mu sync.Mutex
-	// views 内存视图注册表（foundation；生产持久化由后续 FR 承担）。
+	// views 保存本进程固定视图；重启不复活旧 ID，物理保护由 Catalog 有界租约承担。
 	views map[string]*QueryView
-	// viewSeq 保证 ViewID 单调唯一（Windows 时钟粒度下 UnixNano 可能碰撞）。
-	viewSeq uint64
 	// now 可注入便于测试。
-	now func() time.Time
+	now         func() time.Time
+	ttl         time.Duration
+	maxViews    int
+	timers      map[string]*time.Timer
+	activeViews map[string]time.Time
+	closed      bool
+	// 注：曾尝试接一路「仍在采集的命名空间」信号来区分「真空」与「丢记录」，
+	// 2026-11-05 回退——源是否在采集与「那天有没有数据」无关（见 coverEmptyAuthorizedTargets 论证）。
 }
 
 // maxRetainedViews 内存视图注册表上限。
@@ -66,18 +72,24 @@ const maxRetainedViews = 4096
 
 // pruneViewsLocked 在插入前回收过期/超量的视图。调用方须持有 p.mu。
 func (p *Planner) pruneViewsLocked() {
-	if len(p.views) < maxRetainedViews {
-		return
-	}
 	now := p.now()
-	// 先删过期视图。
-	for id, v := range p.views {
-		if !v.ExpiresAt.IsZero() && !now.Before(v.ExpiresAt) {
-			delete(p.views, id)
+	drop := func(id string) {
+		delete(p.views, id)
+		delete(p.activeViews, id)
+		if timer := p.timers[id]; timer != nil {
+			timer.Stop()
+			delete(p.timers, id)
+		}
+		if p.cat != nil {
+			logLeaseCleanupError(p.cat.ReleaseQueryView(id))
 		}
 	}
-	// 仍超量：按创建时间淘汰最旧的，直至低于上限。
-	for len(p.views) >= maxRetainedViews {
+	for id, v := range p.views {
+		if !now.Before(v.ExpiresAt) {
+			drop(id)
+		}
+	}
+	for len(p.views) >= p.maxViews {
 		oldestID := ""
 		var oldest time.Time
 		for id, v := range p.views {
@@ -88,21 +100,13 @@ func (p *Planner) pruneViewsLocked() {
 		if oldestID == "" {
 			break
 		}
-		delete(p.views, oldestID)
+		drop(oldestID)
 	}
 }
 
 // NewPlanner 构造 Planner。status 为 nil 时使用 DefaultPartitionStatus。
 func NewPlanner(cat CatalogSource, status StatusFunc) *Planner {
-	if status == nil {
-		status = DefaultPartitionStatus
-	}
-	return &Planner{
-		cat:    cat,
-		status: status,
-		views:  make(map[string]*QueryView),
-		now:    time.Now,
-	}
+	return NewPlannerWithOptions(cat, status, Options{})
 }
 
 // GetView 返回已登记视图。
@@ -110,7 +114,7 @@ func (p *Planner) GetView(viewID string) (*QueryView, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	v, ok := p.views[viewID]
-	return v, ok
+	return cloneQueryView(v), ok
 }
 
 // Views 返回全部视图副本（测试/诊断）。
@@ -119,7 +123,7 @@ func (p *Planner) Views() map[string]QueryView {
 	defer p.mu.Unlock()
 	out := make(map[string]QueryView, len(p.views))
 	for k, v := range p.views {
-		out[k] = *v
+		out[k] = *cloneQueryView(v)
 	}
 	return out
 }
@@ -142,10 +146,21 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		},
 	}
 
-	// —— 视图校验（有 view_id 时复用固定集合；generation 不匹配 → VIEW_STALE）——
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed || p.cat == nil {
+		res.Err = newErr(ErrCodeNotReady, "query planner unavailable")
+		res.Coverage.MarkIncomplete(ReasonNoCatalogAuthority)
+		return res
+	}
+	logLeaseCleanupError(p.cat.PruneQueryLeases(p.now()))
+
+	// —— 视图校验：读取位置与逐源集合必须仍由原租约保护 ——
 	if req.ViewRef != nil && req.ViewRef.ViewID != "" {
 		p.mu.Lock()
-		view, ok := p.views[req.ViewRef.ViewID]
+		stored, ok := p.views[req.ViewRef.ViewID]
+		view := cloneQueryView(stored)
 		p.mu.Unlock()
 		if !ok {
 			res.Err = newErr(ErrCodeViewStale, fmt.Sprintf("unknown view_id %q", req.ViewRef.ViewID))
@@ -160,17 +175,19 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			return res
 		}
 		if !view.ExpiresAt.IsZero() && !p.now().Before(view.ExpiresAt) {
+			logLeaseCleanupError(p.ReleaseView(view.ViewID))
 			res.Err = newErr(ErrCodeViewStale, "view expired")
 			res.Coverage.EnumerationState = EnumStale
 			return res
 		}
-		stale := p.validateViewAgainstCatalog(view, &res.Coverage)
+		stale := p.validateViewAgainstCatalog(view, &res.Coverage, req.AllowProjectionDrift)
 		if stale != nil {
 			res.Err = stale
 			res.Coverage.EnumerationState = EnumStale
 			return res
 		}
 		res.View = view
+		res.Quality = view.Quality
 		// 分页：按 view 固定的 target 与 generation 选 range（不重新选最新集合）。
 		p.planRangesForView(req, view, &res)
 		return res
@@ -179,19 +196,54 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 	// —— 首次请求：创建固定视图 ——
 	keys := p.selectKeys(req)
 	var ranges []AuthoritativeRange
+	createdAt := p.now()
+	// 签发前先回收本地过期/超量视图，不能被 Catalog 容量闸挡在淘汰动作之前。
+	p.mu.Lock()
+	p.pruneViewsLocked()
+	p.mu.Unlock()
+	viewID, issueErr := p.cat.NewQueryViewID(createdAt)
+	if issueErr != nil {
+		res.Err = snapshotQueryError(issueErr)
+		res.Coverage.MarkIncomplete(ReasonBudgetExceeded)
+		return res
+	}
 	view := &QueryView{
-		ViewID:             p.newViewID(),
+		ViewID:             viewID,
 		OrderVersion:       SortVersion,
 		TimeRange:          req.TimeRange,
+		Filter:             req.Filter,
 		TargetIDs:          make([]string, 0, len(keys)),
 		ClosedVisibleSeq:   make(map[string]uint64, len(keys)),
 		Generations:        make(map[string]uint64, len(keys)),
 		Owners:             make(map[string]string, len(keys)),
 		DirIDs:             make(map[string]string, len(keys)),
 		ProjectionVersions: make(map[string]string, len(keys)),
+		Projections:        make(map[string]*catalog.PublishedProjection, len(keys)),
+		LeaseIDs:           make(map[string]string, len(keys)),
+		Transient:          req.Transient,
 		QueryableTargets:   make(map[string]bool, len(keys)),
 		TargetCoverage:     make(map[string]TargetCoverage, len(keys)),
-		CreatedAt:          p.now(),
+		CreatedAt:          createdAt,
+	}
+	view.ExpiresAt = view.CreatedAt.Add(p.ttl)
+	snapshots, err := p.cat.SnapshotAndLease(catalog.QuerySnapshotRequest{ViewID: view.ViewID,
+		Holder: "worker-query", Keys: keys, Now: view.CreatedAt, TTL: p.ttl})
+	if err != nil {
+		logLeaseCleanupError(p.cat.ReleaseQueryView(view.ViewID))
+		res.Err = snapshotQueryError(err)
+		if res.Err.Code == ErrCodeBudgetExceeded {
+			res.Coverage.MarkIncomplete(ReasonBudgetExceeded)
+		} else {
+			res.Coverage.MarkIncomplete(ReasonRangeUnavailable)
+		}
+		return res
+	}
+	byKey := make(map[catalog.PartitionKey]catalog.QuerySnapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		byKey[snapshot.Key] = snapshot
+		if snapshot.ExpiresAt.Before(view.ExpiresAt) {
+			view.ExpiresAt = snapshot.ExpiresAt
+		}
 	}
 
 	for _, key := range keys {
@@ -208,22 +260,57 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			continue
 		}
 
-		// Catalog 权威：唯一查询副本入口（staging/residual 已被 OwnerForQuery 排除）。
-		ref := catalog.OwnerForQuery(rec)
-		if !ref.OK {
-			// fallback：Catalog 实例方法
-			if r2, ok2 := p.cat.OwnerForQuery(key); ok2 {
-				ref = r2
+		// 权威位置只用同锁捕获并登记租约的快照；Get 仅提供诊断状态。
+		snapshot, snapOK := byKey[key]
+		if !snapOK {
+			// 未获取物理租约只能保留不可读覆盖；诊断分类不产生历史读取权。
+			view.Projections[targetID] = nil
+			diagnostic := catalog.OwnerForQuery(rec)
+			status := p.status(key, rec, diagnostic)
+			// 归档权威不能报成「没有 Catalog 权威」：那是配置/记录缺失的措辞，
+			// 而这里的真相是「权威在归档、本地未恢复」。原因不同，处置动作也不同
+			// （一个是查配置，一个是执行 rehydrate），故按 owner 分开取首个原因。
+			lead := ReasonNoCatalogAuthority
+			// 归档对象已按保留期清除（归档对象回收）时，原因**必须**是 ARCHIVE_PURGED。
+			//
+			// 与 ARCHIVE_NOT_RESTORED 分开的理由是**处置动作相反**：前者是「平台按保留期
+			// 删掉了，取不回来」，后者是「副本还在归档里，去 rehydrate」。
+			// 复用 MISSING 会让用户反复点恢复、反复得到第二条错误，最后仍要人工解释。
+			//
+			// 这里也不能返回空成功：数据确实不在了，静默的 0 行会被读成「那天没有日志」。
+			if purgedArchive(rec) {
+				lead = ReasonArchivePurged
+			} else if rec != nil && rec.Owner == catalog.OwnerArchive {
+				lead = ReasonArchiveNotRestored
 			}
-		}
-		if !ref.OK {
+			reasons := append([]string{lead}, status.NotReadyReasons...)
+			reasons = append(reasons, classifyStatus(req, rec, diagnostic, status)...)
+			for _, reason := range rec.PartialReasons {
+				reasons = appendUniqueStr(reasons, reason)
+			}
+			state := CoverageNotReady
+			// 两种「归档副本不可读」共用 CoverageArchiveMiss（proto 没有更细的枚举，
+			// 不为此扩已冻结的 wire 契约），区分度由 reason 与 error code 承担。
+			if hasStr(reasons, ReasonArchiveNotRestored) || hasStr(reasons, ReasonArchivePurged) {
+				state = CoverageArchiveMiss
+			}
 			res.Coverage.AddTarget(TargetCoverage{
 				TargetID: targetID,
-				State:    CoverageNotReady,
-				Reasons:  []string{ReasonNoCatalogAuthority},
+				State:    state,
+				Reasons:  reasons,
+				// 归档权威的位置如实带上：审计要看的是「正本在哪」，
+				// 而不是一个空白的 dir_id（那会让现场以为记录坏了）。
+				Owner: string(recOwner(rec)),
+				DirID: recOwnerDirID(rec),
 			})
 			continue
 		}
+
+		projection, prefixKnown := freezeProjection(key, snapshot.Projection)
+		ref := catalog.QueryRef{OK: true, Owner: snapshot.Owner, DirID: snapshot.DirID,
+			Generation: snapshot.Generation, Projection: projection}
+		view.LeaseIDs[targetID] = snapshot.LeaseID
+		view.Projections[targetID] = cloneProjection(projection)
 
 		// 防御：staging 目录即使被误写进 ref 也不得入选。
 		if ref.DirID != "" && rec.TargetDirID != "" && ref.DirID == rec.TargetDirID &&
@@ -240,6 +327,10 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		}
 
 		st := p.status(key, rec, ref)
+		if !prefixKnown {
+			st.Queryable = false
+			st.NotReadyReasons = appendUniqueStr(st.NotReadyReasons, ReasonProjectionIncomplete)
+		}
 		reasons := classifyStatus(req, rec, ref, st)
 		for _, reason := range rec.PartialReasons {
 			reasons = appendUniqueStr(reasons, reason)
@@ -249,19 +340,21 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		cvs := uint64(0)
 		manifest := ""
 		if ref.Projection != nil {
+			// 明确的零上界不能再借用 default 或其他来源的更大水位。
 			cvs = ClosedVisibleSeqOf(ref.Projection, targetID)
-			if cvs == 0 {
-				cvs = ClosedVisibleSeqOf(ref.Projection, "default")
-			}
 			manifest = ref.Projection.ManifestVersion
-			if !ref.Projection.CoverageComplete {
+			// 质量必须按 rank 取 worst 合并，不能无条件覆盖：keys 由 selectKeys 按
+			// key.String() 升序给出，无条件赋值会让「后处理的 target」冲掉「先处理的
+			// target」已判定的更差等级——同一份数据仅因 namespace 命名顺序不同就上报
+			// 不同等级（conflict 被 unresolved 覆盖即丢失唯一的人工修复入口）。
+			if !ref.Projection.CoverageComplete && !projectionlessScope(ref.Projection) {
 				reasons = appendUniqueStr(reasons, ReasonProjectionIncomplete)
-				res.Quality.DuplicateQuality = DupUnresolved
-				res.Quality.StatsQuality = StatsPartial
+				res.Quality.DuplicateQuality = worstDuplicateQuality(res.Quality.DuplicateQuality, DupUnresolved)
+				res.Quality.StatsQuality = worstStatsQuality(res.Quality.StatsQuality, StatsPartial)
 			}
 			if ref.Projection.ConflictCount > 0 {
-				res.Quality.DuplicateQuality = DupConflict
-				res.Quality.StatsQuality = StatsPartial
+				res.Quality.DuplicateQuality = worstDuplicateQuality(res.Quality.DuplicateQuality, DupConflict)
+				res.Quality.StatsQuality = worstStatsQuality(res.Quality.StatsQuality, StatsPartial)
 			}
 		}
 
@@ -328,7 +421,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			DirID:            ref.DirID,
 			Generation:       ref.Generation,
 			ClosedVisibleSeq: cvs,
-			Projection:       ref.Projection,
+			Projection:       cloneProjection(ref.Projection),
 		})
 	}
 
@@ -341,250 +434,71 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		target.Reasons = append([]string(nil), target.Reasons...)
 		view.TargetCoverage[target.TargetID] = target
 	}
-	if !req.Transient {
-		p.mu.Lock()
-		p.pruneViewsLocked()
-		p.views[view.ViewID] = view
-		p.mu.Unlock()
+
+	// 查询窗内无分区的**授权目标**：按「空」而非「坏」纳入覆盖（与 #60 的 CP 侧同口径；
+	// 2026-09-30 生产实证：静默源 inst:153 因此令平台 complete 恒 false）。
+	//
+	// 必须迭代 req.TargetIDs（授权目标）而不是 view.TargetIDs（2026-10-11 复审订正）：
+	// res.Coverage 与 ranges 都按**分区**构造，而 CP 发的授权目标是**命名空间**粒度
+	// （TargetInfo{ID: "inst:153"}）⇒ 窗口内没有分区的源在两边都不出现 ⇒ CP 判
+	// missing_coverage ⇒ 一个静默源把整个平台判成未就绪。而这类源**根本不进 view.TargetIDs**
+	// （selectKeys 按 dayOverlapsRange 过滤掉窗口外的分区）⇒ 迭代视图目标永远看不到它。
+	//
+	// record=true：此刻视图尚未登记（下面的 p.views[...] 还没执行）⇒ 无并发读者，可安全写回。
+	p.coverEmptyAuthorizedTargets(req, view, &res)
+	view.Quality = res.Quality
+	if err := p.registerView(view); err != nil {
+		logLeaseCleanupError(p.cat.ReleaseQueryView(view.ViewID))
+		res.Err = newErr(ErrCodeNotReady, err.Error())
+		res.Coverage.MarkIncomplete(ReasonRangeUnavailable)
+		return res
 	}
-	res.View = view
+	res.View = cloneQueryView(view)
 	return res
 }
 
-// validateViewAgainstCatalog 检查固定视图是否仍可对齐 Catalog。
-// 纯迁移（旧租约仍可读原集合）不自动失效；generation 变化 / 数据集合破坏 closed_visible_seq → VIEW_STALE。
-func (p *Planner) validateViewAgainstCatalog(view *QueryView, cov *Coverage) *QueryError {
-	for targetID, wantGen := range view.Generations {
-		key, ok := parseTargetKey(targetID)
-		if !ok {
-			continue
-		}
-		rec, ok := p.cat.Get(key)
-		if !ok {
-			cov.AddTarget(TargetCoverage{
-				TargetID:          targetID,
-				State:             CoverageStale,
-				Reasons:           []string{ReasonNoCatalogRecord},
-				ClosedVisibleSeq:  view.ClosedVisibleSeq[targetID],
-				CatalogGeneration: wantGen,
-			})
-			return newErr(ErrCodeViewStale, fmt.Sprintf("view %s target %s catalog record missing", view.ViewID, targetID))
-		}
-		ref := catalog.OwnerForQuery(rec)
-		if !ref.OK {
-			return newErr(ErrCodeViewStale, fmt.Sprintf("view %s target %s no catalog authority", view.ViewID, targetID))
-		}
-		if ref.Generation != wantGen {
-			cov.AddTarget(TargetCoverage{
-				TargetID:          targetID,
-				State:             CoverageStale,
-				Reasons:           []string{ReasonConflictGeneration},
-				ClosedVisibleSeq:  view.ClosedVisibleSeq[targetID],
-				CatalogGeneration: ref.Generation,
-				Owner:             string(ref.Owner),
-				DirID:             ref.DirID,
-			})
-			return newErr(ErrCodeViewStale,
-				fmt.Sprintf("view %s target %s generation mismatch view=%d catalog=%d",
-					view.ViewID, targetID, wantGen, ref.Generation))
-		}
-		// owner/dir 切换但 generation 未变时以 Catalog 为准仍可能 stale（不应发生）。
-		if wantDir, ok := view.DirIDs[targetID]; ok && wantDir != "" && ref.DirID != wantDir {
-			return newErr(ErrCodeViewStale,
-				fmt.Sprintf("view %s target %s dir mismatch view=%s catalog=%s",
-					view.ViewID, targetID, wantDir, ref.DirID))
-		}
-		if wantVersion, ok := view.ProjectionVersions[targetID]; ok {
-			currentVersion := ""
-			if ref.Projection != nil {
-				currentVersion = ref.Projection.ManifestVersion
-			}
-			if wantVersion != currentVersion {
-				cov.AddTarget(TargetCoverage{TargetID: targetID, State: CoverageStale, Reasons: []string{ReasonConflictGeneration}})
-				return newErr(ErrCodeViewStale, fmt.Sprintf("view %s target %s projection changed", view.ViewID, targetID))
-			}
-		}
-		// closed_visible_seq 破坏：Catalog projection 前缀小于视图固定值。
-		if ref.Projection != nil {
-			cur := ClosedVisibleSeqOf(ref.Projection, targetID)
-			want := view.ClosedVisibleSeq[targetID]
-			if cur > 0 && want > 0 && cur < want {
-				cov.AddTarget(TargetCoverage{
-					TargetID:          targetID,
-					State:             CoverageStale,
-					Reasons:           []string{ReasonProjectionIncomplete},
-					ClosedVisibleSeq:  cur,
-					CatalogGeneration: ref.Generation,
-				})
-				return newErr(ErrCodeViewStale,
-					fmt.Sprintf("view %s target %s closed_visible_seq shrunk view=%d catalog=%d",
-						view.ViewID, targetID, want, cur))
-			}
-		}
-	}
-	return nil
-}
-
-// planRangesForView 按视图固定 generation/dir 选择 range（禁止重新选最新集合）。
-func (p *Planner) planRangesForView(req PlanRequest, view *QueryView, res *PlanResult) {
-	for _, targetID := range view.TargetIDs {
-		if !view.QueryableTargets[targetID] {
-			if original, ok := view.TargetCoverage[targetID]; ok {
-				res.Coverage.AddTarget(original)
-			} else {
-				res.Coverage.AddTarget(TargetCoverage{TargetID: targetID, State: CoverageNotReady,
-					Reasons: []string{ReasonRangeUnavailable}})
-			}
-			continue
-		}
-		key, ok := parseTargetKey(targetID)
-		if !ok {
-			continue
-		}
-		if req.TargetIDs != nil && !matchTarget(key, req.TargetIDs) {
-			// 视图目标已在创建时授权，但本次请求的授权集合不再覆盖它——必须显式降级，
-			// 不能继续读取。否则「先建宽 View、再以窄授权复用」会绕过调用方的授权收窄，
-			// 使权限撤销在该 Worker 上不生效（M-9）。
-			res.Coverage.AddTarget(TargetCoverage{TargetID: targetID, State: CoverageNotReady,
-				Reasons: []string{ReasonUnauthorizedTarget}})
-			continue
-		}
-		wantGen := view.Generations[targetID]
-		wantDir := view.DirIDs[targetID]
-		ownerStr := view.Owners[targetID]
-		cvs := view.ClosedVisibleSeq[targetID]
-
-		rec, ok := p.cat.Get(key)
-		if !ok {
-			res.Coverage.AddTarget(TargetCoverage{
-				TargetID: targetID,
-				State:    CoverageNotReady,
-				Reasons:  []string{ReasonNoCatalogRecord},
-			})
-			continue
-		}
-		ref := catalog.OwnerForQuery(rec)
-		if ref.Generation != wantGen || (wantDir != "" && ref.DirID != wantDir) {
-			res.Err = newErr(ErrCodeViewStale, "view generation/dir changed during plan")
-			res.Coverage.EnumerationState = EnumStale
-			return
-		}
-
-		var owner catalog.Owner
-		switch ownerStr {
-		case string(catalog.OwnerHot):
-			owner = catalog.OwnerHot
-		case string(catalog.OwnerCold):
-			owner = catalog.OwnerCold
-		case string(catalog.OwnerArchive):
-			owner = catalog.OwnerArchive
-		default:
-			owner = ref.Owner
-		}
-
-		if original, ok := view.TargetCoverage[targetID]; ok {
-			res.Coverage.AddTarget(original)
-		} else {
-			res.Coverage.AddTarget(TargetCoverage{
-				TargetID: targetID, State: CoverageNotReady, Reasons: []string{ReasonRangeUnavailable},
-			})
-			continue
-		}
-		res.Ranges = append(res.Ranges, AuthoritativeRange{
-			TargetID:         targetID,
-			Key:              key,
-			Owner:            owner,
-			Tier:             TierOf(owner),
-			DirID:            wantDir,
-			Generation:       wantGen,
-			ClosedVisibleSeq: cvs,
-			Projection:       ref.Projection,
-		})
-	}
-	assertDisjoint(res.Ranges)
-}
-
-// selectKeys 按授权目标 + 时间范围筛选 Catalog 分区键。
-func (p *Planner) selectKeys(req PlanRequest) []catalog.PartitionKey {
-	all := p.cat.Keys()
-	sort.Slice(all, func(i, j int) bool { return all[i].String() < all[j].String() })
-	out := make([]catalog.PartitionKey, 0, len(all))
-	for _, k := range all {
-		if !matchTarget(k, req.TargetIDs) {
-			continue
-		}
-		if !dayOverlapsRange(k.UTCDay, req.TimeRange) {
-			continue
-		}
-		out = append(out, k)
-	}
-	return out
-}
-
-func matchTarget(key catalog.PartitionKey, authorized []string) bool {
-	if len(authorized) == 0 {
-		return true
-	}
-	id := key.String()
-	for _, a := range authorized {
-		if a == id || a == key.StorageNamespace || a == key.UTCDay {
-			return true
-		}
-	}
-	return false
-}
-
-// dayOverlapsRange 报告 utc_day（YYYY-MM-DD）是否与 [from,to) 有交集。
-func dayOverlapsRange(day string, tr TimeRange) bool {
-	if tr.FromUTC == "" && tr.ToUTC == "" {
-		return true
-	}
-	dayStart, err := time.Parse(time.RFC3339, day+"T00:00:00Z")
-	if err != nil {
-		return true // 无法解析时不过滤，交给 Catalog 权威
-	}
-	dayEnd := dayStart.Add(24 * time.Hour)
-
-	if tr.FromUTC != "" {
-		from, err := time.Parse(time.RFC3339, tr.FromUTC)
-		if err == nil && !dayEnd.After(from) {
-			return false
-		}
-	}
-	if tr.ToUTC != "" {
-		to, err := time.Parse(time.RFC3339, tr.ToUTC)
-		if err == nil && !dayStart.Before(to) {
-			return false
-		}
-	}
-	return true
-}
-
-func parseTargetKey(targetID string) (catalog.PartitionKey, bool) {
-	// storage_namespace 可能含 '/'（如 ns/game-1）；utc_day 固定为最后一段。
-	i := strings.LastIndex(targetID, "/")
-	if i <= 0 || i == len(targetID)-1 {
-		return catalog.PartitionKey{}, false
-	}
-	return catalog.PartitionKey{
-		StorageNamespace: targetID[:i],
-		UTCDay:           targetID[i+1:],
-	}, true
+// purgedArchive 报告该分区的归档副本是否已按保留期清除（归档对象回收）。
+//
+// 抽成单函数而不是在多处各写一遍判断：这个条件决定「用户看到的是『已清除』还是
+// 『去恢复一下』」，而两处措辞一旦分叉，用户就会在两条互斥的引导之间来回。
+func purgedArchive(rec *catalog.Record) bool {
+	return rec != nil && rec.Owner == catalog.OwnerArchive && rec.ArchiveEvidence.ArchiveObjectPurged()
 }
 
 func classifyStatus(req PlanRequest, rec *catalog.Record, ref catalog.QueryRef, st PartitionStatus) []string {
 	var reasons []string
+	// 归档权威的判定必须以**记录**为准，不能只看 ref：
+	// `OwnerForQuery` 在 owner_dir 为空时会返回 OK=false，此时 ref.Owner 是空串，
+	// 若只看 ref 就会把「已归档但本地无副本」误报成「没有 Catalog 权威」——
+	// 运维看到的将是 NO_CATALOG_AUTHORITY（像配置丢了），而不是
+	// ARCHIVE_NOT_RESTORED（像归档需要恢复）。两者处置动作完全不同。
+	archivedAuthority := (rec != nil && rec.Owner == catalog.OwnerArchive) || ref.Owner == catalog.OwnerArchive
+	// 归档对象已按保留期清除时**不再**报「未恢复」：那条建议此刻是死路。
+	//
+	// 注意这里不能只把 archivedAuthority 置假——下面还有一条按 `req.RequireArchive`
+	// 独立追加的分支（那是「调用方要求归档层」的判据，不走 archivedAuthority）。
+	// 只改一处会在「显式要求归档层」的请求上留下「已清除 + 请去恢复」并存，
+	// 而这正是本用例集里 M14 变异的形态：单点修复看着对，实际只堵了一半。
+	purged := purgedArchive(rec)
+	if purged {
+		archivedAuthority = false
+	}
 	if st.ColdConfigured && !st.ColdReady && (req.RequireCold || ref.Owner == catalog.OwnerCold) {
 		reasons = appendUniqueStr(reasons, ReasonColdMissing)
 	}
-	if st.ArchiveConfigured && !st.ArchiveRestored && (req.RequireArchive || ref.Owner == catalog.OwnerArchive) {
+	if st.ArchiveConfigured && !st.ArchiveRestored && (req.RequireArchive || archivedAuthority) && !purged {
+		reasons = appendUniqueStr(reasons, ReasonArchiveNotRestored)
+	}
+	// 归档权威：正本在归档，热层可能已被回收。本地没有对齐的已恢复投影时，
+	// 除了「未恢复」还必须显式标出「该读归档」，否则调用方会按 HOT 缺失去猜。
+	if archivedAuthority && !st.ArchiveRestored {
 		reasons = appendUniqueStr(reasons, ReasonArchiveNotRestored)
 	}
 	// 冷层已配置但不可用，且查询覆盖需要历史层时：不阻塞 HOT range，但必须 partial。
 	if req.RequireCold && st.ColdConfigured && !st.ColdReady {
 		reasons = appendUniqueStr(reasons, ReasonColdMissing)
 	}
-	if req.RequireArchive && st.ArchiveConfigured && !st.ArchiveRestored {
+	if req.RequireArchive && st.ArchiveConfigured && !st.ArchiveRestored && !purged {
 		reasons = appendUniqueStr(reasons, ReasonArchiveNotRestored)
 	}
 	_ = rec
@@ -603,22 +517,12 @@ func assertDisjoint(ranges []AuthoritativeRange) {
 	}
 }
 
-// newViewID 生成不可预测的 Worker 本地视图 ID。
-//
-// 原实现用 UnixNano + 自增序号，可被枚举：视图复用路径的授权校验（`planRangesForView`）
-// 依赖「视图创建时的目标」作为读取范围，猜中 ID 就能以更窄的当前授权复用更宽的视图
-// （M-4A/M-9）。改用 128 位加密随机数；失败时退回原方案以保证仍能生成唯一 ID
-// （viewSeq 单调，不依赖时钟粒度）。
-func (p *Planner) newViewID() string {
-	p.mu.Lock()
-	p.viewSeq++
-	seq := p.viewSeq
-	p.mu.Unlock()
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return fmt.Sprintf("view-%d-%d", p.now().UnixNano(), seq)
+// snapshotQueryError 保留容量拒绝的可恢复语义，不把合法负载过载误报为永久 stale。
+func snapshotQueryError(err error) *QueryError {
+	if errors.Is(err, catalog.ErrQueryAdmission) {
+		return &QueryError{Code: ErrCodeBudgetExceeded, Message: err.Error(), Retryable: true, RetryAfter: 1000}
 	}
-	return "view-" + strconv.FormatUint(seq, 36) + "-" + hex.EncodeToString(buf[:])
+	return newErr(ErrCodeNotReady, fmt.Sprintf("query snapshot unavailable: %v", err))
 }
 
 func appendUniqueStr(list []string, v string) []string {
@@ -640,4 +544,46 @@ func hasStr(list []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// projectionlessScope 报告该投影是不是「简化投递路径补建的空壳」。
+//
+// ## 背景
+//
+// 2026-11-02 投递路径简化后，`deliverCtx` 不再走 `publishSnapshot`，也就不再维护
+// 「已发布投影」这个概念。为了让查得到数据，写入侧会补建一个**最小分区记录**
+// （`ingest.ensureCatalogPartition`）：owner / dirID / 一个代次为空的投影结构。
+//
+// 那个空壳的 `CoverageComplete` 是 false（没有「发布」这回事）。若照旧据此推
+// `PROJECTION_INCOMPLETE` + `DupUnresolved/StatsPartial`，**所有新数据都会被标成
+// “不完整/未对账”**——用户每次查都会看到一条降低信任度的横幅，而实际上什么都没错。
+//
+// ## 判据
+//
+// 三条同时成立才算空壳（三条都只对简化路径产生，`publishSnapshot` 走不到）：
+//   - `ManifestVersion` 为空：`publishSnapshot` 末尾**总会**写 manifest（`manifest-<sha256>`）；
+//   - `SourceProjections` 为空；
+//   - `ClosedVisibleSeq` 为空。
+//
+// 旧数据（简化前的已发布投影）三者至少有一个非空，不会被误判。
+func projectionlessScope(proj *catalog.PublishedProjection) bool {
+	if proj == nil {
+		return false
+	}
+	return proj.ManifestVersion == "" && len(proj.SourceProjections) == 0 && len(proj.ClosedVisibleSeq) == 0
+}
+
+// recOwner / recOwnerDirID 是 nil 安全的记录读取，供覆盖登记使用。
+func recOwner(rec *catalog.Record) catalog.Owner {
+	if rec == nil {
+		return ""
+	}
+	return rec.Owner
+}
+
+func recOwnerDirID(rec *catalog.Record) string {
+	if rec == nil {
+		return ""
+	}
+	return rec.OwnerDirID
 }

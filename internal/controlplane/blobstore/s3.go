@@ -38,7 +38,7 @@ type S3Config struct {
 }
 
 // s3Store S3 兼容对象存储适配器：纯标准库 SigV4（header 签名）+ query 预签名，
-// path-style 寻址。参见 ADR-073 决策 3（CP 侧独立实现，不 import worker 备份域）。
+// path-style 寻址（CP 侧独立实现，不 import worker 备份域）。
 type s3Store struct {
 	endpoint  string // host[:port]，无 scheme
 	scheme    string // http | https
@@ -237,7 +237,7 @@ func (s *s3Store) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// listBucketResult ListObjectsV2 响应（只取所需字段；截断标记与续传令牌供 ListPage 分页，FR-349）。
+// listBucketResult ListObjectsV2 响应（只取所需字段；截断标记与续传令牌供 ListPage 分页）。
 type listBucketResult struct {
 	Contents []struct {
 		Key          string `xml:"Key"`
@@ -254,7 +254,7 @@ func (s *s3Store) List(ctx context.Context, prefix string, limit int) ([]ObjectI
 	return out, err
 }
 
-// ListPage 经 ListObjectsV2 + continuation-token 分页枚举（FR-349 对账全量遍历）。
+// ListPage 经 ListObjectsV2 + continuation-token 分页枚举（对账全量遍历）。
 // nextToken 非空表示 bucket 侧已截断，还有后续页。
 func (s *s3Store) ListPage(ctx context.Context, prefix string, limit int, token string) ([]ObjectInfo, string, error) {
 	if limit <= 0 {
@@ -306,7 +306,7 @@ func (s *s3Store) ListPage(ctx context.Context, prefix string, limit int, token 
 	return out, next, nil
 }
 
-// Presign 生成对象的 SigV4 query 预签名 GET URL（302 分发用，见 ADR-073 决策 1）。
+// Presign 生成对象的 SigV4 query 预签名 GET URL（302 分发用）。
 func (s *s3Store) Presign(key string, ttl time.Duration) (string, error) {
 	if ttl <= 0 {
 		ttl = 10 * time.Minute

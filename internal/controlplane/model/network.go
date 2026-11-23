@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// Network 是 MC 群组服的非独占软标签（ADR-007）：仅供 UI 分组/筛选/批量运维，
+// Network 是 MC 群组服的非独占软标签：仅供 UI 分组/筛选/批量运维，
 // 一个实例可属于多个 network；真实路由只由 server_registrations 驱动，network 不做归属容器。
 // 删除 network 不影响成员实例与其 server_registrations。
 type Network struct {

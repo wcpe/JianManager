@@ -7,7 +7,7 @@ import { cn } from '../lib/utils'
 /** 密码输入框 props：透传给底层 Input，但 type 由内部显隐状态控制。 */
 type PasswordInputProps = Omit<ComponentProps<typeof Input>, 'type'>
 
-/** 带显隐切换的密码输入框（FR-157）。眼睛按钮不入 Tab 序，靠 aria-label 暴露。 */
+/** 带显隐切换的密码输入框。眼睛按钮不入 Tab 序，靠 aria-label 暴露。 */
 export function PasswordInput({ className, ...props }: PasswordInputProps) {
   const { t } = useTranslation()
   const [show, setShow] = useState(false)

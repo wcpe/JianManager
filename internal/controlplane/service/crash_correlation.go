@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// crashCorrelationWindow 崩溃关联窗口：查崩溃时刻往前 Δ 的资源样本（FR-470 §2.3）。
+// crashCorrelationWindow 崩溃关联窗口：查崩溃时刻往前 Δ 的资源样本（§2.3）。
 const crashCorrelationWindow = 5 * time.Minute
 
 // crashMetricSource 是关联所需的堆指标数据源（*MetricService 实现）；可为 nil（跳过堆关联）。
@@ -19,7 +19,7 @@ type crashMetricSource interface {
 	LatestValue(scope model.MetricScope, nodeUUID, instanceID, metricKey string, since time.Time) (*float64, error)
 }
 
-// CrashCorrelation 崩溃与资源的关联证据（FR-470 §2.3，OOM 证据链）。
+// CrashCorrelation 崩溃与资源的关联证据（§2.3，OOM 证据链）。
 type CrashCorrelation struct {
 	// NearOOM 崩前 RSS 是否逼近实例内存上限（或样本缺失时无法判定为 false）。
 	NearOOM bool `json:"nearOom"`
@@ -29,13 +29,13 @@ type CrashCorrelation struct {
 	MemLimitMB int64 `json:"memLimitMb"`
 	// HeapUsedMax 崩溃窗口内 JVM 堆已用峰值（字节）；无探针样本为 0。
 	HeapUsedMax int64 `json:"heapUsedMax"`
-	// GCNote GC 关联提示（FR-465 落地前为「待依赖」，见 spec §5）。
+	// GCNote GC 关联提示（落地前为「待依赖」，见 spec §5）。
 	GCNote string `json:"gcNote"`
 	// Note 人可读结论（无数据/降级原因）。
 	Note string `json:"note,omitempty"`
 }
 
-// CrashCorrelationService 崩溃与资源关联查询（FR-470 §2.3）。只读，不写新表。
+// CrashCorrelationService 崩溃与资源关联查询（§2.3）。只读，不写新表。
 type CrashCorrelationService struct {
 	db *gorm.DB
 	// metrics 堆指标数据源；nil 时仅做进程 RSS 关联。
@@ -47,7 +47,7 @@ func NewCrashCorrelationService(db *gorm.DB) *CrashCorrelationService {
 	return &CrashCorrelationService{db: db}
 }
 
-// SetMetrics 注入时序数据源（FR-462 同源），用于堆指标关联。
+// SetMetrics 注入时序数据源（同源），用于堆指标关联。
 func (s *CrashCorrelationService) SetMetrics(m crashMetricSource) { s.metrics = m }
 
 // CorrelateInstance 计算某实例在某时刻的崩溃关联证据。
@@ -70,7 +70,7 @@ func (s *CrashCorrelationService) CorrelateInstance(instanceID uint, occurredAt 
 		from = to.Add(-crashCorrelationWindow)
 	}
 
-	// 1. 进程树 RSS 峰值（FR-170 ProcessMetricSnapshot）。
+	// 1. 进程树 RSS 峰值（ProcessMetricSnapshot）。
 	//
 	// R6：口径必须与配额维度**同源**（quota_metric_source.go 的 LatestProcessSample 用
 	// `SUM(rss_bytes)` 求整棵树）。ProcessMetricSnapshot 是按**进程**一行的 TOPN 表
@@ -118,8 +118,8 @@ func (s *CrashCorrelationService) CorrelateInstance(instanceID uint, occurredAt 
 	// 3. 结论：RSS 逼近上限（>=90%）判 nearOOM；有堆数据时一并标注。
 	// 与批量版共用 finalizeCorrelationNote，避免两处判定口径漂移。
 	finalizeCorrelationNote(&out)
-	// FR-465 依赖：GC 指标尚未采集入库（spec §5）。
-	out.GCNote = "GC 关联待 FR-465 落地（serverprobe_gc_* 尚未入库）"
+	// 依赖：GC 指标尚未采集入库（spec §5）。
+	out.GCNote = "GC 关联待落地（serverprobe_gc_* 尚未入库）"
 	return out, nil
 }
 

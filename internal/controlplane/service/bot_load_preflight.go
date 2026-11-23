@@ -17,7 +17,7 @@ import (
 //
 // 只要求 Snapshot；若实现同时提供 Refresh（强制刷新），preflight 会优先用它——
 // 预检必须基于实时容量，而 Snapshot 走 15s TTL 缓存，长时间运行的舰队里缓存可能已陈旧
-//（真机表现：节点明明有可用容量，预检却报「可用容量 0」+ CAPACITY_SNAPSHOT_STALE，
+// （真机表现：节点明明有可用容量，预检却报「可用容量 0」+ CAPACITY_SNAPSHOT_STALE，
 // 需反复重试才偶尔命中新鲜快照）。用可选接口而非强制方法，避免牵动其它调用方的替身实现。
 type BotLoadCapacityProvider interface {
 	Snapshot(ctx context.Context, excludeRunID uint) (*BotLoadCapacitySnapshot, error)

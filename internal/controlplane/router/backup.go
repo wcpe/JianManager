@@ -50,9 +50,9 @@ func (h *BackupHandler) List(c *gin.Context) {
 
 type createBackupRequest struct {
 	Name string `json:"name" binding:"required"`
-	// Incremental 为 true 时创建增量备份（FR-056），挂到该实例最近一次已完成备份后形成链。
+	// Incremental 为 true 时创建增量备份，挂到该实例最近一次已完成备份后形成链。
 	Incremental bool `json:"incremental"`
-	// StorageID 指定远程存储后端；缺省存于节点本地（FR-057）。
+	// StorageID 指定远程存储后端；缺省存于节点本地。
 	StorageID *uint `json:"storageId"`
 }
 
@@ -108,6 +108,12 @@ func (h *BackupHandler) Restore(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "INSTANCE_NOT_STOPPED", "message": err.Error()})
 			return
 		}
+		// 同实例已有恢复在途：409。没有这道门时两次 POST 会各自启动一个恢复，
+		// 同时解包覆盖工作目录。
+		if errors.Is(err, service.ErrBackupInFlight) {
+			c.JSON(http.StatusConflict, gin.H{"error": "OPERATION_IN_FLIGHT", "message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
 	}
@@ -130,6 +136,11 @@ func (h *BackupHandler) Delete(c *gin.Context) {
 	if err := h.backupSvc.Delete(id); err != nil {
 		if errors.Is(err, service.ErrBackupHasIncrementalChildren) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+			return
+		}
+		// 在途备份（创建中/恢复中）：409——可重试的业务态，不是服务故障。
+		if errors.Is(err, service.ErrBackupInFlight) {
+			c.JSON(http.StatusConflict, gin.H{"error": "OPERATION_IN_FLIGHT", "message": err.Error()})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})

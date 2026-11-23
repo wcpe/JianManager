@@ -1,17 +1,17 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-142 详情页监控与探针增强 · 单机（Playwright + mock 模式）验收。
+/** 
+ *详情页监控与探针增强 · 单机（Playwright + mock 模式）验收。
  * 覆盖两条验收：
  *  1) 监控面板 TPS/MSPT/CPU 当前阈值色条 + 历史曲线阈值标记（带 RangePicker）
  *  2) 探针状态卡（未装可操作指引）+ 停机时当前指标折叠不占空白
- * 证据截图落 .tmp/acceptance/FR-142/。
+ * 证据截图落 .tmp/acceptance。
  */
 
-const SHOT = (name: string) => ({ path: `../.tmp/acceptance/FR-142/${name}` })
+const SHOT = (name: string) => ({ path: `../.tmp/acceptance/${name}` })
 
-test('FR-142 运行态：当前健康阈值色条 + 探针卡 + 历史曲线阈值标记', async ({ page }) => {
+test('运行态：当前健康阈值色条 + 探针卡 + 历史曲线阈值标记', async ({ page }) => {
   await login(page)
   // 探针卡依赖独立状态请求，导航前监听响应，避免整套慢速运行时用固定 5 秒猜测加载完成。
   const probeResponsePromise = page.waitForResponse((response) => {
@@ -22,7 +22,7 @@ test('FR-142 运行态：当前健康阈值色条 + 探针卡 + 历史曲线阈�
   const probeResponse = await probeResponsePromise
   expect(probeResponse.ok()).toBe(true)
 
-  // 探针状态卡（FR-068/114 复用，FR-142 指引）
+  // 探针状态卡（114 复用指引）
   await expect(page.getByText('ServerProbe 探针更新')).toBeVisible()
 
   // 当前健康：TPS/MSPT/CPU 三枚阈值色条 pill
@@ -37,10 +37,10 @@ test('FR-142 运行态：当前健康阈值色条 + 探针卡 + 历史曲线阈�
   await page.screenshot({ ...SHOT('single-machine-running.png'), fullPage: true })
 })
 
-test('FR-142 停机态：当前指标折叠不占大块空白', async ({ page }) => {
+test('停机态：当前指标折叠不占大块空白', async ({ page }) => {
   await login(page)
   // 取「停机且具备 metrics 能力」的种子：实例 21（creative-plot，minecraft_java:backend，STOPPED）。
-  // 原用实例 2（lobby-proxy）已不再适用——FR-445/448 能力画像下 proxy 画像不含 metrics，
+  // 原用实例 2（lobby-proxy）已不再适用——448 能力画像下 proxy 画像不含 metrics，
   // `?tab=metrics` 会回落到概览页，看不到指标卡折叠。
   // 停机态健康条依赖实例详情状态，导航前监听该请求，避免整套慢速运行时抢在状态回填前断言。
   const instanceResponsePromise = page.waitForResponse((response) => {

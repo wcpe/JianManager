@@ -6,7 +6,7 @@ import (
 )
 
 // TestInvariant_CollectBudgetFitsHeartbeatTick 锁定「可配超时上界」与「心跳护栏」的数值关系
-// （FR-446 复审 NEW-ISSUE A）：
+// （复审 NEW-ISSUE A）：
 //
 //	MaxCollectBudget() + HeartbeatTickReserve ≤ HeartbeatInterval
 //

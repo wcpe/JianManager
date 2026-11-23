@@ -18,8 +18,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-389 / FR-489：CP 内嵌 MCP 鉴权、tools/list、tools/call 与 Token 维度活动视图。
-// 无状态化（ADR-096）：Streamable HTTP 不再有会话，故不再断言 Mcp-Session-Id。
+// CP 内嵌 MCP 鉴权、tools/list、tools/call 与 Token 维度活动视图。
+// 无状态化：Streamable HTTP 不再有会话，故不再断言 Mcp-Session-Id。
 
 func setupMCP(t *testing.T) (db *gorm.DB, r *gin.Engine, adminJWT string, agentPlain string, inst *model.Instance) {
 	t.Helper()
@@ -149,7 +149,7 @@ func TestMCP_InitializeAndToolsList(t *testing.T) {
 	assert.False(t, names["kill_instance"])
 }
 
-// TestMCP_StaleSessionHeaderIgnored 携带陈旧/陌生 Mcp-Session-Id 不被拒绝（ADR-096 后果）。
+// TestMCP_StaleSessionHeaderIgnored 携带陈旧/陌生 Mcp-Session-Id 不被拒绝（后果）。
 //
 // 这正是无状态化要修的故障面：会话语义下客户端会收到 404 SESSION_GONE 后永久卡死。
 func TestMCP_StaleSessionHeaderIgnored(t *testing.T) {
@@ -181,7 +181,7 @@ func TestMCP_DELETE_Returns405(t *testing.T) {
 	assert.Contains(t, w.Header().Get("Allow"), http.MethodPost)
 }
 
-// ---- 无状态化核心承诺：策略变更在下一个请求即生效（ADR-096）----
+// ---- 无状态化核心承诺：策略变更在下一个请求即生效----
 //
 // 以下两条是 PR #42「不再有会话内 principal 快照窗口」的端点级证据。会话式实现下，
 // initialize 时快照的 principal 会存活到会话结束，吊销/降权在会话内不生效；若日后有人
@@ -300,7 +300,7 @@ func TestMCP_ToolsCall_Whoami(t *testing.T) {
 	require.NotEmpty(t, resp.Result.Content)
 	assert.Contains(t, resp.Result.Content[0].Text, "mcp-test")
 
-	// FR-390：MCP tool 记 client=mcp 流水（会话类流水已随无状态化移除，只剩调用类）。
+	// MCP tool 记 client=mcp 流水（会话类流水已随无状态化移除，只剩调用类）。
 	var whoamiN int64
 	require.NoError(t, db.Model(&model.AgentCallLog{}).Where("action = ? AND client = ?", "agent.whoami", "mcp").Count(&whoamiN).Error)
 	assert.GreaterOrEqual(t, whoamiN, int64(1), "应有 agent.whoami 流水")
@@ -331,7 +331,7 @@ type mcpActivityResp struct {
 	} `json:"items"`
 }
 
-// TestMCP_ActivityAggregatesByToken 活动端点按 Token 聚合调用流水（ADR-096 决策 6）。
+// TestMCP_ActivityAggregatesByToken 活动端点按 Token 聚合调用流水。
 func TestMCP_ActivityAggregatesByToken(t *testing.T) {
 	_, r, adminJWT, plain, _ := setupMCP(t)
 

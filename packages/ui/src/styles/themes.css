@@ -1,0 +1,105 @@
+/**
+ * 主题色（阶段 2：改为种子声明式）。
+ *
+ * ── 加一套新主题要写什么 ──
+ * 只写 5 个种子，亮暗各一组：
+ *  --seed-brand       品牌主色（主操作 / 焦点环 / 图表 1）
+ *  --seed-on-brand    品牌上的前景色（按钮文字；按品牌明度挑墨或白）
+ *  --seed-brand-rgb   同色的裸三元组，供阴影晕色用
+ *                     （CSS 无法从颜色变量里取出分量，只能一并声明）
+ *  --seed-hue         结构色相
+ *  --seed-chroma      结构 chroma 基准（≈ 描边色的 chroma）
+ * 其余结构色（background / card / border / secondary / muted / foreground 等）
+ * 由 tokens.css 从种子派生，不必再抄一遍。
+ *
+ * 例（第六套主题 rose）：
+ *  [data-theme="rose"] {
+ *    --seed-brand: oklch(0.62 0.19 12);
+ *    --seed-on-brand: #ffffff;
+ *    --seed-brand-rgb: 225 29 72;
+ *    --seed-hue: 12;
+ *    --seed-chroma: 0.018;
+ *  }
+ *  [data-theme="rose"].dark {
+ *    --seed-brand: oklch(0.72 0.16 12);
+ *    --seed-on-brand: #2a0808;
+ *    --seed-brand-rgb: 251 113 133;
+ *    --seed-hue: 12;
+ *    --seed-chroma: 0.032;
+ *  }
+ *
+ * ── 明暗正交 ──
+ * 亮色 [data-theme="x"]（特异性等于单类，书写在 :root/.dark 之后而胜出）；
+ * 暗色 [data-theme="x"].dark（特异性高于 .dark 单类，正交生效）。
+ * [data-theme] 块会同时改写 --primary 等下游派生（见 tokens.css 的 color-mix）。
+ */
+
+/* 青绿 teal：微青灰结构色 + 青绿品牌色。
+   亮色按钮文本用深青墨而非近白——近白对 oklch(0.704) 青绿只有 2.39:1，不达 4.5:1。 */
+[data-theme="teal"] {
+  --seed-brand: oklch(0.704 0.123 183);
+  --seed-on-brand: oklch(0.2 0.04 183);
+  --seed-brand-rgb: 20 184 166;
+  --seed-hue: 182;
+  --seed-chroma: 0.0155;
+}
+
+[data-theme="teal"].dark {
+  --seed-brand: oklch(0.76 0.12 183);
+  --seed-on-brand: oklch(0.2 0.04 183);
+  --seed-brand-rgb: 45 212 191;
+  --seed-hue: 179;
+  --seed-chroma: 0.030;
+}
+
+/* 海洋蓝 ocean：冷蓝灰结构色 + 钴蓝主操作（#2563eb 系），运维台「冷静可靠」的观感。 */
+[data-theme="ocean"] {
+  --seed-brand: #2563eb;
+  --seed-on-brand: #ffffff;
+  --seed-brand-rgb: 37 99 235;
+  --seed-hue: 253;
+  --seed-chroma: 0.020;
+}
+
+[data-theme="ocean"].dark {
+  --seed-brand: #6d9cff;
+  --seed-on-brand: #0b1a33;
+  --seed-brand-rgb: 109 156 255;
+  --seed-hue: 257;
+  --seed-chroma: 0.045;
+}
+
+/* 紫罗兰 violet：冷紫灰结构色 + 紫罗兰主操作（#7c3aed 系）。 */
+[data-theme="violet"] {
+  --seed-brand: #7c3aed;
+  --seed-on-brand: #ffffff;
+  --seed-brand-rgb: 124 58 237;
+  --seed-hue: 297;
+  --seed-chroma: 0.022;
+}
+
+[data-theme="violet"].dark {
+  --seed-brand: #9b7bff;
+  --seed-on-brand: #17102e;
+  --seed-brand-rgb: 155 123 255;
+  --seed-hue: 291;
+  --seed-chroma: 0.050;
+}
+
+/* 落日橙 sunset：暖灰结构色 + 落日橙主操作（#ea8a3a 系）。
+   橙色亮度较高，按钮文本用深琥珀墨（对 #ea8a3a 约 6:1），不走白字。 */
+[data-theme="sunset"] {
+  --seed-brand: #ea8a3a;
+  --seed-on-brand: #331c04;
+  --seed-brand-rgb: 234 138 58;
+  --seed-hue: 74;
+  --seed-chroma: 0.016;
+}
+
+[data-theme="sunset"].dark {
+  --seed-brand: #f5a35c;
+  --seed-on-brand: #2b1601;
+  --seed-brand-rgb: 245 163 92;
+  --seed-hue: 65;
+  --seed-chroma: 0.028;
+}

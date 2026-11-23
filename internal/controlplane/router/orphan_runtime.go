@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// OrphanRuntimeHandler 无主运行时列表与手动确认处置（FR-326）。
+// OrphanRuntimeHandler 无主运行时列表与手动确认处置。
 // 全组挂 admin（JWT + 平台管理员）；处置写审计（由 Tracker 内完成）。
 type OrphanRuntimeHandler struct {
 	svc *service.OrphanRuntimeTracker

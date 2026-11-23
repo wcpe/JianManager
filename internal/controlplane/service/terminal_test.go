@@ -71,7 +71,7 @@ func TestIssueToken_ThirtySecondTTL(t *testing.T) {
 	assert.InDelta(t, 30, exp.Time.Sub(iat.Time).Seconds(), 1)
 }
 
-// TestIssueToken_UniquePerIssue 复现同秒重复签发碰撞（FR-140 收尾）：
+// TestIssueToken_UniquePerIssue 复现同秒重复签发碰撞（收尾）：
 // 终端 token 若是确定性 JWT（claims 无随机成分），同一秒内两次签发会得到字节相同的
 // token，配合一次性 used-set 导致断线重连同秒重取必 401。要求每次签发结果唯一。
 func TestIssueToken_UniquePerIssue(t *testing.T) {
@@ -143,7 +143,7 @@ func TestTerminalProxy_RejectsReusedToken(t *testing.T) {
 	}
 }
 
-// TestTerminalProxy_ReissuedTokenSameSecondConnects 复现终端断线重连场景（FR-140 收尾）：
+// TestTerminalProxy_ReissuedTokenSameSecondConnects 复现终端断线重连场景（收尾）：
 // 首连消费 token A 后断开，前端同一秒内重取 token B 重连——B 必须是全新 token、
 // 不得命中 used-set 返回 401（旧实现 A/B 字节相同，重连要等跨秒重试才恢复）。
 func TestTerminalProxy_ReissuedTokenSameSecondConnects(t *testing.T) {

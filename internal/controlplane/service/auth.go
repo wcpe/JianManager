@@ -184,18 +184,19 @@ func (s *AuthService) SetupAdmin(username, password string) (*TokenPair, error) 
 	}
 
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&model.User{}).Where("role = ?", model.RolePlatformAdmin).Count(&count).Error; err != nil {
-			return fmt.Errorf("查询管理员数量失败: %w", err)
-		}
-		if count > 0 {
-			return ErrAdminAlreadyExists
-		}
+		// 先写一次性锁再读取管理员，避免 SQLite WAL 读快照升级写锁时失败。
 		lockResult := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.AuthSetupLock{Key: authSetupLockKey})
 		if lockResult.Error != nil {
 			return fmt.Errorf("获取初始化锁失败: %w", lockResult.Error)
 		}
 		if lockResult.RowsAffected == 0 {
+			return ErrAdminAlreadyExists
+		}
+		var count int64
+		if err := tx.Model(&model.User{}).Where("role = ?", model.RolePlatformAdmin).Count(&count).Error; err != nil {
+			return fmt.Errorf("查询管理员数量失败: %w", err)
+		}
+		if count > 0 {
 			return ErrAdminAlreadyExists
 		}
 		if err := tx.Create(user).Error; err != nil {

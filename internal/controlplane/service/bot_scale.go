@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// Bot 规模化查询/聚合/批量操作（FR-038）。
+// Bot 规模化查询/聚合/批量操作。
 // 万级 Bot 下不全量序列化：列表分页、摘要走 DB 聚合，批量经 gRPC 按节点分片并发委托。
 
 const (
@@ -71,12 +71,27 @@ type BotListQuery struct {
 	PageSize int
 }
 
+// BotListItem Bot 列表项：在 model.Bot 之上补一个实例名。
+//
+// 【为什么用服务层视图而不是给 model.Bot 加字段】model 是 AutoMigrate 的真源，
+// 加一个非持久化字段会被一并映射成列。
+//
+// 【可见性说明——有意为之的取舍，决策记录】instanceName 会把实例名直接暴露给能读 Bot 列表的人，
+// 而本列表当前没有按组收敛 scope。我们**显式接受**这一扩大，理由：改造前前端为了在列表里显示
+// 实例名，是直接拉取**全量实例列表**（`GET /instances`，千级约 1MB 且带 30s 兜底轮询），
+// 那等于把全部实例清单交给每一个能打开本页的人——现在暴露的反而更少、更窄。
+// 若将来为本列表补上 scope 收敛，应同步复查此处。
+type BotListItem struct {
+	model.Bot
+	InstanceName string `json:"instanceName,omitempty"`
+}
+
 // BotListResult 分页列表结果。
 type BotListResult struct {
-	Items    []model.Bot `json:"items"`
-	Total    int64       `json:"total"`
-	Page     int         `json:"page"`
-	PageSize int         `json:"pageSize"`
+	Items    []BotListItem `json:"items"`
+	Total    int64         `json:"total"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"pageSize"`
 }
 
 // BotSummaryGroup 分组聚合的单组计数。
@@ -112,6 +127,13 @@ type BotBatchRequest struct {
 	Filter   *BotFilter
 	Behavior string
 	Target   string
+	// AllowFleetOwned 表示这次批量操作由 **Fleet 场景自己**发起（如压测会话 Stop），
+	// 允许处理 load_batch_id / stress_session_id 归属的 Bot。
+	//
+	// 由运营手动触发的批量 stop/delete 一律为 false：那些是「越权动别人的 Bot」，
+	// Worker 会明确拒绝，此时账本也不能先改（见 Batch 里的排除逻辑）。
+	// 字段不对外序列化，仅服务内部调用点可设置。
+	AllowFleetOwned bool `json:"-"`
 }
 
 // BotBatchError 批量操作单条失败明细。
@@ -207,7 +229,13 @@ func (s *BotService) ListPaged(query BotListQuery, scopeIDs []uint, scope bool) 
 	// 列表也回填实时状态：否则重连/连接的 Bot 在聚合页一直显示 connecting。
 	s.refreshStatuses(items)
 
-	return &BotListResult{Items: items, Total: total, Page: page, PageSize: size}, nil
+	// 实例名已在 Preload("Instance.Node") 里，此处只是拷进视图，不产生额外查询。
+	out := make([]BotListItem, len(items))
+	for i := range items {
+		out[i] = BotListItem{Bot: items[i], InstanceName: items[i].Instance.Name}
+	}
+
+	return &BotListResult{Items: out, Total: total, Page: page, PageSize: size}, nil
 }
 
 // refreshStatuses 按节点聚合批量拉取各 Bot 的实时状态并回填 DB（每个 Worker 仅一次 ListBots）。
@@ -462,9 +490,36 @@ func (s *BotService) Batch(req BotBatchRequest, scopeIDs []uint, scope bool) (*B
 		return result, nil
 	}
 
-	// set-behavior 必须在 Worker 成功后再落库；其他动作保持既有账本语义。
-	if req.Action != BotBatchSetBehavior {
-		s.applyBatchDBChange(req, bots)
+	// 委托前先把「本地就能判定会被 Worker 拒绝」的目标剔出去（R10）。
+	//
+	// Worker 对 Fleet 归属（load_batch_id / stress_session_id 非空）的 Bot 会明确拒绝
+	// 旧 DeleteBot，而这类归属是**平台自己落的账**，不需要问 Worker 就知道。
+	// 此前 stop / delete 先把 DB 改掉再委托：Worker 一拒，运行中的 Bot 还在跑、
+	// 账本却已经「停了/删了」，后续普通查询也看不到这行——假成功。
+	//
+	// 但「委托失败不阻塞账本变更」是既有契约（Worker 失联的幽灵 Bot 必须还能从库里清掉），
+	// 所以这里只把**确定性拒绝**的剔除，网络/未连接等失败仍按原语义处理。
+	batchTargets := bots
+	if !req.AllowFleetOwned && (req.Action == BotBatchStop || req.Action == BotBatchDelete || req.Action == BotBatchSetBehavior) {
+		kept := make([]model.Bot, 0, len(bots))
+		for i := range bots {
+			if isFleetOwnedBot(&bots[i]) {
+				result.Failed++
+				if len(result.Errors) < maxBatchErrors {
+					result.Errors = append(result.Errors, BotBatchError{
+						BotID: bots[i].ID, ErrorCode: BotFleetManagedErrorCode, Error: ErrBotFleetManaged.Error(),
+					})
+				}
+				continue
+			}
+			kept = append(kept, bots[i])
+		}
+		batchTargets = kept
+	}
+
+	// set-behavior 必须在 Worker 成功后再落库；其他动作保持既有账本语义（见上）。
+	if req.Action != BotBatchSetBehavior && len(batchTargets) > 0 {
+		s.applyBatchDBChange(req, batchTargets)
 	}
 
 	// 有界并发委托，按 Bot 各自所属节点路由
@@ -474,8 +529,8 @@ func (s *BotService) Batch(req BotBatchRequest, scopeIDs []uint, scope bool) (*B
 		sem                   = make(chan struct{}, batchConcurrency)
 		successfulBehaviorIDs []uint
 	)
-	for i := range bots {
-		bot := bots[i]
+	for i := range batchTargets {
+		bot := batchTargets[i]
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
@@ -483,25 +538,27 @@ func (s *BotService) Batch(req BotBatchRequest, scopeIDs []uint, scope bool) (*B
 			defer func() { <-sem }()
 
 			derr := s.delegateBatchOne(req, &bot)
-
-			mu.Lock()
-			defer mu.Unlock()
 			if derr != nil {
+				mu.Lock()
 				result.Failed++
 				if len(result.Errors) < maxBatchErrors {
 					result.Errors = append(result.Errors, BotBatchError{
 						BotID: bot.ID, ErrorCode: botBatchErrorCode(derr), Error: derr.Error(),
 					})
 				}
-			} else {
-				result.Succeeded++
-				if req.Action == BotBatchSetBehavior {
-					successfulBehaviorIDs = append(successfulBehaviorIDs, bot.ID)
-				}
+				mu.Unlock()
+				return
 			}
+			mu.Lock()
+			result.Succeeded++
+			if req.Action == BotBatchSetBehavior {
+				successfulBehaviorIDs = append(successfulBehaviorIDs, bot.ID)
+			}
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
+
 	if req.Action == BotBatchSetBehavior && len(successfulBehaviorIDs) > 0 {
 		if err := s.db.Model(&model.Bot{}).Where("id IN ?", successfulBehaviorIDs).Update("behavior", req.Behavior).Error; err != nil {
 			result.Succeeded -= len(successfulBehaviorIDs)
@@ -537,7 +594,17 @@ func (s *BotService) applyBatchDBChange(req BotBatchRequest, bots []model.Bot) {
 			slog.Warn("批量更新 Bot 行为失败", "error", err)
 		}
 	case BotBatchStop:
-		if err := s.db.Model(&model.Bot{}).Where("id IN ?", ids).Update("status", model.BotStatusStopped).Error; err != nil {
+		// stop 必须对称地写 desired_state=stopped 并 bump generation。
+		//
+		// 此前只写 status，`desired_state` 停留在默认的 stopped —— **碰巧对**，
+		// 但那是"默认值恰好等于期望值"的运气，不是正确实现：一旦 start 把 desired 写成 running
+		// （见 delegateBatchOne），stop 只改 status 就会留下 "desired=running 但实际已停" 的
+		// 漂移状态，reconcile 会按 desired 把它重新拉起来。
+		if err := s.db.Model(&model.Bot{}).Where("id IN ?", ids).Updates(map[string]any{
+			"desired_state":            model.BotDesiredStopped,
+			"desired_state_generation": gorm.Expr("desired_state_generation + 1"),
+			"status":                   model.BotStatusStopped,
+		}).Error; err != nil {
 			slog.Warn("批量更新 Bot 状态失败", "error", err)
 		}
 	case BotBatchDelete:
@@ -611,7 +678,31 @@ func (s *BotService) delegateBatchOne(req BotBatchRequest, bot *model.Bot) error
 			return fmt.Errorf("Worker CreateBot 失败: %s", resp.Error)
 		}
 		// 真实状态由读取时 refreshStatus 回填，这里先置 connecting，不再乐观置 connected；委托成功清 lastError。
-		_ = s.db.Model(&model.Bot{}).Where("id = ?", bot.ID).Updates(map[string]any{"status": model.BotStatusConnecting, "last_error": ""}).Error
+		//
+		// ## 必须同时写 desired_state（真机 bug，2026-10-28）
+		//
+		// 这段此前只写 status，于是：
+		//   接口返回 {"succeeded":1}（它的依据是"Worker gRPC 回了 Success"），
+		//   而 GET /bots/:id 的 desiredState 仍是列默认值 stopped。
+		//
+		// 后果不只是"显示不一致"——`desired_state` 是 CP 侧所有归真机制的唯一筛选条件：
+		//   · bot_freshness.MarkStale 只收敛 desired_state='running' 的行
+		//   · bot_reclaim 的失效回收只扫 desired_state='running' 且 fleet-owned 的行
+		//   · Worker 重启后的 reconcile 也按 desired 生成"应运行但没在跑"的补偿项
+		// 它恒为 stopped 意味着 V1 Bot 被**排除在所有自愈之外**：崩了没人管，
+		// Worker 重启后启动意图彻底丢失（Worker 内存里的 desired 账本也从未收到过它）。
+		//
+		// generation 必须 bump：它是"意图的第几版"，reconcile 靠它判断先后。
+		// 不 bump 的话，先 stop 再 start 会被当成同一个意图的两个版本，状态推进不确定。
+		if err := s.db.Model(&model.Bot{}).Where("id = ?", bot.ID).Updates(map[string]any{
+			"desired_state":            model.BotDesiredRunning,
+			"desired_state_generation": gorm.Expr("desired_state_generation + 1"),
+			"status":                   model.BotStatusConnecting,
+			"last_error":               "",
+		}).Error; err != nil {
+			// 不吞错误：写不进去就意味着意图没落账，调用方必须知道这次 start 是"半成功"。
+			return fmt.Errorf("记录 Bot 启动意图失败: %w", err)
+		}
 	default:
 		return fmt.Errorf("不支持的批量动作: %s", req.Action)
 	}

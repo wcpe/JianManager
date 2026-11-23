@@ -21,7 +21,7 @@ func TestDayMigrationBatchAtomicallySwitchesAllNamespaces(t *testing.T) {
 	records, err := cat.BeginDayMigration(day, OwnerCold, "20260923")
 	require.NoError(t, err)
 	require.Len(t, records, 2)
-	require.EqualValues(t, 1, journal.LastSeq(), "one JSONL entry freezes the whole physical day")
+	require.EqualValues(t, 2, journal.LastSeq(), "先独立持久冻结接纳，再用一条批次记录捕获排空后的成员")
 	for _, state := range []MigrationState{StateDraining, StateSnapshotting, StateStagingVerify} {
 		_, err = cat.AdvanceDay(day, state)
 		require.NoError(t, err)

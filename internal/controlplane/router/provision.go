@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ProvisionHandler 处理核心查询、一键搭建子服（FR-034）、搭建代理（FR-035）与复制子服（FR-036）。
+// ProvisionHandler 处理核心查询、一键搭建子服、搭建代理与复制子服。
 // 注册在平台管理员路由组下。
 type ProvisionHandler struct {
 	core  *service.CoreService
@@ -47,7 +47,7 @@ func (h *ProvisionHandler) Cores(c *gin.Context) {
 	c.JSON(http.StatusOK, info)
 }
 
-// ProvisionServer POST /instances/provision/server —— 一键搭建后端子服（FR-319 异步化）。
+// ProvisionServer POST /instances/provision/server —— 一键搭建后端子服（异步化）。
 // 同步段只做核心解析 + 建实例 + 登记任务，立即 201 返回 {instance, taskId}；
 // 下载/写配置在 CP 后台推进，进度/失败原因见任务中心（前端不再被慢下载拖到超时）。
 func (h *ProvisionHandler) ProvisionServer(c *gin.Context) {
@@ -56,7 +56,7 @@ func (h *ProvisionHandler) ProvisionServer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
-	// mcVersion 的条件必填（FR-441）：MC 核心需要，binary 不需要。
+	// mcVersion 的条件必填：MC 核心需要，binary 不需要。
 	// 原先靠 binding:"required" 拦下并回 400；下移到此处是为了让 coreType=binary 能不带
 	// mcVersion 通过绑定，同时保持 MC 路径对缺参的响应码与文案完全不变。
 	if err := service.ValidateProvisionRequest(req); err != nil {
@@ -86,7 +86,7 @@ func (h *ProvisionHandler) ProvisionBukkit(c *gin.Context) {
 	h.ProvisionServer(c)
 }
 
-// ProvisionProxy POST /instances/provision/proxy —— 异步搭建代理实例（FR-035/202/236）。
+// ProvisionProxy POST /instances/provision/proxy —— 异步搭建代理实例（202/236）。
 // 同步段创建实例并登记任务，立即返回兼容结果 + taskId；下载、配置、注册与失败补偿在后台执行。
 func (h *ProvisionHandler) ProvisionProxy(c *gin.Context) {
 	var req service.ProvisionProxyRequest
@@ -111,7 +111,7 @@ func (h *ProvisionHandler) ProvisionProxy(c *gin.Context) {
 	c.JSON(http.StatusCreated, result)
 }
 
-// Rebuild POST /instances/:id/rebuild —— 重建损毁实例（FR-342），复用已存搭建参数重跑搭建到既有工作目录，
+// Rebuild POST /instances/:id/rebuild —— 重建损毁实例，复用已存搭建参数重跑搭建到既有工作目录，
 // 无需重填。仅 DAMAGED 且有 ProvisionSpec 的实例可重建；起后台任务返回 {taskId}，进度见任务中心。
 func (h *ProvisionHandler) Rebuild(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -124,7 +124,7 @@ func (h *ProvisionHandler) Rebuild(c *gin.Context) {
 	if access != nil {
 		createdBy = access.UserID
 	}
-	// 按角色分派（FR-342 阶段二）：代理走 proxy.RebuildProxy，后端/通用走 prov.RebuildInstance。
+	// 按角色分派（阶段二）：代理走 proxy.RebuildProxy，后端/通用走 prov.RebuildInstance。
 	role, roleErr := h.prov.InstanceRoleFor(uint(id))
 	if roleErr != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
@@ -143,7 +143,7 @@ func (h *ProvisionHandler) Rebuild(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"taskId": taskID})
 }
 
-// ResyncProxy POST /proxies/:id/resync —— 重新把注册关系与 secret 推到代理配置与各后端（FR-035）。
+// ResyncProxy POST /proxies/:id/resync —— 重新把注册关系与 secret 推到代理配置与各后端。
 func (h *ProvisionHandler) ResyncProxy(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -158,7 +158,7 @@ func (h *ProvisionHandler) ResyncProxy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"synced": true, "secretConsistent": consistent, "warnings": warnings})
 }
 
-// Ports GET /nodes/:id/ports —— 查看某节点端口占用与分配范围（FR-032）。
+// Ports GET /nodes/:id/ports —— 查看某节点端口占用与分配范围。
 func (h *ProvisionHandler) Ports(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -177,7 +177,7 @@ func (h *ProvisionHandler) Ports(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// CloneInstance POST /instances/:id/clone —— 一键复制 backend 子服（FR-036）。
+// CloneInstance POST /instances/:id/clone —— 一键复制 backend 子服。
 func (h *ProvisionHandler) CloneInstance(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {

@@ -2,13 +2,11 @@ import { describe, it, expect } from 'vitest'
 import {
   logLevelStatus,
   timeRangeToParams,
-  buildExportParams,
   computeVirtualWindow,
   TIME_RANGE_PRESETS,
   LOG_VIEWS,
-  type LogExportScope,
-} from './logs-filters'
-import type { LogQueryParams } from '@/api/logs'
+  resolveLogView,
+} from '@/lib/logs/logs-filters'
 
 describe('logLevelStatus', () => {
   it('maps error to danger and warn to warning (unified with alerts semantics)', () => {
@@ -28,9 +26,22 @@ describe('logLevelStatus', () => {
 })
 
 describe('LOG_VIEWS', () => {
-  it('defines the primary views plus the administrator-only full search and legacy view', () => {
-    // legacy 由 FR-482 引入：切换后存量日志走 Legacy 只读路径，需与 federated 视图分列。
-    expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all', 'legacy'])
+  it('separates platform tails, node tails, instance history and the combined window', () => {
+    expect(LOG_VIEWS).toEqual(['platform', 'node', 'instance', 'all'])
+  })
+})
+
+describe('resolveLogView', () => {
+  it('keeps explicit four views and maps old instance/node links', () => {
+    for (const view of LOG_VIEWS) expect(resolveLogView(view, 'worker', true)).toBe(view)
+    expect(resolveLogView('node_instance', 'worker', true)).toBe('node')
+    expect(resolveLogView('node_instance', null, true)).toBe('instance')
+    expect(resolveLogView(null, 'worker', true)).toBe('node')
+    expect(resolveLogView('legacy', 'worker', true)).toBe('instance')
+    expect(resolveLogView('invalid', null, true)).toBe('instance')
+  })
+  it('restricts all process and combined views to administrators', () => {
+    for (const view of LOG_VIEWS) expect(resolveLogView(view, 'worker', false)).toBe('instance')
   })
 })
 
@@ -61,53 +72,6 @@ describe('timeRangeToParams', () => {
     expect(TIME_RANGE_PRESETS).toContain('all')
     expect(TIME_RANGE_PRESETS).toContain('15m')
     expect(TIME_RANGE_PRESETS).toContain('7d')
-  })
-})
-
-describe('buildExportParams', () => {
-  const base: LogQueryParams = {
-    level: 'error',
-    keyword: 'boom',
-    page: 3,
-    pageSize: 50,
-    from: '2026-06-26T11:00:00.000Z',
-    to: '2026-06-26T12:00:00.000Z',
-  }
-
-  it('currentPage keeps the exact page/pageSize so only the visible page exports', () => {
-    const out = buildExportParams(base, 'currentPage')
-    expect(out.page).toBe(3)
-    expect(out.pageSize).toBe(50)
-    expect(out.level).toBe('error')
-  })
-
-  it('allMatched drops pagination so the whole filtered set exports', () => {
-    const out = buildExportParams(base, 'allMatched')
-    expect(out.page).toBeUndefined()
-    expect(out.pageSize).toBeUndefined()
-    // 但保留筛选条件（含时间）。
-    expect(out.level).toBe('error')
-    expect(out.from).toBe('2026-06-26T11:00:00.000Z')
-    expect(out.to).toBe('2026-06-26T12:00:00.000Z')
-  })
-
-  it('range drops pagination but keeps the from/to window', () => {
-    const out = buildExportParams(base, 'range')
-    expect(out.page).toBeUndefined()
-    expect(out.pageSize).toBeUndefined()
-    expect(out.from).toBe('2026-06-26T11:00:00.000Z')
-    expect(out.to).toBe('2026-06-26T12:00:00.000Z')
-  })
-
-  it('does not mutate the input params', () => {
-    const snapshot = JSON.parse(JSON.stringify(base))
-    buildExportParams(base, 'allMatched')
-    expect(base).toEqual(snapshot)
-  })
-
-  it('treats an unknown scope like allMatched (safe default)', () => {
-    const out = buildExportParams(base, 'bogus' as LogExportScope)
-    expect(out.page).toBeUndefined()
   })
 })
 

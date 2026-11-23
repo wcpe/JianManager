@@ -21,7 +21,7 @@ import java.util.concurrent.TimeoutException;
  * 动态加载 updater-core 并调用入口（契约 §6.3）。
  *
  * <p>以独立 {@link URLClassLoader} <b>内存加载</b> core jar（读 jar 字节经临时副本 URL，
- * 避免持续锁住原 jar，便于 FR-091 自更新替换），反射 {@code top.wcpe.mc.jm.updater.core.Core.run(Map)}，
+ * 避免持续锁住原 jar，便于自更新替换），反射 {@code top.wcpe.mc.jm.updater.core.Core.run(Map)}，
  * 同步等待 + 超时（契约 §6.3）。
  *
  * <p>抽为独立类便于单测：用真实构建出的 updater-core.jar 端到端验证加载与反射调用。

@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-148 趋势图增强 · 单机（Playwright + mock 模式）验收。
+/** 
+ *趋势图增强 · 单机（Playwright + mock 模式）验收。
  * TimeSeriesChart：多序列常驻图例、窄幅指标 Y 轴 auto domain、空态 i18n。
- * 在指标最丰富的实例监控页断言（该图组件全站复用）。证据落 .tmp/acceptance/FR-148/。
+ * 在指标最丰富的实例监控页断言（该图组件全站复用）。证据落 .tmp/acceptance。
  */
 
-test('FR-148 多序列图例 + 空态 i18n（TimeSeriesChart）', async ({ page }) => {
+test('多序列图例 + 空态 i18n（TimeSeriesChart）', async ({ page }) => {
   await login(page)
   // 趋势图由独立时序请求驱动，导航前监听响应，避免整套慢速运行时在数据回填前断言。
   const seriesResponsePromise = page.waitForResponse((response) => {
@@ -27,5 +27,5 @@ test('FR-148 多序列图例 + 空态 i18n（TimeSeriesChart）', async ({ page 
   await expect(page.getByText('分世界实体')).toBeVisible()
   await expect(page.getByText('暂无数据').first()).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-148/single-machine-charts.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-charts.png', fullPage: true })
 })

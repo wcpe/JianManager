@@ -18,6 +18,12 @@ func newPortsTestDB(t *testing.T) *gorm.DB {
 	// 内存库（共享缓存，按测试名隔离），避免 Windows 上 sqlite 文件在清理时被占用。
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Instance{}))
 	return db
 }
@@ -61,7 +67,7 @@ func TestAllocPortsForNode(t *testing.T) {
 	require.Equal(t, 25566, p4.ServerPort) // p2 的端口被回收
 }
 
-// TestAllocPortsForNode_ProbeInapplicable FR-454：探针不适用（代理/通用二进制/Beacon）时不分配
+// TestAllocPortsForNode_ProbeInapplicable：探针不适用（代理/通用二进制/Beacon）时不分配
 // 探针端口（ProbePort 恒 0），但仍分配 server/query；不占用的探针端口可被后续 MC 实例取用。
 func TestAllocPortsForNode_ProbeInapplicable(t *testing.T) {
 	db := newPortsTestDB(t)

@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BinaryVersionHandler 实例二进制/Beacon 版本管理路由处理器（FR-468）。
+// BinaryVersionHandler 实例二进制/Beacon 版本管理路由处理器。
 // 读走 instance.read（且实例可访问），升级/回滚走实例写权限（canManageInstance）。
 type BinaryVersionHandler struct {
 	svc   *service.BinaryVersionService

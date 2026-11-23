@@ -56,7 +56,7 @@ type GroupQuota struct {
 	MaxInstances int  `gorm:"default:10" json:"maxInstances"`
 	MaxBots      int  `gorm:"default:50" json:"maxBots"`
 	MaxStorageMB int  `gorm:"default:10240" json:"maxStorageMb"`
-	// EnforceMode 组级运行期配额强制档位（FR-467 §2.5）：alert | throttle | stop。
+	// EnforceMode 组级运行期配额强制档位（§2.5）：alert | throttle | stop。
 	// 空串表示继承平台设置 quota.enforce_mode（不在此处硬编码默认值，
 	// 否则「组未显式配置」与「组显式配成 alert」两种意图无法区分）。
 	EnforceMode string    `gorm:"type:varchar(16)" json:"enforceMode"`

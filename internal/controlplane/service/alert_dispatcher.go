@@ -12,7 +12,7 @@ import (
 )
 
 // AlertTrigger 一次告警触发的语义描述，由各触发源（指标评估器 / 事件驱动监听器）产生，
-// 交由 AlertDispatcher 统一处理去抖聚合、静默、分级路由与落库（FR-085）。
+// 交由 AlertDispatcher 统一处理去抖聚合、静默、分级路由与落库。
 type AlertTrigger struct {
 	Rule     *model.AlertRule
 	TargetID uint
@@ -57,7 +57,7 @@ type notifyJob struct {
 	note AlertNotification
 }
 
-// AlertDispatcher 告警分发器（FR-085）。所有触发源经此统一落库 + 通知，
+// AlertDispatcher 告警分发器。所有触发源经此统一落库 + 通知，
 // 集中实现去抖聚合（dedup window）、静默窗口（silence window）、分级路由（按 rule.ChannelIDs → 通道）、
 // 恢复通知与站内通知。无状态于内存（聚合状态以 DB 活跃事件为准），可被多触发源并发调用。
 type AlertDispatcher struct {
@@ -278,12 +278,12 @@ func (d *AlertDispatcher) Resolve(rule *model.AlertRule, dedupKey string, messag
 	})
 }
 
-// notify 把通知扇出到规则路由的所有通道（FR-085）。
-// 优先用 ChannelIDs；为兼容 FR-011，未配置通道但配了 NotifyType=webhook 时回退单 webhook 直发。
+// notify 把通知扇出到规则路由的所有通道。
+// 优先用 ChannelIDs；为兼容未配置通道但配了 NotifyType=webhook 时回退单 webhook 直发。
 func (d *AlertDispatcher) notify(rule *model.AlertRule, note AlertNotification) {
 	ids := parseChannelIDs(rule.ChannelIDs)
 	if len(ids) == 0 {
-		// FR-011 兼容回退：单 webhook 直发。
+		// 兼容回退：单 webhook 直发。
 		if rule.NotifyType == model.ChannelTypeWebhook && rule.NotifyTarget != "" {
 			cfg := ChannelConfig{URL: rule.NotifyTarget}
 			if err := validateChannelConfig(model.ChannelTypeWebhook, &cfg); err != nil {
@@ -328,7 +328,7 @@ func ruleLevel(rule *model.AlertRule) string {
 	return rule.Level
 }
 
-// ruleTriggerType 返回规则触发类型，空值按 metric（兼容 FR-011 存量）。
+// ruleTriggerType 返回规则触发类型，空值按 metric（兼容存量）。
 func ruleTriggerType(rule *model.AlertRule) string {
 	if rule.TriggerType == "" {
 		return model.AlertTriggerMetric

@@ -52,8 +52,8 @@ func Dial(addr string) (net.Conn, error) {
 	return platformDial(addr)
 }
 
-// DialTimeout 以超时拨号到指定地址（FR-456 F9）：地址未就绪/对端 accept 队列打满时避免无限阻塞。
-// timeout<=0 时退化为无超时拨号。
+// DialTimeout 以超时拨号到指定地址：Windows 管道实例繁忙时有界等待，Unix Socket 使用拨号超时。
+// timeout<=0 时使用平台默认拨号语义。
 func DialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
 	if addr == "" {
 		return nil, fmt.Errorf("拨号地址为空")
@@ -64,10 +64,19 @@ func DialTimeout(addr string, timeout time.Duration) (net.Conn, error) {
 	return platformDialTimeout(addr, timeout)
 }
 
-// platformDialDefaultTimeout 无显式超时拨号的默认上限（FR-456 F9）：
-// 地址存在但对端未 accept 时避免无限阻塞，调用方据失败重试。
+// dialProbe 为 SocketServed 提供短超时探活拨号。
+// Windows 命名管道实例繁忙时会等待可用实例，探活使用短超时避免阻塞数秒。
+func dialProbe(addr string) (net.Conn, error) {
+	if addr == "" {
+		return nil, fmt.Errorf("拨号地址为空")
+	}
+	return platformDialProbe(addr)
+}
+
+// platformDialDefaultTimeout 是 Windows 命名管道无显式超时拨号时的默认上限。
+// 管道实例繁忙时有界等待，调用方据失败重试；管道不存在时可能直接返回错误。
 const platformDialDefaultTimeout = 2 * time.Second
 
-// platformListen / platformDial / platformDialTimeout / RemoveSocket 由平台文件实现：
+// platformListen / platformDial / platformDialTimeout / platformDialProbe / RemoveSocket 由平台文件实现：
 //   - conn_unix.go    （Linux/macOS: Unix Socket）
-//   - conn_windows.go （Windows: Named Pipe，基于 npipe）
+//   - conn_windows.go （Windows: Named Pipe，基于 go-winio）

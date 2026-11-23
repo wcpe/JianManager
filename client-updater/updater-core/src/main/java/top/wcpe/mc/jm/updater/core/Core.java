@@ -11,20 +11,20 @@ import java.util.Map;
  * <p>{@code run} 拉 manifest（latest）→ 文件级 reconcile（增量/减量）；
  * 端点不可达 fail-static 带本地版本放行。
  *
- * <p>FR-256 起去掉验签 / CAS / core 自更新（信任靠 HTTPS + 拉取密钥鉴权，
+ * <p>已去掉验签 / CAS / core 自更新（信任靠 HTTPS + 拉取密钥鉴权，
  * 见 {@code docs/specs/updater-arch-simplification/spec.md}）。
- * <p>协议见 {@code docs/specs/client-distribution/contract.md}（ADR-021）。
+ * <p>协议见 {@code docs/specs/client-distribution/contract.md}。
  */
 public final class Core {
 
-    /** selftest 通过码（FR-091）；{@link UrlClassLoaderSelfTest} 据此判定新 jar 是否可切换。 */
+    /** selftest 通过码；{@link UrlClassLoaderSelfTest} 据此判定新 jar 是否可切换。 */
     public static final int SELFTEST_OK = 0;
 
     private Core() {
     }
 
     /**
-     * 新 core jar 切换前的自检入口（FR-091）：被 selftest 以独立 classloader 反射调用，
+     * 新 core jar 切换前的自检入口：被 selftest 以独立 classloader 反射调用，
      * 校验本 jar 关键依赖（JSON / 哈希 / zstd 解码）在仅自身 classpath 下可用；通过返回 {@link #SELFTEST_OK}。
      */
     public static int selfTest() {
@@ -74,11 +74,11 @@ public final class Core {
             String coreVersion = buildInfo.display();
             String wedgeVersion = contextValue(ctx, "wedgeVersion");
             String playerName = contextValue(ctx, "playerName");
-            // FR-426 增补：配置未填玩家名时，从启动参数 --username 取（启动器注入的登录名，如 --username Amazon2）。
+            // 配置未填玩家名时，从启动参数 --username 取（启动器注入的登录名，如 --username Amazon2）。
             if (playerName == null || playerName.isEmpty()) {
                 playerName = LaunchArgs.resolvePlayerName(playerName, LaunchArgs.fullCommand());
             }
-            // 机器码身份（FR-092）：稳定、不可逆、跨平台；ctx 显式提供则用之（测试/特殊），否则本机生成。
+            // 机器码身份：稳定、不可逆、跨平台；ctx 显式提供则用之（测试/特殊），否则本机生成。
             String machineId = ctx.getOrDefault("machineId", "");
             if (machineId.isEmpty()) {
                 machineId = MachineId.get();
@@ -98,7 +98,7 @@ public final class Core {
                     endpoint, channel, key, machineId, installId, playerName, coreVersion, Duration.ofSeconds(15));
             SecurityIdentity identity = new SecurityIdentity(
                     channel, playerName, machineId, installId, coreVersion, wedgeVersion, fromVersion);
-            // 遥测开关同时控制 FR-265 运行态心跳，尊重客户端诊断数据 opt-out；安全画像不受此开关影响。
+            // 遥测开关同时控制运行态心跳，尊重客户端诊断数据 opt-out；安全画像不受此开关影响。
             boolean telemetryEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("telemetry", "true"));
             if (telemetryEnabled) {
                 log.info("开始上报运行态心跳 fromVersion=" + fromVersion);
@@ -111,13 +111,13 @@ public final class Core {
             SecurityHello.postBestEffort(transport, identity);
             log.info("安全画像上报已提交");
             long start = System.currentTimeMillis();
-            // 进度窗口（FR-099）：默认展示；ctx progressUi=false 可关（headless 由展示层自动降级文本）。
+            // 进度窗口：默认展示；ctx progressUi=false 可关（headless 由展示层自动降级文本）。
             boolean progressUiEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("progressUi", "true"));
             Updater updater = new Updater(gameDir, transport, progressUiEnabled);
             int rc = updater.run(log);
             log.info("reconcile 编排结束 rc=" + rc);
 
-            // 遥测上报（FR-094，best-effort、opt-out）：BUSY（未实际更新）不报；telemetry=false 关闭。
+            // 遥测上报（best-effort、opt-out）：BUSY（未实际更新）不报；telemetry=false 关闭。
             if (telemetryEnabled && rc != Updater.BUSY) {
                 long toVersion = StateStore.load(stateDir).lastSeenVersion();
                 log.info("开始上报更新遥测 fromVersion=" + fromVersion + " toVersion=" + toVersion + " rc=" + rc);

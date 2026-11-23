@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// FR-443：启用推送时的必需项 fail-fast。
+// 启用推送时的必需项 fail-fast。
 // 原则是「明确 opt-in 才校验」——未启用推送的部署不受任何影响。
 func TestValidateBeaconConfig(t *testing.T) {
 	cases := []struct {

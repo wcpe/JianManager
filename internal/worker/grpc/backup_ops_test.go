@@ -19,6 +19,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 	"github.com/wcpe/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/internal/worker/storage"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -61,6 +62,10 @@ func manifestMap(m []*workerpb.BackupManifestEntry) map[string]*workerpb.BackupM
 }
 
 func TestStorageBackend_WebDAVSuccess(t *testing.T) {
+	// httptest 监听 127.0.0.1，而 Probe 默认拒回环（SSRF 防护）。
+	// 显式开测试例外（生产策略不放宽），测完恢复。
+	storage.SetProbeAllowLoopbackForTest(true)
+	defer storage.SetProbeAllowLoopbackForTest(false)
 	objects := map[string][]byte{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
@@ -101,6 +106,9 @@ func TestStorageBackend_WebDAVSuccess(t *testing.T) {
 }
 
 func TestStorageBackend_WebDAVAuthFailure(t *testing.T) {
+	// 同上：探测目标在回环，需显式开测试例外。
+	storage.SetProbeAllowLoopbackForTest(true)
+	defer storage.SetProbeAllowLoopbackForTest(false)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
 			w.WriteHeader(http.StatusUnauthorized)

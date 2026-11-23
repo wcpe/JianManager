@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// rankingSupportedMetrics 跨实例排行支持的指标键（FR-469）。
+// rankingSupportedMetrics 跨实例排行支持的指标键。
 var rankingSupportedMetrics = map[string]bool{
 	model.MetricInstTPS:           true,
 	model.MetricInstMSPT:          true,
@@ -36,7 +36,7 @@ const rankingMaxRawWindow = 6 * time.Hour
 // 与 spec §2.1「单条聚合 SQL 避免 N+1」不冲突——仍是单条聚合，只是档位更粗。
 const rankingMax5mWindow = 7 * 24 * time.Hour
 
-// RankingQuery 跨实例排行查询（FR-469）。代表值取窗口内均值（比最新一拍稳健）。
+// RankingQuery 跨实例排行查询。代表值取窗口内均值（比最新一拍稳健）。
 type RankingQuery struct {
 	MetricKey string
 	Order     string // asc | desc；空则按指标语义定方向
@@ -86,7 +86,7 @@ func rankingOrder(metricKey, requested string) string {
 	return "desc"
 }
 
-// InstanceRanking 返回窗口内各实例某指标代表值的跨节点排行（FR-469）。
+// InstanceRanking 返回窗口内各实例某指标代表值的跨节点排行。
 // 单条聚合 SQL：以样本表为驱动 JOIN metric_series 按 **instance_id** 分组求均值，
 // 再 JOIN instances 取名，最后排序 LIMIT；窗口内无样本的实例不进榜（不伪造 0）。
 //
@@ -267,14 +267,14 @@ func (s *MetricService) rankingSkippedNoData(base func() *gorm.DB, tsCol string,
 	return skipped
 }
 
-// PlayerTrendQuery 玩家在线趋势查询（FR-469）。
+// PlayerTrendQuery 玩家在线趋势查询。
 type PlayerTrendQuery struct {
 	From, To   time.Time
 	Resolution string
 	Location   *time.Location // 时段分布时区；nil → 服务器本地时区
 }
 
-// PlayerTrendResult 全网玩家在线趋势与时段分布（FR-469）。
+// PlayerTrendResult 全网玩家在线趋势与时段分布。
 type PlayerTrendResult struct {
 	Resolution string        `json:"resolution"`
 	Timezone   string        `json:"timezone"`
@@ -285,7 +285,7 @@ type PlayerTrendResult struct {
 	DailyAvg   float64       `json:"dailyAvg"`
 }
 
-// PlayerTrend 返回窗口内全网在线人数趋势曲线 + 24 时段分布 + 峰值/日均（FR-469）。
+// PlayerTrend 返回窗口内全网在线人数趋势曲线 + 24 时段分布 + 峰值/日均。
 // 时段分桶按查询时区（默认服务器本地时区）的小时归并求均值。
 func (s *MetricService) PlayerTrend(q PlayerTrendQuery) (PlayerTrendResult, error) {
 	loc := q.Location

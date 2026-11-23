@@ -12,9 +12,9 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// fr471SleepCommand 返回一个可控的长驻启动命令（跨平台）：
+// adoptSleepStartCommand 返回一个可控的长驻启动命令（跨平台）：
 // 用进程自身作为被托管的「游戏服」，仅用于验证 RPC 的接线与错误范式。
-func fr471StartCommand() string {
+func adoptStartCommand() string {
 	if runtime.GOOS == "windows" {
 		return "timeout /t 60 /nobreak"
 	}
@@ -25,7 +25,7 @@ func fr471StartCommand() string {
 // Success=false + Error（与 StopInstance 的错误范式一致，由 CP 回写 statusReason）。
 func TestAdoptForeignRuntime_Unregistered(t *testing.T) {
 	mgr := process.NewManager(t.TempDir())
-	srv := NewServer(mgr, "node-fr471", nil, nil, nil)
+	srv := NewServer(mgr, "node-adopt", nil, nil, nil)
 
 	resp, err := srv.AdoptForeignRuntime(context.Background(), &workerpb.InstanceActionRequest{InstanceUuid: "missing-uuid"})
 	require.NoError(t, err, "业务失败不应是 gRPC 传输错误")
@@ -38,11 +38,11 @@ func TestAdoptForeignRuntime_Unregistered(t *testing.T) {
 func TestAdoptForeignRuntime_NoDriftStartsInstance(t *testing.T) {
 	mgr := process.NewManager(t.TempDir())
 	mgr.SetMemGuard(process.MemGuardConfig{Disabled: true})
-	uuid := "fr471-adopt-e2e"
-	require.NoError(t, mgr.Create(uuid, "fr471", fr471StartCommand(), "stop", t.TempDir(), nil, false, process.ProcessTypeDirect, "", "", 0, 0))
+	uuid := "adopt-e2e"
+	require.NoError(t, mgr.Create(uuid, "adopt", adoptStartCommand(), "stop", t.TempDir(), nil, false, process.ProcessTypeDirect, "", "", 0, 0))
 	t.Cleanup(func() { _ = mgr.Kill(uuid) })
 
-	srv := NewServer(mgr, "node-fr471", nil, nil, nil)
+	srv := NewServer(mgr, "node-adopt", nil, nil, nil)
 	resp, err := srv.AdoptForeignRuntime(context.Background(), &workerpb.InstanceActionRequest{InstanceUuid: uuid})
 	require.NoError(t, err)
 	require.True(t, resp.Success, resp.Error)

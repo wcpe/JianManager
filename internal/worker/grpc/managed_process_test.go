@@ -8,11 +8,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 func TestInspectManagedProcessRejectsPidOutsideInstanceTree(t *testing.T) {
-	srv, _, uuid := startFR343RunningInstance(t)
+	srv, _, uuid := startMetricsRunningInstance(t)
 
 	resp, err := srv.InspectManagedProcess(context.Background(), &workerpb.ManagedProcessInspectRequest{
 		InstanceUuid: uuid,
@@ -23,8 +24,15 @@ func TestInspectManagedProcessRejectsPidOutsideInstanceTree(t *testing.T) {
 	require.Equal(t, "PID_NOT_MANAGED", resp.Code)
 }
 
-func TestTerminateManagedProcessRejectsRootPID(t *testing.T) {
-	srv, mgr, uuid := startFR343RunningInstance(t)
+/*
+根进程允许 PID 级处置（用户要求：卡死时必须能清理）。
+
+这条用例锁住的是「放开后行为正确」：处置成功，且**实例状态随根进程退出被同步**——
+原先靠拒绝根进程来保证状态一致性，现在改为由 waitLoop 的退出监听保证，
+所以这里必须验证状态确实变了，否则放开就退化成「杀了但平台还记着 RUNNING」。
+*/
+func TestTerminateManagedProcessAllowsRootPID(t *testing.T) {
+	srv, mgr, uuid := startMetricsRunningInstance(t)
 	rootPID := mgr.GetInstancePID(uuid)
 	require.Greater(t, rootPID, 0)
 
@@ -34,12 +42,31 @@ func TestTerminateManagedProcessRejectsRootPID(t *testing.T) {
 		Mode:         "kill_tree",
 	})
 	require.NoError(t, err)
-	require.False(t, resp.Success)
-	require.Equal(t, "ROOT_PROCESS_ACTION_DENIED", resp.Code)
+	// 本用例要钉的是「根进程**不再被拒绝**处置」——放开前这里返回 PID_NOT_MANAGED，
+	// 现在最低要求是该拒绝码消失。不能直接断言 Success：
+	//
+	// 处置与取 PID 之间若进程已自然退出（helper 生命周期短、runner 负载高），
+	// 产品侧会如实回报 `os: process already finished`，这是**正确的**结果，
+	// 而不是缺陷——届时实例状态同样已离开 RUNNING，下方断言照样成立。
+	// CI core shard 2 曾因把它当失败而红灯。
+	require.NotEqual(t, "PID_NOT_MANAGED", resp.Code, "根进程应当允许处置：%s", resp.Message)
+	if !resp.Success {
+		require.Contains(t, resp.Message, "process already finished",
+			"非成功结果只接受「进程已先行退出」这一种，其余仍视为缺陷：%s", resp.Message)
+	}
+
+	// 退出监听把实例同步为 CRASHED/STOPPED，不会停在 RUNNING。
+	require.Eventually(t, func() bool {
+		st, err := mgr.GetState(uuid)
+		if err != nil {
+			return true
+		}
+		return st != process.StateRunning
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func TestInspectManagedProcessReturnsTreeScopedDetail(t *testing.T) {
-	srv, mgr, uuid := startFR343RunningInstance(t)
+	srv, mgr, uuid := startMetricsRunningInstance(t)
 	rootPID := int32(mgr.GetInstancePID(uuid))
 	require.Greater(t, rootPID, int32(0))
 
@@ -69,7 +96,7 @@ func TestInspectManagedProcessReturnsTreeScopedDetail(t *testing.T) {
 }
 
 func TestTerminateManagedProcessRejectsUnsupportedMode(t *testing.T) {
-	srv, mgr, uuid := startFR343RunningInstance(t)
+	srv, mgr, uuid := startMetricsRunningInstance(t)
 	rootPID := int32(mgr.GetInstancePID(uuid))
 	require.Greater(t, rootPID, int32(0))
 

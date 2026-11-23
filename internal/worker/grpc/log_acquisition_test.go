@@ -2,16 +2,11 @@ package grpc
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
+	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -19,12 +14,14 @@ import (
 type registrationLogCollector struct {
 	calls                          int
 	target, generation, mode, path string
+	ruleKey, relativePath          string
 	err                            error
 }
 
-func (c *registrationLogCollector) RegisterInstance(uuid, target, generation, mode, path string) error {
+func (c *registrationLogCollector) RegisterInstance(reg logconf.InstanceRegistration) error {
 	c.calls++
-	c.target, c.generation, c.mode, c.path = target, generation, mode, path
+	c.target, c.generation, c.mode, c.path = reg.TargetID, reg.Generation, reg.Mode, reg.WorkDir
+	c.ruleKey, c.relativePath = reg.RuleKey, reg.RelativePath
 	return c.err
 }
 func (*registrationLogCollector) AppendInstanceOutput(string, string, []byte) error { return nil }
@@ -52,26 +49,4 @@ func TestInstanceRegistrationAndResyncBindManagedLogs(t *testing.T) {
 	require.False(t, response.Success)
 	_, exists := manager.GetInstance(request.InstanceUuid)
 	require.False(t, exists, "do not acknowledge registration when durable log binding failed")
-}
-
-func TestCreateInstanceAdoptsPendingOutputThroughGrpcBinding(t *testing.T) {
-	root := t.TempDir()
-	collector, err := ingest.New(ingest.Options{Root: root, Catalog: catalog.New(nil)})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = collector.Stop() })
-	require.ErrorIs(t, collector.AppendInstanceOutput("uuid-grpc-spool", "stdout", []byte("before grpc binding\n")), ingest.ErrInstanceBindingPending)
-
-	manager := process.NewManager(t.TempDir())
-	srv := NewServer(manager, "node", nil, nil, nil)
-	srv.SetInstanceLogCollector(collector)
-	request := &workerpb.CreateInstanceRequest{InstanceUuid: "uuid-grpc-spool", Name: "fixture", WorkDir: t.TempDir(), ProcessType: "direct",
-		LogTargetId: "inst:grpc-spool", LogAcquireMode: "STDIO_PRIMARY", LogSourceGeneration: "holder-g1"}
-	response, err := srv.CreateInstance(context.Background(), request)
-	require.NoError(t, err)
-	require.True(t, response.Success)
-	identity := sha256.Sum256([]byte(request.InstanceUuid + "\x00" + request.LogSourceGeneration))
-	rawPath := filepath.Join(root, "var", "log", "raw", fmt.Sprintf("%x", identity), "stdout.log")
-	data, err := os.ReadFile(rawPath)
-	require.NoError(t, err)
-	require.Equal(t, "before grpc binding\n", string(data))
 }

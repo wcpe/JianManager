@@ -44,7 +44,7 @@ class CodecTest {
                 () -> Codec.decode(new byte[]{1}, "brotli"));
     }
 
-    // ── FR-257：流式解码（decodeStream）──────────────────────────────────
+    // ── 流式解码（decodeStream）────────────────────────────────────────
 
     @Test
     void decodesZstdStream() throws Exception {

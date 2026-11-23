@@ -6,12 +6,12 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import InstanceConsolePage from './InstanceConsolePage'
 
-/**
- * FR-313：崩溃诊断卡——实例控制台概览区的崩溃快照列表。
+/** 
+ *：崩溃诊断卡——实例控制台概览区的崩溃快照列表。
  * 数据来自 GET /instances/:id/crash-snapshots（devmock 种子：实例 3 两条、实例 2 无），
  * 覆盖列表渲染（倒序 + 退出码/信号/时长）、尾部输出展开（等宽 pre）、空态。
  */
-describe('InstanceConsolePage 崩溃诊断卡（FR-313）', () => {
+describe('InstanceConsolePage 崩溃诊断卡', () => {
   beforeEach(() => {
     loginMockUser()
   })
@@ -20,7 +20,7 @@ describe('InstanceConsolePage 崩溃诊断卡（FR-313）', () => {
     renderWithProviders(<InstanceConsolePage instanceId={3} />, { route: '/instances/3' })
 
     const card = await screen.findByTestId('crash-diagnostics')
-    // 快照异步到达；无快照时该段只显示一行灰字（FR-423 空态收缩），标题随数据出现。
+    // 快照异步到达；无快照时该段只显示一行灰字（空态收缩），标题随数据出现。
     expect(await within(card).findByText('崩溃诊断')).toBeInTheDocument()
 
     const rows = await within(card).findAllByRole('button', { expanded: false })
@@ -42,14 +42,14 @@ describe('InstanceConsolePage 崩溃诊断卡（FR-313）', () => {
     const card = await screen.findByTestId('crash-diagnostics')
     const rows = await within(card).findAllByRole('button', { expanded: false })
 
-    // 展开前尾部输出的 <pre> 不可见（FR-470 起证据行/指纹会出现在卡片其它位置，
+    // 展开前尾部输出的 <pre> 不可见（起证据行/指纹会出现在卡片其它位置，
     // 故此处按「承载尾部输出的 pre」判定，而不是全文匹配）。
     expect(within(card).queryByText(/Saving chunks/)).not.toBeInTheDocument()
 
     await user.click(rows[1])
     expect(rows[1]).toHaveAttribute('aria-expanded', 'true')
     // 等宽字体承载（spec §2）：尾部输出渲染在 font-mono 的 pre 中。
-    // FR-470 起同一行文本也可能出现在「命中证据」列表里，故按元素类型定位 pre。
+    // 起同一行文本也可能出现在「命中证据」列表里，故按元素类型定位 pre。
     const pre = within(card)
       .getAllByText(/Unable to access jarfile paper.jar/)
       .find((el) => el.tagName === 'PRE')
@@ -70,11 +70,11 @@ describe('InstanceConsolePage 崩溃诊断卡（FR-313）', () => {
   })
 })
 
-/**
- * FR-470：崩溃诊断增强——根因标签 / 证据 / 关联资源证据 / 趋势 / 同类聚合。
+/** 
+ *：崩溃诊断增强——根因标签 / 证据 / 关联资源证据 / 趋势 / 同类聚合。
  * 种子（devmock）：实例 3 两条快照分别带 class_not_found 与 oom（后者带关联证据）。
  */
-describe('InstanceConsolePage 崩溃诊断增强（FR-470）', () => {
+describe('InstanceConsolePage 崩溃诊断增强', () => {
   beforeEach(() => {
     loginMockUser()
   })

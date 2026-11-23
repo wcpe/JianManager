@@ -1,11 +1,30 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { startTransition, useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Brush, CartesianGrid, Legend, Line, LineChart, XAxis, YAxis } from 'recharts'
 import { formatterFor, type PlotSeries } from '../lib/monitor-metrics'
 import { brushSelectionToWindow } from '../lib/brush'
+import { chartAccessibleName } from '../lib/chart-a11y'
 import { hoverSnapshotAt, type SampleRow } from '../lib/chart-hover'
 
 const CHART_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)']
+
+/** 
+ * 容器宽度变化的防抖时长（阶段 6 补丁）。
+ *
+ * 侧栏开合、面板折叠、窗口拖拽都会让容器宽度**逐帧**变化，ResizeObserver 因此每帧回调。
+ * 而 recharts 重绘极贵——实测展开一次侧栏，图表侧产生 240 次 `<g>` 子节点替换 +
+ * 48 次 `<line>` 宽度改写，正好铺满 320ms 过渡期，把主线程占满、动画帧插不进来。
+ *
+ * 【为什么取 2000ms 而不是刚够盖住动画】取值必须大于侧栏折叠动画（320ms），否则防抖到期时
+ * 动画仍在进行，那次重绘会直接砸在动画中间（实测 120ms 时展开期间只剩 4 帧、最大帧间隔
+ * 433ms）。但仅取 400ms 仍然不够：React Profiler 埋点显示，点击侧栏后内容区累计阻塞
+ * 538.8ms、最大单项 229ms，且**从点击后 812ms 才开始**——正好落在防抖到期处。
+ * 也就是说"图表适应新宽度"这件事本身要花几百毫秒，只要它还挨着操作时段，用户就会感到卡。
+ * 取 2000ms 把它推到操作结束之后：用户点完侧栏、视线移开，图表才安静地重排一次。
+ * 代价是图表宽度延迟约 2 秒跟随——对趋势图这种"看形状不看精确宽度"的内容肉眼无感，
+ * 这也是与用户确认后接受的取舍。
+ */
+const CHART_RESIZE_DEBOUNCE_MS = 2000
 
 /** 据跨度选 X 轴时间格式：≤24h 显示时:分，更长显示月-日（与 TimeSeriesChart 一致）。 */
 function makeTickFormatter(spanMs: number): (ts: string) => string {
@@ -19,8 +38,8 @@ function makeTickFormatter(spanMs: number): (ts: string) => string {
   }
 }
 
-/**
- * 监控图（FR-169）：在折线基础上加 **底部 brush 拖拽轴**（拖选时间窗，recharts Brush 原生缩放主图）
+/** 
+ * 监控图：在折线基础上加 **底部 brush 拖拽轴**（拖选时间窗，recharts Brush 原生缩放主图）
  * 与 **hover 浮窗**（该时刻各序列值）。每图独立时间窗为本地视图状态，不回写父级 range。
  *
  * 设计参见 design §4.2。纯逻辑（选区→窗、x→最近点）下沉 lib/brush.ts、lib/chart-hover.ts，
@@ -34,6 +53,7 @@ export function MonitorChart({
   yDomain = ['auto', 'auto'],
   showBrush = true,
   yAxisWidth = 48,
+  ariaLabel,
 }: {
   series: PlotSeries[]
   height?: number
@@ -44,6 +64,11 @@ export function MonitorChart({
   showBrush?: boolean
   /** Y 轴宽度（px）。格式化后仍偏长的场景（如多指标对比的紧凑缩写）可放宽避免截断。 */
   yAxisWidth?: number
+  /** 
+   * 图表的替代文本（可访问名）。省略时由序列名推导——见 {@link chartAccessibleName}。
+   * 调用方若有更贴切的描述（图卡标题等），传进来即可覆盖推导值。
+   */
+  ariaLabel?: string
 }) {
   const { t } = useTranslation()
 
@@ -63,7 +88,11 @@ export function MonitorChart({
   const timestamps = useMemo(() => rows.map((r) => String(r.ts)), [rows])
   const fullSpanMs = useMemo(() => {
     if (rows.length < 2) return 0
-    return new Date(String(rows[rows.length - 1].ts)).getTime() - new Date(String(rows[0].ts)).getTime()
+    // rows.length >= 2：首末两行必存在；判空仅为类型收窄
+    const lastRow = rows[rows.length - 1]
+    const firstRow = rows[0]
+    if (lastRow === undefined || firstRow === undefined) return 0
+    return new Date(String(lastRow.ts)).getTime() - new Date(String(firstRow.ts)).getTime()
   }, [rows])
 
   // brush 选区下标（受控）：默认全段。数据行数随轮询变化时，渲染期把下标夹到当前边界，
@@ -98,14 +127,22 @@ export function MonitorChart({
   // 容器实测宽度直喂 LineChart，规避 ResponsiveContainer 在 0 尺寸容器内 width(-1) 告警（BUG-007）。
   const [width, setWidth] = useState(0)
   const observerRef = useRef<ResizeObserver | null>(null)
+  const debounceRef = useRef<number | undefined>(undefined)
   const containerRef = useCallback((el: HTMLDivElement | null) => {
     observerRef.current?.disconnect()
+    window.clearTimeout(debounceRef.current)
     if (!el) {
       observerRef.current = null
       return
     }
     const observer = new ResizeObserver((entries) => {
-      setWidth(Math.floor(entries[0]?.contentRect.width ?? 0))
+      const next = Math.floor(entries[0]?.contentRect.width ?? 0)
+      window.clearTimeout(debounceRef.current)
+      debounceRef.current = window.setTimeout(() => {
+        // startTransition：把这次重绘降级为可中断的低优先级更新，
+        // 让浏览器优先绘制正在进行的 CSS 动画帧（见 CHART_RESIZE_DEBOUNCE_MS 的说明）。
+        startTransition(() => setWidth(next))
+      }, CHART_RESIZE_DEBOUNCE_MS)
     })
     observer.observe(el)
     observerRef.current = observer
@@ -154,7 +191,13 @@ export function MonitorChart({
         )}
       </div>
 
-      <div ref={containerRef} style={{ height, width: '100%' }}>
+      {/* role="img" + aria-label：为什么与 TimeSeriesChart 同一处理，见 charts/TimeSeriesChart.tsx 的同位置注释。 */}
+      <div
+        ref={containerRef}
+        role="img"
+        aria-label={chartAccessibleName(series, ariaLabel, emptyHint)}
+        style={{ height, width: '100%' }}
+      >
         {width > 0 && (
           <LineChart
             width={width}

@@ -19,7 +19,7 @@ func constSlice(n int, v float64) []float64 {
 	return out
 }
 
-// TestAnalyzeAttributionFactors_GCDominates 注入 GC 抖动后归因指向 GC 因子（FR-465 验收 4/5）。
+// TestAnalyzeAttributionFactors_GCDominates 注入 GC 抖动后归因指向 GC 因子（验收 4/5）。
 func TestAnalyzeAttributionFactors_GCDominates(t *testing.T) {
 	const n = 60
 	target := constSlice(n, 20)

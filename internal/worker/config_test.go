@@ -8,9 +8,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
-// TestLoad_OrphanScanDefaults 运行期孤儿扫描默认启用、周期 60s、策略 warn（FR-456）。
+// TestLoad_OrphanScanDefaults 运行期孤儿扫描默认启用、周期 60s、策略 warn。
 func TestLoad_OrphanScanDefaults(t *testing.T) {
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
 	require.NoError(t, err)
@@ -19,7 +20,7 @@ func TestLoad_OrphanScanDefaults(t *testing.T) {
 	assert.Equal(t, 60*time.Second, cfg.OrphanScan.ScanInterval())
 }
 
-// TestLoad_OrphanScanEnvOverride 运行期孤儿扫描可经环境变量覆盖（FR-456）。
+// TestLoad_OrphanScanEnvOverride 运行期孤儿扫描可经环境变量覆盖。
 func TestLoad_OrphanScanEnvOverride(t *testing.T) {
 	t.Setenv("JIANMANAGER_ORPHAN_SCAN_DISABLED", "true")
 	t.Setenv("JIANMANAGER_ORPHAN_SCAN_INTERVAL", "15s")
@@ -39,7 +40,45 @@ func TestOrphanScanConfig_ScanIntervalParsing(t *testing.T) {
 	assert.Equal(t, 90*time.Second, OrphanScanConfig{Interval: "90s"}.ScanInterval())
 }
 
-// TestHealthScanConfig 巡检周期/熔断窗口解析回退默认 30s/10m；策略组装对齐本地配置（FR-459）。
+// TestLoad_RecoverRetryBackoffDefaults 接管重试序列默认覆盖分钟级（①）：
+// Worker 重启后接管存活 wrapper 的重试窗口默认 1s→…→64s ≈127s（spec §6）。
+//
+// 转红方式：把默认改回旧 {1s,2s,4s}（≈7s）或删掉该键——序列值与总窗口断言失败。
+func TestLoad_RecoverRetryBackoffDefaults(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "1s,2s,4s,8s,16s,32s,64s", cfg.Recover.RetryBackoff)
+
+	seq := cfg.Recover.RetryBackoffSequence()
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, seq, "配置默认口径应与进程包默认序列同源")
+	total := time.Duration(0)
+	for _, d := range seq {
+		total += d
+	}
+	assert.Equal(t, 127*time.Second, total, "默认重试窗口 ≈127s")
+}
+
+// TestLoad_RecoverRetryBackoffEnvOverride 接管重试序列可经环境变量/配置文件覆盖（① 测试用小值）。
+func TestLoad_RecoverRetryBackoffEnvOverride(t *testing.T) {
+	t.Setenv("JIANMANAGER_RECOVER_RETRY_BACKOFF", "10ms,20ms")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}, cfg.Recover.RetryBackoffSequence())
+}
+
+// TestRecoverConfig_RetryBackoffSequenceParsing 留空/全非法回退默认序列；逐项过滤非法与非正项。
+func TestRecoverConfig_RetryBackoffSequenceParsing(t *testing.T) {
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{}.RetryBackoffSequence())
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{RetryBackoff: "  "}.RetryBackoffSequence())
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{RetryBackoff: "bogus"}.RetryBackoffSequence())
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{RetryBackoff: "-1s,-2s"}.RetryBackoffSequence())
+	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second},
+		RecoverConfig{RetryBackoff: "1s, 2s"}.RetryBackoffSequence())
+	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second},
+		RecoverConfig{RetryBackoff: "1s, bogus, 2s, 0s"}.RetryBackoffSequence(), "非法项应跳过")
+}
+
+// TestHealthScanConfig 巡检周期/熔断窗口解析回退默认 30s/10m；策略组装对齐本地配置。
 func TestHealthScanConfig(t *testing.T) {
 	assert.Equal(t, 30*time.Second, HealthScanConfig{}.ScanInterval())
 	assert.Equal(t, 30*time.Second, HealthScanConfig{Interval: "bogus"}.ScanInterval())
@@ -55,7 +94,7 @@ func TestHealthScanConfig(t *testing.T) {
 	assert.False(t, HealthScanConfig{Disabled: true}.HealthPolicy().Enabled, "Disabled 应映射为 Enabled=false")
 }
 
-// TestLoad_Defaults 零配置（无文件、无 env）时加载合理默认值（FR-080，见 ADR-020）。
+// TestLoad_Defaults 零配置（无文件、无 env）时加载合理默认值。
 func TestLoad_Defaults(t *testing.T) {
 	// 指向不存在的文件，强制走默认值（ReadInConfig 容错）。
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
@@ -77,16 +116,16 @@ func TestLoad_LogCapacityRejectsInvertedThresholds(t *testing.T) {
 
 func TestLoad_LogVLPorts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "worker.yml")
-	require.NoError(t, os.WriteFile(path, []byte("log_vl:\n  hot_port: 19641\n  cold_port: 19642\n  rehydrate_port: 19643\n"), 0o600))
+	// 2026-10-29：冷热双层废除，`cold_port` / `rehydrate_port` 已删除 ——
+	// 只剩余一个受管实例，也只剩一个端口可配。写了旧键不会生效。
+	require.NoError(t, os.WriteFile(path, []byte("log_vl:\n  hot_port: 19641\n"), 0o600))
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, 19641, cfg.LogVL.HotPort)
-	assert.Equal(t, 19642, cfg.LogVL.ColdPort)
-	assert.Equal(t, 19643, cfg.LogVL.RehydratePort)
 
-	require.NoError(t, os.WriteFile(path, []byte("log_vl:\n  hot_port: 19641\n  cold_port: 19641\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("log_vl:\n  hot_port: 70000\n"), 0o600))
 	_, err = Load(path)
-	require.ErrorContains(t, err, "ports must be distinct")
+	require.ErrorContains(t, err, "ports must be within 1..65535")
 }
 
 // TestLoad_EnrollTokenFromEnv enrollment token 经 JIANMANAGER_ENROLL_TOKEN 注入、不从 yaml 读取。
@@ -139,7 +178,7 @@ func TestLoad_IgnoresLegacyGRPCPort(t *testing.T) {
 	assert.Equal(t, 19102, cfg.WS.Port)
 }
 
-// TestLoad_ControlPlaneEnvAlias 旧键 JIANMANAGER_CONTROL_PLANE 与正式键等价（FR-354）。
+// TestLoad_ControlPlaneEnvAlias 旧键 JIANMANAGER_CONTROL_PLANE 与正式键等价。
 func TestLoad_ControlPlaneEnvAlias(t *testing.T) {
 	t.Setenv("JIANMANAGER_CONTROL_PLANE", "legacy-cp:9100")
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
@@ -147,7 +186,7 @@ func TestLoad_ControlPlaneEnvAlias(t *testing.T) {
 	assert.Equal(t, "legacy-cp:9100", cfg.ControlPlane)
 }
 
-// TestLoad_ArtifactCacheCap 节点制品缓存上限默认 0（不限），可经 env 覆盖（FR-178）。
+// TestLoad_ArtifactCacheCap 节点制品缓存上限默认 0（不限），可经 env 覆盖。
 func TestLoad_ArtifactCacheCap(t *testing.T) {
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
 	require.NoError(t, err)
@@ -159,7 +198,7 @@ func TestLoad_ArtifactCacheCap(t *testing.T) {
 	assert.Equal(t, int64(1073741824), cfg2.ArtifactCache.MaxBytes)
 }
 
-// TestFindConfigFile_YmlPreferred .yml 优先于 .yaml，皆无返回空（FR-224 / FR-222 自检复用）。
+// TestFindConfigFile_YmlPreferred .yml 优先于 .yaml，皆无返回空（自检复用）。
 func TestFindConfigFile_YmlPreferred(t *testing.T) {
 	dir := t.TempDir()
 	assert.Empty(t, FindConfigFile("worker", dir), "皆无返回空")
@@ -191,7 +230,82 @@ func TestWorkerConfigExists_FindsConfigBesideExecutable(t *testing.T) {
 	assert.True(t, WorkerConfigExists(), "exe 目录有 worker.yml → 应判已配置（FIX-3）")
 }
 
-// TestWorkerConfigExists 工作目录有/无 worker 配置文件时正确报告（FR-222 未配置自检的一半）。
+// TestLoad_LogIngestTimeZone 采集时区配置面（缺陷 C）：默认 UTC 不变、显式值可配、非法值启动即拒。
+//
+// 转红：改动前没有 log_ingest.time_zone 这条配置面 —— 生产只能改代码才能让源时区生效；
+// 且时区配错必须显式失败，静默回退会让整源时间轴偏移而无人察觉。
+func TestLoad_LogIngestTimeZone(t *testing.T) {
+	// 零配置：留空 = UTC（既有行为零变化，未配置的节点时间轴不漂移）。
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.IngestDefaultTimeZone(), "未配置时区时必须保持 UTC（空串）语义")
+
+	// 现场口径：节点 JVM 与 Worker 同机，配 local 即跟随节点时区（生产 HKT 建议值）。
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: local\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "local", cfg.IngestDefaultTimeZone())
+
+	// 也可显式写 IANA 名（不依赖节点 TZ，跨机迁移时时间轴不随部署环境漂移）。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: Asia/Hong_Kong\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "Asia/Hong_Kong", cfg.IngestDefaultTimeZone())
+
+	// 非法值必须启动即拒（与登记阶段拒绝非法源级时区同一取舍）。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: HKT+8\n"), 0o600))
+	_, err = Load(path)
+	require.ErrorContains(t, err, "log_ingest.time_zone 非法")
+}
+
+// TestLoad_LogIngestTimeZoneEnvOverride 环境变量按路径覆盖配置（JIANMANAGER_LOG_INGEST_TIME_ZONE）。
+func TestLoad_LogIngestTimeZoneEnvOverride(t *testing.T) {
+	t.Setenv("JIANMANAGER_LOG_INGEST_TIME_ZONE", "Asia/Hong_Kong")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "Asia/Hong_Kong", cfg.IngestDefaultTimeZone())
+}
+
+// TestLoad_LogIngestCharset 采集字符集配置面（复审 P2-3）：默认 auto 不变、显式值可配、非法值启动即拒。
+//
+// 转红：改动前没有 log_ingest.charset 这条配置面（config.go 无键、main.go 不传）——
+// 节点级默认字符集只能改代码才能生效；且非法字符集必须显式失败，静默回退 auto 会让
+// GBK 日志被当作非法 UTF-8 净化成替换字符而无人察觉。
+func TestLoad_LogIngestCharset(t *testing.T) {
+	// 零配置：留空 = auto（既有行为零变化，合法 UTF-8 源逐字节不变）。
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.IngestDefaultCharset(), "未配置字符集时必须保持 auto（空串）语义")
+
+	// 显式声明（中文 locale 的 JVM 输出 GBK 日志时的确定性方案）。
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  charset: gbk\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "gbk", cfg.IngestDefaultCharset())
+
+	// 也接受 auto/utf-8/gb18030。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  charset: gb18030\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "gb18030", cfg.IngestDefaultCharset())
+
+	// 非法值必须启动即拒（与源级登记拒绝非法字符集同一取舍）。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  charset: big5\n"), 0o600))
+	_, err = Load(path)
+	require.ErrorContains(t, err, "log_ingest.charset 非法")
+}
+
+// TestLoad_LogIngestCharsetEnvOverride 环境变量按路径覆盖配置（JIANMANAGER_LOG_INGEST_CHARSET）。
+func TestLoad_LogIngestCharsetEnvOverride(t *testing.T) {
+	t.Setenv("JIANMANAGER_LOG_INGEST_CHARSET", "gb18030")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "gb18030", cfg.IngestDefaultCharset())
+}
+
+// TestWorkerConfigExists 工作目录有/无 worker 配置文件时正确报告（未配置自检的一半）。
 func TestWorkerConfigExists(t *testing.T) {
 	dir := t.TempDir()
 	wd, err := os.Getwd()
@@ -203,4 +317,228 @@ func TestWorkerConfigExists(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.yml"), []byte("name: x\n"), 0o644))
 	assert.True(t, WorkerConfigExists(), "有 worker.yml 即已配置")
+}
+
+// TestLoad_ConfigPathIsReported 守住「生效配置文件可自证」（2026-10-02 真机复验的连带交付）：
+// 「改了 worker.yml 重启却没生效」的第一嫌疑是「进程读的不是你改的那个文件」——cwd / exe 旁 /
+// configs 三处都在搜索路径里（服务形态下 cwd 还可能是系统目录）。
+//
+// 转红：不记录 `v.ConfigFileUsed()`（ConfigPath 恒为空）→ 本用例必红。
+func TestLoad_ConfigPathIsReported(t *testing.T) {
+	// 未找到任何配置文件：空串（明确表达「全部取自默认值/环境变量」）。
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.ConfigPath(), "没有配置文件时必须明确报告空路径")
+
+	// 显式路径：必须回报该文件的绝对路径（供启动日志自证）。
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: Asia/Hong_Kong\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	abs, err := filepath.Abs(path)
+	require.NoError(t, err)
+	assert.Equal(t, abs, cfg.ConfigPath(), "必须回报实际读到的配置文件绝对路径")
+}
+
+// TestRecoveryQuotaTuningDefaultsAndOverride（方案② 的绑定回归）：默认必须是 4× / 30m ✓，
+// 且可经 log_capacity.recovery_* 覆盖 ✓；非法/非正一律回退默认（安全方向 ✓）。
+func TestRecoveryQuotaTuningDefaultsAndOverride(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	f, g := cfg.RecoveryQuotaTuning()
+	assert.Equal(t, 4.0, f, "默认恢复期配额 = 4× 常规闸")
+	assert.Equal(t, 30*time.Minute, g, "默认排空宽限 = 30m（现场排空动辄小时级 ✓）")
+
+	t.Setenv("JIANMANAGER_LOG_CAPACITY_RECOVERY_QUOTA_FACTOR", "8")
+	t.Setenv("JIANMANAGER_LOG_CAPACITY_RECOVERY_DRAIN_GRACE", "45m")
+	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	f2, g2 := cfg2.RecoveryQuotaTuning()
+	assert.Equal(t, 8.0, f2)
+	assert.Equal(t, 45*time.Minute, g2)
+
+	bad := &Config{}
+	bad.LogCapacity.RecoveryQuotaFactor = 0 // <1 ⇒ 回退默认 ✓
+	bad.LogCapacity.RecoveryDrainGrace = "not-a-duration"
+	f3, g3 := bad.RecoveryQuotaTuning()
+	assert.Equal(t, 4.0, f3)
+	assert.Equal(t, 30*time.Minute, g3)
+}
+
+// TestLoad_LogSourceTargetShape 静态 log_sources 必须写成可被查询枚举到的目标形态
+// （`inst:<实例ID>` / `node:<节点ID>`），否则启动即拒。
+//
+// 为什么这条重要（2026-10-17 dev 实测）：命名空间写错时采集与写入 VL 全部正常，
+// 但 CP 按目标枚举匹配不到 → 前端显示「日志查询服务未启用」，现场会误判成 VL 故障。
+// 因此这里既覆盖「合法通过」，也逐个覆盖每类非法形态的拒绝理由。
+func TestLoad_LogSourceTargetShape(t *testing.T) {
+	writeCfg := func(t *testing.T, logSources string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "worker.yml")
+		require.NoError(t, os.WriteFile(path, []byte(logSources), 0o600))
+		return path
+	}
+
+	t.Run("合法的实例源与节点源均通过", func(t *testing.T) {
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317/file"
+    source_generation: "g1"
+    path: "/srv/317/logs/latest.log"
+    mode: FILE_PRIMARY
+    storage_namespace: "inst:317"
+  - log_source_id: "node:1/worker"
+    source_generation: "g1"
+    path: "/var/log/jm/worker.log"
+    mode: FILE_PRIMARY
+    source_category: "worker"
+    storage_namespace: "node:1"
+`)
+		cfg, err := Load(path)
+		require.NoError(t, err)
+		require.Len(t, cfg.LogSources, 2)
+	})
+
+	t.Run("自造命名空间被拒", func(t *testing.T) {
+		// 正是 2026-10-17 dev 现场那条配置：dev:smoke 不属于任何 CP 目标。
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "dev:smoke/file"
+    source_generation: "dev-g1"
+    path: "/tmp/smoke.log"
+    mode: FILE_PRIMARY
+    storage_namespace: "dev:smoke"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "不是可被查询的目标形态")
+		require.ErrorContains(t, err, "dev:smoke")
+	})
+
+	t.Run("命名空间为空被拒", func(t *testing.T) {
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:1/file"
+    source_generation: "g1"
+    storage_namespace: ""
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "storage_namespace 不能为空")
+	})
+
+	t.Run("源标识不以自身命名空间开头被拒", func(t *testing.T) {
+		// 分区键按 storage_namespace 归属，源标识前缀与之脱节会让两者指向不同目标。
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:318/file"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, `必须以 "inst:317/" 开头`)
+	})
+
+	t.Run("源标识缺流名被拒", func(t *testing.T) {
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317/"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, `必须以 "inst:317/" 开头`)
+	})
+
+	t.Run("source_category 非法值被拒", func(t *testing.T) {
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317/file"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+    source_category: "proxy"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "source_category")
+	})
+
+	t.Run("同一源重复登记被拒", func(t *testing.T) {
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317/file"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+  - log_source_id: "inst:317/file"
+    source_generation: "g2"
+    storage_namespace: "inst:317"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "重复")
+	})
+
+	t.Run("出厂示例形态可通过（node 类源 id == namespace）", func(t *testing.T) {
+		// configs/worker.yml 的示例就是这一形态：log_source_id=node:1 + storage_namespace=node:1。
+		// 此前一律强制 `<ns>/` 会把它判非法，存量部署按示例升级后直接起不来（2026-10-19 评审发现）。
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "node:1"
+    source_generation: "node-self-v1"
+    path: "/var/log/jianmanager/worker.log"
+    mode: FILE_PRIMARY
+    source_category: "worker"
+    storage_namespace: "node:1"
+`)
+		cfg, err := Load(path)
+		require.NoError(t, err)
+		require.Len(t, cfg.LogSources, 1)
+	})
+
+	t.Run("实例类源仍必须带流名", func(t *testing.T) {
+		// instance 类不允许 id == namespace：分区键与源身份必须可区分。
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "必须以")
+	})
+
+	t.Run("节点 UUID 形态也可用（运维写配置时数字 ID 尚未分配）", func(t *testing.T) {
+		// M-3：节点数字 ID 由 CP 在注册时分配，写 worker.yml 时无法预知；UUID 在
+		// <dataDir>/etc/node-identity.json 里，是可发现、可验证的写法。
+		// CP 的 assemble.go 对未知前缀走 default 分支按 UUID 解析并归一成 node:<id>。
+		const uuid = "0091c0d6-6f54-469b-9119-40c05cacbb64"
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "node:`+uuid+`/file"
+    source_generation: "g1"
+    path: "/var/log/jm/node.log"
+    mode: FILE_PRIMARY
+    storage_namespace: "node:`+uuid+`"
+`)
+		cfg, err := Load(path)
+		require.NoError(t, err)
+		require.Len(t, cfg.LogSources, 1)
+		require.Equal(t, "node:"+uuid, cfg.LogSources[0].StorageNamespace)
+	})
+
+	t.Run("畸形的 UUID 形态仍被拒", func(t *testing.T) {
+		for _, ns := range []string{
+			"node:not-a-uuid",
+			"node:0091c0d6-6f54-469b-9119",               // 段数不足
+			"node:0091c0d6-6f54-469b-9119-40c05cacbb6",   // 末段少一位
+			"node:0091c0d6-6f54-469b-9119-40c05cacbb64x", // 多字符
+		} {
+			path := writeCfg(t, `log_sources:
+  - log_source_id: "`+ns+`/file"
+    source_generation: "g1"
+    storage_namespace: "`+ns+`"
+`)
+			_, err := Load(path)
+			require.ErrorContains(t, err, "不是可被查询的目标形态", "命名空间 %q 应被拒", ns)
+		}
+	})
+
+	t.Run("实例 ID 非正数被拒", func(t *testing.T) {
+		// inst:0 / inst:007 这类形态 CP 永远不会枚举到（ID 由数据库自增生成）。
+		for _, ns := range []string{"inst:0", "inst:007", "node:00", "inst:-1"} {
+			path := writeCfg(t, `log_sources:
+  - log_source_id: "`+ns+`/file"
+    source_generation: "g1"
+    storage_namespace: "`+ns+`"
+`)
+			_, err := Load(path)
+			require.ErrorContains(t, err, "不是可被查询的目标形态", "命名空间 %q 应被拒", ns)
+		}
+	})
 }

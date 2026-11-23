@@ -31,6 +31,12 @@ func newStorageTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.BackupStorage{}, &model.Backup{}))
 	return db
 }
@@ -75,7 +81,7 @@ func TestCreate_DefaultsS3Region(t *testing.T) {
 	require.Equal(t, "us-east-1", st.Region)
 }
 
-// TestCreate_NameConflict 名称与既有后端冲突时回业务错误（FR-338 收口，替代裸撞唯一索引的 500）。
+// TestCreate_NameConflict 名称与既有后端冲突时回业务错误（收口，替代裸撞唯一索引的 500）。
 func TestCreate_NameConflict(t *testing.T) {
 	svc := NewBackupStorageService(newStorageTestDB(t))
 	_, err := svc.Create(&model.BackupStorage{Name: "dup", Type: model.BackupStorageWebDAV, Endpoint: "https://dav.local"})
@@ -84,7 +90,7 @@ func TestCreate_NameConflict(t *testing.T) {
 	require.ErrorIs(t, err, ErrStorageNameConflict)
 }
 
-// TestUpdate_OK 编辑改名/改凭证引用/改 endpoint 落库生效，且 lastTest* 清空（FR-338）。
+// TestUpdate_OK 编辑改名/改凭证引用/改 endpoint 落库生效，且 lastTest* 清空。
 func TestUpdate_OK(t *testing.T) {
 	db := newStorageTestDB(t)
 	svc := NewBackupStorageService(db)
@@ -125,7 +131,7 @@ func TestUpdate_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrStorageNotFound)
 }
 
-// TestUpdate_TypeImmutable 改 type 被拒（改型=删重建，FR-338 拍板）。
+// TestUpdate_TypeImmutable 改 type 被拒（改型=删重建拍板）。
 func TestUpdate_TypeImmutable(t *testing.T) {
 	svc := NewBackupStorageService(newStorageTestDB(t))
 	st, err := svc.Create(&model.BackupStorage{Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b"})
@@ -226,7 +232,7 @@ func TestResolveSpec_MissingEnv(t *testing.T) {
 	require.ErrorIs(t, err, ErrCredentialEnvMissing)
 }
 
-// TestResolveEnvRef_回落密钥文件与向后兼容（FR-495）：
+// TestResolveEnvRef_回落密钥文件与向后兼容：
 // 环境变量未命中时回落 etc/<VAR_NAME>.key（QQ 扫码绑定的落盘密钥）；
 // 文件不存在时行为必须与纯环境变量版本完全一致（仍报 ErrCredentialEnvMissing）。
 func TestResolveEnvRef_回落密钥文件与向后兼容(t *testing.T) {
@@ -330,9 +336,12 @@ func TestLocalStats_ScansDataRootBackups(t *testing.T) {
 }
 
 // TestTestConnection_NoWorkerReturnsTypedFailure 无在线 Worker 时返回可展示失败结果。
+//
+// endpoint 用公网字面量 IP（而非 dav.local）：TestConnection 在下发前会校验目标地址，
+// 而 .local 域名会被 SSRF 门禁拦下，那样测到的就不是「无 Worker」这条路径了。
 func TestTestConnection_NoWorkerReturnsTypedFailure(t *testing.T) {
 	svc := NewBackupStorageService(newStorageTestDB(t))
-	st, err := svc.Create(&model.BackupStorage{Name: "dav", Type: model.BackupStorageWebDAV, Endpoint: "https://dav.local"})
+	st, err := svc.Create(&model.BackupStorage{Name: "dav", Type: model.BackupStorageWebDAV, Endpoint: "https://198.51.100.8/dav"})
 	require.NoError(t, err)
 
 	result, err := svc.TestConnection(st.ID)
@@ -342,6 +351,9 @@ func TestTestConnection_NoWorkerReturnsTypedFailure(t *testing.T) {
 }
 
 // TestTestConnection_DelegatesToWorker 探测请求会解析凭证并转发给在线 Worker。
+//
+// 同上：endpoint 必须是可出站的公网字面量，否则会在下发前的端点校验就被拦下，
+// 测不到「凭证解析 + 转发 Worker」这条主路径。
 func TestTestConnection_DelegatesToWorker(t *testing.T) {
 	t.Setenv("JM_TEST_BK_AK", "ak-secret")
 	t.Setenv("JM_TEST_BK_SK", "sk-secret")
@@ -351,7 +363,7 @@ func TestTestConnection_DelegatesToWorker(t *testing.T) {
 	pool.SetWorkerClientForTest("node-a", worker)
 	svc := NewBackupStorageService(db, pool)
 	st, err := svc.Create(&model.BackupStorage{
-		Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b",
+		Name: "s3", Type: model.BackupStorageS3, Endpoint: "198.51.100.8:9000", Bucket: "b",
 		AccessKeyEnv: "${JM_TEST_BK_AK}", SecretKeyEnv: "${JM_TEST_BK_SK}", UseSSL: false,
 	})
 	require.NoError(t, err)
@@ -429,6 +441,10 @@ func TestList_IncludesUsageAndLastTest(t *testing.T) {
 func TestTestSaved_UpdatesLastTestWithoutLeakingSecret(t *testing.T) {
 	t.Setenv("JM_TEST_BK_AK", "ak-secret")
 	t.Setenv("JM_TEST_BK_SK", "sk-secret")
+	// httptest 监听 127.0.0.1，而探测默认拒绝回环（SSRF 防护）。
+	// 这里显式开测试例外，测完恢复——生产路径永不开这个口子。
+	SetProbeAllowLoopbackForTest(true)
+	t.Cleanup(func() { SetProbeAllowLoopbackForTest(false) })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodHead, r.Method)
 		w.WriteHeader(http.StatusOK)
@@ -458,6 +474,8 @@ func TestTestSaved_UpdatesLastTestWithoutLeakingSecret(t *testing.T) {
 func TestTestCandidate_ProbesS3Endpoint(t *testing.T) {
 	t.Setenv("JM_TEST_BK_AK", "ak")
 	t.Setenv("JM_TEST_BK_SK", "sk")
+	SetProbeAllowLoopbackForTest(true)
+	t.Cleanup(func() { SetProbeAllowLoopbackForTest(false) })
 	var called atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodHead, r.Method)
@@ -496,6 +514,8 @@ func TestTestCandidate_ReportsS3ConnectionFailure(t *testing.T) {
 func TestTestCandidate_ProbesWebDAVEndpointWithBasicAuth(t *testing.T) {
 	t.Setenv("JM_TEST_DAV_USER", "u")
 	t.Setenv("JM_TEST_DAV_PASS", "p")
+	SetProbeAllowLoopbackForTest(true)
+	t.Cleanup(func() { SetProbeAllowLoopbackForTest(false) })
 	var called atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodOptions, r.Method)
@@ -521,6 +541,9 @@ func TestTestCandidate_ProbesWebDAVEndpointWithBasicAuth(t *testing.T) {
 func TestTestCandidate_ProbesSFTPSSH(t *testing.T) {
 	t.Setenv("JM_TEST_SFTP_USER", "jm")
 	t.Setenv("JM_TEST_SFTP_PASS", "secret")
+	// 同上：本地起的 SSH 服务在 127.0.0.1，需显式开回环例外。
+	SetProbeAllowLoopbackForTest(true)
+	t.Cleanup(func() { SetProbeAllowLoopbackForTest(false) })
 	endpoint, calls := startTestSSHServer(t, "jm", "secret")
 
 	svc := NewBackupStorageService(newStorageTestDB(t))

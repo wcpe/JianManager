@@ -1,0 +1,149 @@
+paths:
+  /business/stream:
+    get:
+      tags: [stream]
+      summary: 订阅业务事件流（SSE）
+      description: |
+        以 Server-Sent Events 接收探针上报的业务事件。
+
+        ## 为什么用 SSE 而不是 WebSocket
+
+        | 因素 | SSE | WebSocket |
+        |---|---|---|
+        | 方向 | 服务端→客户端单向 | 双向（此处用不上） |
+        | 断线重连 | 浏览器原生 + `Last-Event-ID` | 需自行实现 |
+        | 补读 | 原生 `id` 字段支持 | 需自定义协议 |
+        | 代理穿透 | 纯 HTTP | 需 Upgrade 握手 |
+
+        命令方向由 HTTP POST 覆盖，所以单向足够。
+
+        ## 断线补读
+
+        SSE 的 `id` 字段承载 `seq`。浏览器 `EventSource` 重连时会自动发送
+        `Last-Event-ID` 头，服务端据此从缓冲补发遗漏事件。
+
+        **缓冲窗口为 30 秒或 20 万条（先到者生效）。**超出窗口返回 `replay_gap` 帧，
+        此时**必须触发全量对账**——仅靠事件流无法补齐。
+
+        ## 缓冲的性质
+
+        - **非持久**：进程重启即失
+        - **非真源**：真源在插件，镜像在业务台
+        - **可丢**：窗口外必然补不到，靠对账兜底
+
+        请勿把本接口当作可靠消息队列使用。
+
+        ## 慢消费者保护
+
+        每个订阅者有独立的有界队列（默认 1024 条）。队列满时会**断开该订阅者**
+        并发送 `event: error`（`code: SLOW_CONSUMER`），**不阻塞其他订阅者**。
+
+        断开不是数据丢失——重连后带 `Last-Event-ID` 即可补齐（窗口内）。
+
+        ## 心跳
+
+        每 20 秒发送 `event: ping`。客户端应将「超过 50 秒无任何帧」视为连接异常。
+
+        ## 连接数限制
+
+        单 Token 最多 5 个并发 SSE 连接，超出返回 429。
+      operationId: streamBusinessEvents
+      parameters:
+        - name: domains
+          in: query
+          description: 只订阅这些业务域，逗号分隔。缺省为全部。
+          schema:
+            type: string
+          example: activity,economy
+        - name: topics
+          in: query
+          description: |
+            只订阅匹配的主题，逗号分隔。支持后缀通配（`activity.*`）。
+            缺省为全部。
+          schema:
+            type: string
+          example: 'activity.spring-2026,activity.winter-*'
+        - name: Last-Event-ID
+          in: header
+          description: |
+            断线重连时由浏览器 `EventSource` 自动携带，值为上次收到的 `id`（即 `seq`）。
+            手动实现客户端时也应带上此头以启用补读。
+          schema:
+            type: integer
+        - name: since
+          in: query
+          description: |
+            `Last-Event-ID` 的等价查询参数，用于无法设置请求头的客户端。
+            两者同时存在时以 `Last-Event-ID` 为准。
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: |
+            事件流。`Content-Type: text/event-stream`。
+
+            响应头固定包含 `X-Accel-Buffering: no` 与 `Cache-Control: no-cache`
+            以禁用代理缓冲。
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-cache
+            X-Accel-Buffering:
+              schema:
+                type: string
+              example: 'no'
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  SSE 帧序列。每帧由 `id`、`event`、`data` 三行组成。
+
+                  ### 业务事件（`event: business.event`）
+
+                  ```
+                  id: 9001
+                  event: business.event
+                  data: {"streamSeq":9001,"node":"node-main","instance":5,
+                         "instanceName":"game-01","domain":"activity",
+                         "topic":"activity.spring-2026","dedupKey":"e-8891",
+                         "seq":1024,"occurredAt":1730000000,"payload":{...}}
+                  ```
+
+                  `data` 结构见 `BusinessEventFrame`。
+
+                  **两个序号不要混用**：
+                  - `id` / `streamSeq` —— CP 分配、**全局单调**，补读用这个
+                  - `seq` —— 探针分配、**per-domain 单调**，只用于判单实例单域是否漏事件
+
+                  ### 心跳（`event: ping`）
+
+                  ```
+                  event: ping
+                  data: {"t":1730000000}
+                  ```
+
+                  每 20 秒一次。超过 50 秒未收到任何帧应视为连接异常。
+
+                  ### 补读缺口（`event: replay_gap`）
+
+                  ```
+                  event: replay_gap
+                  data: {"requestedSeq":888,"oldestAvailableSeq":1002,"reason":"BUFFER_EXPIRED"}
+                  ```
+
+                  **收到后必须触发全量对账。**
+
+                  ### 错误终止（`event: error`）
+
+                  ```
+                  event: error
+                  data: {"code":"SLOW_CONSUMER","message":"事件处理过慢，连接已关闭"}
+                  ```
+
+                  连接即将关闭。重连可继续。
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '429':
+          $ref: '../components/common.yaml#/RateLimited'

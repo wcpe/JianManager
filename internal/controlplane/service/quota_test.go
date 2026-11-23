@@ -69,7 +69,7 @@ func makeQuotaInstance(t *testing.T, db *gorm.DB, name string, cpu float64, memM
 	return inst
 }
 
-// TestEffectiveQuota_InstanceWins 实例级字段优先于组派生（FR-467 §2.2 优先级）。
+// TestEffectiveQuota_InstanceWins 实例级字段优先于组派生（§2.2 优先级）。
 func TestEffectiveQuota_InstanceWins(t *testing.T) {
 	db := quotaTestDB(t)
 	require.NoError(t, db.Create(&model.GroupQuota{GroupID: 11, MaxStorageMB: 1024}).Error)

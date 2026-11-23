@@ -4,7 +4,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/crashdiag"
 )
 
-// 崩溃根因枚举（FR-470 spec §2.1）：service 层对外暴露的别名，实现位于 crashdiag 包。
+// 崩溃根因枚举（spec §2.1）：service 层对外暴露的别名，实现位于 crashdiag 包。
 //
 // 为何不把规则直接写在 service：service 依赖 grpc（ClientPool），而崩溃快照的写入路径
 // 在 grpc 层，若规则只在 service 会形成 import cycle；故纯函数规则下沉到中立的 crashdiag 包，
@@ -20,10 +20,10 @@ const (
 	CrashRootCauseUnknown       = crashdiag.CrashRootCauseUnknown
 )
 
-// CrashClassification 崩溃分类结果（FR-470）：service 层别名。
+// CrashClassification 崩溃分类结果：service 层别名。
 type CrashClassification = crashdiag.CrashClassification
 
-// ClassifyCrashSnapshot 对崩溃现场做根因归类（FR-470，纯函数，见 crashdiag 包）。
+// ClassifyCrashSnapshot 对崩溃现场做根因归类（纯函数，见 crashdiag 包）。
 func ClassifyCrashSnapshot(exitCode int, signal, tailOutput string) CrashClassification {
 	return crashdiag.ClassifyCrashSnapshot(exitCode, signal, tailOutput)
 }

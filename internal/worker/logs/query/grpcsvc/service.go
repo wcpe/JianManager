@@ -3,10 +3,12 @@ package grpcsvc
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
@@ -42,6 +44,14 @@ type FacetsQuerier interface {
 	Facets(ctx context.Context, req query.QueryRequest, dimensions []string, dimensionLimit uint32) query.FacetsResponse
 }
 
+// StreamsQuerier 是可选扩展：实现后三个 LogStream* RPC 走真实路径，
+// 否则 stub 返回 LOG_UNSUPPORTED（不返回空成功——空成功会被前端当成「没有流」）。
+type StreamsQuerier interface {
+	Streams(ctx context.Context, req query.QueryRequest) query.StreamsResponse
+	StreamFieldNames(ctx context.Context, req query.QueryRequest) query.StreamFieldNamesResponse
+	StreamFieldValues(ctx context.Context, req query.QueryRequest, field string) query.StreamFieldValuesResponse
+}
+
 // ArchiveQuerier 是可选的真实归档/恢复能力。
 type ArchiveQuerier interface {
 	Rehydrate(ctx context.Context, req query.QueryRequest, objectIDs []string) query.ArchiveTaskResponse
@@ -63,11 +73,57 @@ type PartitionMigrator interface {
 	Migrate(ctx context.Context, storageNamespace, utcDay, targetTier string) error
 }
 
-type CutoverReadinessProvider interface {
-	Readiness() (ledgerReady bool, cutoff time.Time, reasons []string)
+// OperatorMetadataKey 是承载「操作人认证主体」的 incoming gRPC metadata 键。//
+// 为什么用 metadata 而不是给 proto 加字段：本路径的操作人来自**调用方的认证上下文**，
+// 而不是请求体（请求体可被任意伪造，PUT 一个字段就把责任推给别人）。用 metadata 让
+// 「谁在调用」由传输层携带，且**无需 proto 变更与代码生成**，CP 侧只要在发起该 RPC 时
+// 带上这个头即可生效；未携带时本层**拒绝**执行（见 LogResolveIngestGaps）。
+//
+// 契约点（CP 侧需配合）：发起 LogResolveIngestGaps 且带 storage_namespace 时，
+// 必须设置本头为可审计的操作人标识（如控制台登录名 / API 密钥主体）。
+const OperatorMetadataKey = "x-jm-operator"
+
+// operatorFromContext 取出调用方认证主体；取不到返回空串（由调用方负责拒绝）。
+func operatorFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	for _, v := range md.Get(OperatorMetadataKey) {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
-type IngestGapResolver interface{ ResolveCoveredGaps() error }
+// ReasonMetadataKey 是承载「本次操作的显式理由」的 incoming gRPC metadata 键。
+//
+// 与 OperatorMetadataKey 同源同口径（都走传输层，不进请求体）：理由要进审计凭据，
+// 而请求体可被任意伪造 —— 让"为什么可以这么做"与"谁做的"一样由传输层给出，凭据才可信。
+// 该键在缺口放弃路径上早已在用（ResolveCoveredGapsForSource 读同一个字面量），
+// 此处只是把它收敛成常量名，不改任何 wire 行为。
+const ReasonMetadataKey = "x-jm-reason"
+
+// reasonFromContext 取出调用方给出的操作理由；取不到返回空串（由调用方负责拒绝）。
+func reasonFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	for _, v := range md.Get(ReasonMetadataKey) {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
 
 type CutoverReadinessFunc func() (bool, time.Time, []string)
 
@@ -86,19 +142,17 @@ func (f RuntimeInstallFunc) Install(ctx context.Context, packageURL, packageSHA 
 }
 
 // Service 实现 workerpb.WorkerServiceServer 的日志查询 RPC 子集。
-// 嵌入 UnimplementedWorkerServiceServer 以保持前向兼容（Rehydrate 等后续 FR）。
+// 嵌入 UnimplementedWorkerServiceServer 以保持前向兼容（Rehydrate 等后续项）。
 type Service struct {
 	workerpb.UnimplementedWorkerServiceServer
 
-	query       QueryService
-	views       ViewLookup
-	enabled     bool
-	runtime     RuntimeController
-	installer   RuntimeInstaller
-	catalog     *catalog.Catalog
-	migrator    PartitionMigrator
-	cutover     CutoverReadinessProvider
-	gapResolver IngestGapResolver
+	query     QueryService
+	views     ViewLookup
+	enabled   bool
+	runtime   RuntimeController
+	installer RuntimeInstaller
+	catalog   *catalog.Catalog
+	migrator  PartitionMigrator
 }
 
 // New 构造已启用的日志 RPC 服务层。
@@ -106,6 +160,21 @@ type Service struct {
 // views 可为 nil（不做 view 回填）。
 func New(q QueryService, views ViewLookup) *Service {
 	return &Service{query: q, views: views, enabled: q != nil}
+}
+
+// SetResourceBudget 将 Worker 共享资源预算交给真实查询面。
+func (s *Service) SetResourceBudget(budget query.ResourceBudget) {
+	if target, ok := s.query.(interface{ SetResourceBudget(query.ResourceBudget) }); ok {
+		target.SetResourceBudget(budget)
+	}
+}
+
+// Close 在 Worker 停机时释放固定视图，但不提前解除在途读取 pin。
+func (s *Service) Close() error {
+	if target, ok := s.query.(interface{ Close() error }); ok {
+		return target.Close()
+	}
+	return nil
 }
 
 // NewDisabled 构造显式禁用的服务（老 Worker / 未启用日志平台）。
@@ -121,10 +190,8 @@ func (s *Service) SetRuntimeController(controller RuntimeController) { s.runtime
 
 func (s *Service) SetRuntimeInstaller(installer RuntimeInstaller) { s.installer = installer }
 
-func (s *Service) SetRuntimeCatalog(cat *catalog.Catalog)                { s.catalog = cat }
-func (s *Service) SetPartitionMigrator(migrator PartitionMigrator)       { s.migrator = migrator }
-func (s *Service) SetCutoverReadiness(provider CutoverReadinessProvider) { s.cutover = provider }
-func (s *Service) SetIngestGapResolver(resolver IngestGapResolver)       { s.gapResolver = resolver }
+func (s *Service) SetRuntimeCatalog(cat *catalog.Catalog)          { s.catalog = cat }
+func (s *Service) SetPartitionMigrator(migrator PartitionMigrator) { s.migrator = migrator }
 
 // Enabled 报告服务是否启用。
 func (s *Service) Enabled() bool { return s.enabled && s.query != nil }
@@ -186,9 +253,11 @@ func unauthorizedSearch(req *workerpb.LogSearchRequest, err error) *workerpb.Log
 	}
 }
 
-// LogCreateView creates the Worker-local view used by subsequent federated calls.
+// LogCreateView 创建后续联邦请求复用的 Worker 固定视图。
 func (s *Service) LogCreateView(ctx context.Context, req *workerpb.LogCreateViewRequest) (*workerpb.LogCreateViewResponse, error) {
-	_ = ctx
+	if ctx.Err() != nil {
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	if !s.plannerReady() {
 		return &workerpb.LogCreateViewResponse{
 			RequestId: requestIDOfQuery(req.GetQuery()),
@@ -203,7 +272,22 @@ func (s *Service) LogCreateView(ctx context.Context, req *workerpb.LogCreateView
 			Error:     &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_UNAUTHORIZED, Message: err.Error()},
 		}, nil
 	}
-	resp := s.query.OpenView(qreq)
+	var resp query.SearchResponse
+	if contextual, ok := s.query.(interface {
+		OpenViewContext(context.Context, query.QueryRequest) query.SearchResponse
+	}); ok {
+		resp = contextual.OpenViewContext(ctx, qreq)
+	} else {
+		resp = s.query.OpenView(qreq)
+	}
+	if ctx.Err() != nil {
+		if target, ok := s.query.(interface{ ReleaseView(string) error }); ok && resp.View != nil {
+			if err := target.ReleaseView(resp.View.ViewID); err != nil {
+				slog.Warn("取消建View后的租约清理失败", "err", err)
+			}
+		}
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	s.fillClosedVisibleSeq(&resp.Coverage, viewIDOf(resp.View, qreq.View))
 	return &workerpb.LogCreateViewResponse{
 		RequestId: resp.RequestID,
@@ -246,6 +330,7 @@ func (s *Service) LogStats(ctx context.Context, req *workerpb.LogStatsRequest) (
 	}
 	qreq.GroupBy = append([]string(nil), req.GetGroupBy()...)
 	qreq.TimeBucket = req.GetTimeBucket()
+	qreq.MetricField = req.GetMetricField()
 	resp := s.query.Stats(ctx, qreq, req.GetGroupBy())
 	s.fillClosedVisibleSeq(&resp.Coverage, viewIDOf(resp.View, qreq.View))
 	out := grpcmap.StatsResponseToProto(resp)
@@ -262,6 +347,7 @@ func (s *Service) LogFields(ctx context.Context, req *workerpb.LogFieldsRequest)
 		}, nil
 	}
 	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	qreq.ExploreFields = req.GetExploreFields()
 	fq, ok := s.query.(FieldsQuerier)
 	if !ok {
 		return &workerpb.LogFieldsResponse{
@@ -272,11 +358,12 @@ func (s *Service) LogFields(ctx context.Context, req *workerpb.LogFieldsRequest)
 	res := fq.Fields(ctx, qreq)
 	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
 	out := &workerpb.LogFieldsResponse{
-		RequestId: res.RequestID,
-		View:      grpcmap.ViewRefToProto(res.View),
-		Coverage:  grpcmap.CoverageToProto(res.Coverage),
-		Fields:    append([]string(nil), res.Fields...),
-		Error:     grpcmap.QueryErrorToProto(res.Err),
+		ExploreApplied: res.ExploreApplied,
+		RequestId:      res.RequestID,
+		View:           grpcmap.ViewRefToProto(res.View),
+		Coverage:       grpcmap.CoverageToProto(res.Coverage),
+		Fields:         append([]string(nil), res.Fields...),
+		Error:          grpcmap.QueryErrorToProto(res.Err),
 	}
 	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
 	return out, nil
@@ -291,6 +378,7 @@ func (s *Service) LogFacets(ctx context.Context, req *workerpb.LogFacetsRequest)
 		}, nil
 	}
 	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	qreq.ExploreFields = req.GetExploreFields()
 	fq, ok := s.query.(FacetsQuerier)
 	if !ok {
 		return &workerpb.LogFacetsResponse{
@@ -305,11 +393,121 @@ func (s *Service) LogFacets(ctx context.Context, req *workerpb.LogFacetsRequest)
 		values = append(values, &workerpb.LogFacetValue{Dimension: v.Dimension, Value: v.Value, Count: v.Count})
 	}
 	out := &workerpb.LogFacetsResponse{
+		ExploreApplied: res.ExploreApplied,
+		RequestId:      res.RequestID,
+		View:           grpcmap.ViewRefToProto(res.View),
+		Coverage:       grpcmap.CoverageToProto(res.Coverage),
+		Values:         values,
+		Truncated:      res.Truncated,
+		Error:          grpcmap.QueryErrorToProto(res.Err),
+	}
+	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	return out, nil
+}
+
+// LogStreams 枚举查询窗内的 stream。未接入 StreamsQuerier 时返回 LOG_UNSUPPORTED。
+//
+// 语义边界（与 Fields 区分）：
+//   - LogFields  = 「窗内出现过哪些**文档字段名**」（/field_names）
+//   - LogStreams = 「窗内有哪些**流**、各多少条」（/streams）
+//
+// 两者都能回答「有哪些流字段」，但只有后者能给出**条数**，
+// 而条数正是前端「按日志量排序看哪个源在刷屏」所需。
+func (s *Service) LogStreams(ctx context.Context, req *workerpb.LogStreamsRequest) (*workerpb.LogStreamsResponse, error) {
+	if !s.plannerReady() {
+		return &workerpb.LogStreamsResponse{
+			RequestId: requestIDOfQuery(req.GetQuery()),
+			Error:     unsupportedErr("log streams disabled on this worker"),
+		}, nil
+	}
+	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	sq, ok := s.query.(StreamsQuerier)
+	if !ok {
+		return &workerpb.LogStreamsResponse{
+			RequestId: qreq.RequestID,
+			Error:     unsupportedErr("log streams unimplemented on this worker"),
+		}, nil
+	}
+	res := sq.Streams(ctx, qreq)
+	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
+	streams := make([]*workerpb.LogStream, 0, len(res.Streams))
+	for _, sv := range res.Streams {
+		streams = append(streams, &workerpb.LogStream{
+			Raw:         sv.Raw,
+			LogSourceId: sv.LogSourceID,
+			Stream:      sv.Stream,
+			Hits:        sv.Hits,
+		})
+	}
+	out := &workerpb.LogStreamsResponse{
+		RequestId: res.RequestID,
+		View:      grpcmap.ViewRefToProto(res.View),
+		Coverage:  grpcmap.CoverageToProto(res.Coverage),
+		Streams:   streams,
+		Complete:  res.Complete,
+		Error:     grpcmap.QueryErrorToProto(res.Err),
+	}
+	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	return out, nil
+}
+
+// LogStreamFieldNames 列出 stream 的标签维度名。
+func (s *Service) LogStreamFieldNames(ctx context.Context, req *workerpb.LogStreamFieldNamesRequest) (*workerpb.LogStreamFieldNamesResponse, error) {
+	if !s.plannerReady() {
+		return &workerpb.LogStreamFieldNamesResponse{
+			RequestId: requestIDOfQuery(req.GetQuery()),
+			Error:     unsupportedErr("log stream field names disabled on this worker"),
+		}, nil
+	}
+	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	sq, ok := s.query.(StreamsQuerier)
+	if !ok {
+		return &workerpb.LogStreamFieldNamesResponse{
+			RequestId: qreq.RequestID,
+			Error:     unsupportedErr("log stream field names unimplemented on this worker"),
+		}, nil
+	}
+	res := sq.StreamFieldNames(ctx, qreq)
+	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
+	out := &workerpb.LogStreamFieldNamesResponse{
+		RequestId: res.RequestID,
+		View:      grpcmap.ViewRefToProto(res.View),
+		Coverage:  grpcmap.CoverageToProto(res.Coverage),
+		Fields:    append([]string(nil), res.Fields...),
+		Error:     grpcmap.QueryErrorToProto(res.Err),
+	}
+	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	return out, nil
+}
+
+// LogStreamFieldValues 按单个 stream 标签维度取取值分布。
+func (s *Service) LogStreamFieldValues(ctx context.Context, req *workerpb.LogStreamFieldValuesRequest) (*workerpb.LogStreamFieldValuesResponse, error) {
+	if !s.plannerReady() {
+		return &workerpb.LogStreamFieldValuesResponse{
+			RequestId: requestIDOfQuery(req.GetQuery()),
+			Error:     unsupportedErr("log stream field values disabled on this worker"),
+		}, nil
+	}
+	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	sq, ok := s.query.(StreamsQuerier)
+	if !ok {
+		return &workerpb.LogStreamFieldValuesResponse{
+			RequestId: qreq.RequestID,
+			Error:     unsupportedErr("log stream field values unimplemented on this worker"),
+		}, nil
+	}
+	res := sq.StreamFieldValues(ctx, qreq, req.GetField())
+	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
+	values := make([]*workerpb.LogStreamFieldValue, 0, len(res.Values))
+	for _, v := range res.Values {
+		values = append(values, &workerpb.LogStreamFieldValue{Value: v.Value, Hits: v.Count})
+	}
+	out := &workerpb.LogStreamFieldValuesResponse{
 		RequestId: res.RequestID,
 		View:      grpcmap.ViewRefToProto(res.View),
 		Coverage:  grpcmap.CoverageToProto(res.Coverage),
 		Values:    values,
-		Truncated: res.Truncated,
+		Complete:  res.Complete,
 		Error:     grpcmap.QueryErrorToProto(res.Err),
 	}
 	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
@@ -356,7 +554,7 @@ func (s *Service) LogRuntimeStatus(ctx context.Context, req *workerpb.LogRuntime
 		resp.Error = unsupportedErr("managed VictoriaLogs supervisor is not configured")
 		return resp, nil
 	}
-	for _, ns := range []vlsup.Namespace{vlsup.NamespaceHot, vlsup.NamespaceCold, vlsup.NamespaceRehydrate} {
+	for _, ns := range []vlsup.Namespace{vlsup.NamespaceHot} {
 		if probe, ok := s.runtime.(interface {
 			Health(context.Context, vlsup.Namespace) error
 		}); ok {
@@ -406,17 +604,16 @@ func runtimeCatalogReadiness(cat *catalog.Catalog, ns vlsup.Namespace) (recovere
 	return seen && complete, seen && complete && published
 }
 
+// ownerUsesNamespace 报告某归属的数据在不在该受管实例里。
+//
+// 2026-10-29：只剩余一个 VL，冷热双层已废除 ⇒ 所有归属的数据都在这唯一的实例里。
+// 保留这个函数而不是直接 return true，是因为 catalog 里仍可能有历史记录的 Owner=cold/archive
+// （今天之前搬过去的），那些记录同样是这一个 VL 的（它们的物理分区现在都在同一 data_root 下）。
 func ownerUsesNamespace(owner catalog.Owner, ns vlsup.Namespace) bool {
-	switch owner {
-	case catalog.OwnerHot:
-		return ns == vlsup.NamespaceHot
-	case catalog.OwnerCold:
-		return ns == vlsup.NamespaceCold
-	case catalog.OwnerArchive:
-		return ns == vlsup.NamespaceRehydrate
-	default:
+	if ns != vlsup.NamespaceHot {
 		return false
 	}
+	return owner.Valid()
 }
 
 func (s *Service) LogRuntimeControl(ctx context.Context, req *workerpb.LogRuntimeControlRequest) (*workerpb.LogTaskResponse, error) {
@@ -439,7 +636,7 @@ func (s *Service) LogRuntimeControl(ctx context.Context, req *workerpb.LogRuntim
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED, Error: unsupportedErr("managed VictoriaLogs supervisor is not configured")}, nil
 	}
 	ns := vlsup.Namespace(strings.ToLower(strings.TrimSpace(req.GetNamespace())))
-	if ns != vlsup.NamespaceHot && ns != vlsup.NamespaceCold && ns != vlsup.NamespaceRehydrate {
+	if !vlsup.ValidNamespace(ns) {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED, Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_ERROR_UNSPECIFIED, Message: "unknown VictoriaLogs namespace"}}, nil
 	}
 	var err error
@@ -477,47 +674,6 @@ func (s *Service) LogMigratePartition(ctx context.Context, req *workerpb.LogMigr
 	if err := s.migrator.Migrate(ctx, namespace, day, target); err != nil {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
 			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: err.Error(), Retryable: true}}, nil
-	}
-	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
-}
-
-func (s *Service) LogCutoverReadiness(_ context.Context, req *workerpb.LogCutoverReadinessRequest) (*workerpb.LogCutoverReadinessResponse, error) {
-	resp := &workerpb.LogCutoverReadinessResponse{RequestId: req.GetRequestId()}
-	if s.cutover == nil || s.query == nil {
-		resp.Error = unsupportedErr("log cutover readiness is not configured")
-		return resp, nil
-	}
-	caps := s.query.GetCapabilities(query.CapabilitiesRequest{ProtocolVersion: req.GetProtocolVersion(), RequestID: req.GetRequestId()})
-	required := map[string]bool{"query_view": false, "search": false, "stats": false}
-	for _, capability := range caps.Capabilities {
-		if _, ok := required[capability]; ok {
-			required[capability] = true
-		}
-	}
-	confirmed := caps.Supported
-	for _, present := range required {
-		confirmed = confirmed && present
-	}
-	ready, cutoff, reasons := s.cutover.Readiness()
-	resp.CapabilityConfirmed, resp.LedgerReady = confirmed, ready
-	resp.Reasons = append(resp.Reasons, reasons...)
-	if !confirmed {
-		resp.Reasons = append(resp.Reasons, "required_log_capabilities_missing")
-	}
-	if !cutoff.IsZero() {
-		resp.CutoffTimeUtc = cutoff.UTC().Format(time.RFC3339Nano)
-	}
-	return resp, nil
-}
-
-func (s *Service) LogResolveIngestGaps(_ context.Context, _ *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
-	if s.gapResolver == nil {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: unsupportedErr("ingest gap resolution is not configured")}, nil
-	}
-	if err := s.gapResolver.ResolveCoveredGaps(); err != nil {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: err.Error()}}, nil
 	}
 	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
 }
@@ -576,8 +732,20 @@ func unsupportedErr(msg string) *workerpb.LogError {
 	}
 }
 
+// taskStateFromString 把归档任务状态字符串映射为 proto 枚举。
+//
+// archive.TaskState 的取值自带 LOG_TASK_ 前缀（与 proto 枚举同名，见
+// archive/types.go），而历史调用方与测试也可能传裸值（QUEUED/SUCCEEDED…），
+// 因此这里**先剥前缀再匹配**，两种形态都认。
+// 此前只匹配裸值，带前缀的取值全部落入 default：成功回灌被报成 FAILED 且
+// error 为空，调用方无法用 state 判定成功。
+// 选在映射层归一化而不是改 archive 常量：TaskState 会随 RehydrateJob 的
+// `json:"state"` 出现在持久化快照里，改常量等于改那份表示；proto 枚举是外部契约，
+// 更不能动。无法识别的取值仍 fail-closed 归到 FAILED。
 func taskStateFromString(state string) workerpb.LogTaskState {
-	switch strings.ToUpper(strings.TrimSpace(state)) {
+	// 只剥一层：`LOG_TASK_` 已是两种形态的唯一差异，多剥会把异常输入误判成合法值。
+	norm := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(state)), "LOG_TASK_")
+	switch norm {
 	case "QUEUED":
 		return workerpb.LogTaskState_LOG_TASK_QUEUED
 	case "RUNNING":

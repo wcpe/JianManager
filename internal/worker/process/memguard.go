@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/memguard"
 )
 
-// MemGuardConfig Worker 实时内存闸配置（FR-317，worker.yml memory_guard 段）。
+// MemGuardConfig Worker 实时内存闸配置（worker.yml memory_guard 段）。
 type MemGuardConfig struct {
 	// ReserveMB 保留水位（MB）；0 = 默认策略 max(512MB, 总内存 10%)。
 	ReserveMB int64
@@ -41,7 +41,7 @@ func (m *Manager) SetMemReader(r readSysMem) {
 	m.readMem = r
 }
 
-// preflightMemory 启动前实时内存闸（FR-317 Worker 侧，最后防线）：
+// preflightMemory 启动前实时内存闸（Worker 侧，最后防线）：
 // 可用内存 − 实例预估需求 < 保留水位 即拒绝启动，防止把节点内存跑满至失去响应
 // （真机事故：Paper -Xmx2048M 把主机 OOM 至 SSH/面板全失联）。
 // 读数失败放行（fail-open）：内存读数故障不应瘫痪全部启动能力，仅告警留痕。

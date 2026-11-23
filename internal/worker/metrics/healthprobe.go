@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// FR-459 响应维度探针：判定「实例能否对外服务」。
+// 响应维度探针：判定「实例能否对外服务」。
 //
 // 与存活维度（internal/worker/process 的 ProbeInstanceEvidence：看进程/容器是否还在）互补：
 //   - HTTP 探针：对 ServerProbe `/metrics`（ProbePort）做**轻量** GET，短超时（复用抓取上限

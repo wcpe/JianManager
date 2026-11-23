@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// daemonStrategy 通过独立 wrapper 子进程管理游戏服（ADR-003）。
+// daemonStrategy 通过独立 wrapper 子进程管理游戏服。
 // Worker spawn wrapper 子进程（脱离 Worker 进程组），wrapper 作为 Java 父进程。
 // 两者通过 Unix Socket / Named Pipe + 二进制帧协议通信。
 // Worker 退出/重启时 wrapper 继续运行，Worker 重启后通过 PID 文件 reconnect。
@@ -36,7 +37,11 @@ type daemonStrategy struct {
 	// 「命令看似下发成功，连接却随即失效」，正是本缺陷要根治的失联形态。
 	writeMu sync.Mutex
 
-	wrapperCmd *exec.Cmd
+	// wrapperCommand 为启动配置的受控 helper 测试接缝；nil 始终执行当前 Worker 的 daemon 子命令。
+	wrapperCommand func(executable string) *exec.Cmd
+	wrapperCmd     *exec.Cmd
+	// wrapperPID 独立保存 PID 记录。Windows 上无法打开句柄时仍需保留已确认的 PID，供心跳与状态快照使用。
+	wrapperPID int
 	conn       net.Conn
 	state      InstanceState
 	closed     bool
@@ -59,10 +64,64 @@ func newDaemonStrategy(mgr *Manager, spec CommandSpec) *daemonStrategy {
 }
 
 func (d *daemonStrategy) Start(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, err)
+	}
+	// 只有当前 Unix socket 路径明确缺失，才把旧地址记录作为需要人工接管的迁移残留快速拒绝。
+	// 当前 socket 仍存在时，旧代可能已恢复控制且正在优雅退出，必须保留正常的上一代退出等待。
+	// Named Pipe 与文件路径不同；查询出错也不能推断缺失，均继续走既有等待与防双开守卫。
+	canonical := daemon.SocketAddr(d.pidDir, d.spec.UUID)
+	socketMissing := false
+	if runtime.GOOS != "windows" {
+		_, err := os.Lstat(canonical)
+		socketMissing = os.IsNotExist(err)
+	}
+	if rec, err := daemon.NewPIDFile(daemon.PIDFileName(d.pidDir, d.spec.UUID)).ReadRecord(); socketMissing && err == nil &&
+		rec.InstanceUUID == d.spec.UUID && rec.SocketAddr != "" && rec.SocketAddr != canonical &&
+		(d.mgr.pidAlive(rec.WrapperPID) || d.mgr.pidAlive(rec.JavaPID)) {
+		d.mu.Lock()
+		d.state = StateCrashed
+		d.mu.Unlock()
+		return fmt.Errorf("实例 %s 启动中止：旧部署残留需接管/清理，wrapperPid=%d javaPid=%d 记录地址=%s 当前地址=%s；请先恢复控制连接并停止旧实例，或显式接管/清理后再启动，拒绝新旧并存",
+			d.spec.UUID, rec.WrapperPID, rec.JavaPID, rec.SocketAddr, daemon.SocketAddr(d.pidDir, d.spec.UUID))
+	}
 	// 重启前等待上一代 wrapper/Java 完全退出，避免快速 stop→start 时旧进程仍占监听端口/socket
 	// 导致新进程端口冲突崩溃。不持 d.mu，以免长时间阻塞 State()/SendCommand 等查询；
 	// pidDir/UUID 构造后不可变，无锁读取安全；并发启动已由 Manager 的 STARTING 状态串行化。
-	daemon.WaitForPriorExit(d.pidDir, d.spec.UUID)
+	//
+	// 预算耗尽即**拒绝启动**（旧实现是"仍继续启动"）：Stop 只下发停止帧、不等待进程退出，
+	// restartLocked 随即调用本函数；若此时旧进程仍在优雅关服（强杀兜底默认 30s，长于旧等待上限
+	// 15s），继续启动就会拉起第二个 wrapper 与第二个 Java——新进程抢端口秒崩、旧进程继续用旧配置
+	// 跑满兜底时长，而 Manager.Restart 早已返回成功（实例 153 / beacon-main 实证的静默假成功）。
+	// 此处显式失败，由 startLocked 置 CRASHED 并透出原因：宁可保留仍在服务的旧进程并报失败，
+	// 也不新旧并存。
+	//
+	// ctx 必须传下去（复审 P1-5）：等待预算可达分钟级，而调用方可能提前取消/超时。取消时返回
+	// 可重试错误（daemon.ErrStartWaitCanceled）且**保持原状态**——「还没来得及判定」不是崩溃。
+	if err := daemon.WaitForPriorExitContext(ctx, d.pidDir, d.spec.UUID, daemon.PriorExitBudget(d.spec.GracefulStopTimeoutSeconds)); err != nil {
+		if errors.Is(err, daemon.ErrStartWaitCanceled) {
+			return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, err)
+		}
+		d.mu.Lock()
+		d.state = StateCrashed
+		d.mu.Unlock()
+		return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, err)
+	}
+
+	// 纵深防御：上面的等待只信 PID 文件，而记录可能缺失/损坏（旧 wrapper 被强杀未及清理、
+	// 记录被误删），此时等待会误判「上一代已清理」直接放行。socket 是实例级唯一地址，
+	// 能拨通就说明确有 wrapper 在托管——拒绝启动，宁可本次失败也不新旧并存。
+	served, probeErr := daemon.SocketServedContext(ctx, d.pidDir, d.spec.UUID)
+	if probeErr != nil {
+		// 取消 ⇒ 服务状态未知：绝不能按「无人监听」放行（那正好退化成双开）。
+		return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, probeErr)
+	}
+	if served {
+		d.mu.Lock()
+		d.state = StateCrashed
+		d.mu.Unlock()
+		return fmt.Errorf("实例 %s 启动中止：检测到已有 wrapper 在托管该实例（socket 仍可拨通），拒绝新旧并存", d.spec.UUID)
+	}
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -99,6 +158,9 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 	}
 
 	cmd := exec.Command(exePath, "daemon")
+	if d.wrapperCommand != nil {
+		cmd = d.wrapperCommand(exePath)
+	}
 	cmd.Env = append(os.Environ(), daemon.EnvWrapperConfig+"="+string(cfgBytes))
 	// wrapper 必须脱离 Worker 进程组：Worker 退出时 wrapper 不被牵连。
 	// Linux/macOS: setsid 新建会话；Windows: CREATE_NEW_PROCESS_GROUP。
@@ -108,11 +170,16 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 	cmd.Stdout = newSlogWriter(d.spec.UUID, "wrapper-stdout")
 	cmd.Stderr = newSlogWriter(d.spec.UUID, "wrapper-stderr")
 
+	// 请求只约束启动提交前的阶段，不能用 CommandContext 把已启动 wrapper 绑到 RPC。
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("启动 wrapper 未执行: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		d.state = StateCrashed
 		return fmt.Errorf("启动 wrapper 失败: %w", err)
 	}
 	d.wrapperCmd = cmd
+	d.wrapperPID = cmd.Process.Pid
 	d.state = StateRunning
 	slog.Info("daemon wrapper 已启动", "instanceId", d.spec.UUID, "wrapperPid", cmd.Process.Pid)
 
@@ -174,7 +241,7 @@ func (d *daemonStrategy) readLoop(conn net.Conn) {
 	defer d.readWg.Done()
 	// 连接断开时收回引用（仅在它仍是当前连接时）：否则 controlConnected 会长期误判
 	// 「仍持有长连接」，从而抑制证据采集在缺乏进程证据时的 socket 兜底探活——那会让
-	// FR-455 的存活判定退化（进程其实在跑，却因探活被抑制而报不在跑）。
+	// 的存活判定退化（进程其实在跑，却因探活被抑制而报不在跑）。
 	// 身份比对不可省：换连后旧 readLoop 也会走到这里，不能把新连接一并清掉。
 	defer func() {
 		d.mu.Lock()
@@ -205,7 +272,7 @@ func (d *daemonStrategy) readLoop(conn net.Conn) {
 				d.mgr.onOutput(d.spec.UUID, stream, data)
 			}
 		case daemon.ChannelControl:
-			// wrapper 上抛的进程退出事件（FR-313）：daemon 模式退出码只有 wrapper 能拿到，
+			// wrapper 上抛的进程退出事件：daemon 模式退出码只有 wrapper 能拿到，
 			// 经此扇出崩溃现场供组装快照上报 CP。老 wrapper 不发事件帧，此分支自然不触达。
 			if fr.Type == daemon.TypeEvent {
 				if ev, ok := daemon.DecodeExitEvent(fr.Payload); ok {
@@ -257,6 +324,16 @@ func (d *daemonStrategy) Stop() error {
 	d.state = StateStopping
 	conn := d.conn
 	d.mu.Unlock()
+
+	// 停止是人工/正常的终结意图，必须先于 stop 帧下发「禁用自动重启」：wrapper 的自动重启判定
+	// 基于启动期快照的 cfg.AutoRestart 与粘性开关，若不禁用，Java 先于 stop 生效而退出时它仍会
+	// 按策略把 Java 拉起来——真机现象：手动 stop 之后 daemon 又把进程自动拉起过一次（短暂启动
+	// 后退出）。禁用是粘性的，但只作用于当前 wrapper；下次启动会 spawn 全新 wrapper
+	// （autoRestartOff 默认 false），不污染后续运行。
+	// 失败不阻断停止：禁用只是加固，stop 帧本身仍有既有的拨号兜底与强杀链路。
+	if err := d.DisableAutoRestart(); err != nil {
+		slog.Warn("下发禁用自动重启失败，继续执行停止", "instanceId", d.spec.UUID, "error", err)
+	}
 
 	// 常态：控制连接已就绪，下发 stop 控制帧让 wrapper 优雅关服（保存世界 + 输出停止日志）。
 	if conn != nil {
@@ -311,7 +388,7 @@ func (d *daemonStrategy) stopViaFreshDial() bool {
 }
 
 // sendControlViaFreshDial 即时拨号 wrapper socket 下发一条控制帧（不缓存连接）。
-// 供「连接尚未建立 / 既有连接已断」的兜底路径复用（FIX-C 停止、FR-459 熔断禁用自动重启）。
+// 供「连接尚未建立 / 既有连接已断」的兜底路径复用（FIX-C 停止熔断禁用自动重启）。
 func (d *daemonStrategy) sendControlViaFreshDial(cmd string) bool {
 	addr := daemon.SocketAddr(d.pidDir, d.spec.UUID)
 	conn, err := daemon.Dial(addr)
@@ -326,7 +403,7 @@ func (d *daemonStrategy) sendControlViaFreshDial(cmd string) bool {
 	return f.Encode(conn) == nil
 }
 
-// DisableAutoRestart 实现 FR-459 崩溃熔断的 daemon 生效路径：向 wrapper 下发「禁用自动重启」
+// DisableAutoRestart 实现崩溃熔断的 daemon 生效路径：向 wrapper 下发「禁用自动重启」
 // 控制帧（粘性），使 wrapper 内部按启动期 env 快照完成的自动重启被真正拦住——Worker 无法
 // 直接触及 wrapper 内部状态，必须经此控制通道。
 //
@@ -342,7 +419,7 @@ func (d *daemonStrategy) DisableAutoRestart() error {
 	return nil
 }
 
-// EnableAutoRestart 实现 FR-459 熔断人工解除的 daemon 复位路径：向 wrapper 下发「恢复自动重启」
+// EnableAutoRestart 实现熔断人工解除的 daemon 复位路径：向 wrapper 下发「恢复自动重启」
 // 控制帧（清 wrapper 内粘性 autoRestartOff），与 DisableAutoRestart 对称。
 //
 // 必要性（终验 Major）：熔断在 Java 仍在运行时触发时只发禁用帧、保 RUNNING；人工解除若只清 Worker
@@ -496,6 +573,44 @@ func (d *daemonStrategy) State() InstanceState {
 
 // Close 断开与 wrapper 的连接，不杀游戏服（daemon 优雅退出语义）。
 // wrapper 进程继续托管 Java，Worker 重启后可 reconnect。
+// waitReadLoopsBounded 有界等待 readWg 归零：Wait 本身无 deadline ⇒ 旁路 goroutine + time.After；
+// 超时返回 false 并由调用方强关连接（**不无界等待**）。
+//
+// **必须在返回前确保没有遗留的阻塞 Wait**（M1，2026-10-12 修复）：
+// Go 的 `sync.WaitGroup` 禁止「上一次 Wait 尚未返回时再次 Add」——被唤醒的 Wait 会检查
+// 计数是否非零并 panic：
+//
+//	panic: sync: WaitGroup is reused before previous Wait has returned
+//
+// 而该 panic 发生在**本函数自己起的 goroutine 内**，调用方的 recover 兜不住 ⇒ 直接终止
+// 整个 Worker 进程（全部实例控制通道断；daemon 下实例本身存活但面板失联）。
+//
+// 生产时序（实测复现）：读环被楔住（读环会同步调 onOutput → WS Broadcast / 落盘，
+// 任一处长阻塞都满足）⇒ 本函数超时返回 ⇒ 调用方强关 conn 并 `readWg.Add(1)` 起新环；
+// 若旧环恰在此时 Done（被强关唤醒）与 Add 交错，Wait 被唤醒时计数非零 ⇒ panic。
+//
+// 修法：**超时后不返回，继续等到 Wait 真正结束**，再让调用方继续（进而 Add）。
+// 于是任何时刻最多只有一个 Wait 在飞，且 Add 必然发生在它返回之后 —— 竞态窗口被彻底消除。
+// 代价是"有界等待"退化为"等到旧环退出"，但这不构成无界等待：调用方在超时分支随即强关
+// `oldConn`（见 Reconnect），`Read` 立即返回错误 ⇒ 旧读环必然在有限时间内 `Done`。
+func (d *daemonStrategy) waitReadLoopsBounded(wg *sync.WaitGroup, budget time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(budget):
+		// **不返回**：必须等 Wait 真正返回，否则遗留的 Wait 会与后续 Add 相撞而 panic。
+		// 代价是"有界等待"退化为"等到旧环退出"，但调用方随即会强关 conn（见 Reconnect 超时分支），
+		// 旧环必然在有限时间内退出；而 panic 是进程级不可恢复的，两者不可权衡。
+		<-done
+		return false
+	}
+}
+
 func (d *daemonStrategy) Close() error {
 	d.mu.Lock()
 	if d.closed {
@@ -509,16 +624,10 @@ func (d *daemonStrategy) Close() error {
 	if conn != nil {
 		_ = conn.Close()
 	}
-	// 等待读取 goroutine 退出（带超时，避免卡住）
-	done := make(chan struct{})
-	go func() {
-		d.readWg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-	}
+	// 等待读取 goroutine 退出（带超时，避免卡住）。
+	// **走同一有界等待方法**（M1，2026-10-12）：裸 Wait 同样会在超时后遗留阻塞的 Wait，
+	// 与后续 Add（Reconnect 起新环）相撞即 panic。
+	_ = d.waitReadLoopsBounded(&d.readWg, 2*time.Second)
 	return nil
 }
 
@@ -544,6 +653,25 @@ func (d *daemonStrategy) Reconnect(addr string) error {
 	if err != nil {
 		return fmt.Errorf("reconnect wrapper 失败: %w", err)
 	}
+	// ② **先停旧环**（P0 ✓）：Reconnect 过去只起新环、不停旧环 ⇒ 双环并行 ⇒ 旧环继续从失效 conn 读帧，
+	// 经 onOutput → EmitOutput → dispatch 扇出，与订阅者取消订阅竞争 ⇒ send on closed channel ✗。
+	// 顺序（**任何一步都不无界** ✓）：① 短锁取旧 conn 快照 ✓；② 关旧 conn（停止信号 ✓：读必失败 ⇒ 旧环退出 ✓）；
+	// ③ **不持 d.mu** 做有界 Wait（照 Close(543-559) 范式 ✓，Wait 无 deadline ⇒ 旁路 goroutine + time.After ✓）；
+	// ④ 才进临界区注册新环（closed=false + Add(1) 同临界区 ✓，正是既有 507-510 纪律 ✓）。
+	d.mu.Lock()
+	oldConn := d.conn
+	d.mu.Unlock()
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+	if !d.waitReadLoopsBounded(&d.readWg, 3*time.Second) {
+		// 超时 ⇒ 强关一次旧 conn 再短等（仍不无界 ✗）；此后照常起新环 ⇒ 旧环若仍在，输出可能重复 ✓
+		// ⇒ 由"无重复输出"验证项直接观测 ✓（不掩盖 ✗）。
+		if oldConn != nil {
+			_ = oldConn.Close()
+		}
+		_ = d.waitReadLoopsBounded(&d.readWg, time.Second)
+	}
 	d.mu.Lock()
 	d.conn = conn
 	d.state = StateRunning
@@ -561,25 +689,26 @@ func (d *daemonStrategy) Reconnect(addr string) error {
 func (d *daemonStrategy) SetWrapperPID(pid int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if pid > 0 {
-		proc, err := os.FindProcess(pid)
-		if err == nil {
-			d.wrapperCmd = exec.Command("") // 占位，进程已存在
-			if d.wrapperCmd.Process == nil {
-				d.wrapperCmd.Process = proc
-			}
-		}
+	if pid <= 0 {
+		return
+	}
+	// PID 已由上游存活探测与归属复核确认，句柄获取失败不应抹掉它的观测身份。
+	d.wrapperPID = pid
+	d.wrapperCmd = nil
+	if proc, err := os.FindProcess(pid); err == nil {
+		d.wrapperCmd = exec.Command("") // 占位，进程已存在
+		d.wrapperCmd.Process = proc
 	}
 }
 
-// GetPID 返回 wrapper 进程的 PID，未启动或已退出时返回 0。
+// GetPID 返回已知的 wrapper 进程 PID；未启动且未恢复 PID 时返回 0。
 func (d *daemonStrategy) GetPID() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.wrapperCmd == nil || d.wrapperCmd.Process == nil {
-		return 0
+	if d.wrapperCmd != nil && d.wrapperCmd.Process != nil {
+		return d.wrapperCmd.Process.Pid
 	}
-	return d.wrapperCmd.Process.Pid
+	return d.wrapperPID
 }
 
 // decodeGBK 将 GBK 字节解码为 UTF-8（Windows Java 输出常见）。

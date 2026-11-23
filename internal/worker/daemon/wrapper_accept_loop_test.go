@@ -87,7 +87,6 @@ func TestWrapperAcceptLoopExitsWhenWrapperClosed(t *testing.T) {
 	require.Equal(t, 1, ln.callCount(), "关闭导致的 Accept 错误不应触发重试")
 }
 
-
 // blockingWriter 是带「在飞窗口」的假连接：Write 停留 inFlightWindow 后返回，
 // 统计在飞数量与 CloseHandle 次数。模拟 npipe 重叠 I/O「Write 在飞尚未返回」。
 type blockingWriter struct {
@@ -133,6 +132,7 @@ func (b *blockingWriter) snapshot() (inFlight, closes int) {
 	defer b.mu.Unlock()
 	return b.inFlight, b.closes
 }
+
 // TestWrapperFrameWritesAreSerialized 锁定「wrapper 侧帧写入必须整体互斥」不变量。
 //
 // 背景（Windows 真机验收发现）：workerConn 由多个 goroutine 共享（stdout/stderr 两条

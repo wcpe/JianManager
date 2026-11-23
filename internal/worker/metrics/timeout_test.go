@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/directprobe"
 )
 
-// TestDirectProbeTimeoutsDefault 未配置（0）时回退内置默认，且设置后生效（FR-446 超时可配）。
+// TestDirectProbeTimeoutsDefault 未配置（0）时回退内置默认，且设置后生效（超时可配）。
 func TestDirectProbeTimeoutsDefault(t *testing.T) {
 	// 用例间共享全局生效值，逐例显式还原，避免相互污染。
 	t.Cleanup(func() { SetDirectProbeTimeouts(0, 0) })
@@ -41,7 +41,7 @@ func TestDirectProbeTimeoutsNonPositiveFallsBack(t *testing.T) {
 	assert.Equal(t, defaultDirectProbeTimeout, query)
 }
 
-// TestDirectProbeTimeoutsClampUpperBound 下发/本地值超上界时钳制到共享上界（FR-446 复审 N3）：
+// TestDirectProbeTimeoutsClampUpperBound 下发/本地值超上界时钳制到共享上界（复审 N3）：
 // Worker 独立钳制，令异常 CP 下发或 env 覆盖也无法把每实例每拍最坏阻塞量推过心跳采集预算。
 //
 // 上界值不再是字面量 30s，而取 directprobe.MaxTimeout（与 CP 写校验/读钳制同源，见 NEW-ISSUE A）；
@@ -68,7 +68,7 @@ func TestDirectProbeTimeoutsClampUpperBound(t *testing.T) {
 }
 
 // TestDirectProbeUpperBoundMatchesSharedContract 锁定 Worker 归一的默认/上界与共享契约包一致
-// （FR-446 复审 NEW-ISSUE A）：任一处改走独立字面量即失败。
+// （复审 NEW-ISSUE A）：任一处改走独立字面量即失败。
 func TestDirectProbeUpperBoundMatchesSharedContract(t *testing.T) {
 	assert.Equal(t, directprobe.DefaultTimeout, defaultDirectProbeTimeout)
 	assert.Equal(t, directprobe.MaxTimeout, maxDirectProbeTimeout)
@@ -93,7 +93,7 @@ func TestCollectConfigTimeoutOverridesEffective(t *testing.T) {
 	assert.Nil(t, tel.QueryErr)
 }
 
-// TestProbeErrorCategory 三类直探错误归类（FR-446 审计项 4 的告警文案依赖它）。
+// TestProbeErrorCategory 三类直探错误归类（审计项 4 的告警文案依赖它）。
 func TestProbeErrorCategory(t *testing.T) {
 	assert.Equal(t, "", ProbeErrorCategory(nil))
 	assert.Equal(t, ProbeErrTimeout, ProbeErrorCategory(os.ErrDeadlineExceeded))

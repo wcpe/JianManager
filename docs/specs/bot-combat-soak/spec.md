@@ -88,3 +88,20 @@
 - Mineflayer 在目标协议版本中玩家实体的实际 `type` 值必须在小规模真机预检记录；不匹配时需调整验收场景，而不是放宽 selector。
 - 50 个路径规划和近战行为会显著高于此前 idle 负载；CPU/TPS 保护可能提前停止测试，属于有效容量结论。
 - ServerProbe 资源指标不提供可信战斗事件；任何“击杀数”“伤害量”的业务结论均不在本 FR 的证据范围。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入（保留原文）。
+
+### FR-404 Bot 乱斗场景与受管稳定性压测
+
+Bot 乱斗场景与受管稳定性压测（feat，增强 FR-274/352/398/399）：`attack_until` 加性支持死亡后受限重生恢复、混合玩家/敌对生物确定性随机目标、无目标寻路搜敌与客户端攻击活跃度；MCP `loadtest_run_create` 可提交冻结的 Scenario V2。使用受管隔离 Paper + ServerProbe 运行 1 Worker × 50 Bot × 1 小时，只验证客户端攻击活动、重生恢复和资源稳定性，不把它表述为服务端伤害/击杀或 TEST-500（需 spec，依赖 FR-398/399）→ `docs/specs/bot-combat-soak/spec.md`
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-404（Bot 乱斗场景与受管稳定性压测）
+
+FR-404（Bot 乱斗场景与受管稳定性压测）：Scenario V2 的死亡重生恢复、混合目标搜敌与本地攻击活跃度，以及 MCP 场景创建入口；以受管 Paper + ServerProbe 做 50 Bot 一小时资源稳定性验证，不把客户端攻击动作冒充服务端伤害/击杀证据 → `docs/specs/bot-combat-soak/spec.md`（✅ 已交付@v0.21.0；50 Bot 一小时真机压测按 `.tmp/acceptance-real-machine-checklist.md` 执行）
+

@@ -27,7 +27,7 @@ var (
 	ErrSSEConnClosed = errors.New("MCP SSE 连接已关闭")
 )
 
-// SSEConn 是 SSE 兼容路径的**传输连接**，不是协议会话（ADR-096 决策 5）。
+// SSEConn 是 SSE 兼容路径的**传输连接**，不是协议会话。
 //
 // Streamable HTTP 路径已无状态：它不建会话、不下发也不读 Mcp-Session-Id。
 // 连接态只服务于 SSE 传输自身的需要——`/message` 必须把工具结果回推到 `/sse`
@@ -82,7 +82,7 @@ func NewSSEConnRegistry() *SSEConnRegistry {
 
 // Register 登记一条 SSE 连接并返回它。
 //
-// 不再有并发上限（ADR-096 决策 3）：连接数由客户端实际建连数决定，
+// 不再有并发上限：连接数由客户端实际建连数决定，
 // 连接断开即注销；故本方法不会因配额拒绝。
 // p 须非 nil——调用方（/sse）已在 nil 时回 401。
 func (r *SSEConnRegistry) Register(p *service.AgentPrincipal, clientIP string) *SSEConn {

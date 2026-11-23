@@ -35,7 +35,7 @@ wrapper 进程（`worker daemon` 子命令）启动即 `signal.Ignore(syscall.SI
 
 ### 3.2 修 K2 — worker systemd 单元 `KillMode=process`
 
-`scripts/install-worker.sh` 的 `[Service]` 段加 `KillMode=process`：systemd 重启只对 unit 主进程（Worker）发信号，不波及 cgroup 内经 `setsid` 脱离的 wrapper。同步内嵌副本 `internal/controlplane/embed/install-scripts/install-worker.sh`（字节一致，受 `install_scripts_test.go` 守护），补守护测试断言 `KillMode=process` 存在。
+`scripts/embed/install-worker.sh` 的 `[Service]` 段加 `KillMode=process`：systemd 重启只对 unit 主进程（Worker）发信号，不波及 cgroup 内经 `setsid` 脱离的 wrapper。（当时需同步 `internal/controlplane/embed/install-scripts/` 下的内嵌副本并由 `install_scripts_test.go` 守护字节一致；**该副本与守护测试已随「嵌入包搬到 `scripts/embed`、脚本只留一份」删除**——现在同一个文件既是 canonical 也是嵌入输入，无漂移可能。）补守护测试断言 `KillMode=process` 存在。
 
 ### 3.3 修 K3 — 优雅停机设上限
 
@@ -52,11 +52,11 @@ wrapper 进程（`worker daemon` 子命令）启动即 `signal.Ignore(syscall.SI
 - [ ] AC2：重启后 Worker 日志出现「已连接 wrapper socket」（takeover reconnect），实例状态经 CP 查询回 `RUNNING`；终端可交互、可停止。
 - [ ] AC3：重启耗时 ≤10s（优雅停机不再 90s 挂起）。
 - [ ] AC4：删除该运行中实例 → 无孤儿 java、端口释放、工作目录移除、无残留 pid/sock（FR-310 不回归）。
-- [ ] AC5：`go test ./...` 全绿（含 `install_scripts_test.go` 的 KillMode 守护 + 现有 daemon/recover 测试）。
+- [ ] AC5：`go test ./...` 全绿（含 KillMode 守护 + 现有 daemon/recover 测试）。KillMode 守护原在 `internal/controlplane/embed/install_scripts_test.go::TestInstallWorkerScript_KillModeProcess`，随内嵌副本删除后**已迁入 `scripts/embed/embed_test.go`**（且比原版更严：要求该行是 `[Service]` 段内的**配置行**而非注释，三种变异——删行/挪到段外/改成注释——均实测转红）。
 
 ## 5. 影响面
 
 - `internal/worker/daemon/`（新增 SIGPIPE 忽略 + `Run` 调用）
 - `apps/worker/main.go`（优雅停机上限）
-- `scripts/install-worker.sh` + `internal/controlplane/embed/install-scripts/install-worker.sh` + `install_scripts_test.go`
+- `scripts/embed/install-worker.sh`（真源兼嵌入输入，只有一份；原 `internal/controlplane/embed/install-scripts/` 副本与 `install_scripts_test.go` 已删除，内容守护（含 KillMode）迁入 `scripts/embed/embed_test.go`）
 - 文档：`docs/ARCHITECTURE.md`（进程生存与重启接管一节）、`docs/PRD.md`（FR-341 登记）

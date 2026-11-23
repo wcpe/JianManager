@@ -22,12 +22,12 @@ function collectAdoptRequests() {
   return { paths, stop: () => server.events.removeListener('request:start', listener) }
 }
 
-/**
- * FR-471：实例列表的运行态漂移标记与接管入口。
+/** 
+ *：实例列表的运行态漂移标记与接管入口。
  * 种子 creative-plot（id=21）STOPPED + runtimeDriftPid>0；用 `q=creative-plot`
  * 收敛到单行，避免 1000+ 虚拟列表的其他行干扰断言。
  */
-describe('InstancesPage 运行态漂移（FR-471）', () => {
+describe('InstancesPage 运行态漂移', () => {
   beforeEach(() => {
     loginMockUser()
     useConsoleStore.setState({ selectedNodeId: null })
@@ -47,9 +47,16 @@ describe('InstancesPage 运行态漂移（FR-471）', () => {
 
     const row = (await screen.findByText('creative-plot')).closest('tr') as HTMLElement
     const badge = within(row).getByTestId('runtime-drift-badge')
-    expect(badge).toHaveTextContent('运行态漂移')
-    // tooltip 里带上未纳管 PID，方便鼠标悬停即得证据。
-    expect(badge.getAttribute('title')).toContain('41237')
+    /* 
+      【呈现变更·本轮】表格行里只渲染图标（带七字文案的完整徽章会把名称列撑宽、
+      把该行抬高约 20px，破坏表格行高一致），文案改由 title 承载。
+      故断言从「元素文本含『运行态漂移』」改为「悬停提示含该文案」——可读性并未减少。
+    */
+    expect(badge.textContent).toBe('')
+    expect(badge.getAttribute('title')).toContain('运行态漂移')
+    // tooltip 里带上未纳管进程的命令行（行内能给出的证据；PID 在「接管」确认框里给，
+    // 见下一条用例对 runtimeDriftAdoptDesc 的断言）。
+    expect(badge.getAttribute('title')).toContain('paper.jar')
   })
 
   it('「⋯」菜单里的接管入口经二次确认后才发 adopt-runtime 请求', async () => {
@@ -66,6 +73,8 @@ describe('InstancesPage 运行态漂移（FR-471）', () => {
 
       const dialog = await screen.findByRole('dialog')
       expect(within(dialog).getByText('接管实例「creative-plot」的运行态？')).toBeInTheDocument()
+      // 未纳管进程的 PID 在这里给出（行内标记只带命令行，见上一条用例）。
+      expect(within(dialog).getByText(/41237/)).toBeInTheDocument()
       // 打开菜单/弹窗本身不得发写请求。
       expect(spy.paths).toHaveLength(0)
 

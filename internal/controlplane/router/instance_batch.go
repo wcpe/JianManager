@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// InstanceBatchHandler 实例批量操作路由处理器（FR-058）。
+// InstanceBatchHandler 实例批量操作路由处理器。
 type InstanceBatchHandler struct {
 	batchSvc *service.InstanceBatchService
 	authz    *service.AuthzService
@@ -26,7 +26,7 @@ type instanceBatchRequest struct {
 	Command string                         `json:"command"`
 }
 
-// Batch 批量执行 command/start/stop/restart/kill，经 gRPC 委托对应 Worker（FR-058）。
+// Batch 批量执行 command/start/stop/restart/kill，经 gRPC 委托对应 Worker。
 // 权限隔离：仅操作有权实例，越权/不存在 id 计入 skipped（存在性隐藏，镜像 Bot 批量）。
 // 危险操作（批量 kill/stop）的二次确认在前端完成；服务端依赖审计中间件留痕。
 func (h *InstanceBatchHandler) Batch(c *gin.Context) {
@@ -81,7 +81,7 @@ func (h *InstanceBatchHandler) Batch(c *gin.Context) {
 }
 
 // RegisterRoutes 注册实例批量操作路由。
-// 加性追加，挂在 /instances/batch；不改既有 InstanceHandler 路由（避免与 FR-047 冲突）。
+// 加性追加，挂在 /instances/batch；不改既有 InstanceHandler 路由（避免与冲突）。
 func (h *InstanceBatchHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/instances/batch", h.Batch)
 }

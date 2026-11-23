@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// fakeWorkerClient 假 WorkerServiceClient（FR-314 CP 预检测试）：仅覆盖预检/注册/启动三方法，
+// fakeWorkerClient 假 WorkerServiceClient（CP 预检测试）：仅覆盖预检/注册/启动三方法，
 // 其余走嵌入接口（本测试不触达）。
 // CreateInstance 默认 Success:true——与真实 Worker 的幂等语义一致（已注册也返回成功）；
 // 注册失败场景用 createResp/createErr 显式注入。
@@ -45,14 +45,14 @@ func (f *fakeWorkerClient) StartInstance(ctx context.Context, in *workerpb.Insta
 	return &workerpb.InstanceActionResponse{Success: true}, nil
 }
 
-// newPreflightFixture 建 db + 节点 + 服务（禁用异步委托）+ 一个可启动实例。
+// newPreflightFixture 建 db + 节点 + 服务（走委托旁路，无异步副作用）+ 一个可启动实例。
 func newPreflightFixture(t *testing.T) (*InstanceService, *cpgrpc.ClientPool, *model.Node, *model.Instance) {
 	t.Helper()
 	db := newNodeTestDB(t)
 	node := newTestNode(t, db, "n1")
 	pool := cpgrpc.NewClientPool()
 	svc := NewInstanceService(db, NewGroupService(db), pool)
-	svc.Shutdown()
+	svc.SetDelegateBypassForTest(true)
 
 	inst := &model.Instance{
 		NodeID:       node.ID,

@@ -67,7 +67,7 @@ type BotLoadNodeCapacity struct {
 	AvailableBots      int    `json:"availableBots"`
 	CapacityGeneration int64  `json:"capacityGeneration"`
 	WorkerEpoch        string `json:"workerEpoch,omitempty"`
-	// WorkerEpochGeneration 是 bot-worker 分片世代号真源（FR-460）；失效 Bot 回收据此比对 Bot 侧记录。
+	// WorkerEpochGeneration 是 bot-worker 分片世代号真源；失效 Bot 回收据此比对 Bot 侧记录。
 	WorkerEpochGeneration             int64      `json:"workerEpochGeneration,omitempty"`
 	BotWorkerVersion                  string     `json:"botWorkerVersion,omitempty"`
 	RuntimeSource                     string     `json:"runtimeSource,omitempty"`

@@ -46,7 +46,7 @@ func TestBackup_List_IncludesChecksumFields(t *testing.T) {
 	require.Equal(t, backup.ChecksumAlgo, row["checksumAlgo"])
 }
 
-// TestBackup_Restore_RejectedWhenInstanceRunning 实例运行中恢复备份回 409（FR-013 真机验收缺陷回归）：
+// TestBackup_Restore_RejectedWhenInstanceRunning 实例运行中恢复备份回 409（真机验收缺陷回归）：
 // 恢复会解包覆盖工作目录，运行中的服务器下次自动存档会把恢复结果覆盖回去（静默失效），须先停止实例。
 func TestBackup_Restore_RejectedWhenInstanceRunning(t *testing.T) {
 	db := setupTestDB(t)

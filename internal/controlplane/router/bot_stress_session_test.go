@@ -1,6 +1,8 @@
 package router
 
 import (
+	"bufio"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -69,7 +71,7 @@ func TestBotStressSession_Flow(t *testing.T) {
 	assert.NotContains(t, byStatus, string(model.BotStatusStopped))
 }
 
-// TestBotStressSession_ReportAndStream FR-370：终态报告 HTTP + 最小 SSE 首帧。
+// TestBotStressSession_ReportAndStream：终态报告 HTTP + 最小 SSE 首帧。
 func TestBotStressSession_ReportAndStream(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -119,37 +121,17 @@ func TestBotStressSession_ReportAndStream(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "runId")
 	assert.Contains(t, w.Body.String(), sess.UUID)
 
-	// SSE：读到 connected + init + counts（终态还会 complete）
-	req, err := http.NewRequest(http.MethodGet, "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/stream", nil)
-	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		r.ServeHTTP(rec, req)
-	}()
-	// 等首包
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		body := rec.Body.String()
-		if strings.Contains(body, "event: init") && strings.Contains(body, "event: counts") {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	body := rec.Body.String()
-	assert.Contains(t, rec.Header().Get("Content-Type"), "text/event-stream")
+	// SSE：读取到完整 complete 帧后关闭请求，服务退出后再由 fixture 清理数据库。
+	headers, body := readBotStressSessionSSE(t, r, "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/stream", token, "event: complete")
+	assert.Contains(t, headers.Get("Content-Type"), "text/event-stream")
 	assert.Contains(t, body, "event: connected")
 	assert.Contains(t, body, "event: init")
 	assert.Contains(t, body, "event: counts")
 	assert.Contains(t, body, "event: complete")
 	assert.Contains(t, body, `"runState":"completed"`)
-	// 取消请求上下文：关闭底层连接不可直接，进程级测试结束即可。
-	_ = done
 }
 
-// TestBotStressSession_Metrics FR-370：5s 样本可读。
+// TestBotStressSession_Metrics：5s 样本可读。
 func TestBotStressSession_Metrics(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -183,7 +165,7 @@ func TestBotStressSession_Metrics(t *testing.T) {
 	assert.Equal(t, float64(1), counts["connected"])
 }
 
-// TestBotStressSession_FailuresAndEvents FR-370：失败/事件投影端点。
+// TestBotStressSession_FailuresAndEvents：失败/事件投影端点。
 func TestBotStressSession_FailuresAndEvents(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -230,7 +212,7 @@ func TestBotStressSession_FailuresAndEvents(t *testing.T) {
 	assert.Equal(t, "run-state", eb["items"].([]interface{})[0].(map[string]interface{})["type"])
 }
 
-// TestBotStressSession_Bots FR-370：bots 列表投影。
+// TestBotStressSession_Bots：bots 列表投影。
 func TestBotStressSession_Bots(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -257,7 +239,7 @@ func TestBotStressSession_Bots(t *testing.T) {
 	assert.Equal(t, "connected", items[0].(map[string]interface{})["status"])
 }
 
-// TestBotStressSession_StreamHistoryAndEvents FR-370：SSE 推送 history 帧（run_events 投影）。
+// TestBotStressSession_StreamHistoryAndEvents：SSE 推送 history 帧（run_events 投影）。
 func TestBotStressSession_StreamHistoryAndEvents(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -276,26 +258,42 @@ func TestBotStressSession_StreamHistoryAndEvents(t *testing.T) {
 		OccurredAt: time.Now().UTC(), PayloadJSON: `{"runState":"running"}`,
 	}).Error)
 
-	req, err := http.NewRequest(http.MethodGet, "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/stream", nil)
-	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		r.ServeHTTP(rec, req)
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(rec.Body.String(), "event: history") {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	body := rec.Body.String()
+	_, body := readBotStressSessionSSE(t, r, "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/stream", token, "event: history")
 	assert.Contains(t, body, "event: history")
 	assert.Contains(t, body, `"type":"run-state"`)
-	_ = done
+}
+
+// readBotStressSessionSSE 通过真实 HTTP 连接读取完整 SSE 帧。
+// ResponseRecorder 的 Header/Body 不能与 handler 并发读写；网络响应把两侧隔离，
+// 请求 deadline 约束等待，关闭 body 并取消请求后 Server.Close 等待 handler 退出。
+func readBotStressSessionSSE(t *testing.T, handler http.Handler, path, token, until string) (http.Header, string) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+path, nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		body.WriteString(line)
+		body.WriteByte('\n')
+		// 空行终结一帧，不能只读到 event 行就关闭连接、漏掉对应 data。
+		if line == "" && strings.Contains(body.String(), until) {
+			return resp.Header.Clone(), body.String()
+		}
+	}
+	require.NoError(t, scanner.Err(), "等待 SSE 帧 %q 失败，已读: %s", until, body.String())
+	t.Fatalf("SSE 在目标帧 %q 到达前关闭，已读: %s", until, body.String())
+	return nil, ""
 }
 
 func TestBotStressSession_GetDetailReturnsOrchestration(t *testing.T) {

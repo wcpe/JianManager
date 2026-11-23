@@ -9,9 +9,9 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BeaconHandler 是 FR-444「从 Beacon 拉取拓扑」的手动触发端点。
+// BeaconHandler 是「从 Beacon 拉取拓扑」的手动触发端点。
 //
-// 设计要点（ADR-090）：
+// 设计要点：
 //   - **不自动建树**：拉取只由此端点手动触发，避免与人工已建的分组冲突。
 //   - **可选协同**：未配置 beacon.endpoint 时返回 503 + 明确提示，而非 500；
 //     未部署 Beacon 时本平台其余功能完全不受影响。

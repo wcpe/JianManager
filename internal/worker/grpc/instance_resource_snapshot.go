@@ -3,7 +3,6 @@ package grpc
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +16,7 @@ import (
 
 const instanceResourceSnapshotTimeout = 3 * time.Second
 
-// instanceWorkDirSizeTimeout 工作目录大小统计的独立预算（FR-467）。
+// instanceWorkDirSizeTimeout 工作目录大小统计的独立预算。
 // 数十 GB 目录遍历可达数秒，故不与 3s 的进程快照预算共用——磁盘统计慢不该拖垮进程指标。
 //
 // N-5 修正：本预算必须在**独立 ctx** 上派生才真正可达。原先 instanceWorkDirBytes 收的是
@@ -27,7 +26,7 @@ const instanceResourceSnapshotTimeout = 3 * time.Second
 // 磁盘配额静默不生效。现在磁盘统计从入站 RPC ctx 派生，只受调用方 deadline 约束。
 const instanceWorkDirSizeTimeout = 10 * time.Second
 
-// GetInstanceResourceSnapshot 返回受管根进程及完整子进程树的资源快照（FR-399）。
+// GetInstanceResourceSnapshot 返回受管根进程及完整子进程树的资源快照。
 // 每个资源指标单独标记可用性，避免以零值掩盖进程退出或系统权限限制。
 func (s *Server) GetInstanceResourceSnapshot(ctx context.Context, req *workerpb.GetInstanceResourceSnapshotRequest) (*workerpb.GetInstanceResourceSnapshotResponse, error) {
 	state, err := s.manager.GetState(req.InstanceUuid)
@@ -95,7 +94,7 @@ func snapshotInstanceProcessTree(ctx context.Context, rootPID int32, workDirByte
 	return response
 }
 
-// instanceWorkDirBytes 统计实例工作目录占用（FR-467 运行期配额强制的磁盘维度）。
+// instanceWorkDirBytes 统计实例工作目录占用（运行期配额强制的磁盘维度）。
 //
 // 与进程指标分开采集：磁盘占用看目录树大小而非进程 RSS。统计失败（实例不存在/目录不可读）
 // 时返回 available=false，让 CP 侧明确「磁盘维度不可用」而不是把 0 当成「没占空间」
@@ -145,72 +144,50 @@ func (s *Server) instanceWorkDirBytes(dirCtx context.Context, instanceUUID strin
 	return total, true
 }
 
+// completeProcessTree 收集整棵进程树（含根）。
+// 遍历与去重逻辑在 collectProcessTreeIn（纯算法，可用内存树验证），
+// 这里仅把根句柄适配为 procNode。
 func completeProcessTree(ctx context.Context, root *psproc.Process) ([]*psproc.Process, error) {
-	seen := make(map[int32]struct{})
-	processes := make([]*psproc.Process, 0, 4)
-	var walk func(*psproc.Process) error
-	walk = func(current *psproc.Process) error {
-		if current == nil {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if _, ok := seen[current.Pid]; ok {
-			return nil
-		}
-		seen[current.Pid] = struct{}{}
-		processes = append(processes, current)
-		children, err := current.ChildrenWithContext(ctx)
-		if err != nil {
-			return err
-		}
-		for _, child := range children {
-			if err := walk(child); err != nil {
-				return err
-			}
-		}
-		return nil
+	if root == nil {
+		return nil, nil
 	}
-	if err := walk(root); err != nil {
+	nodes, err := collectProcessTreeIn(ctx, &gopsutilNode{proc: root})
+	if err != nil {
 		return nil, err
+	}
+	processes := make([]*psproc.Process, 0, len(nodes))
+	for _, node := range nodes {
+		if proc := asProcess(node); proc != nil {
+			processes = append(processes, proc)
+		}
 	}
 	return processes, nil
 }
 
 func processTreeRSS(ctx context.Context, processes []*psproc.Process) (int64, bool) {
-	var total uint64
-	for _, current := range processes {
-		memory, err := current.MemoryInfoWithContext(ctx)
-		if err != nil || memory == nil || math.MaxUint64-total < memory.RSS {
-			return 0, false
-		}
-		total += memory.RSS
-	}
-	if total > math.MaxInt64 {
-		return 0, false
-	}
-	return int64(total), true
+	return sumTreeRSSIn(ctx, wrapProcesses(processes))
 }
 
 func processTreeCPU(ctx context.Context, processes []*psproc.Process) (float64, bool) {
-	var total float64
-	for _, current := range processes {
-		cpuPercent, err := current.CPUPercentWithContext(ctx)
-		if err != nil {
-			return 0, false
-		}
-		total += cpuPercent
-	}
-	return total, true
+	return sumTreeCPUIn(ctx, wrapProcesses(processes))
 }
 
 func processUptime(ctx context.Context, root *psproc.Process) (float64, bool) {
-	createdAt, err := root.CreateTimeWithContext(ctx)
-	if err != nil || createdAt <= 0 {
+	if root == nil {
 		return 0, false
 	}
-	return float64(time.Now().UnixMilli()-createdAt) / 1000, true
+	return uptimeIn(ctx, &gopsutilNode{proc: root})
+}
+
+// wrapProcesses 把 gopsutil 句柄批量适配为 procNode。
+func wrapProcesses(processes []*psproc.Process) []procNode {
+	out := make([]procNode, 0, len(processes))
+	for _, proc := range processes {
+		if proc != nil {
+			out = append(out, &gopsutilNode{proc: proc})
+		}
+	}
+	return out
 }
 
 func unavailableInstanceResourceReason(response *workerpb.GetInstanceResourceSnapshotResponse) string {

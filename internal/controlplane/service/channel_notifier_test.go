@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -192,7 +194,7 @@ func TestValidWebhookURL(t *testing.T) {
 	assert.False(t, validWebhookURL("not a url"))
 }
 
-// ── QQ 通道（FR-494）──
+// ── QQ 通道──
 
 // TestChannelNotifier_QQCredentialEnvRef 明文 appSecret 必须被拒，${ENV_VAR} 形式通过。
 func TestChannelNotifier_QQCredentialEnvRef(t *testing.T) {
@@ -498,6 +500,97 @@ func TestChannelNotifier_QQTokenSingleFlight(t *testing.T) {
 	}
 	assert.Equal(t, int32(1), m.tokenCalls.Load(), "并发投递只应触发一次取 token")
 	assert.Equal(t, int32(concurrency), m.messageCalls.Load())
+}
+
+// qqTokenWaitContext 在等待者开始监听取消时发出信号，避免靠睡眠猜测其是否加入单飞。
+type qqTokenWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *qqTokenWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func TestChannelNotifier_QQTokenSingleFlightLeaderCancellation(t *testing.T) {
+	firstStarted := make(chan struct{})
+	firstCanceled := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 读完 POST 请求体后，服务端才能通过请求 context 观察对端的断连。
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if calls.Add(1) == 1 {
+			close(firstStarted)
+			select {
+			case <-r.Context().Done():
+				close(firstCanceled)
+			case <-release:
+			}
+			return
+		}
+		_, _ = w.Write([]byte(`{"access_token":"replacement","expires_in":7200}`))
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	notifier := NewChannelNotifier()
+	deadline, cancelDeadline := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelDeadline()
+	leader, cancelLeader := context.WithCancel(deadline)
+	defer cancelLeader()
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := notifier.qqAccessTokenContext(leader, srv.URL, "1020001", "plain")
+		leaderDone <- err
+	}()
+	select {
+	case <-firstStarted:
+	case <-deadline.Done():
+		t.Fatal("首个令牌请求未开始")
+	}
+
+	waiter := &qqTokenWaitContext{Context: deadline, waiting: make(chan struct{})}
+	type result struct {
+		token string
+		err   error
+	}
+	waiterDone := make(chan result, 1)
+	go func() {
+		token, err := notifier.qqAccessTokenContext(waiter, srv.URL, "1020001", "plain")
+		waiterDone <- result{token, err}
+	}()
+	select {
+	case <-waiter.waiting:
+	case <-deadline.Done():
+		t.Fatal("第二个调用未加入在途令牌请求")
+	}
+
+	cancelLeader()
+	select {
+	case err := <-leaderDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-deadline.Done():
+		t.Fatal("取消发起者后首个调用未退出")
+	}
+	select {
+	case <-firstCanceled:
+	case <-deadline.Done():
+		t.Fatal("服务端未观察到首个令牌请求断开")
+	}
+	select {
+	case got := <-waiterDone:
+		require.NoError(t, got.err, "发起者取消不能连带取消仍有效的等待者")
+		assert.Equal(t, "replacement", got.token)
+	case <-deadline.Done():
+		t.Fatal("等待者未返回令牌")
+	}
+	assert.Equal(t, int32(2), calls.Load(), "取消后只应由一个等待者重新请求令牌")
 }
 
 // TestChannelNotifier_QQBusinessError 开放平台 HTTP 200 但 code 非 0 时必须判为失败。

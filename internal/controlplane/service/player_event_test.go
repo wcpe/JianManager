@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// TestPlayerRoster_ApplyEvent 验证在线名册随事件演进（FR-066）：
+// TestPlayerRoster_ApplyEvent 验证在线名册随事件演进：
 // connected 重置该实例名册、player_join 加入、player_quit 移除、disconnected 清空该实例、
 // cross_server 在目标子服记为在线。名册以「实例 UUID + 子服名」为活动维度（BC 跨服感知）。
 func TestPlayerRoster_ApplyEvent(t *testing.T) {

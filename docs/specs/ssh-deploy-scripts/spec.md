@@ -117,3 +117,14 @@
 - **`systemctl --user` 的会话总线**：SSH 非交互会话需 `XDG_RUNTIME_DIR` 正确指向 `/run/user/<uid>`（linger 开启后该目录常驻）；脚本远端命令统一前置导出。
 - **arm64 产物**：`make dist` 现只出 amd64；目标机 arm64 时脚本报错提示，产物扩编不在本 FR。
 - **首启引导依赖人工**：CP 首次部署后必须浏览器完成 FR-017 引导才能签 token，deploy-worker 无法紧随全自动——已在脚本回显中指引，属产品既定形态非缺口。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入。
+
+### FR-277 SSH 推送式远程部署脚本
+
+**需求补充**：`deploy-cp.sh` / `deploy-worker.sh` 两独立 POSIX sh 脚本，从操作机经 SSH 密钥把本地 `make dist` 产物推送部署/更新到 Linux 主机（systemd 常驻、幂等重跑、数据与身份保留、部署后健康检查）；SSH 目标与部署参数经环境变量配置，Worker 首次上线经 `JM_ENROLL_TOKEN` 复用 setup 语义；目标机 root / 免密 sudo / 纯普通用户（user 级 systemd+linger）三档全支持（需 spec + ADR-063）→ `docs/specs/ssh-deploy-scripts/spec.md`
+
+**交付状态**：✅ 已交付@v0.15.0·真机验收（deploy-cp/worker 更新模式/幂等/身份保留/user档systemd/一键装机全验通）
+

@@ -17,8 +17,8 @@ function loginAsAdmin() {
   useAuthStore.getState().login(ADMIN_TOKEN, 'test-refresh-token')
 }
 
-/**
- * 分发观测总览区块（FR-426/427/428 mock 验收）：
+/** 
+ * 分发观测总览区块（427/428 mock 验收）：
  * - 洞察卡（同环比）/ 更新热力图 / 机器更新排行 三区块齐备
  * - 点机器行 → 抽屉出该机器更新事件时间线
  * - 自定义 from/to 深链：监控页 URL 窗口还原到时间筛选展示
@@ -34,7 +34,7 @@ beforeAll(() => {
   }
 })
 
-describe('ObsOverviewSection（FR-426/427/428 mock）', () => {
+describe('ObsOverviewSection（427/428 mock）', () => {
   it('洞察卡+热力图+机器排行渲染；点机器行出更新时间线', async () => {
     const user = userEvent.setup()
     loginMockUser()
@@ -59,7 +59,7 @@ describe('ObsOverviewSection（FR-426/427/428 mock）', () => {
   })
 })
 
-describe('FR-425 自定义时间深链（页面 B）', () => {
+describe('自定义时间深链（页面 B）', () => {
   it('URL from/to 还原到时间筛选按钮文案', async () => {
     loginAsAdmin()
     renderWithProviders(

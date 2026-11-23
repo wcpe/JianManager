@@ -43,9 +43,12 @@ func (s *Server) TerminateManagedProcess(ctx context.Context, req *workerpb.Mana
 	}
 	defer view.cancel()
 	mode := strings.TrimSpace(req.Mode)
-	if req.Pid == view.rootPID {
-		return processActionFailure("ROOT_PROCESS_ACTION_DENIED", "实例根进程须通过实例停止/强杀处置"), nil
-	}
+	/*
+		根进程也允许 PID 级处置（用户要求：进程卡死时必须有手段清理）。
+		安全性来自 waitLoop：根进程退出会被监听到，随即把实例标记为 CRASHED、
+		采集崩溃现场并按 autoRestart 策略处理——状态机不会停在「运行中」。
+		仍保留「温和终止」与「强制终止树」的区分：前者给进程收尾机会，后者连同子进程一并清理。
+	*/
 	affected, err := applyManagedProcessAction(view.target, view.targetChildren, mode)
 	if err != nil {
 		return processActionErrorResponse(err), nil

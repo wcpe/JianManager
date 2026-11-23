@@ -1,5 +1,5 @@
 // 外部测试包：与 register_identity_test.go 同理（service 已 import grpc，避免循环）。
-// 进程内集成测试：真 grpc.Server + bufconn + 真反向隧道，验证 FR-281 M1 的
+// 进程内集成测试：真 grpc.Server + bufconn + 真反向隧道，验证M1 的
 // 「隧道建立→登记→pool 隧道取连接→RPC 可达」与「鉴权拒绝」「无隧道不可调用」。
 package grpc_test
 
@@ -155,7 +155,7 @@ func TestPool_DoesNotFallbackToDirectWithoutTunnel(t *testing.T) {
 	require.Nil(t, client)
 }
 
-// TestReverseTunnel_SecretCannotBeReusedForAnotherNode 锁定 ADR-081 §3「UUID 与 secret 共同绑定身份」：
+// TestReverseTunnel_SecretCannotBeReusedForAnotherNode 锁定「UUID 与 secret 共同绑定身份」：
 // 已知 A 的 secret 时，冒充 B（另一个真实节点）必须被拒——secret 不能跨节点复用，身份不是「任一有效 secret」。
 func TestReverseTunnel_SecretCannotBeReusedForAnotherNode(t *testing.T) {
 	reg, db, lis := startTunnelCP(t)

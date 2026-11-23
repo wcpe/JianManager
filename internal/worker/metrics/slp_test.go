@@ -121,14 +121,32 @@ func TestPingSLPAgainstFakeServer(t *testing.T) {
 	writeVarInt(&resp, int32(len(j)))
 	resp.Write(j)
 
+	// 假服务端必须先读完客户端发来的两个包，再回响应。
+	//
+	// 客户端依次发送「握手包」和「状态请求包」，两者是否落在同一个 TCP 段
+	// 由内核决定（取决于调度与 Nagle）。原实现只 Read 一次就 Write 并关闭连接：
+	// 当两个包恰好分成两段到达时，服务端在客户端发完之前就写响应并 FIN，
+	// 客户端随后读到 RST/EOF —— `wsarecv: An existing connection was forcibly closed`。
+	// 这是**测试自身的竞态**，不是 SLP 实现缺陷。
+	//
+	// 这里不依赖握手的精确字节长度（那会把测试与协议字段绑死、容易再次漂移），
+	// 改为「持续读到客户端停止发送」：用一个足够宽的读循环吞完两包，
+	// 直到出现短暂读超时再判定客户端已发完，然后写响应。
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
 		defer conn.Close()
+		// 静默 150ms 即认为客户端已发完（协议里客户端发完就等响应，不会再有数据）。
+		_ = conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
 		buf := make([]byte, 4096)
-		_, _ = conn.Read(buf) // 读握手（客户端随后发的状态请求留在接收缓冲）
+		for {
+			if _, err := conn.Read(buf); err != nil {
+				break
+			}
+		}
+		_ = conn.SetReadDeadline(time.Time{})
 		_, _ = conn.Write(resp.Bytes())
 	}()
 

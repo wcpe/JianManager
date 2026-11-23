@@ -9,12 +9,12 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-398：压测模板 CRUD 与运行编排工具。
+// 压测模板 CRUD 与运行编排工具。
 
 const (
 	// agentTemplateOwnerID / agentTemplateIsAdmin：Agent 以平台级视角操作模板。
 	// Token 授权边界已由 capability 表达，再叠加用户所有权会产生「Agent 创建的模板归谁」的悖论。
-	// 决策见 ADR-080 附注：持 bot.load 即可管理全部压测模板；误删风险由精确确认参数兜底。
+	// 决策附注：持 bot.load 即可管理全部压测模板；误删风险由精确确认参数兜底。
 	agentTemplateOwnerID = uint(0)
 	agentTemplateIsAdmin = true
 )
