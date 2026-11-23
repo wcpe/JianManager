@@ -297,8 +297,8 @@ jobs:
           # 文本/端口/URL 时不剥、照常扫描，避免被引号包裹的真实公网 IP 绕过门禁。
           # diff 内容扫描不做此豁免——真正的泄漏面在那里，文本里引用版本号是常态。
           # 反引号容忍内填空格：GitHub 会把 `` ` 1.2.3.4 ` `` 渲染为 `1.2.3.4`，与
-          # <code> 的 padding 口径一致；Markdown 双反引号 `` ``ver`` `` 会先剥外层
-          # 再命中内层，天然被同一规则覆盖。
+          # <code> 的 padding 口径一致；Markdown 双反引号 `` ``ver`` `` 中内层 `ver`
+          # 会先命中本规则被剥去，残余一对反引号不再含 IP，天然被覆盖。
           MSGS_IP=$(printf '%s\n' "$MSGS" \
             | sed -E "s@<code>[[:space:]]*${VER_TOKEN}[[:space:]]*</code>@ @g; s@\`[[:space:]]*${VER_TOKEN}[[:space:]]*\`@ @g")
 
