@@ -198,7 +198,7 @@ export default function UserTokensPage() {
 
 /** 状态到 StatusBadge 档位映射。 */
 /** 令牌名展示：后端设备授权默认名存可本地化标记 `device:<label>`，按 UI 语言渲染。 */
-export function displayTokenName(name: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
+function displayTokenName(name: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
   if (name === 'device:cli') return t('userTokens.deviceNameCli')
   if (name.startsWith('device:')) return t('userTokens.deviceName', { label: name.slice(7) })
   return name
