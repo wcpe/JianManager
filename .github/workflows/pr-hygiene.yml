@@ -14,6 +14,10 @@ permissions:
 jobs:
   hygiene:
     runs-on: ubuntu-latest
+    env:
+      # 纯版本 token（数字或 v 开头、仅版本字符、无空白）；提交信息与 PR 正文两段
+      # 扫描共用同一口径，集中定义避免两处漂移。
+      VER_TOKEN: '[vV]?[0-9][0-9A-Za-z._+\-]*'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -288,10 +292,12 @@ jobs:
           # 会被误判成 IPv4。
           # 只剥纯版本 token（数字或 v 开头、仅版本字符、无空白），code 段里混有其他
           # 文本/端口/URL 时不剥、照常扫描，避免被引号包裹的真实公网 IP 绕过门禁。
-          VER_TOKEN='[vV]?[0-9][0-9A-Za-z._+\-]*'
           # diff 内容扫描不做此豁免——真正的泄漏面在那里，文本里引用版本号是常态。
+          # 反引号容忍内填空格：GitHub 会把 `` ` 1.2.3.4 ` `` 渲染为 `1.2.3.4`，与
+          # <code> 的 padding 口径一致；Markdown 双反引号 `` ``ver`` `` 会先剥外层
+          # 再命中内层，天然被同一规则覆盖。
           MSGS_IP=$(printf '%s\n' "$MSGS" \
-            | sed -E "s@<code>[[:space:]]*${VER_TOKEN}[[:space:]]*</code>@ @g; s@\`${VER_TOKEN}\`@ @g")
+            | sed -E "s@<code>[[:space:]]*${VER_TOKEN}[[:space:]]*</code>@ @g; s@\`[[:space:]]*${VER_TOKEN}[[:space:]]*\`@ @g")
 
           MSG_IP_HITS=$(printf '%s\n' "$MSGS_IP" \
             | grep -aoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]+)?\b[^[:space:]]?' \
@@ -373,9 +379,8 @@ jobs:
           # 同样先剥离「纯版本 token」的 <code>…</code> 与 `…`：dependabot 正文用 <code>
           # 包裹版本号，形如「x.y.z.w」的 Java 版本曾把 setup-java 升级 PR 误拦。
           # 非纯版本的 code 段不剥，真实 IP 依旧触发门禁。
-          VER_TOKEN='[vV]?[0-9][0-9A-Za-z._+\-]*'
           TEXT_IP=$(printf '%s\n' "$TEXT" \
-            | sed -E "s@<code>[[:space:]]*${VER_TOKEN}[[:space:]]*</code>@ @g; s@\`${VER_TOKEN}\`@ @g")
+            | sed -E "s@<code>[[:space:]]*${VER_TOKEN}[[:space:]]*</code>@ @g; s@\`[[:space:]]*${VER_TOKEN}[[:space:]]*\`@ @g")
 
           TEXT_IP_HITS=$(printf '%s\n' "$TEXT_IP" \
             | grep -aoE '\b([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]+)?\b[^[:space:]]?' \
