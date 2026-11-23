@@ -284,8 +284,8 @@ jobs:
           fail=0
 
           # IP 提取前先剥离内容为「单个版本号 token」的行内 code 引用（<code>…</code>
-          # 与 `…`）：dependabot 等机器人把版本号（如 18.0.1.1）写进 <code>，四段点分
-          # 数字会被误判成 IPv4。
+          # 与 `…`）：dependabot 等机器人把版本号写进 <code>，四段点分数字
+          # 会被误判成 IPv4。
           # 只剥纯版本 token（数字或 v 开头、仅版本字符、无空白），code 段里混有其他
           # 文本/端口/URL 时不剥、照常扫描，避免被引号包裹的真实公网 IP 绕过门禁。
           VER_TOKEN='[vV]?[0-9][0-9A-Za-z._+\-]*'
@@ -371,7 +371,7 @@ jobs:
 
           # 与内容检查同法：先抽 token 再逐个判，不让“整行豁免”吞掉真实地址。
           # 同样先剥离「纯版本 token」的 <code>…</code> 与 `…`：dependabot 正文用 <code>
-          # 包裹版本号，形如 18.0.1.1 的 Java 版本曾把 setup-java 升级 PR 误拦。
+          # 包裹版本号，形如「x.y.z.w」的 Java 版本曾把 setup-java 升级 PR 误拦。
           # 非纯版本的 code 段不剥，真实 IP 依旧触发门禁。
           VER_TOKEN='[vV]?[0-9][0-9A-Za-z._+\-]*'
           TEXT_IP=$(printf '%s\n' "$TEXT" \
