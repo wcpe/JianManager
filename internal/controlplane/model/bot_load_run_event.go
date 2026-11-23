@@ -18,7 +18,7 @@ const (
 	BotLoadRunEventReportReady     BotLoadRunEventType = "report-ready"
 )
 
-// BotLoadRunEvent 是 FR-370 运行历史事件（append-only，不随 metric TTL 删除）。
+// BotLoadRunEvent 是运行历史事件（append-only，不随 metric TTL 删除）。
 type BotLoadRunEvent struct {
 	ID              uint                `gorm:"primaryKey" json:"id"`
 	StressSessionID uint                `gorm:"not null;index:idx_bot_load_run_event_session_id,priority:1;index:idx_bot_load_run_event_type,priority:1;index:idx_bot_load_run_event_time,priority:1" json:"stressSessionId"`

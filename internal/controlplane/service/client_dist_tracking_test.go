@@ -16,7 +16,13 @@ func newTrackingDB(t *testing.T) *gorm.DB {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.ClientDistEvent{}, &model.ClientDistDaily{}, &model.ClientRuntimeState{}))
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+	require.NoError(t, db.AutoMigrate(&model.ClientDistEvent{}, &model.ClientDistDaily{}, &model.ClientRuntimeState{}, &model.ClientTelemetry{}))
 	return db
 }
 
@@ -99,7 +105,7 @@ func TestClientDistTracking_QueryEventsFilters(t *testing.T) {
 	require.Len(t, byKind, 2)
 }
 
-// TestClientDistTracking_RecordPersistsErrCode 失败事件写入语义错误码（FR-249）。
+// TestClientDistTracking_RecordPersistsErrCode 失败事件写入语义错误码。
 func TestClientDistTracking_RecordPersistsErrCode(t *testing.T) {
 	db := newTrackingDB(t)
 	svc := NewClientDistTrackingService(db)
@@ -112,7 +118,7 @@ func TestClientDistTracking_RecordPersistsErrCode(t *testing.T) {
 	require.Equal(t, "NO_LATEST_VERSION", ev.ErrCode, "失败事件应保留错误码")
 }
 
-// TestClientDistTracking_QueryOutcomeAndErrCode 按 outcome（成功/失败）+ errCode 精确筛（FR-249）。
+// TestClientDistTracking_QueryOutcomeAndErrCode 按 outcome（成功/失败）+ errCode 精确筛。
 // 失败⟺status>=400；成功⟺status>0 且 <400（含 304/200/206）。
 func TestClientDistTracking_QueryOutcomeAndErrCode(t *testing.T) {
 	db := newTrackingDB(t)
@@ -198,6 +204,34 @@ func TestClientDistTracking_SearchEventsRuntimeFiltersAndPagination(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, int64(1), page.Total)
 	require.Equal(t, "m2", page.Items[0].MachineID)
+}
+
+// TestClientDistTracking_RuntimeFilterKeepsChannelScope 全频道口径下，
+// runtime 维度下钻必须按 (channel_id, machine_id) 复合键收敛（R33）。
+//
+// 触发场景：机器码是客户端自报的，两台不同频道的机器完全可能同码。
+// 只按 machine_id 拼 IN 列表时，筛「A 频道的 M = v15」会把「B 频道的 M = v3」的请求一起捞进来。
+func TestClientDistTracking_RuntimeFilterKeepsChannelScope(t *testing.T) {
+	db := newTrackingDB(t)
+	svc := NewClientDistTrackingService(db)
+	require.NoError(t, db.Create(&model.ClientRuntimeState{ChannelID: "chA", MachineID: "shared", LocalVersion: 15}).Error)
+	require.NoError(t, db.Create(&model.ClientRuntimeState{ChannelID: "chB", MachineID: "shared", LocalVersion: 3}).Error)
+	// 两条明细同机器码、不同频道。
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "chA", MachineID: "shared", Kind: "manifest", Version: 15, Status: 200}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "chB", MachineID: "shared", Kind: "manifest", Version: 3, Status: 200}).Error)
+
+	// 全频道下按 v15 下钻：只应命中 chA 那一条。
+	page, err := svc.SearchEvents(ClientDistEventSearchFilter{RuntimeVersion: intPtr(15), Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, "chA", page.Items[0].ChannelID, "不得混入同机器码的 chB 请求")
+
+	// 按 v3 下钻：只应命中 chB。
+	page, err = svc.SearchEvents(ClientDistEventSearchFilter{RuntimeVersion: intPtr(3), Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Equal(t, "chB", page.Items[0].ChannelID)
 }
 
 func TestClientDistTracking_RealtimeOverview(t *testing.T) {

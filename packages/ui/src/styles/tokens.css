@@ -1,0 +1,247 @@
+/**
+ * 设计 token（阶段 1 自 apps/control-plane-web/src/index.css 迁入；阶段 2 改为「种子 + 派生」）。
+ *
+ * ── 怎么加一套新主题 ──
+ * 在 themes.css 里声明 **4 个种子** 即可，结构色会自动派生：
+ *  --seed-brand      品牌主色（主操作 / 焦点环 / 图表 1）
+ *  --seed-on-brand   品牌上的前景色（按钮文字）
+ *  --seed-hue        结构色相（背景 / 边框 / 正文都带它）
+ *  --seed-chroma     结构 chroma 基准（越低越中性，越高越"有色"）
+ * 其余结构色（background / foreground / card / secondary / muted / border / input）
+ * 由下面从种子算出，不必再抄一遍。
+ *
+ * ── 想单独调某个结构值 ──
+ * 在主题块里写对应的 `--seed-surface` / `--seed-card` / `--seed-line` 等覆盖即可：
+ * 派生层统一写成 `var(--seed-x, 派生式)`，显式值优先。
+ *
+ * ── 派生公式的来历 ──
+ * 系数取自既有 5 套主题实测值的 OKLCH 换算：结构色相与主题色相一致（偏差 ±8° 内）、
+ * 各角色的 L 高度稳定（亮色 bg≈0.970 / border≈0.893，暗色 bg≈0.189 / border≈0.328）、
+ * 各角色 chroma 与 border chroma 成稳定比例。目标是观感一致（色相同族、明暗关系不变），
+ * 而非逐像素相同——可达性由 color-contrast.test.ts 守住。
+ *
+ * 消费方（主控台 / ui-museum）不再各自复制，只 import 本目录的 index.css。
+ * 变量命名与语义见 theme-map.css —— 那里把 token 映射成 Tailwind utility。
+ */
+
+/** 结构 chroma 的换算系数：以 border 的 chroma 为 1.0，各角色相对它取值。 */
+:root {
+  color-scheme: light;
+
+  /* ── 种子：默认主题（indigo）── */
+  --seed-brand: #158053;
+  --seed-on-brand: #ffffff;
+  --seed-hue: 258;
+  --seed-chroma: 0.011;
+
+  /* ── 品牌维度 ── */
+  --brand-forest: #158053;
+  --brand-cobalt: #2563eb;
+  --primary: var(--seed-brand);
+  --primary-foreground: var(--seed-on-brand);
+  --ring: var(--seed-brand);
+  /* 淡色块与淡色文字：用结构色相从种子算出，与 accent 底同族。
+     不用 color-mix 从 --primary 混——品牌色偏亮，混出的文字与同样偏亮的 accent 底对比不足。 */
+  --accent: var(--seed-brand-weak, oklch(0.955 calc(var(--seed-chroma) * 1.4) var(--seed-hue)));
+  --accent-foreground: var(--seed-brand-ink, oklch(0.440 calc(var(--seed-chroma) * 4.6) var(--seed-hue)));
+
+  /* ── 结构维度（从种子派生）── */
+  /*
+    亮色页面底 = 纯白。按 shadcn 的 token 约定，`--background` 就是应用的默认底色，
+    组件的 `bg-background` 全部指向它；此前是 oklch(0.970) 的浅灰，
+    于是顶栏/内容区看起来「不是纯白」。需要灰底时改这一个 token 即可，组件不用动。
+  */
+  --background: var(--seed-surface, #ffffff);
+  --foreground: var(--seed-content, oklch(0.245 calc(var(--seed-chroma) * 2.2) var(--seed-hue)));
+  --card: var(--seed-card, #ffffff);
+  --card-foreground: var(--seed-content, oklch(0.245 calc(var(--seed-chroma) * 2.2) var(--seed-hue)));
+  --popover: var(--seed-popover, var(--seed-card, #ffffff));
+  --popover-foreground: var(--seed-content, oklch(0.245 calc(var(--seed-chroma) * 2.2) var(--seed-hue)));
+  --secondary: var(--seed-surface-2, oklch(0.945 calc(var(--seed-chroma) * 0.68) var(--seed-hue)));
+  --secondary-foreground: var(--seed-content-2, oklch(0.325 calc(var(--seed-chroma) * 2.4) var(--seed-hue)));
+  --muted: var(--seed-surface-3, oklch(0.980 calc(var(--seed-chroma) * 0.32) var(--seed-hue)));
+  --muted-foreground: var(--seed-content-3, oklch(0.545 calc(var(--seed-chroma) * 2.2) var(--seed-hue)));
+  --border: var(--seed-line, oklch(0.893 var(--seed-chroma) var(--seed-hue)));
+  --input: var(--seed-line, oklch(0.893 var(--seed-chroma) var(--seed-hue)));
+
+  /*
+    ── 侧栏系列（shadcn 标准的 sidebar token 组）──
+
+    【为什么必须补齐这一组】shadcn 的 token 表里，侧栏是**独立的一套表面**：
+      --sidebar / --sidebar-foreground / --sidebar-primary / --sidebar-accent /
+      --sidebar-border / --sidebar-ring
+    它们存在的原因很实际：侧栏是常驻的大面积导航区，它的底色、hover 态、分隔线
+    与正文区不是同一套取值——正文区的 `muted` 拿来当侧栏 hover，往往太淡或太亮。
+
+    本项目此前完全没有这组 token，于是侧栏的所有颜色只能写在
+    `apps/control-plane-web/src/index.css` 的 `.jm-sidebar-drawer` 之类自定义类里，
+    换主题/改配色都要在应用侧改 CSS——这正是「样式散落在 index.css」的根源。
+
+    现在按 shadcn 补齐，组件侧即可写 `bg-sidebar` / `border-sidebar-border` /
+    `hover:bg-sidebar-accent`，不再需要任何自定义 CSS。
+
+    取值：亮色侧栏与内容区**同为纯白**（用户明确要求），层次由 `--sidebar-border`
+    那条竖线表达，而不是靠明度差。
+
+    `--sidebar-primary` 是侧栏内的高强调色（选中项、CTA）；`--sidebar-accent`
+    是侧栏内的 hover/选中底——前者用品牌色，后者用极淡的品牌色。
+  */
+  --sidebar: var(--seed-sidebar, #ffffff);
+  --sidebar-foreground: var(--seed-content, oklch(0.245 calc(var(--seed-chroma) * 2.2) var(--seed-hue)));
+  --sidebar-primary: var(--seed-brand, oklch(0.55 0.12 160));
+  --sidebar-primary-foreground: var(--seed-on-brand, #ffffff);
+  --sidebar-accent: var(--seed-brand-weak, oklch(0.955 calc(var(--seed-chroma) * 1.4) var(--seed-hue)));
+  --sidebar-accent-foreground: var(--seed-brand-ink, oklch(0.440 calc(var(--seed-chroma) * 4.6) var(--seed-hue)));
+  --sidebar-border: var(--seed-line, oklch(0.893 var(--seed-chroma) var(--seed-hue)));
+  --sidebar-ring: var(--seed-brand, oklch(0.55 0.12 160));
+
+  /* ── 非主题维度：状态色语义固定，不随主题变 ── */
+  --destructive: #dc2626;
+  /* 全局圆角基准 = 5px。各级 --radius-* 在 theme-map.css 里全部等于此值（统一视觉半径）。 */
+  --radius: 5px;
+  /* 首访资源减重：原 1437.5KB 背景位图（console-bg-light.png，全站唯一重物 ✗）
+     替换为同基调的柔和渐变（0KB ✓）。视觉一致性由设计 token 保证：沿用 background/muted。
+     如需恢复位图：把 url('/brand/console-bg-light.png') 换回即可（文件已移出 public ✗）。 */
+  --workspace-bg-image: linear-gradient(160deg, var(--background) 0%, var(--muted) 55%, var(--background) 100%);
+
+  --shadow-color: 16 24 40;
+  /* 阴影晕色用裸三元组（CSS 无法从颜色变量里取分量），故主题需一并声明 --seed-brand-rgb。 */
+  --brand-shadow: var(--seed-brand-rgb, 21 128 83);
+
+  --status-success: #16a34a;
+  --status-success-foreground: #ffffff;
+  --status-warning: #d97706;
+  --status-warning-foreground: #1f2937;
+  --status-danger: #dc2626;
+  --status-danger-foreground: #ffffff;
+  --status-info: #2563eb;
+  --status-info-foreground: #ffffff;
+
+  --chart-1: var(--seed-brand);
+  --chart-2: #2563eb;
+  --chart-3: #d97706;
+  --chart-4: #7c3aed;
+  --chart-5: #dc2626;
+
+  /* ── 方案 A「精工卡片」派生令牌（表格视觉工艺）──
+     只服务 opt-in 的 Table appearance="refined"：发丝分隔线、次要前景、柔和实底状态 chip、
+     主色刻度线指针用的弱底/墨色。品牌相关值（--primary-weak/ink/line）用 color-mix 从 --primary
+     推导——因 html 根上叠加 [data-theme]/.dark 会同时改写 --primary，派生值随之自动换肤；
+     状态色（success/danger）语义固定，明暗各给一套。未在别处使用时不影响任何既有观感。 */
+  --hairline: #eef2f6;
+  --subtle-fg: #475569;
+  --primary-weak: color-mix(in srgb, var(--primary) 13%, var(--card));
+  --primary-ink: color-mix(in srgb, var(--primary) 74%, #04120b);
+  --primary-line: color-mix(in srgb, var(--primary) 30%, var(--card));
+  --success-weak: #e8f7ee;
+  --success-ink: #11613f;
+  --success-line: #cdebdb;
+  --danger-weak: #fef2f2;
+  --danger-ink: #b91c1c;
+  --danger-line: #f9d7d7;
+  /* warning/info 补齐同款三件套（此前只有 success/danger 有）：
+     weak=淡底 / ink=该底上的墨色 / line=描边。状态徽章用它比实色底更柔和，
+     且暗色下自动跟随（见下方 .dark）。 */
+  --warning-weak: #fdf5e6;
+  --warning-ink: #92400e;
+  --warning-line: #f5e0bb;
+  --info-weak: #eff5ff;
+  --info-ink: #1d4ed8;
+  --info-line: #d3e2fb;
+
+  /* ── 层级阶梯 ──
+     此前 45 处 z 值散落（含 z-[200]/z-[300] 这类任意值），浮层谁压谁只能靠读代码。
+     用普通 CSS 变量而非 @theme：Tailwind 的 z 主题命名空间不保证，
+     `z-[var(--z-*)]` 的写法无歧义且换肤/换主题时同样生效。 */
+  --z-base: 1;
+  --z-sticky: 10;      /* 吸附表头、粘性工具条 */
+  --z-dropdown: 20;    /* 下拉、气泡、右键菜单 */
+  --z-overlay: 30;     /* 遮罩 */
+  --z-modal: 40;       /* 模态、抽屉 */
+  --z-toast: 50;       /* 全局提示（须压住一切） */
+}
+
+.dark {
+  color-scheme: dark;
+
+  /* ── 种子：暗色默认主题（indigo）──
+     亮暗各自声明种子，互不干扰：`.dark` 在 `:root` 之后生效，主题块又在其后。 */
+  --seed-brand: #7c86ff;
+  --seed-on-brand: #101322;
+  --seed-hue: 257;
+  --seed-chroma: 0.029;
+
+  --brand-forest: #2fd184;
+  --brand-cobalt: #7c86ff;
+  --primary: var(--seed-brand);
+  --primary-foreground: var(--seed-on-brand);
+  --ring: var(--seed-brand);
+  --accent: var(--seed-brand-weak, oklch(0.330 calc(var(--seed-chroma) * 0.90) var(--seed-hue)));
+  --accent-foreground: var(--seed-brand-ink, oklch(0.860 calc(var(--seed-chroma) * 1.20) var(--seed-hue)));
+
+  /* 暗色的 L 与亮色不同（深底 + 亮字），故各角色用自己的一组明度 */
+  --background: var(--seed-surface, oklch(0.189 calc(var(--seed-chroma) * 0.50) var(--seed-hue)));
+  --foreground: var(--seed-content, oklch(0.940 calc(var(--seed-chroma) * 0.45) var(--seed-hue)));
+  --card: var(--seed-card, oklch(0.230 calc(var(--seed-chroma) * 0.72) var(--seed-hue)));
+  --card-foreground: var(--seed-content, oklch(0.940 calc(var(--seed-chroma) * 0.45) var(--seed-hue)));
+  --popover: var(--seed-popover, oklch(0.238 calc(var(--seed-chroma) * 0.72) var(--seed-hue)));
+  --popover-foreground: var(--seed-content, oklch(0.940 calc(var(--seed-chroma) * 0.45) var(--seed-hue)));
+  --secondary: var(--seed-surface-2, oklch(0.283 calc(var(--seed-chroma) * 0.88) var(--seed-hue)));
+  --secondary-foreground: var(--seed-content-2, oklch(0.940 calc(var(--seed-chroma) * 0.45) var(--seed-hue)));
+  --muted: var(--seed-surface-3, oklch(0.251 calc(var(--seed-chroma) * 0.72) var(--seed-hue)));
+  --muted-foreground: var(--seed-content-3, oklch(0.720 calc(var(--seed-chroma) * 0.92) var(--seed-hue)));
+  --border: var(--seed-line, oklch(0.328 var(--seed-chroma) var(--seed-hue)));
+  --input: var(--seed-line-strong, oklch(0.400 calc(var(--seed-chroma) * 1.10) var(--seed-hue)));
+
+  /*
+    深色侧栏：与内容区同源（--background），层次由 --sidebar-border 表达。
+    亮色下侧栏与内容区都是纯白、深色下都是同一个深底——两侧一致，
+    这样切换明暗时侧栏不会突然「跳成另一种颜色」。
+  */
+  --sidebar: var(--seed-sidebar, var(--seed-surface, oklch(0.189 calc(var(--seed-chroma) * 0.50) var(--seed-hue))));
+  --sidebar-foreground: var(--seed-content, oklch(0.940 calc(var(--seed-chroma) * 0.45) var(--seed-hue)));
+  --sidebar-primary: var(--seed-brand, oklch(0.76 0.12 160));
+  --sidebar-primary-foreground: var(--seed-on-brand, oklch(0.20 0.04 160));
+  --sidebar-accent: var(--seed-brand-weak, oklch(0.330 calc(var(--seed-chroma) * 0.90) var(--seed-hue)));
+  --sidebar-accent-foreground: var(--seed-content, oklch(0.940 calc(var(--seed-chroma) * 0.45) var(--seed-hue)));
+  --sidebar-border: var(--seed-line, oklch(0.328 var(--seed-chroma) var(--seed-hue)));
+  --sidebar-ring: var(--seed-brand, oklch(0.76 0.12 160));
+
+  --destructive: #f87171;
+
+  --shadow-color: 0 0 0;
+  --brand-shadow: var(--seed-brand-rgb, 124 134 255);
+
+  --status-success: #36d58a;
+  --status-success-foreground: #07150f;
+  --status-warning: #f2b84b;
+  --status-warning-foreground: #1a1205;
+  --status-danger: #f87171;
+  --status-danger-foreground: #1f0808;
+  --status-info: #74a8ff;
+  --status-info-foreground: #08111f;
+
+  --chart-1: var(--seed-brand);
+  --chart-2: #36d58a;
+  --chart-3: #f2b84b;
+  --chart-4: #d879ff;
+  --chart-5: #f87171;
+  --workspace-bg-image: none;
+
+  /* 方案 A 派生令牌的暗色覆盖：发丝线用边框色与卡片 mix，状态 chip 底/墨在深底上提亮。
+     --primary-weak/ink/line 仍由 :root 的 color-mix 自动跟随暗色 --primary，无需重复声明。 */
+  --hairline: color-mix(in srgb, var(--border) 62%, var(--card));
+  --subtle-fg: color-mix(in srgb, var(--foreground) 78%, var(--muted-foreground));
+  --success-weak: color-mix(in srgb, var(--status-success) 22%, var(--card));
+  --success-ink: color-mix(in srgb, var(--status-success) 82%, #ffffff);
+  --success-line: color-mix(in srgb, var(--status-success) 32%, var(--card));
+  --danger-weak: color-mix(in srgb, var(--status-danger) 18%, var(--card));
+  --danger-ink: color-mix(in srgb, var(--status-danger) 86%, #ffffff);
+  --danger-line: color-mix(in srgb, var(--status-danger) 36%, var(--card));
+  --warning-weak: color-mix(in srgb, var(--status-warning) 20%, var(--card));
+  --warning-ink: color-mix(in srgb, var(--status-warning) 88%, #ffffff);
+  --warning-line: color-mix(in srgb, var(--status-warning) 34%, var(--card));
+  --info-weak: color-mix(in srgb, var(--status-info) 18%, var(--card));
+  --info-ink: color-mix(in srgb, var(--status-info) 88%, #ffffff);
+  --info-line: color-mix(in srgb, var(--status-info) 34%, var(--card));
+}

@@ -5,9 +5,9 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import ClientDistLogsTab from './ClientDistLogsTab'
 
-/**
- * ClientDistLogsTab（FR-430 / ADR-088 去重合并）：单一入口按 `type` 双视图。
- * - `type=request`（缺省）：加厚请求表 + 脱敏详情（FR-357/FR-265）。
+/** 
+ * ClientDistLogsTab（去重合并）：单一入口按 `type` 双视图。
+ * - `type=request`（缺省）：加厚请求表 + 脱敏详情。
  * - `type=all`/其余 5 类：安全聚合多类型表（hello/risk/action/request/runtime/telemetry）。
  */
 beforeAll(() => {
@@ -29,13 +29,13 @@ describe('ClientDistLogsTab', () => {
     loginMockUser()
     const user = userEvent.setup()
     renderWithProviders(
-      <ClientDistLogsTab channelId={undefined} range="7d" enabled link={{}} onClearLink={() => {}} />,
+      <ClientDistLogsTab channelId={undefined} window={{ range: '7d' }} enabled link={{}} onClearLink={() => {}} />,
       { route: '/client-dist-ops?tab=logs' },
     )
 
     expect(await screen.findByText('分发请求日志')).toBeInTheDocument()
     expect(await screen.findByRole('columnheader', { name: '错误码' })).toBeInTheDocument()
-    // 加厚列（FR-357）
+    // 加厚列
     expect(screen.getByRole('columnheader', { name: '玩家名' })).toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: 'Core 版本' })).toBeInTheDocument()
     expect(screen.getByText('INVALID_CLIENT_KEY')).toBeInTheDocument()
@@ -53,7 +53,7 @@ describe('ClientDistLogsTab', () => {
   it('type=all：出安全聚合多类型表（含 hello/telemetry）', async () => {
     loginMockUser()
     renderWithProviders(
-      <ClientDistLogsTab channelId={undefined} range="7d" enabled link={{}} onClearLink={() => {}} />,
+      <ClientDistLogsTab channelId={undefined} window={{ range: '7d' }} enabled link={{}} onClearLink={() => {}} />,
       { route: '/client-dist-ops?tab=logs&type=all' },
     )
 
@@ -70,7 +70,7 @@ describe('ClientDistLogsTab', () => {
     renderWithProviders(
       <ClientDistLogsTab
         channelId={undefined}
-        range="7d"
+        window={{ range: '7d' }}
         enabled
         link={{ machineId: 'm-aaaa', ip: '203.0.113.1', errCode: 'INVALID_CLIENT_KEY' }}
         onClearLink={() => {}}

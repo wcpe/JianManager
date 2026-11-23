@@ -5,8 +5,8 @@ import { renderWithProviders } from '@/test/render'
 import { mockInject } from '@jianmanager/devmock/inject'
 import LoginPage from './LoginPage'
 
-/**
- * LoginPage 强断言纵切（FR-199 样例，地基随附）：验 render harness + 假后端 auth 联动 + 错误注入。
+/** 
+ * LoginPage 强断言纵切（样例，地基随附）：验 render harness + 假后端 auth 联动 + 错误注入。
  * 注：错误凭据(401) 触发整页刷新的回归断言归「登录失败刷新」fix（sdd-fix-bug），不在地基样例内。
  */
 async function fillAndSubmit(username: string, password: string) {

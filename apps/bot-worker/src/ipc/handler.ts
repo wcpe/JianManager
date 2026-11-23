@@ -1,4 +1,4 @@
-/**
+/** 
  * IPC 命令分发器。
  * FleetController 负责批量准入和连接生命周期，本文件保留旧行为、命令与脚本入口。
  */
@@ -26,7 +26,15 @@ const BOT_WORKER_VERSION = '0.4.0'
 
 const prewarmPool = new PrewarmPool({ count: 0, maxPoolSize: MAX_BOTS })
 const scriptRunner = new ScriptRunner()
-const stateReporter = new StateReporter({ intervalMs: 3000 })
+/** 
+ * Bot 状态快照上报周期（毫秒）。
+ *
+ * 每次上都会遍历全部 Bot 生成完整快照对象（含排序），是随舰队规模线性增长的固定开销；
+ * 数百 Bot 时 3s 一次会与收包处理争抢事件循环。默认放宽到 10s——状态面板对实时性的
+ * 要求远低于 keepalive，可用环境变量在需要更细粒度观测时调回。
+ */
+const stateReportIntervalMs = Number.parseInt(process.env.JM_BOT_WORKER_STATE_INTERVAL_MS || '10000', 10) || 10000
+const stateReporter = new StateReporter({ intervalMs: stateReportIntervalMs })
 const workerEpochGeneration = parseWorkerEpochGeneration()
 
 const fleet = new FleetController({
@@ -48,7 +56,7 @@ const healthCheck = new HealthCheck({
   fleetHeartbeat: (eventLoopP95Ms) => fleet.heartbeat(eventLoopP95Ms),
 })
 
-// FR-369 通用命令编排：集中 scheduler；bot.chat 经 fleet 已连接实例派发。
+// 通用命令编排：集中 scheduler；bot.chat 经 fleet 已连接实例派发。
 const commandScheduler = new CommandScheduler({
   getBot: (botUuid) => fleet.getBotByUuid(botUuid) ?? fleet.getBot(botUuid),
   chat: (bot, command) => {
@@ -124,7 +132,7 @@ export function shutdown(): void {
   fleet.shutdown()
 }
 
-/** FR-369：下发命令计划（同步回执 command-schedule-accepted）。 */
+/** 下发命令计划（同步回执 command-schedule-accepted）。 */
 function handleCommandSchedule(command: CommandScheduleCommand): void {
   const result = commandScheduler.apply(command)
   if (result.ok) {
@@ -147,7 +155,7 @@ function handleCommandSchedule(command: CommandScheduleCommand): void {
   })
 }
 
-/** FR-369：barrier release（同步回执 command-schedule-release-result）。 */
+/** barrier release（同步回执 command-schedule-release-result）。 */
 function handleCommandScheduleRelease(command: CommandScheduleReleaseCommand): void {
   const result = commandScheduler.release(command)
   if (result.ok) {
@@ -170,7 +178,7 @@ function handleCommandScheduleRelease(command: CommandScheduleReleaseCommand): v
   })
 }
 
-/** FR-369：取消计划（同步回执 command-schedule-cancel-result）。 */
+/** 取消计划（同步回执 command-schedule-cancel-result）。 */
 function handleCommandScheduleCancel(command: CommandScheduleCancelCommand): void {
   const result = commandScheduler.cancel(command)
   if (result.ok) {

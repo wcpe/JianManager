@@ -206,3 +206,13 @@ interface ArtifactStorageTestResult { ok: boolean; message: string; errorCode?: 
 - **切活跃后的双落点**：制品分布于本地与多个 s3 渠道由 Asset 逐条自述，读路径永远正确；集中归拢靠 FR-348 迁移工具。
 - **presign 时钟偏移**：见 §3.8，运维要求。
 - **updater 跨协议不跟随**：文档级部署建议规避；若未来必须跨协议，需 updater 增手动跟随（另立 FR，动客户端发版链路）。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-347 制品库外置对象存储底座
+
+**需求补充**：BlobStore 抽象 + 本地/S3 适配器 + 存储渠道配置页 + 302 预签名下载（feat，增强 FR-088 修订 ADR-011 存储节，用户诉求：制品上传自部署 rustfs 做数据分发、CP 不存大对象）：抽 BlobStore 接口（Put/Open/Stat/Delete/List/Presign，后续新后端只加适配器）——本地适配器封装现 CAS、S3 适配器复用 worker SigV4 纯标准库实现并补 presign；新表制品存储渠道 + 「文件存储配置」管理页（CRUD/连通测试/设活跃渠道；凭证面板直填可逆加密存储，沿 FR-192 先例）；Asset.StorageBackend 按记录路由下载——local 走 ServeContent、s3 返 302 预签名短时效 URL（updater 已开跟随重定向，真机必验）（需 spec + ADR）→ `docs/specs/artifact-external-storage/spec.md`
+
+**交付状态**：✅ 已交付@v0.18.0

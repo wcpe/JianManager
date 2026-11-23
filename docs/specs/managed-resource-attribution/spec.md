@@ -84,3 +84,20 @@ RSS 是进程观察值，可能含共享页，**不能**与节点已用内存相
 - Heartbeat 字段新增必须重新生成 protobuf 代码，并保持老 Worker 可连接。
 - Worker/Bot Worker RSS 与节点已用内存口径不同，前端必须持续展示“观察值，非可加总分账”。
 - FR-401 只能消费本 FR 的实时快照契约，禁止另建一套 RPC 轮询或再次修改 Heartbeat 语义。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入（保留原文）。
+
+### FR-400 受管资源归因与首页仪表 Tooltip
+
+受管资源归因与首页仪表 Tooltip（feat，增强 FR-169/170）：修复观测刷新后，首页 CPU/负载/内存仪表提供采样时间、陈旧/离线态与可访问 Tooltip；按节点→受管实例→进程 TopN 解释资源占用并可下钻监控页，归因接口可查询已就绪共享 Bot Worker 的真实容量或缺测原因。仅覆盖节点、Worker、受管实例进程树与 Bot Worker，不采集任意 OS 进程；页面可见时 10s 刷新、隐藏暂停，复用既有 90s 新鲜度阈值（需 spec，依赖 FIX-观测刷新）→ `docs/specs/managed-resource-attribution/spec.md`
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 索引段迁入（保留原文）。
+
+### FIX-观测刷新 + FR-400~403（平台全景观测 2026-07-27）
+
+FIX-观测刷新 + FR-400~403（平台全景观测 2026-07-27）：修复可见页面指标自动刷新与陈旧态；补齐受管资源归因与首页 Tooltip、Bot Worker 历史观测、平台总览下钻，以及平台/节点实例日志分流。范围只涵盖平台受管资源，不采集任意 OS 进程、不伪造单 Bot RSS；指标留存复用 ADR-013 的 48h raw / 30d 5m / 400d 1h。→ FR-400 `docs/specs/managed-resource-attribution/spec.md`、FR-401 `docs/specs/bot-runtime-observability/spec.md`、FR-402 `docs/specs/platform-observability-overview/spec.md`（均需 spec）；FR-403 免 spec。依赖序：FIX→400→401→402；FR-403 独立；计划见 `.tmp/brainstorm-platform-observability-2026-07-27.md`（✅ 均已交付@v0.21.0；真 CP 多节点鲜度/断隧道按 checklist 确认）
+

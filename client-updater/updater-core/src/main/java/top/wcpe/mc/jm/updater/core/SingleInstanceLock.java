@@ -9,7 +9,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 /**
- * 单实例并发锁（契约 §6 / FR-090）：单 gameDir 仅一个 updater 运行，
+ * 单实例并发锁（契约 §6）：单 gameDir 仅一个 updater 运行，
  * 防同时开两个游戏 / 重复启动并发改目录。
  *
  * <p>基于 {@link FileLock} 排他锁文件 {@code <gameDir>/.jm-updater/updater.lock}。

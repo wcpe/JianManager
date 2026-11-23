@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// uploadClientFileNone 以 multipart 上传 client-file 制品并显式 codec=none（FR-214 文本预览前提：
+// uploadClientFileNone 以 multipart 上传 client-file 制品并显式 codec=none（文本预览前提：
 // 默认 uploadClientFile 用 codec=zstd 会被判 binary）。返回制品 sha256。
 func uploadClientFileNone(t *testing.T, r *gin.Engine, token, channelID string, content []byte, filename string) string {
 	t.Helper()
@@ -38,7 +38,7 @@ func uploadClientFileNone(t *testing.T, r *gin.Engine, token, channelID string, 
 	return sha
 }
 
-// TestClientDist_ArtifactContent_TextPreview 管理面文本预览端点（FR-214）：
+// TestClientDist_ArtifactContent_TextPreview 管理面文本预览端点：
 // 文本制品 → kind=text + 内容一致；含 NUL → kind=binary；缺 sha256 → 400；不存在 → 404；非管理员 → 403。
 func TestClientDist_ArtifactContent_TextPreview(t *testing.T) {
 	db := setupTestDB(t)
@@ -95,7 +95,7 @@ func TestClientDist_ArtifactContent_TextPreview(t *testing.T) {
 	}
 }
 
-// TestClientDist_ArtifactContent_TooLarge 超过预览上限的制品 → kind=too-large（不回内容，FR-214）。
+// TestClientDist_ArtifactContent_TooLarge 超过预览上限的制品 → kind=too-large（不回内容）。
 func TestClientDist_ArtifactContent_TooLarge(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)
@@ -119,7 +119,7 @@ func TestClientDist_ArtifactContent_TooLarge(t *testing.T) {
 	}
 }
 
-// TestClientDist_ArtifactContent_Download 管理面下载端点（FR-214）：JWT 下载字节一致；无 JWT → 401。
+// TestClientDist_ArtifactContent_Download 管理面下载端点：JWT 下载字节一致；无 JWT → 401。
 func TestClientDist_ArtifactContent_Download(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)

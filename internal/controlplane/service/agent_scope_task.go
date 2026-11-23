@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// GetTaskForAgent 按 taskId 读取任务；归属经关联实例或节点 scope 重验（FR-396）。
+// GetTaskForAgent 按 taskId 读取任务；归属经关联实例或节点 scope 重验。
 // Agent Token 不是平台用户，不走 CreatedBy 用户所有权；scope 外与不存在均收敛为 ErrAgentForbidden。
 func (s *AgentTokenService) GetTaskForAgent(p *AgentPrincipal, taskID string) (*model.Task, []model.TaskLog, error) {
 	if s == nil || s.db == nil {

@@ -7,7 +7,7 @@ import (
 )
 
 // TestRemove_NestedPathClearsTopLevelDir 删除走登记的嵌套探测路径时，应清理到
-// 托管根下的顶层子目录，不留父壳空目录（FR-292）。
+// 托管根下的顶层子目录，不留父壳空目录。
 // 真机复现：NodeJDK.Path=…/temurin-11/jdk-11.0.31+11，删后 temurin-11/ 空壳仍在占位。
 func TestRemove_NestedPathClearsTopLevelDir(t *testing.T) {
 	root := t.TempDir()
@@ -28,7 +28,7 @@ func TestRemove_NestedPathClearsTopLevelDir(t *testing.T) {
 	}
 }
 
-// TestRemove_DirectChildUnchanged 直接指向顶层子目录的删除行为不变（FR-292 回归守护）。
+// TestRemove_DirectChildUnchanged 直接指向顶层子目录的删除行为不变（回归守护）。
 func TestRemove_DirectChildUnchanged(t *testing.T) {
 	root := t.TempDir()
 	m := NewManager(root, nil)
@@ -44,7 +44,7 @@ func TestRemove_DirectChildUnchanged(t *testing.T) {
 	}
 }
 
-// TestRemove_RootItselfRejected 托管根本身不得作为删除目标（FR-292：
+// TestRemove_RootItselfRejected 托管根本身不得作为删除目标（：
 // 原实现 rel="." 可穿过校验直达 RemoveAll(根)，会清空全部托管 JDK）。
 func TestRemove_RootItselfRejected(t *testing.T) {
 	root := t.TempDir()

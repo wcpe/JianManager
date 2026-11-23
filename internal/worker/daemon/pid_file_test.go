@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,4 +66,74 @@ func TestPIDFile_Remove(t *testing.T) {
 
 	// 重复删除不报错
 	assert.NoError(t, pf.Remove())
+}
+
+// TestPIDFile_WriteRecord_Atomic_ReaderNeverSeesPartial 锁定「PID 文件必须原子写」。
+//
+// 真实故障形态：wrapper 会写两次 PID 文件（监听就绪写 wrapper_pid+socket，Java 拉起后补写
+// java_pid，见 wrapper.go）。旧实现用 os.WriteFile（截断→写入），中间存在空文件/半截 JSON 的窗口。
+// 并发读取方（Worker 重启时的 RecoverDaemonInstances）恰好撞上这个窗口就会 ReadRecord 失败，
+// 而它对解析失败的处理是 **删除 PID 文件并跳过**——一个正在服务的实例被静默移出账本。
+//
+// 本用例用「持续写 + 持续读」把该窗口放大：修复前（非原子写）必能读到失败；
+// 修复后（临时文件 + rename）读者只会看到完整的旧记录或新记录。
+// 若日后有人把 writeFileAtomic改回 os.WriteFile，本用例会立刻变红。
+func TestPIDFile_WriteRecord_Atomic_ReaderNeverSeesPartial(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "inst.pid")
+	pf := NewPIDFile(path)
+
+	// 先写一份完整记录，确保一直有一份可读的旧内容。
+	require.NoError(t, pf.WriteRecord(PIDRecord{WrapperPID: 1000, InstanceUUID: "uuid-atomic"}))
+
+	const rounds = 300
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// 写侧：模拟 wrapper 反复补写（java_pid 变化）。
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			_ = pf.WriteRecord(PIDRecord{
+				WrapperPID:   1000,
+				JavaPID:      2000 + i,
+				InstanceUUID: "uuid-atomic",
+			})
+		}
+		close(stop)
+	}()
+
+	// 读侧：持续读取，任何一次解析失败都说明存在非原子窗口。
+	var readErrs []error
+	var mu sync.Mutex
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if rec, err := pf.ReadRecord(); err != nil {
+				mu.Lock()
+				readErrs = append(readErrs, err)
+				mu.Unlock()
+			} else if rec.InstanceUUID != "uuid-atomic" {
+				mu.Lock()
+				readErrs = append(readErrs, fmt.Errorf("读到不完整记录: %+v", rec))
+				mu.Unlock()
+			}
+		}
+	}()
+	wg.Wait()
+
+	assert.Empty(t, readErrs, "原子写下并发读取不应出现任何解析失败或半截记录")
+
+	// 也不应在 PID 目录里留下临时文件垃圾（该目录会被反复扫描）。
+	entries, err := os.ReadDir(filepath.Dir(path))
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotContains(t, e.Name(), ".tmp", "原子写的临时文件必须已清理")
+	}
 }

@@ -9,12 +9,12 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-398：压测模板 CRUD 与运行编排工具。
+// 压测模板 CRUD 与运行编排工具。
 
 const (
 	// agentTemplateOwnerID / agentTemplateIsAdmin：Agent 以平台级视角操作模板。
 	// Token 授权边界已由 capability 表达，再叠加用户所有权会产生「Agent 创建的模板归谁」的悖论。
-	// 决策见 ADR-080 附注：持 bot.load 即可管理全部压测模板；误删风险由精确确认参数兜底。
+	// 决策附注：持 bot.load 即可管理全部压测模板；误删风险由精确确认参数兜底。
 	agentTemplateOwnerID = uint(0)
 	agentTemplateIsAdmin = true
 )
@@ -458,6 +458,9 @@ func execRunGet(_ context.Context, deps ToolDeps, p *service.AgentPrincipal, act
 }
 
 // execNodeCapacity 返回 scope 内发压节点容量，越界节点直接过滤不暴露。
+//
+// 优先走 Refresh（实时）而非 Snapshot（15s TTL 缓存）：这是「规划 executorNodeIds」的入口，
+// 缓存陈旧时会给出 availableBots=0 + CAPACITY_SNAPSHOT_STALE 的误导结果，让人以为没有容量。
 func execNodeCapacity(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, _ map[string]any) ToolResult {
 	if deps.Capacity == nil {
 		return toolErr("发压容量目录不可用")
@@ -465,7 +468,7 @@ func execNodeCapacity(ctx context.Context, deps ToolDeps, p *service.AgentPrinci
 	if _, err := service.CanDiscover(p, action); err != nil {
 		return toolForbidden(err)
 	}
-	snapshot, err := deps.Capacity.Snapshot(ctx, 0)
+	snapshot, err := service.RefreshBotLoadCapacity(ctx, deps.Capacity, 0)
 	if err != nil {
 		return toolErr("查询发压节点容量失败: " + err.Error())
 	}

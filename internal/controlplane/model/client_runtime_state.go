@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ClientRuntimeState 客户端运行态最新快照（FR-265）。
+// ClientRuntimeState 客户端运行态最新快照。
 // 按 channel_id + machine_id upsert，仅保存最新启动心跳；不作为可信身份，仅用于观测统计。
 type ClientRuntimeState struct {
 	ID               uint       `gorm:"primaryKey" json:"id"`

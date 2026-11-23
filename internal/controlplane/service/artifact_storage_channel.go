@@ -32,14 +32,14 @@ var (
 	// ErrArtifactStorageInUse 渠道被制品引用，禁止删除（读路径按记录自述定位，删渠道即断链）。
 	ErrArtifactStorageInUse = errors.New("制品存储渠道被制品引用，无法删除")
 	// ErrArtifactStorageEncryptorMissing 凭证加密器未配置（生产 autogen 失败降级态）。
-	// 此时创建/编辑 s3 渠道直接拒绝——绝不落明文、不静默降级（ADR-073 决策 4）。
+	// 此时创建/编辑 s3 渠道直接拒绝——绝不落明文、不静默降级。
 	ErrArtifactStorageEncryptorMissing = errors.New("凭证加密未配置，无法保存对象存储渠道")
 	// ErrArtifactStorageInvalidConfig 渠道配置校验失败（endpoint/bucket 缺失、TTL 越界等）。
 	ErrArtifactStorageInvalidConfig = errors.New("制品存储渠道配置非法")
 )
 
 const (
-	// artifactPresignTTLDefault 预签名 URL 默认有效期秒数（10 分钟，ADR-073 决策 1）。
+	// artifactPresignTTLDefault 预签名 URL 默认有效期秒数（10 分钟）。
 	artifactPresignTTLDefault = 600
 	// artifactPresignTTLMin / Max 预签名 TTL 允许区间 [60, 3600]。
 	artifactPresignTTLMin = 60
@@ -50,15 +50,15 @@ const (
 	artifactStorageProbeTimeout = 8 * time.Second
 )
 
-// ArtifactStorageChannelService 制品存储渠道服务（FR-347，见 ADR-073，修订 ADR-011 存储节）。
+// ArtifactStorageChannelService 制品存储渠道服务（修订存储节）。
 //
 // 渠道是 client-file 制品写路径的落点路由配置：全表恰一条活跃（事务保证），切活跃仅影响
 // 新上传；存量 Asset 按自身 StorageBackend + StorageChannelID 自述读取。凭证面板直填、
-// 复用 FR-192 KeyEncryptor（AES-256-GCM）可逆加密落库，与备份域 ${ENV_VAR} 形态分道。
+// 复用KeyEncryptor（AES-256-GCM）可逆加密落库，与备份域 ${ENV_VAR} 形态分道。
 type ArtifactStorageChannelService struct {
 	db   *gorm.DB
 	root *dataroot.Root
-	// enc 凭证可逆加密器（复用 FR-192 基建）；nil=未配置，s3 渠道创建/编辑被拒（快失败）。
+	// enc 凭证可逆加密器（复用基建）；nil=未配置，s3 渠道创建/编辑被拒（快失败）。
 	enc *KeyEncryptor
 }
 
@@ -67,13 +67,13 @@ func NewArtifactStorageChannelService(db *gorm.DB, root *dataroot.Root) *Artifac
 	return &ArtifactStorageChannelService{db: db, root: root}
 }
 
-// SetKeyEncryptor 注入凭证可逆加密器（与拉取密钥共用主密钥，密钥运维口径一致，ADR-073 决策 4）。
+// SetKeyEncryptor 注入凭证可逆加密器（与拉取密钥共用主密钥，密钥运维口径一致）。
 func (s *ArtifactStorageChannelService) SetKeyEncryptor(enc *KeyEncryptor) {
 	s.enc = enc
 }
 
 // EnsureBuiltin 幂等 seed 内置「本机存储」渠道（Builtin+local，不可删不可编辑）。
-// 若全表无活跃行则将内置行置活跃——local 恒可用的语义由 DB 实体承载（ADR-073 决策 2）。
+// 若全表无活跃行则将内置行置活跃——local 恒可用的语义由 DB 实体承载。
 func (s *ArtifactStorageChannelService) EnsureBuiltin() error {
 	var builtin model.ArtifactStorageChannel
 	err := s.db.Where("builtin = ?", true).First(&builtin).Error
@@ -191,7 +191,7 @@ func (s *ArtifactStorageChannelService) Create(p SaveArtifactStorageParams) (*mo
 }
 
 // Update 编辑渠道。Builtin 拒；type 不可改；accessKey/secretKey 空=保留原密文、非空=重加密覆盖；
-// 成功后清 LastTest*（配置已变，旧测试结论失效，沿 FR-338 备份域先例）。
+// 成功后清 LastTest*（配置已变，旧测试结论失效，沿备份域先例）。
 func (s *ArtifactStorageChannelService) Update(id uint, p SaveArtifactStorageParams) (*model.ArtifactStorageChannel, error) {
 	cur, err := s.GetByID(id)
 	if err != nil {
@@ -248,7 +248,7 @@ func (s *ArtifactStorageChannelService) Update(id uint, p SaveArtifactStoragePar
 }
 
 // Delete 删除渠道（硬删除）。Builtin 拒；活跃拒（先切走）；被制品引用拒（附引用数）——
-// 读路径按 Asset.StorageChannelID 自述定位，删被引用渠道即断链（ADR-073 决策 2）。
+// 读路径按 Asset.StorageChannelID 自述定位，删被引用渠道即断链。
 func (s *ArtifactStorageChannelService) Delete(id uint) error {
 	ch, err := s.GetByID(id)
 	if err != nil {
@@ -260,7 +260,7 @@ func (s *ArtifactStorageChannelService) Delete(id uint) error {
 	if ch.Active {
 		return ErrArtifactStorageActiveDelete
 	}
-	// 迁移在途禁删任何渠道（FR-348）：源集合由逐条记录自述、随迁移动态收敛，
+	// 迁移在途禁删任何渠道：源集合由逐条记录自述、随迁移动态收敛，
 	// 静态判定「此渠道无关」不可靠，粗粒度全禁；迁移终态（或强停）后恢复可删。
 	if inflight, ierr := artifactMigrationInFlight(s.db); ierr != nil {
 		return ierr
@@ -356,7 +356,7 @@ func (s *ArtifactStorageChannelService) StoreForAsset(a *model.Asset) (blobstore
 	return s.StoreFor(ch)
 }
 
-// PresignForAsset 为 s3 制品现算预签名下载 URL，TTL 取渠道配置（302 分发，ADR-073 决策 1）。
+// PresignForAsset 为 s3 制品现算预签名下载 URL，TTL 取渠道配置（302 分发）。
 func (s *ArtifactStorageChannelService) PresignForAsset(a *model.Asset) (string, error) {
 	if a.StorageBackend != model.AssetBackendS3 || a.StorageChannelID == 0 {
 		return "", fmt.Errorf("制品非 s3 存储，无需预签名（asset %d）", a.ID)
@@ -547,7 +547,7 @@ func (s *ArtifactStorageChannelService) encryptCredentials(ak, sk string) (akEnc
 }
 
 // decryptCredentials 从渠道密文还原明文凭证。加密器未配置/密钥不符时报错（快失败，
-// 运维恢复密钥文件即愈，见 spec §3.2 与 ADR-073 后果）。
+// 运维恢复密钥文件即愈，见 spec §3.2 后果）。
 func (s *ArtifactStorageChannelService) decryptCredentials(ch *model.ArtifactStorageChannel) (ak, sk string, err error) {
 	if ch.AccessKeyEnc != "" {
 		if ak, err = s.enc.Decrypt(ch.AccessKeyEnc); err != nil {

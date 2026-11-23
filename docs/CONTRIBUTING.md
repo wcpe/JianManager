@@ -19,6 +19,37 @@ task web:e2e    # Playwright 真浏览器整站 E2E
 task dist       # 前端 + Bot Worker + 全部内嵌资产 + 四个发布二进制
 ```
 
+### E2E 前置：清掉 `DISPLAY`（SSH / X11 转发环境）
+
+**经 SSH 进入、且 shell 带有 `DISPLAY`（如 `DISPLAY=localhost:11.0`，即 X11 转发）时，必须先取消它再跑 Playwright，否则每个 `click()` 都会超时。**
+
+```bash
+env -u DISPLAY pnpm --filter control-plane-web e2e   # 等价 task web:e2e
+```
+
+原因：此类 `DISPLAY` 会让 Chromium 的 `requestAnimationFrame` **完全不触发**（实测空白页 1.5s 内 0 次回调；`setTimeout` 正常）。Playwright 的点击前要做「稳定性」检查——要求元素连续两帧几何不变——rAF 停摆使该检查永不满足，于是所有点击都会以 `waiting for element to be visible, enabled and stable` 超时。症状具有强误导性：
+
+- 失败点几乎全部落在 `login()` 的第一步（登录按钮点击），看起来像认证或页面缺陷；
+- 元素实际**位置静止、可见、未被禁用、无遮挡、无动画**，`fill()` 也能正常工作——唯独 `click()` 失败；
+- 与产品代码无关，`git bisect` / 回滚版本都无效。
+
+判定与自查：
+
+```bash
+echo "${DISPLAY:-<未设置>}"     # 有值且形如 localhost:N → 需 unset
+```
+
+```js
+// 在任意页面执行：返回 0 即命中该陷阱
+await page.evaluate(() => new Promise((res) => {
+  let n = 0
+  requestAnimationFrame(() => { n++ })
+  setTimeout(() => res(n), 1000)
+}))
+```
+
+CI 的 runner 不带 `DISPLAY`，因此**该问题只在本地出现，CI 恒为绿**——本地红而 CI 绿时优先按此自查。
+
 ## 2. 分支与流程
 
 本仓采用**单主干 GitHub Flow**：主干唯一为 `master`，始终可发布。
@@ -27,7 +58,7 @@ task dist       # 前端 + Bot Worker + 全部内嵌资产 + 四个发布二进�
 - **短分支命名**：`feature/*`（新功能）、`fix/*`（修 bug）、`refactor/*`（重构）、`hotfix/*`（线上紧急修复，从发布 tag 切出）、`docs/*`、`chore/*`；分支从最新 `master` 切出，生命周期尽量短，合入后立即删除。
 - **合并要求**：PR 提交前清理 WIP / `fixup!` 提交；一个 commit 只做一件事，不混合 `feat` / `fix` / `refactor`；优先 rebase + fast-forward 合入；禁止 squash 多意图 PR；禁止「整版本一个大提交」；合并后删除源分支。
 - **回滚**：用 `git revert` 反向提交，不做历史改写；**严禁 force push 主干**；严禁 `--no-verify`；严禁 amend 已 push 的提交。
-- PR 必须通过 CI 双门禁：`web-quality` 跑 lint + vitest + 构建 + E2E；`bot-quality` 跑 Bot Worker 生产依赖审计 + 类型检查 + lint + 构建。
+- PR 必须通过 CI 质量门禁：`web-quality` 跑 lint + vitest + 构建 + E2E；`bot-quality` 跑 Bot Worker 生产依赖审计 + 类型检查 + lint + 构建；`go-quality` 跑 Go 编译、静态检查与日志联邦回归测试。
 - 发布 workflow 另有完整门禁：metadata 版本/ref/tag 校验 → 全部内嵌资产（含 Bot Worker）→ Go 与前端测试 → 四产物构建 → Linux/Windows 原生 `--version` smoke → Release。任一步失败都不得发布。
 - 发版：先按 §6 把源码切为裸 `X.Y.Z`，在同一提交打 `vX.Y.Z` tag；Git tag / Release 保留 `v`，二进制版本不带 `v`。紧急修复从发布 tag 切 `hotfix/*` 后回流。
 - GitHub-hosted runner 与实际 Release 创建只有 push 后才能验证；当前工作区按用户选择暂不 push，因此远端 Actions 仍待验。
@@ -55,12 +86,13 @@ task dist       # 前端 + Bot Worker + 全部内嵌资产 + 四个发布二进�
 
 ## 6. 版本号
 
-唯一真源是 [`internal/version/version.go`](../internal/version/version.go)（ADR-065 / [ADR-074](adr/074-release-version-provenance-and-smoke.md)）。当前正式发布提交使用 **`0.18.0`**，对应 tag `v0.18.0`；后续开发态恒为下一目标版本 `X.Y.Z-dev`，普通贡献者不要自行改版本号。
+唯一真源是 [`internal/version/version.go`](../internal/version/version.go)（ADR-065 / [ADR-108](adr/108-release-version-provenance-and-smoke.md)）。当前正式发布提交使用 **`0.18.0`**，对应 tag `v0.18.0`；后续开发态恒为下一目标版本 `X.Y.Z-dev`，普通贡献者不要自行改版本号。
 
 发布 metadata 由 `scripts/release-metadata.mjs` 统一解析，规则如下：
 
 - **开发构建**：源码 `X.Y.Z-dev`，二进制 / Bot 归档 / 内嵌 Worker manifest 注入 `X.Y.Z-dev+g<7位sha>`；SHA 只存在于构建元数据，不写回源码。
 - **正式发布**：先由发版流程把源码改为裸 `X.Y.Z`，在同一提交创建 tag `vX.Y.Z`；Git tag / GitHub Release 使用 `vX.Y.Z`，二进制内部使用裸 `X.Y.Z`。
+- **发版前置红线**：创建发版 commit 与 tag **必须在基线提交（当前主干 tip）的远程 CI 全绿之后**。CI 未绿（含 flake 导致的红）时禁止改动 `version.go`、禁止归档 CHANGELOG、禁止打 tag；本地测试全绿不能替代 CI 结论。详见 [`.claude/rules/gate-merge.md`](../.claude/rules/gate-merge.md) §发版红线。
 - **强校验**：正式 tag 与源码裸版本不一致直接失败；普通分支出现无同 SHA 正式 tag 的裸版本也直接失败。普通分支位于已经打 tag 的裸版本提交时不重复发布 `latest`。
 - **单点消费**：发布 workflow 的 Bot Worker 内嵌、CP 内嵌 Worker、四个最终二进制、smoke 与 Release 全部使用 metadata job 的同一份输出，禁止各 job 自行拼版本。
 
@@ -87,7 +119,7 @@ node --test scripts/release-metadata.test.mjs
 
 - 主干 `master` 受保护，**新建仓库时即开启**，不依赖事后补配。
 - **必须经 PR 合并**，不允许直推主干。
-- **必须 CI 检查通过才可合并**：至少通过 `web-quality`、`agent-gate`；发布另受 release 门禁约束。
+- **必须 CI 检查通过才可合并**：至少通过 `web-quality`、`bot-quality`、`go-quality`、`agent-gate`；发布另受 release 门禁约束。
 - **管理员同样受约束**，任何角色都不得绕过上述要求直接推主干。
 - **禁止 force push、禁止删除主干**。
 - **建议要求线性历史**（对应 rebase + fast-forward 合入）。
@@ -105,3 +137,13 @@ GitHub 没有「标签即代码」的原生文件，标签在仓库设置里维�
 | `破坏性变更` | 含迁移成本，发版前必须确认迁移说明 |
 
 - `hotfix` + `P0` + `破坏性变更` 同时出现时，发版前必须确认迁移说明已写入 CHANGELOG 与 PR。
+
+## 10. 敏感信息与脱敏（提交前自查）
+
+仓库要能被他人 clone，所以**任何真实环境标识都不许入库**——不只是代码，也包括文档、验收记录、CHANGELOG、测试夹具与注释。
+
+- **主机名**：验收 / 事故 / 真机记录一律用占位 `host-1`、`host-2`…（历史记录中的 `host-1`/`host-2` 即此类占位，不是集群真实命名）；测试与 mock 数据用 `node-a`/`node-b` 一类中性名。**禁止**写入真实主机名。
+- **地址**：内网 IP / 端口 / 拓扑不进仓库；示例统一用文档保留地址（`192.0.2.0/24`、`example.com`）。
+- **凭据**：token / 密码 / 私钥一律不进仓库，配置里只留 `${ENV_VAR}` 引用（见 `configs/*.yml` 的既有写法）；`.env`、证书、密钥库由 `.gitignore` 拦截，需要给他人看结构时补 `*.example` 占位。
+- **过程产物**：临时脚本、探针、验收日志、扫描报告一律放 `.tmp/`（已被忽略、不入库），不要散落在仓库根或 `docs/`。
+- **提交前自查**：`git status` 看清将入库的文件；需要时手动跑一次隐私扫描（工作区 + 历史），确认无凭据 / PII / 内网信息后再提交。

@@ -20,9 +20,9 @@ export type MonitorSeriesHook = (
   source: MonitorSource,
   range: MetricRange,
   resolution: MetricResolution,
-) => { series: RawSeries[]; isLoading: boolean }
+) => { series: RawSeries[]; isLoading: boolean; isError?: boolean }
 
-/** 一张图卡：独立时间筛选 + brush + hover（FR-169）。 */
+/** 一张图卡：独立时间筛选 + brush + hover。 */
 function MonitorChartCard({
   def,
   source,
@@ -42,12 +42,18 @@ function MonitorChartCard({
 }) {
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>(defaultRange)
-  const { series: raw, isLoading } = useSeries(source, range, resolution)
+  const { series: raw, isLoading, isError } = useSeries(source, range, resolution)
   const plot = buildChartSeries(def, raw, (k) => t(k), worldFilter)
+  const hasSamples = plot.some((s) => s.points.some((p) => p.value != null && Number.isFinite(p.value)))
 
   return (
     <Panel title={t(def.titleKey)} hoverable actions={<RangePicker value={range} onChange={setRange} />}>
-      {isLoading && plot.length === 0 ? (
+      {isError && (
+        <div role="alert" className="flex items-center justify-center text-xs text-destructive" style={!hasSamples ? { height: height + 20 } : undefined}>
+          {t('common.error')}
+        </div>
+      )}
+      {isError && !hasSamples ? null : isLoading && plot.length === 0 ? (
         <div className="flex items-center justify-center text-xs text-muted-foreground" style={{ height: height + 20 }}>
           {t('common.loading')}
         </div>
@@ -58,14 +64,15 @@ function MonitorChartCard({
           valueFormatter={formatterFor(def.format)}
           yDomain={def.yDomain ?? ['auto', 'auto']}
           emptyHint={t('common.noData')}
+          ariaLabel={t(def.titleKey)}
         />
       )}
     </Panel>
   )
 }
 
-/**
- * 监控骨架（FR-169，design §4.2）：平台/节点/实例共用。按 defs 渲染指标图网格，
+/** 
+ * 监控骨架（design §4.2）：平台/节点/实例共用。按 defs 渲染指标图网格，
  * 每图独立时间筛选 + 底部 brush 拖拽轴 + hover 浮窗。实时由各图查询的轮询（refetchInterval）承担，
  * 历史/实时并存——同一查询既回历史样本又随轮询前移末端。
  *
@@ -83,9 +90,9 @@ export function MonitorSkeleton({
   defs: MetricChartDef[]
   source: MonitorSource
   defaultRange?: MetricRange
-  /** 页级聚合粒度（FR-221）：透传给每图查询；auto=按区间自动选档（既有默认）。 */
+  /** 页级聚合粒度：透传给每图查询；auto=按区间自动选档（既有默认）。 */
   resolution?: MetricResolution
-  /** 下钻聚焦的世界名（FR-221）：分世界图只画该世界，非空才生效。 */
+  /** 下钻聚焦的世界名：分世界图只画该世界，非空才生效。 */
   worldFilter?: string
   chartHeight?: number
   useSeries: MonitorSeriesHook

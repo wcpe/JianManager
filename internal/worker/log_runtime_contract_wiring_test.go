@@ -1,0 +1,175 @@
+package config
+
+import (
+	"bytes"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
+)
+
+// TestWiringRuntimeRetentionDefaultSingleSource 防止加载器与子进程默认值重新漂移。
+func TestWiringRuntimeRetentionDefaultSingleSource(t *testing.T) {
+	cfg, err := loadLogPolicyFixture(t, "{}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogVL.RetentionPeriod != vlsup.DefaultRetentionPeriod {
+		t.Fatalf("Load native默认=%q，运行时真源=%q", cfg.LogVL.RetentionPeriod, vlsup.DefaultRetentionPeriod)
+	}
+	if cfg.LogRetention.Enabled || cfg.LogVL.DeleteEnabled {
+		t.Fatal("零配置不得开启保留策略或删除")
+	}
+}
+
+// TestWiringLayeringRequiresReceiverAndHeadroom 启层不能只打开策略开关。
+func TestWiringLayeringRequiresReceiverAndHeadroom(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"缺受管接收端", "log_retention:\n  enabled: true\n", "log_vl"},
+		{"相等native窗口", "log_retention:\n  enabled: true\nlog_vl:\n  retention_period: 90d\n", "retention_period"},
+		{"不足UTC日与驱动余量", "log_retention:\n  enabled: true\nlog_vl:\n  retention_period: 91d\n", "retention_period"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadLogPolicyFixture(t, tc.body)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("应拒绝并定位 %s，得到 %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// TestWiringHotOnlyKeepsFiniteNativeRetention 关闭应用删除不等于关闭引擎原生淘汰。
+func TestWiringHotOnlyKeepsFiniteNativeRetention(t *testing.T) {
+	cfg, err := loadLogPolicyFixture(t, "log_vl:\n  retention_period: 30d\nlog_retention:\n  enabled: false\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogVL.RetentionPeriod != "30d" || cfg.LogRetention.Enabled || cfg.LogVL.DeleteEnabled {
+		t.Fatalf("合法HOT-only组合被改写: %+v", cfg.LogVL)
+	}
+}
+
+const wiringManagedReceiverYAML = `
+log_vl:
+  binary_path: /isolated/victorialogs
+  asset_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  username: fixture-user
+  password: fixture-password
+`
+
+func wiringValidLayerYAML() string {
+	return wiringManagedReceiverYAML + `
+log_retention:
+  enabled: true
+  migration:
+    copy_verify_budget: 2h
+    recovery_budget: 24h
+`
+}
+
+// TestWiringLayeringHasExplicitFiniteSLA 只认可有接收端、调度周期和有限余量的分层组合。
+func TestWiringLayeringHasExplicitFiniteSLA(t *testing.T) {
+	if _, err := loadLogPolicyFixture(t, wiringValidLayerYAML()); err != nil {
+		t.Fatalf("完整分层声明应通过: %v", err)
+	}
+	for _, tc := range []struct{ name, from, to, want string }{
+		// 「未声明」不再拒启（2026-10-27 升级兼容性修正）：缺省取保守默认 1h。
+		// 但「显式写 0」仍必须拒——那是表达了「用不了」的意图，静默改成默认等于把意图掉包。
+		{"复制校验预算显式为零", "copy_verify_budget: 2h", "copy_verify_budget: 0s", "copy_verify_budget"},
+		{"恢复预算非正", "recovery_budget: 24h", "recovery_budget: 0", "recovery_budget"},
+		{"鉴权不完整", "password: fixture-password", "password: ''", "log_vl"},
+		{"未校验资产", "asset_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "asset_sha256: ''", "asset_sha256"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadLogPolicyFixture(t, strings.Replace(wiringValidLayerYAML(), tc.from, tc.to, 1))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("应拒绝并定位 %s，得到 %v", tc.want, err)
+			}
+		})
+	}
+	// 2026-10-29：冷热双层已废除，`start_cold` 不再是合法键。
+	// 保留这条断言的**意图**（保留期必须计入 UTC 日 + 驱动周期 + 复制校验 + 恢复预算），
+	// 锚点改成 password 行，不再依赖已删除的键。
+	insufficient := strings.Replace(wiringValidLayerYAML(), "  password: fixture-password", "  password: fixture-password\n  retention_period: 92d", 1)
+	if _, err := loadLogPolicyFixture(t, insufficient); err == nil || !strings.Contains(err.Error(), "retention_period") {
+		t.Fatalf("必须计入UTC日+周期+复制校验+恢复预算，得到 %v", err)
+	}
+}
+
+// TestWiringNamespaceBudgetsRespectLegacyKeys 新键按层优先，旧内存键仍能控制未覆盖字段。
+func TestWiringNamespaceBudgetsRespectLegacyKeys(t *testing.T) {
+	cfg, err := loadLogPolicyFixture(t, `
+log_vl:
+  hot_cache_bytes: 268435456
+  memory_limit_bytes: 402653184
+  namespace_budgets:
+    hot:
+      cache_bytes: 100663296
+      go_memory_limit_bytes: 335544320
+      rss_bytes: 469762048
+  budget:
+    disk_bytes: 8589934592
+    rss_bytes: 1073741824
+    reservations:
+      wal: 536870912
+      staging: 536870912
+      export: 268435456
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget, err := cfg.LogVL.RuntimeBudget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2026-10-29：只剩一个受管实例。原用例测「新键按层覆盖旧内存键」，
+	// 现在把同样的覆盖关系放在 hot 上验（namespace_budgets.hot 覆盖 hot_cache_bytes 与 memory_limit_bytes）。
+	hot := budget.Namespaces[vlsup.NamespaceHot]
+	if hot.CacheBytes != 96<<20 || hot.GoMemoryLimitBytes != 320<<20 || hot.RSSBytes != 448<<20 {
+		t.Fatalf("兼容归并错误: hot=%+v", hot)
+	}
+	if budget.DiskBytes != 8<<30 || budget.RSSBytes != 1<<30 || budget.Reservations[vlsup.ReservationWAL] != 512<<20 {
+		t.Fatalf("磁盘/RSS/预留接线混淆: %+v", budget)
+	}
+	disabledSoftLimit, err := (LogVLConfig{MemoryLimitBytes: -1}).RuntimeBudget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ns, limits := range disabledSoftLimit.Namespaces {
+		if limits.GoMemoryLimitBytes != -1 {
+			t.Fatalf("旧负值禁注入语义丢失: %s=%+v", ns, limits)
+		}
+	}
+	// 新键通过环境变量覆盖依然生效（与层数无关，换到唯一的受管实例上验）。
+	t.Setenv("JIANMANAGER_LOG_VL_NAMESPACE_BUDGETS_HOT_CACHE_BYTES", "67108864")
+	cfg, err = loadLogPolicyFixture(t, "{}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget, err = cfg.LogVL.RuntimeBudget()
+	if err != nil || budget.Namespaces[vlsup.NamespaceHot].CacheBytes != 64<<20 {
+		t.Fatalf("新键环境覆盖失效: %+v, %v", budget, err)
+	}
+}
+
+// TestWiringRetentionCapabilityNoticeIsFiniteAndSecretFree 不把关闭删除或有限缓冲包装成永久副本。
+func TestWiringRetentionCapabilityNoticeIsFiniteAndSecretFree(t *testing.T) {
+	var output bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+	const password = "constructed-retention-secret"
+	_, err := loadLogPolicyFixture(t, "log_vl:\n  retention_period: 30d\n  username: fixture-user\n  password: "+password+"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []string{"自动保留关闭", "有限 TTL", "关闭应用删除不等于永久保留"} {
+		if !strings.Contains(output.String(), message) {
+			t.Fatalf("缺少真实能力边界 %q: %s", message, output.String())
+		}
+	}
+	if strings.Contains(output.String(), password) {
+		t.Fatal("留存能力摘要泄露了构造凭据")
+	}
+}

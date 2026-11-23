@@ -100,7 +100,7 @@ func TestClientDist_VersionHistory_ListAndDetail(t *testing.T) {
 }
 
 // TestClientDist_Rollback_RepublishesOldContentAsHigherVersion 回滚 = 以更高版本号重发旧内容为 latest，
-// 客户端按单调版本正常前进、不被防降级拒绝（ADR-022 §3 / contract §3）。
+// 客户端按单调版本正常前进、不被防降级拒绝（contract §3）。
 func TestClientDist_Rollback_RepublishesOldContentAsHigherVersion(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)
@@ -162,7 +162,7 @@ func TestClientDist_Rollback_NotFound(t *testing.T) {
 }
 
 // TestClientDist_VersionAdminEndpoints_RejectPullKey 历史/详情/回滚是 admin JWT 端点：
-// 拉取密钥（半公开）不得越权访问（关键安全分组，ADR-022 §4 / contract §4）。
+// 拉取密钥（半公开）不得越权访问（关键安全分组，/ contract §4）。
 func TestClientDist_VersionAdminEndpoints_RejectPullKey(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)
@@ -238,7 +238,7 @@ func TestClientDist_PublishFile_ReturnsMD5(t *testing.T) {
 	}
 }
 
-// TestClientDist_MachineRegistration 拉 manifest 携带 X-Machine-Id 时机器码登记 upsert（FR-092）；
+// TestClientDist_MachineRegistration 拉 manifest 携带 X-Machine-Id 时机器码登记 upsert；
 // 不携带则不登记。机器码不可信、仅统计/辅助限流。
 func TestClientDist_MachineRegistration(t *testing.T) {
 	db := setupTestDB(t)
@@ -281,7 +281,7 @@ func TestClientDist_MachineRegistration(t *testing.T) {
 	}
 }
 
-// TestClientDist_PullTrackingAndEventQuery 拉取/下载追踪落库（FR-093）+ 管理面检索端点（含鉴权）。
+// TestClientDist_PullTrackingAndEventQuery 拉取/下载追踪落库+ 管理面检索端点（含鉴权）。
 func TestClientDist_PullTrackingAndEventQuery(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)
@@ -308,7 +308,7 @@ func TestClientDist_PullTrackingAndEventQuery(t *testing.T) {
 		t.Errorf("事件字段异常: version=%d machine=%s status=%d bytes=%d", ev.Version, ev.MachineID, ev.Status, ev.Bytes)
 	}
 
-	// 下载制品 → 制品下载事件应落库且**归属频道**：制品 URL 内容寻址不带频道段，靠密钥归属（FR-093 回归）。
+	// 下载制品 → 制品下载事件应落库且**归属频道**：制品 URL 内容寻址不带频道段，靠密钥归属（回归）。
 	manifest := parseJSON(t, w)
 	artSha := manifest["files"].([]interface{})[0].(map[string]interface{})["artifact"].(map[string]interface{})["sha256"].(string)
 	areq := httptest.NewRequest("GET", "/api/v1/client-artifacts/"+artSha, nil)
@@ -345,7 +345,7 @@ func TestClientDist_PullTrackingAndEventQuery(t *testing.T) {
 	}
 }
 
-// TestClientDist_IPGuardBlocksAndRules L7 防护（FR-096）：加 deny 规则后该 IP 被拒（早于鉴权），
+// TestClientDist_IPGuardBlocksAndRules L7 防护：加 deny 规则后该 IP 被拒（早于鉴权），
 // 删规则恢复；规则 CRUD + protection-stats 限管理员。测试客户端 IP 为 192.0.2.1。
 func TestClientDist_IPGuardBlocksAndRules(t *testing.T) {
 	db := setupTestDB(t)
@@ -409,7 +409,7 @@ func TestClientDist_IPGuardBlocksAndRules(t *testing.T) {
 	}
 }
 
-// TestClientDist_TelemetryEndpoint 遥测上报端点（FR-094）：拉取密钥鉴权、202、结构化落库；无 key 401。
+// TestClientDist_TelemetryEndpoint 遥测上报端点：拉取密钥鉴权、202、结构化落库；无 key 401。
 func TestClientDist_TelemetryEndpoint(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)
@@ -446,7 +446,7 @@ func TestClientDist_TelemetryEndpoint(t *testing.T) {
 	}
 }
 
-// TestClientDist_StatsEndpoint 统计后台端点（FR-095）：管理员获取复合统计；无 JWT 401。
+// TestClientDist_StatsEndpoint 统计后台端点：管理员获取复合统计；无 JWT 401。
 func TestClientDist_StatsEndpoint(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)

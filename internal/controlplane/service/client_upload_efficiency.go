@@ -21,20 +21,20 @@ var (
 	ErrBatchLimitExceeded = errors.New("超出单次上限")
 )
 
-// 上传增效协议上限（FR-346，spec §3）。
+// 上传增效协议上限（spec §3）。
 const (
 	// precheckMaxEntries 单次预查最多查询的 hash 数：单条 IN 查询与响应体量护栏。
 	precheckMaxEntries = 500
 	// batchMaxFiles 单批聚合上传最多文件数：单请求 DB/审计开销可控。
 	batchMaxFiles = 200
-	// batchFileMaxBytes 聚合上传单文件上限 = FR-251 defaultChunkSize（8 MiB）：
+	// batchFileMaxBytes 聚合上传单文件上限 =defaultChunkSize（8 MiB）：
 	// 聚合阈值与分块协议界线对齐——超过者走分块，不重蹈单请求过大短板。
 	batchFileMaxBytes = defaultChunkSize
 	// batchMaxTotalBytes 单批总字节上限（32 MiB）：单请求体量护栏，低于常见反代上限。
 	batchMaxTotalBytes int64 = 32 << 20
 )
 
-// ClientUploadEfficiencyService 客户端分发上传增效服务（FR-346，增强 FR-250/251）。
+// ClientUploadEfficiencyService 客户端分发上传增效服务（增强251）。
 //
 // 秒传预查：前端上传前算好各文件**原始内容** sha256，批量查 CAS——发布链路恒 codec=none，
 // AssetService.Ingest 对上传字节原样散列，故 assets(type='client-file').sha256 即原始内容
@@ -103,8 +103,15 @@ func (s *ClientUploadEfficiencyService) Precheck(entries []PrecheckEntry) ([]Pre
 		}
 	}
 
+	// 只认「可下载」的制品：StorageState=lost 表示索引还在、外置对象已经没了。
+	//
+	// 若把它当命中，前端会跳过上传、manifest 继续引用那个 sha256，而玩家下载永远 410 ——
+	// 而且用户会看到「发布成功」。真正的自愈路径在 Ingest（收到同内容字节后会复位状态），
+	// 所以这里必须让 lost 制品「不命中」，逼前端把字节重新传一遍。
 	var assets []model.Asset
-	if err := s.db.Where("type = ? AND sha256 IN ?", model.AssetTypeClientFile, uniq).Find(&assets).Error; err != nil {
+	if err := s.db.Where("type = ? AND sha256 IN ?", model.AssetTypeClientFile, uniq).
+		Where("COALESCE(storage_state, '') <> ?", string(model.AssetStorageLost)).
+		Find(&assets).Error; err != nil {
 		return nil, fmt.Errorf("查询制品失败: %w", err)
 	}
 	bySha := make(map[string]*model.Asset, len(assets))

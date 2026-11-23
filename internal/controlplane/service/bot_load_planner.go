@@ -37,7 +37,7 @@ type BotLoadPlanningResult struct {
 	Blockers            []BotLoadIssue
 }
 
-// BotLoadPlanner 按 ADR-074 生成稳定、轮转且单批不超过 50 的分片计划。
+// BotLoadPlanner 按生成稳定、轮转且单批不超过 50 的分片计划。
 type BotLoadPlanner struct{}
 
 // Plan 生成确定性分片；容量不足或显式节点不可用时不返回部分计划。

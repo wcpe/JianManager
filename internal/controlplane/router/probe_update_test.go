@@ -48,21 +48,66 @@ func TestProbeUpdate_Status_NotFound(t *testing.T) {
 }
 
 // TestProbeUpdate_Update_NotEmbeddedOr422 单实例推送在未装配版本库时返回 422。
+// 用适用探针的 MC 后端实例——通用二进制/Beacon/代理会被「不适用」前置拒绝，
+// 不走到版本库检查。
 func TestProbeUpdate_Update_NotEmbeddedOr422(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 	token := getAdminToken(t, r)
 	node := createTestNode(t, db)
 	g := createGroupViaAPI(t, r, token, "g")
-	id := makeInstanceInGroup(t, db, node.ID, g, "smp", model.InstanceStatusStopped)
+	inst := &model.Instance{
+		NodeID: node.ID, Name: "smp", Type: model.InstanceTypeMinecraftJava,
+		Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDirect,
+		StartCommand: "java -jar server.jar", Status: model.InstanceStatusStopped,
+	}
+	require.NoError(t, db.Create(inst).Error)
+	require.NoError(t, db.Create(&model.GroupInstance{GroupID: g, InstanceID: inst.ID}).Error)
 
-	w := makeRequest(r, "POST", "/api/v1/instances/"+itoa(id)+"/probe/update", map[string]any{}, token)
+	w := makeRequest(r, "POST", "/api/v1/instances/"+itoa(inst.ID)+"/probe/update", map[string]any{}, token)
 	require.Equal(t, http.StatusUnprocessableEntity, w.Code)
 	m := parseJSON(t, w)
 	assert.Equal(t, "PROBE_NOT_EMBEDDED", m["error"])
 }
 
-// TestProbeUpdate_Update_Forbidden FR-432：member 有 instance.operate 能力；
+// TestProbeUpdate_Update_RejectsNonApplicable：对不适用探针的实例（通用二进制/Beacon/代理）
+// 点「更新探针」，路由层返回明确拒绝（422 BUSINESS_ERROR + 可读原因），不推入无效 Bukkit jar。
+func TestProbeUpdate_Update_RejectsNonApplicable(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	g := createGroupViaAPI(t, r, token, "g")
+
+	cases := []struct {
+		name string
+		typ  model.InstanceType
+		role model.InstanceRole
+		word string
+	}{
+		{"通用二进制", model.InstanceTypeGeneric, model.InstanceRoleUniversal, "通用二进制实例不适用"},
+		{"Beacon", model.InstanceTypeGeneric, model.InstanceRoleBeacon, "Beacon 实例不适用"},
+		{"代理", model.InstanceTypeMinecraftJava, model.InstanceRoleProxy, "代理实例不适用"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inst := &model.Instance{
+				NodeID: node.ID, Name: "na-" + tc.name, Type: tc.typ, Role: tc.role,
+				ProcessType: model.ProcessTypeDirect, StartCommand: "x", Status: model.InstanceStatusStopped,
+			}
+			require.NoError(t, db.Create(inst).Error)
+			require.NoError(t, db.Create(&model.GroupInstance{GroupID: g, InstanceID: inst.ID}).Error)
+
+			w := makeRequest(r, "POST", "/api/v1/instances/"+itoa(inst.ID)+"/probe/update", map[string]any{}, token)
+			require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+			m := parseJSON(t, w)
+			assert.Equal(t, "BUSINESS_ERROR", m["error"])
+			assert.Contains(t, m["message"], tc.word)
+		})
+	}
+}
+
+// TestProbeUpdate_Update_Forbidden：member 有 instance.operate 能力；
 // 无组用户对不可见实例走存在性隐藏 404（不再 403）。
 func TestProbeUpdate_Update_Forbidden(t *testing.T) {
 	db := setupTestDB(t)
@@ -84,7 +129,36 @@ func TestProbeUpdate_Batch_Validation(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestProbeUpdate_Batch_Forbidden FR-432：无组 member 有能力无 scope →
+// TestProbeUpdate_SetVersion_RejectsNonApplicableBeforeSideEffect：不适用探针的实例设置探针
+// 版本必须在任何副作用之前拒绝（422 + 明确原因），且库中 probe_version_id 保持原值——不得先落库。
+func TestProbeUpdate_SetVersion_RejectsNonApplicableBeforeSideEffect(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	g := createGroupViaAPI(t, r, token, "g")
+
+	inst := &model.Instance{
+		NodeID: node.ID, Name: "legacy-beacon", Type: model.InstanceTypeMinecraftJava,
+		Role: model.InstanceRoleBeacon, ProcessType: model.ProcessTypeDirect,
+		StartCommand: "x", Status: model.InstanceStatusStopped,
+	}
+	require.NoError(t, db.Create(inst).Error)
+	require.NoError(t, db.Create(&model.GroupInstance{GroupID: g, InstanceID: inst.ID}).Error)
+
+	w := makeRequest(r, "PUT", "/api/v1/instances/"+itoa(inst.ID)+"/probe-version",
+		map[string]any{"versionId": 123}, token)
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+	m := parseJSON(t, w)
+	assert.Equal(t, "BUSINESS_ERROR", m["error"])
+	assert.Contains(t, m["message"], "Beacon 实例不适用")
+
+	var loaded model.Instance
+	require.NoError(t, db.First(&loaded, inst.ID).Error)
+	assert.Zero(t, loaded.ProbeVersionID, "拒绝必须发生在落库之前（副作用前置检查）")
+}
+
+// TestProbeUpdate_Batch_Forbidden：无组 member 有能力无 scope →
 // 目标全 skipped；若探针制品未装配，业务层回 422 PROBE_NOT_EMBEDDED（非 403）。
 func TestProbeUpdate_Batch_Forbidden(t *testing.T) {
 	db := setupTestDB(t)

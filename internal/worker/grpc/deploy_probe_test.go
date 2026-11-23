@@ -22,7 +22,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// TestDeployServerProbe 验证探针自动部署：jar 与 config.yml 落到实例 plugins 目录（FR-010）。
+// TestDeployServerProbe 验证探针自动部署：jar 与 config.yml 落到实例 plugins 目录。
 func TestDeployServerProbe(t *testing.T) {
 	tmp := t.TempDir()
 	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)

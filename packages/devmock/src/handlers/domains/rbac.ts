@@ -4,8 +4,8 @@ import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-mid
 import { db } from '@jianmanager/devmock/db'
 import type { Session, User } from '@jianmanager/devmock/handlers/domains/auth'
 
-/**
- * RBAC 域 mock（FR-432）：/auth/me + /rbac/* 管理面。
+/** 
+ * RBAC 域 mock：/auth/me + /rbac/* 管理面。
  * 节点集合与 control-plane service.PermissionCatalog / systemRoleNodes 对齐（前端测试用精简副本）。
  */
 
@@ -162,7 +162,7 @@ const CATALOG = [
     nodes: [
       { id: 'agent.token.read', label: 'Token 读取' },
       { id: 'agent.token.manage', label: 'Token 管理' },
-      { id: 'agent.mcp.read', label: 'MCP 会话' },
+      { id: 'agent.mcp.read', label: 'MCP 活动' },
       { id: 'agent.calllog.read', label: '调用流水' },
     ],
   },

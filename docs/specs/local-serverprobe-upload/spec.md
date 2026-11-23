@@ -61,3 +61,12 @@
 
 - 64 MiB 是本次上传上限；如后续制品显著增大，应在独立需求中调整并评估反向代理限制。
 - 用户要求的 0.1.0 测试副本将在验收后保留为本地来源版本；不自动设为默认。
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-411（ServerProbe 本地上传来源）
+
+FR-411（ServerProbe 本地上传来源）：在既有 ServerProbe 制品包中新增本地上传来源，与 GitHub Releases 线上来源明确标识；上传即入 CAS 并可复用既有全局 / Worker / 实例选择与 CP→Worker 下发链路，不自动切换默认版本 → `docs/specs/local-serverprobe-upload/spec.md`（✅ 已交付@v0.21.0）
+

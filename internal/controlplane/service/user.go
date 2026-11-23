@@ -91,7 +91,7 @@ func isUniqueConstraint(err error) bool {
 	return errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(strings.ToLower(err.Error()), "unique")
 }
 
-// UserListFilter 用户列表筛选（FR-336）。零值不限制。
+// UserListFilter 用户列表筛选。零值不限制。
 type UserListFilter struct {
 	// Q 用户名模糊匹配（子串，LIKE %q%，%/_ 由服务端转义）。
 	Q string
@@ -107,7 +107,7 @@ func escapeLike(s string) string {
 	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(s)
 }
 
-// List 返回用户列表与命中总数（FR-336）。total 与 Q 条件同源（Count 同 WHERE）；
+// List 返回用户列表与命中总数。total 与 Q 条件同源（Count 同 WHERE）；
 // 排序统一 username ASC, id ASC——分页窗口稳定必需，分页/全量两形态一致。
 func (s *UserService) List(f UserListFilter) ([]model.User, int64, error) {
 	query := s.db.Model(&model.User{})
@@ -182,6 +182,22 @@ func (s *UserService) Update(id uint, role *model.UserRole, status *model.UserSt
 		}
 	}
 
+	// 禁用同样会让「唯一超管」失效，必须与降级同口径拒绝。
+	// 此前只挡了 role 变更：把唯一超管置为 disabled 后，LoadAccess 会拒绝它的
+	// 所有请求，而初始化检查仍能看到 role=10、不提供重建入口——平台就此失去管理能力。
+	if status != nil && *status != model.UserStatusActive && user.Role == model.RolePlatformAdmin {
+		// ensureSuperAdminSlot 的语义是「排除 id 后没有别的启用超管 ⇒ 返回 true」。
+		// 因此 ok==true 恰恰说明「这就是唯一超管」，必须拒绝；
+		// 写反了会把保护变成「只在有第二个超管时才拦」，正好放走唯一那个。
+		ok, err := s.ensureSuperAdminSlot(id)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return nil, ErrSuperAdminLocked
+		}
+	}
+
 	updates := map[string]interface{}{}
 	if role != nil {
 		updates["role"] = *role
@@ -210,7 +226,25 @@ func (s *UserService) Update(id uint, role *model.UserRole, status *model.UserSt
 }
 
 // Delete 删除用户（软删除）。
+//
+// 唯一超管不可删：与「不可降级 / 不可禁用」同理——删掉它之后正常初始化会因
+// 一次性 setup 锁拒绝重建，平台只能靠带外干预恢复。ensureSuperAdminSlot 返回
+// true 表示「除 id 外没有别的启用超管」，即 id 是唯一那个。
 func (s *UserService) Delete(id uint) error {
+	user, err := s.GetByID(id)
+	if err != nil {
+		return err
+	}
+	if user.Role == model.RolePlatformAdmin {
+		// 同 Update：ok==true = 排除自己后没有别的启用超管 = 自己是唯一那个。
+		ok, err := s.ensureSuperAdminSlot(id)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return ErrSuperAdminLocked
+		}
+	}
 	if err := s.db.Delete(&model.User{}, id).Error; err != nil {
 		return fmt.Errorf("删除用户失败: %w", err)
 	}

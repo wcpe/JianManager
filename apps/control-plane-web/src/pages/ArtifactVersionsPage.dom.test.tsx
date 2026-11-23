@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import {screen, waitFor, within} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
@@ -76,5 +76,68 @@ describe('ArtifactVersionsPage 本地上传', () => {
     expect(screen.getAllByText('本地上传')).toHaveLength(2)
     const localVersion = screen.getByText('0.1.0').closest('div[class*="p-3"]') as HTMLElement
     expect(within(localVersion).getByText('本地上传')).toBeInTheDocument()
+  })
+
+  it('取数失败仍保留页面外壳（PageShell/PageHeader 与 data-page 就绪信号）', async () => {
+    loginMockUser()
+    server.use(
+      http.get(API('/artifact-packages/serverprobe'), () =>
+        HttpResponse.json({ error: 'INTERNAL' }, { status: 500 }),
+      ),
+    )
+    const { container } = renderWithProviders(<ArtifactVersionsPage />)
+
+    expect(await screen.findByTestId('artifact-versions-error')).toBeInTheDocument()
+    // 早退分支此前只剩一行红字：页名消失、e2e 依赖的 data-page 也不在。
+    expect(container.firstElementChild).toHaveAttribute('data-page', 'artifact-versions')
+    expect(screen.getByRole('heading', { name: 'ServerProbe 制品版本库' })).toBeInTheDocument()
+  })
+
+  it('已缓存但无 sha256 时只显示「已缓存到 CP」，不留尾随分隔符', async () => {
+    loginMockUser()
+    server.use(
+      http.get(API('/artifact-packages/serverprobe'), () =>
+        HttpResponse.json({
+          package: { id: 1, key: 'serverprobe', name: 'ServerProbe', assetType: 'server-probe', defaultVersionId: 1 },
+          sources: [githubSource],
+          versions: [{ ...githubVersion, expectedSha256: '' }],
+        }),
+      ),
+    )
+    renderWithProviders(<ArtifactVersionsPage />)
+
+    expect(await screen.findByText('已缓存到 CP')).toBeInTheDocument()
+    expect(screen.queryByText('已缓存到 CP ·')).not.toBeInTheDocument()
+  })
+
+  it('设为全局默认在途时给出转圈与文案反馈', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    // 用手动闸门把请求钉在「在途」：断言完瞬时态再放行（fireEvent 观察不到，
+    // 因为 act() 会把整个 mock 请求周期一起冲掉）。
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    server.use(
+      http.get(API('/artifact-packages/serverprobe'), () =>
+        HttpResponse.json({
+          package: { id: 1, key: 'serverprobe', name: 'ServerProbe', assetType: 'server-probe', defaultVersionId: 0 },
+          sources: [githubSource],
+          versions: [githubVersion],
+        }),
+      ),
+      http.put(API('/artifact-packages/serverprobe/default-version'), async () => {
+        await gate
+        return HttpResponse.json({ defaultVersionId: 1 }, { status: 200 })
+      }),
+    )
+    renderWithProviders(<ArtifactVersionsPage />)
+    await screen.findByText('0.2.0')
+
+    await user.click(screen.getByRole('button', { name: '设为全局默认' }))
+    // 在途：此前只有禁用（无转圈无文案），点了没反应会被当成没点上。
+    expect(await screen.findByRole('button', { name: '保存中...' })).toBeDisabled()
+
+    release()
+    await waitFor(() => expect(screen.queryByRole('button', { name: '保存中...' })).not.toBeInTheDocument())
   })
 })

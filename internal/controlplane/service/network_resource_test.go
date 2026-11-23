@@ -1,0 +1,69 @@
+package service
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+)
+
+func newNetworkResourceTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
+	require.NoError(t, db.AutoMigrate(
+		&model.Node{},
+		&model.Instance{},
+		&model.GroupInstance{},
+		&model.GroupQuota{},
+		&model.Bot{},
+		&model.Backup{},
+	))
+	return db
+}
+
+func TestInstanceCreateAssignsRoleAndSystemWorkDir(t *testing.T) {
+	db := newNetworkResourceTestDB(t)
+	node := &model.Node{Name: "network-resource-node", Host: "127.0.0.1", GRPCPort: 9100, WSPort: 9101, Secret: "secret", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(node).Error)
+
+	svc := NewInstanceService(db, nil, cpgrpc.NewClientPool())
+	inst, err := svc.Create(CreateInstanceRequest{
+		NodeID:       node.ID,
+		Name:         "Lobby One",
+		Type:         model.InstanceTypeMinecraftJava,
+		Role:         model.InstanceRoleBackend,
+		ProcessType:  model.ProcessTypeDirect,
+		StartCommand: "java -jar server.jar nogui",
+		WorkDir:      "C:/operator/should-not-win",
+		ServerPort:   25565,
+		QueryPort:    25565,
+		ProbePort:    29940,
+	})
+	require.NoError(t, err)
+	require.Equal(t, model.InstanceRoleBackend, inst.Role)
+	require.True(t, strings.HasPrefix(inst.WorkDir, "var/servers/lobby-one-"), "MC 实例工作目录应由系统分配到 var/servers 下，实际=%s", inst.WorkDir)
+	require.NotContains(t, inst.WorkDir, "operator")
+
+	invalidRole, err := svc.Create(CreateInstanceRequest{
+		NodeID:       node.ID,
+		Name:         "Invalid Role",
+		Type:         model.InstanceTypeMinecraftJava,
+		Role:         model.InstanceRole("owner"),
+		ProcessType:  model.ProcessTypeDirect,
+		StartCommand: "java -jar server.jar nogui",
+	})
+	require.NoError(t, err)
+	require.Equal(t, model.InstanceRoleUniversal, invalidRole.Role)
+}

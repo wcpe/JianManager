@@ -3,7 +3,7 @@ import { instanceEventsHandlers } from '../realtime/instance-events'
 import { terminalTokenHandler } from '../realtime/terminal-ws'
 
 /**
- * 自动聚合 domains/*.ts 的 handler（ADR-047 决策 5）：域簇加文件即生效，无需改本文件。
+ * 自动聚合 domains/*.ts 的 handler：域簇加文件即生效，无需改本文件。
  * import.meta.glob 由 Vite/vitest 解析；eager 立即 import → 触发各域顶层 db() 播种。
  */
 const modules = import.meta.glob<{ handlers?: HttpHandler[] }>('./domains/*.ts', { eager: true })

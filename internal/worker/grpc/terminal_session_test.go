@@ -103,7 +103,7 @@ func TestTerminalSession_ReadyAndEcho(t *testing.T) {
 	require.Equal(t, "echo:hello", string(f.Payload))
 }
 
-// 令牌被本机 WS 拒绝（401）→ PermissionDenied 透传（FR-276 诊断语义）。
+// 令牌被本机 WS 拒绝（401）→ PermissionDenied 透传（诊断语义）。
 func TestTerminalSession_TokenRejected(t *testing.T) {
 	stream := dialTerminalSession(t, startFakeTerminalWS(t))
 	require.NoError(t, stream.Send(openFrame("bad")))
@@ -126,7 +126,12 @@ func TestTerminalSession_MissingOpen(t *testing.T) {
 // 未装配 WS 地址 → Unavailable（防御性兜底）。
 func TestTerminalSession_NotConfigured(t *testing.T) {
 	stream := dialTerminalSession(t, "")
-	require.NoError(t, stream.Send(openFrame("good")))
+	// Send 的错误在这里不可断言：服务端一旦发现未装配 WS 地址就立即以
+	// Unavailable 结束流，于是客户端的首个 Send 有可能在流已被服务端关闭后
+	// 才发出，拿到 io.EOF。这取决于 gRPC 关闭与客户端写入的先后，属调度竞态
+	// （实测本地稳定复现、CI 上偶发）。本用例要钉的是**客户端最终看到
+	// Unavailable**，因此只对 Recv 的结果断言。
+	_ = stream.Send(openFrame("good"))
 
 	_, err := stream.Recv()
 	require.Error(t, err)

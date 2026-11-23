@@ -32,7 +32,7 @@ func killProcessTree(cmd *exec.Cmd) {
 	_ = cmd.Process.Kill()
 }
 
-// KillPIDTree 按 PID 强杀整棵进程树（FR-325 接管兜底：只有 PID 记录、无 *exec.Cmd 句柄）。
+// KillPIDTree 按 PID 强杀整棵进程树（接管兜底：只有 PID 记录、无 *exec.Cmd 句柄）。
 // 与 killProcessTree 同源：杀 pid 所在进程组（负 pgid，SIGKILL），取不到 pgid 时回退杀单进程。
 func KillPIDTree(pid int) error {
 	if pid <= 0 {

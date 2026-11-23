@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -17,11 +18,17 @@ func newResyncTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.NodeJDK{}))
 	return db
 }
 
-// TestBuildCreateInstanceRequest 验证实例模型→Worker 规格的翻译（ADR-050 重推与单实例补注册共用）：
+// TestBuildCreateInstanceRequest 验证实例模型→Worker 规格的翻译（重推与单实例补注册共用）：
 // EnvVars JSON 解出、绑定 JDK 路径解析、按角色派生优雅停止命令、基础字段透传。
 func TestBuildCreateInstanceRequest(t *testing.T) {
 	db := newResyncTestDB(t)
@@ -30,6 +37,11 @@ func TestBuildCreateInstanceRequest(t *testing.T) {
 
 	jdk := &model.NodeJDK{NodeID: 1, MajorVersion: 21, Path: "/opt/jdks/temurin-21"}
 	require.NoError(t, db.Create(jdk).Error)
+
+	// 日志 holder 身份解析需要节点存在（buildCreateInstanceRequest 按 NodeID 取节点 UUID 生成 source_generation）。
+	node := &model.Node{UUID: "worker-test", Name: "n", Host: "127.0.0.1", OS: "linux", Arch: "amd64"}
+	require.NoError(t, db.Create(node).Error)
+	require.EqualValues(t, 1, node.ID, "实例显式使用 NodeID=1，节点须为 ID=1")
 
 	env := map[string]string{"FOO": "bar"}
 	raw, _ := json.Marshal(env)
@@ -51,12 +63,16 @@ func TestBuildCreateInstanceRequest(t *testing.T) {
 	assert.Equal(t, "var/servers/lobby-ab12", spec.WorkDir)
 	assert.Equal(t, "/opt/jdks/temurin-21", spec.JdkPath, "应解析绑定 JDK 安装路径")
 	assert.Equal(t, "end", spec.StopCommand, "代理角色派生优雅停止命令 end")
-	assert.Equal(t, int32(29940), spec.ProbePort)
+	assert.Equal(t, int32(0), spec.ProbePort, "代理不适用探针，下发的 probe_port 归零")
 	assert.Equal(t, "bar", spec.EnvVars["FOO"], "EnvVars JSON 应解出")
 	assert.Equal(t, "itzg/minecraft-server:latest", spec.Image)
 	assert.Equal(t, 1.5, spec.CpuLimit)
 	assert.Equal(t, int64(2048), spec.MemLimitMb)
 	assert.Equal(t, int64(10240), spec.DiskLimitMb)
+	// 日志采集绑定：Minecraft Java 走文件主源，holder 身份含实例 UUID 与节点 UUID。
+	assert.Equal(t, fmt.Sprintf("inst:%d", inst.ID), spec.LogTargetId)
+	assert.Equal(t, "FILE_PRIMARY", spec.LogAcquireMode)
+	assert.Equal(t, fmt.Sprintf("instance:%s@worker:%s", inst.UUID, node.UUID), spec.LogSourceGeneration)
 }
 
 // TestResyncNode_GracefulPreflight 验证 ResyncNode 的前置容错（无 panic、无副作用）：

@@ -15,8 +15,8 @@ import zh from '@/i18n/zh.json'
 import en from '@/i18n/en.json'
 import SystemUpdatePage from './SystemUpdatePage'
 
-/**
- * SystemUpdatePage 强断言（FR-200）：①渲染 seed 版本对比（CP + 各节点）②升级节点→check 联动版本变化
+/** 
+ * SystemUpdatePage 强断言：①渲染 seed 版本对比（CP + 各节点）②升级节点→check 联动版本变化
  * ③注入 500→错误态。本页仅平台管理员可见，故需用解出 role=10 的 token 登录（store 从 JWT 解 role）。
  * 仅调本域 GET /self-update/check + POST /self-update/check/refresh + GET /self-update/rollout
  * + POST /self-update/nodes/:id/upgrade。
@@ -350,7 +350,7 @@ describe('SystemUpdatePage（mock 假后端）', () => {
     renderWithProviders(<SystemUpdatePage />)
 
     await screen.findByText('Control Plane')
-    // FR-155：全网升级先开配置弹窗（金丝雀分批），点「Continue」再进 DangerConfirm 二次确认。
+    // 全网升级先开配置弹窗（金丝雀分批），点「Continue」再进 DangerConfirm 二次确认。
     await user.click(screen.getByRole('button', { name: 'Upgrade all' }))
     const configDialog = await screen.findByRole('dialog')
     await user.click(within(configDialog).getByRole('button', { name: 'Continue' }))
@@ -361,7 +361,7 @@ describe('SystemUpdatePage（mock 假后端）', () => {
     expect(toastError).not.toHaveBeenCalledWith(expect.stringContaining('{{n}}'))
   })
 
-  it('全网升级配置金丝雀分批：弹窗有金丝雀/每批输入，发起后请求带参数且进度显示阶段（FR-155）', async () => {
+  it('全网升级配置金丝雀分批：弹窗有金丝雀/每批输入，发起后请求带参数且进度显示阶段', async () => {
     loginPlatformAdmin()
     const user = userEvent.setup()
     let sentBody: { canarySize?: number; batchSize?: number; abortOnCanaryFailure?: boolean } | null = null

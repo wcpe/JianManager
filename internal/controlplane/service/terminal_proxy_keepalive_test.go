@@ -1,4 +1,4 @@
-// FR-140 保活加固：CP 终端代理给两侧连接装 ping/pong，空闲终端不被中间层断开。
+// 保活加固：CP 终端代理给两侧连接装 ping/pong，空闲终端不被中间层断开。
 package service
 
 import (

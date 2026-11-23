@@ -16,6 +16,12 @@ func newProbeUpdateTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Instance{}, &model.Node{}, &model.Network{}, &model.NetworkMember{}, &model.GroupInstance{},
 	))
@@ -93,7 +99,8 @@ func TestProbeUpdate_NotEmbedded(t *testing.T) {
 	require.ErrorIs(t, err, ErrProbeNotEmbedded)
 }
 
-// TestProbeUpdate_ResolveTargets_Skipped 请求 IDs 中不存在的实例计入 skipped（存在性隐藏）。
+// TestProbeUpdate_ResolveTargets_Skipped 请求 IDs 中不存在的实例计入 skipped（存在性隐藏）；
+// 不适用的实例走 excluded 而非 skipped。
 func TestProbeUpdate_ResolveTargets_Skipped(t *testing.T) {
 	db := newProbeUpdateTestDB(t)
 	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
@@ -101,10 +108,11 @@ func TestProbeUpdate_ResolveTargets_Skipped(t *testing.T) {
 	b := mkProbeInstance(t, db, "b", 1)
 
 	// 请求 3 个 id，其中一个不存在 → skipped=1。
-	insts, skipped, err := svc.resolveTargets(ProbeUpdateBatchRequest{IDs: []uint{a.ID, b.ID, 9999}}, nil, false)
+	insts, skipped, excluded, err := svc.resolveTargets(ProbeUpdateBatchRequest{IDs: []uint{a.ID, b.ID, 9999}}, nil, false)
 	require.NoError(t, err)
 	require.Len(t, insts, 2)
 	require.Equal(t, 1, skipped)
+	require.Empty(t, excluded, "全部适用，无排除项")
 }
 
 // TestProbeUpdate_ResolveTargets_ScopeIsolation 越权实例被资源隔离剔除并计入 skipped。
@@ -115,7 +123,7 @@ func TestProbeUpdate_ResolveTargets_ScopeIsolation(t *testing.T) {
 	b := mkProbeInstance(t, db, "b", 1)
 
 	// scope=true 且仅 a 可见：请求 a+b → 命中 a，b 越权计入 skipped。
-	insts, skipped, err := svc.resolveTargets(
+	insts, skipped, _, err := svc.resolveTargets(
 		ProbeUpdateBatchRequest{IDs: []uint{a.ID, b.ID}}, []uint{a.ID}, true)
 	require.NoError(t, err)
 	require.Len(t, insts, 1)
@@ -123,7 +131,7 @@ func TestProbeUpdate_ResolveTargets_ScopeIsolation(t *testing.T) {
 	require.Equal(t, 1, skipped)
 
 	// 空可见集合（scope=true, scopeIDs 空）→ 强制空结果。
-	insts, _, err = svc.resolveTargets(
+	insts, _, _, err = svc.resolveTargets(
 		ProbeUpdateBatchRequest{IDs: []uint{a.ID}}, nil, true)
 	require.NoError(t, err)
 	require.Len(t, insts, 0)
@@ -139,7 +147,7 @@ func TestProbeUpdate_ResolveTargets_Filter(t *testing.T) {
 
 	nodeID := uint(1)
 	f := ProbeUpdateBatchFilter{NodeID: &nodeID}
-	insts, skipped, err := svc.resolveTargets(ProbeUpdateBatchRequest{Filter: &f}, nil, false)
+	insts, skipped, _, err := svc.resolveTargets(ProbeUpdateBatchRequest{Filter: &f}, nil, false)
 	require.NoError(t, err)
 	require.Len(t, insts, 2, "仅节点 1 的两个实例命中")
 	require.Equal(t, 0, skipped, "filter 模式 skipped 恒为 0")
@@ -163,7 +171,7 @@ func TestProbeUpdate_Update_RejectsProxy(t *testing.T) {
 	require.Contains(t, err.Error(), "代理实例不适用", "拒绝原因必须明确指向代理不适用")
 }
 
-// TestProbeUpdate_DeployVersionTo_RejectsMissingProbePortWithoutSvc FR-411 守卫：
+// TestProbeUpdate_DeployVersionTo_RejectsMissingProbePortWithoutSvc守卫：
 // probe_port=0 的实例（导入/历史）在未注入 instanceSvc 时，部署必须明确拒绝，
 // 绝不写出 `port: 0` 的探针配置（探针绑 OS 随机端口 → 监控永无数据的静默断链）。
 func TestProbeUpdate_DeployVersionTo_RejectsMissingProbePortWithoutSvc(t *testing.T) {
@@ -178,7 +186,7 @@ func TestProbeUpdate_DeployVersionTo_RejectsMissingProbePortWithoutSvc(t *testin
 	require.Contains(t, err.Error(), "未分配探针端口", "拒绝原因必须明确指向缺失端口")
 }
 
-// TestProbeUpdate_DeployVersionTo_AutoAllocatesProbePort FR-411 补口主路径：
+// TestProbeUpdate_DeployVersionTo_AutoAllocatesProbePort补口主路径：
 // 注入 instanceSvc 后，probe_port=0 的实例在部署前自动补分配端口、落库并刷新传入实例，
 // 随后链路继续推进到 Worker 下发阶段（此处 pool 无 Worker，停在「未连接」而非端口错误）。
 func TestProbeUpdate_DeployVersionTo_AutoAllocatesProbePort(t *testing.T) {
@@ -218,7 +226,8 @@ func TestEnsureProbePort_Idempotent(t *testing.T) {
 	require.Equal(t, 29940, inst.ProbePort)
 }
 
-// TestProbeUpdate_ResolveTargets_SkipsProxy 批量目标解析静默跳过代理实例（计入 skipped）。
+// TestProbeUpdate_ResolveTargets_SkipsProxy 批量目标解析排除代理实例：IDs 模式回传明确原因
+// （excluded），filter 模式在 SQL 侧排除。
 func TestProbeUpdate_ResolveTargets_SkipsProxy(t *testing.T) {
 	db := newProbeUpdateTestDB(t)
 	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
@@ -230,15 +239,130 @@ func TestProbeUpdate_ResolveTargets_SkipsProxy(t *testing.T) {
 	}
 	require.NoError(t, db.Create(proxy).Error)
 
-	insts, skipped, err := svc.resolveTargets(ProbeUpdateBatchRequest{IDs: []uint{backend.ID, proxy.ID}}, nil, false)
+	insts, skipped, excluded, err := svc.resolveTargets(ProbeUpdateBatchRequest{IDs: []uint{backend.ID, proxy.ID}}, nil, false)
 	require.NoError(t, err)
 	require.Len(t, insts, 1, "代理被排除，仅后端命中")
 	require.Equal(t, backend.ID, insts[0].ID)
-	require.Equal(t, 1, skipped, "被排除的代理计入 skipped")
+	require.Equal(t, 0, skipped, "命中的代理不计 skipped（skipped 仅表示未命中）")
+	require.Len(t, excluded, 1, "被排除的代理带明确原因回传")
+	require.Equal(t, proxy.ID, excluded[0].InstanceID)
+	require.Contains(t, excluded[0].Reason, "代理实例不适用")
 
-	insts, _, err = svc.resolveTargets(ProbeUpdateBatchRequest{}, nil, false)
+	insts, _, _, err = svc.resolveTargets(ProbeUpdateBatchRequest{}, nil, false)
 	require.NoError(t, err)
 	for _, in := range insts {
 		require.NotEqual(t, model.InstanceRoleProxy, in.Role, "filter 模式亦不得纳入代理")
 	}
+}
+
+// TestProbeUpdate_Update_RejectsNonApplicable：不适用探针的实例（Beacon/通用二进制，及历史
+// 误记 type=minecraft_java 的 Beacon）单发推送直接拒绝并带明确原因，不再推入无效 Bukkit jar。
+func TestProbeUpdate_Update_RejectsNonApplicable(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
+
+	cases := []struct {
+		name     string
+		inst     *model.Instance
+		wantWord string
+	}{
+		{
+			name: "Beacon",
+			inst: &model.Instance{
+				Name: "beacon", NodeID: 1, Type: model.InstanceTypeGeneric,
+				Role: model.InstanceRoleBeacon, ProcessType: model.ProcessTypeDaemon,
+				StartCommand: "x", Status: model.InstanceStatusStopped,
+			},
+			wantWord: "Beacon 实例不适用",
+		},
+		{
+			name: "通用二进制",
+			inst: &model.Instance{
+				Name: "bin", NodeID: 1, Type: model.InstanceTypeGeneric,
+				Role: model.InstanceRoleUniversal, ProcessType: model.ProcessTypeDaemon,
+				StartCommand: "x", Status: model.InstanceStatusStopped,
+			},
+			wantWord: "通用二进制实例不适用",
+		},
+		{
+			name: "历史误配 Beacon（type=minecraft_java）",
+			inst: &model.Instance{
+				Name: "legacy-beacon", NodeID: 1, Type: model.InstanceTypeMinecraftJava,
+				Role: model.InstanceRoleBeacon, ProcessType: model.ProcessTypeDaemon,
+				StartCommand: "x", Status: model.InstanceStatusStopped,
+			},
+			wantWord: "Beacon 实例不适用",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, db.Create(tc.inst).Error)
+			_, err := svc.Update(tc.inst.ID)
+			require.Error(t, err, "不适用实例必须拒绝而非推入无效 jar")
+			require.Contains(t, err.Error(), tc.wantWord)
+		})
+	}
+}
+
+// TestProbeUpdate_ResolveTargets_SkipsNonApplicable：IDs 模式批量目标解析排除代理/Beacon/通用
+// 二进制，被排除者回传类型+原因（excluded），不再静默 skipped；filter 模式 SQL 侧排除。
+func TestProbeUpdate_ResolveTargets_SkipsNonApplicable(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
+	backend := mkProbeInstance(t, db, "smp", 1)
+	beacon := &model.Instance{
+		Name: "beacon", NodeID: 1, Type: model.InstanceTypeGeneric,
+		Role: model.InstanceRoleBeacon, ProcessType: model.ProcessTypeDaemon,
+		StartCommand: "x", Status: model.InstanceStatusStopped,
+	}
+	bin := &model.Instance{
+		Name: "bin", NodeID: 1, Type: model.InstanceTypeGeneric,
+		Role: model.InstanceRoleUniversal, ProcessType: model.ProcessTypeDaemon,
+		StartCommand: "x", Status: model.InstanceStatusStopped,
+	}
+	require.NoError(t, db.Create(beacon).Error)
+	require.NoError(t, db.Create(bin).Error)
+
+	insts, skipped, excluded, err := svc.resolveTargets(
+		ProbeUpdateBatchRequest{IDs: []uint{backend.ID, beacon.ID, bin.ID}}, nil, false)
+	require.NoError(t, err)
+	require.Len(t, insts, 1, "仅适用探针的实例命中")
+	require.Equal(t, backend.ID, insts[0].ID)
+	require.Equal(t, 0, skipped, "命中但不适用属于 excluded，不是 skipped")
+	require.Len(t, excluded, 2, "被排除的 beacon/binary 各有一条带原因的记录")
+	byID := map[uint]string{}
+	for _, ex := range excluded {
+		byID[ex.InstanceID] = ex.Reason
+	}
+	require.Contains(t, byID[beacon.ID], "Beacon 实例不适用")
+	require.Contains(t, byID[bin.ID], "通用二进制实例不适用")
+	for _, ex := range excluded {
+		require.NotContains(t, ex.Reason, "不存在", "原因必须具体，不能是笼统的跳过")
+	}
+
+	// filter 模式不得纳入不适用实例。
+	insts, _, _, err = svc.resolveTargets(ProbeUpdateBatchRequest{}, nil, false)
+	require.NoError(t, err)
+	for _, in := range insts {
+		require.True(t, model.IsProbeApplicable(in.Type, in.Role), "filter 模式亦不得纳入不适用实例")
+	}
+}
+
+// TestApplyProbeApplicableScope_NullRoleIncludednit：role 为 NULL 的历史行不应被
+// `role NOT IN (…)` 的三值逻辑误排除，须与 model.IsProbeApplicable 同口径（视为适用）。
+func TestApplyProbeApplicableScope_NullRoleIncluded(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	node := &model.Node{Name: "n", Host: "127.0.0.1", Secret: "s"}
+	require.NoError(t, db.Create(node).Error)
+	// 直接写 NULL role（绕过模型的 default:universal），复刻历史/异常行。
+	require.NoError(t, db.Exec(
+		`INSERT INTO instances (uuid, node_id, name, type, role, process_type, status, start_command, probe_port, created_at, updated_at)
+		 VALUES ('null-role', ?, 'legacy', 'minecraft_java', NULL, 'direct', 'STOPPED', 'x', 29940, datetime('now'), datetime('now'))`,
+		node.ID,
+	).Error)
+
+	var got []model.Instance
+	require.NoError(t, applyProbeApplicableScope(db.Model(&model.Instance{})).Find(&got).Error)
+	require.Len(t, got, 1, "role IS NULL 的历史行应被视为适用探针，不被 SQL 误排除")
+	require.True(t, model.IsProbeApplicable(got[0].Type, got[0].Role), "SQL 判定与 Go 判定同口径")
 }

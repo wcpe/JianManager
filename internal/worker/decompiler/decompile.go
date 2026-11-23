@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// 反编译安全上限（ADR-018 决策 4）。
+// 反编译安全上限。
 const (
 	// DefaultTimeout 是单次反编译的默认超时。超时 kill 子进程并降级。
 	DefaultTimeout = 30 * time.Second

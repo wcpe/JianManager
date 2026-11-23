@@ -1,0 +1,120 @@
+{
+  "fallback": {
+    "mcSemantics": false,
+    "capabilities": [
+      "overview",
+      "terminal",
+      "files",
+      "backup"
+    ]
+  },
+  "profiles": {
+    "generic:beacon": {
+      "mcSemantics": false,
+      "capabilities": [
+        "overview",
+        "terminal",
+        "files",
+        "process",
+        "health",
+        "config",
+        "backup"
+      ],
+      "sources": {
+        "config": [
+          "node"
+        ],
+        "health": [
+          "direct"
+        ],
+        "process": [
+          "node"
+        ]
+      }
+    },
+    "generic:universal": {
+      "mcSemantics": false,
+      "capabilities": [
+        "overview",
+        "terminal",
+        "files",
+        "process",
+        "health",
+        "config",
+        "backup"
+      ],
+      "sources": {
+        "config": [
+          "node"
+        ],
+        "health": [
+          "direct"
+        ],
+        "process": [
+          "node"
+        ]
+      }
+    },
+    "minecraft_java:backend": {
+      "mcSemantics": true,
+      "capabilities": [
+        "overview",
+        "terminal",
+        "files",
+        "plugins",
+        "metrics",
+        "players",
+        "business",
+        "bot",
+        "backup",
+        "clone"
+      ],
+      "sources": {
+        "metrics": [
+          "probe",
+          "direct"
+        ],
+        "players": [
+          "probe",
+          "direct"
+        ],
+        "process": [
+          "node"
+        ]
+      }
+    },
+    "minecraft_java:proxy": {
+      "mcSemantics": false,
+      "capabilities": [
+        "overview",
+        "terminal",
+        "files",
+        "bcTopology",
+        "players",
+        "plugins",
+        "process",
+        "health",
+        "config",
+        "backup"
+      ],
+      "sources": {
+        "bcTopology": [
+          "node"
+        ],
+        "config": [
+          "node"
+        ],
+        "health": [
+          "direct"
+        ],
+        "players": [
+          "probe",
+          "direct"
+        ],
+        "process": [
+          "node"
+        ]
+      }
+    }
+  }
+}

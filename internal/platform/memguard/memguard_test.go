@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestParseXmxMB 各单位与缺省解析（FR-317）。
+// TestParseXmxMB 各单位与缺省解析。
 func TestParseXmxMB(t *testing.T) {
 	tests := []struct {
 		name string
@@ -29,7 +29,7 @@ func TestParseXmxMB(t *testing.T) {
 	}
 }
 
-// TestEstimateStartMB docker 上限优先 > Xmx 估算 > 保守默认（FR-317）。
+// TestEstimateStartMB docker 上限优先 > Xmx 估算 > 保守默认。
 func TestEstimateStartMB(t *testing.T) {
 	if got := EstimateStartMB("java -Xmx2G -jar s.jar", 4096); got != 4096 {
 		t.Fatalf("docker MemLimit 应优先: %d", got)
@@ -53,7 +53,7 @@ func TestDefaultReserveMB(t *testing.T) {
 	}
 }
 
-// TestCheck 水位判定边界与错误文案可操作性（FR-317）。
+// TestCheck 水位判定边界与错误文案可操作性。
 func TestCheck(t *testing.T) {
 	// 可用 3000，需求 2611，保留 512 → 3000-2611=389 < 512 拒绝
 	err := Check(3000, 2611, 512)

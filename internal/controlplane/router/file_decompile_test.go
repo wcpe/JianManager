@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// FR-075 归档浏览与反编译 CP 端点：参数校验 / 路径越界 / 权限 / 节点未连接。
+// 归档浏览与反编译 CP 端点：参数校验 / 路径越界 / 权限 / 节点未连接。
 // 真机端到端（真 jar/反编译）由 worker grpc 真机测试覆盖；本层只断 CP 转发前的边界。
 
 func TestArchiveEntries_MissingPath(t *testing.T) {

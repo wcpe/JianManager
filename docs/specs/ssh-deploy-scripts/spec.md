@@ -108,7 +108,7 @@
 5. 幂等：连续执行两次同一脚本无报错、结果一致。
 6. 预检失败路径：SSH 不通 / 产物缺失 / 首次缺 token / 显式 system 档无提权 / user 档 linger 不可开，均给出可操作中文报错而非莫名堆栈。
 7. **真机验收（必须，用户确认）**：真实 Linux 主机——先查操作机 `~/.ssh` 密钥（无则生成 ed25519 公钥交用户装入主机）→ 用户提供 IP/端口/用户 → `deploy-cp.sh` 部面板 → 浏览器首启引导 + 签 token → `deploy-worker.sh` 部节点 → 面板节点在线 → 两脚本各再跑一次更新部署复验 §5.4/§5.5。按用户主机实际权限档执行（用户已确认目标机为纯普通用户 → 真机主验 user 档；system 档以 dry-run 断言 + 可得 root 环境时补验）。单测 / 静态检查绿不替代本项。
-   - **[x] 已通过（2026-07-12，Debian 目标机·验收环境，纯普通用户部署，user 档）**：`deploy-cp.sh` 部面板（HTTP 面板端口，避开安全组仅放行的高位端口段）→ 真浏览器登录 + 面板「添加节点」签 token → `deploy-worker.sh` 部节点（WS 节点端口）→ 面板 node-main **在线**（linux/amd64、4 核、实时指标）；CP+Worker 各再跑一次更新部署（**均不带首次参数/token**）→ 节点身份 md5 不变、`control-plane.yml`/`worker.yml` mtime 不变、DB 仅服务写时序增长、`.bak` 各留一份、更新后节点仍在线同一 UUID。真机复验发现并当场修复：**CP 更新部署探活端口误用默认 8080**（更新不重传端口时探活错端口误报），改为更新模式从远端 `control-plane.yml` 的 `server.port` 解析（awk 限定 server 段避开 grpc 同名 port），修复后探活按 yml 端口通过。
+   - **[x] 已通过（2026-07-12，Debian 目标机·验收环境，纯普通用户部署，user 档）**：`deploy-cp.sh` 部面板（HTTP 面板端口，避开安全组仅放行的高位端口段）→ 真浏览器登录 + 面板「添加节点」签 token → `deploy-worker.sh` 部节点（WS 节点端口）→ 面板 host-1 **在线**（linux/amd64、4 核、实时指标）；CP+Worker 各再跑一次更新部署（**均不带首次参数/token**）→ 节点身份 md5 不变、`control-plane.yml`/`worker.yml` mtime 不变、DB 仅服务写时序增长、`.bak` 各留一份、更新后节点仍在线同一 UUID。真机复验发现并当场修复：**CP 更新部署探活端口误用默认 8080**（更新不重传端口时探活错端口误报），改为更新模式从远端 `control-plane.yml` 的 `server.port` 解析（awk 限定 server 段避开 grpc 同名 port），修复后探活按 yml 端口通过。
 
 ## 6. 风险 / 待定
 
@@ -117,3 +117,14 @@
 - **`systemctl --user` 的会话总线**：SSH 非交互会话需 `XDG_RUNTIME_DIR` 正确指向 `/run/user/<uid>`（linger 开启后该目录常驻）；脚本远端命令统一前置导出。
 - **arm64 产物**：`make dist` 现只出 amd64；目标机 arm64 时脚本报错提示，产物扩编不在本 FR。
 - **首启引导依赖人工**：CP 首次部署后必须浏览器完成 FR-017 引导才能签 token，deploy-worker 无法紧随全自动——已在脚本回显中指引，属产品既定形态非缺口。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入。
+
+### FR-277 SSH 推送式远程部署脚本
+
+**需求补充**：`deploy-cp.sh` / `deploy-worker.sh` 两独立 POSIX sh 脚本，从操作机经 SSH 密钥把本地 `make dist` 产物推送部署/更新到 Linux 主机（systemd 常驻、幂等重跑、数据与身份保留、部署后健康检查）；SSH 目标与部署参数经环境变量配置，Worker 首次上线经 `JM_ENROLL_TOKEN` 复用 setup 语义；目标机 root / 免密 sudo / 纯普通用户（user 级 systemd+linger）三档全支持（需 spec + ADR-063）→ `docs/specs/ssh-deploy-scripts/spec.md`
+
+**交付状态**：✅ 已交付@v0.15.0·真机验收（deploy-cp/worker 更新模式/幂等/身份保留/user档systemd/一键装机全验通）
+

@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// NodeRuntimeHandler 节点运行时管理路由（FR-178）：制品缓存、JDK 版本目录（foojay）、目录浏览。
+// NodeRuntimeHandler 节点运行时管理路由：制品缓存、JDK 版本目录（foojay）、目录浏览。
 // 全部仅平台管理员可达；缓存的破坏性操作（清/逐项清/设上限）写审计。
 type NodeRuntimeHandler struct {
 	svc   *service.NodeRuntimeService
@@ -172,7 +172,7 @@ func (h *NodeRuntimeHandler) BrowseDir(c *gin.Context) {
 	c.JSON(http.StatusOK, view)
 }
 
-// CheckFSAccess POST /nodes/:id/fs/check-access — 节点绝对路径权限探测（FR-373）。
+// CheckFSAccess POST /nodes/:id/fs/check-access — 节点绝对路径权限探测。
 func (h *NodeRuntimeHandler) CheckFSAccess(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -196,7 +196,7 @@ func (h *NodeRuntimeHandler) CheckFSAccess(c *gin.Context) {
 	c.JSON(http.StatusOK, access)
 }
 
-// ChmodFS POST /nodes/:id/fs/chmod — 节点绝对路径单 path 非递归 chmod（FR-373）。
+// ChmodFS POST /nodes/:id/fs/chmod — 节点绝对路径单 path 非递归 chmod。
 func (h *NodeRuntimeHandler) ChmodFS(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -224,7 +224,7 @@ func (h *NodeRuntimeHandler) ChmodFS(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已修改权限", "modeOctal": modeOctal})
 }
 
-// RegisterRoutes 注册节点运行时路由（FR-178）。
+// RegisterRoutes 注册节点运行时路由。
 func (h *NodeRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	ac := rg.Group("/nodes/:id/artifact-cache")
 	ac.GET("", h.ListArtifactCache)
@@ -234,7 +234,7 @@ func (h *NodeRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 
 	rg.GET("/nodes/:id/jdk/catalog", h.JDKCatalog)
 	rg.GET("/nodes/:id/browse", h.BrowseDir)
-	// FR-373 节点路径权限（加性）。
+	// 节点路径权限（加性）。
 	rg.POST("/nodes/:id/fs/check-access", h.CheckFSAccess)
 	rg.POST("/nodes/:id/fs/chmod", h.ChmodFS)
 }

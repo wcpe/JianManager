@@ -75,8 +75,8 @@
 
 ## 5. 验收标准
 
-- FR-298：真机（node-2）植入 JDK 与 Node 假安装目录 → 扫描列出候选 → 勾选入库 → 列表可见；重复扫描标 already_registered；未知类型拒绝。
-- FR-299：真机 node-2 经出站代理装 Node LTS → `bin/node --version` 对版；停滞/残骸/删除语义单测齐平 FR-290~292。
+- FR-298：真机（host-2）植入 JDK 与 Node 假安装目录 → 扫描列出候选 → 勾选入库 → 列表可见；重复扫描标 already_registered；未知类型拒绝。
+- FR-299：真机 host-2 经出站代理装 Node LTS → `bin/node --version` 对版；停滞/残骸/删除语义单测齐平 FR-290~292。
 - FR-300：真机把节点 PATH 无 node 场景（或以库内 node 优先证据）拉起 bot 成功，启动日志标来源。
 - FR-301：真机运行时资产页矩阵显全节点 JDK+Node；手动刷新即时；断一个 worker 刷新容忍显旧。
 - 各真机项需用户确认通过；单测全绿不替代。
@@ -86,3 +86,12 @@
 - proto/worker.proto 与另一并行会话（FR-281 隧道）存在同文件演进——新 RPC 追加在文件尾段，整合时以重生成 pb 收敛。
 - Windows 扫描路径含空格/权限差异——探测失败静默跳过，不阻断扫描整体。
 - nodejs arch 命名（arm64）与 adoptium（aarch64）不同——归一化表按 type 分派，勿共用。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入（保留原文）。
+
+### FR-298 节点运行时库底座与自动扫描
+
+节点运行时库底座与自动扫描（feat，泛化 FR-033/178/228 JDK 域，需 spec）：运行时抽象加类型维度（jdk / nodejs / python 预留；JDK 沿用 `node_jdks` 不动实例外键，新类型承载表 spec 定）；Worker 新增**扫描常见安装路径** RPC（`/usr/lib/jvm`、`Program Files\Java`、nvm/官方 node 目录等，复用 detect 探测），节点页 JDK 面板扩为「运行时」分区：扫描候选勾选入库 + 手动登记泛化多类型 → `docs/specs/node-runtime-library/spec.md`
+

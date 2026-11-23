@@ -1,7 +1,14 @@
 # 功能规格：分发机器级更新清单与钻取（FR-426）
 
-> 状态：✅ 已交付@v0.22.0（随 FR-430 运维页）　·　关联 PRD：**FR-426**　·　关联：FR-217 / FR-265 / FR-430 / ADR-088
+> 状态：✅ 已交付@v0.24.0（真栈端点补全后；v0.22.0 交付时仅 mock）　·　关联 PRD：**FR-426**　·　关联：FR-217 / FR-265 / FR-430 / ADR-088
 > 落点：`/client-dist-ops` 运维页「机器 · 客户端」Tab（`OpsClientsTab` + `MachineListPanel` + `ObsOverviewSection`）
+>
+> **交付状态订正（2026-11-02）**：此前本 spec 标 `@v0.22.0` 已交付，但当时两个端点
+> `GET /client-dist/machines` 与 `.../:machineId/events` **只存在于 devmock**，真栈一直是 404，
+> 运维页的机器清单与时间线在真实环境必然空白。现已在 CP 侧补齐这两个端点
+> （`router/client_dist_runtime.go` 的 `Machines` / `MachineEvents`，服务层
+> `ClientDistTrackingService.QueryMachines` / `QueryMachineEvents`），
+> 因此状态改到 `@v0.24.0`。
 
 ## 1. 背景与目标
 
@@ -18,7 +25,13 @@
 
 ## 3. 设计
 
-- 数据：observability / machines 相关 hook（`useClientDistObservability`、runtime overview 等）+ 时间窗 `from/to`。
+- 数据：CP 侧聚合明细表（`client_dist_event`），**不新增表结构**；玩家名/来源 IP 取自运行态快照
+  （`client_runtime_state`），安装 ID 取自遥测明细（`client_telemetry.install_id`）。
+- 端点：`GET /client-dist/machines`（服务端聚合 + 排序 + 分页）、
+  `GET /client-dist/machines/:machineId/events`（单机时间线）。两者均挂 admin 组，
+  与 `events/search` 同权限口径（观测数据含 IP/机器码维度，访问留痕）。
+- `exact` 标记：查询窗起点落在明细保留期（14 天）内为 `true`（精确），否则 `false`（近似）。
+  **不谎报精确**——运营据此判断「更新次数是不是真的只有这么点」。
 - UI：`MachineListPanel` 清单 + 下钻详情；与 `ObsOverviewSection` 共用时间筛选。
 - 不改后端 schema；复用 FR-217 时序与聚合端点。
 
@@ -26,8 +39,8 @@
 
 - [x] 机器清单与时间窗联动（随 FR-430 Tab 落地）
 - [x] 下钻时间线 / 深链
-- [ ] 独立后端 machine 明细端点增强（若与现网聚合口径不一致，另开 FR）
-- [ ] 发版后 PRD 标 `已交付@vX.Y.Z`
+- [x] 真栈端点补全：`GET /client-dist/machines` 与 `/:machineId/events`（此前只有 devmock）
+- [x] PRD 标 `已交付@v0.24.0`
 
 ## 5. 验收
 
@@ -39,3 +52,16 @@
 ## 6. 范围外
 
 - CDN/多源站机器画像重建；替代 FR-265 客户端运行态心跳。
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-425~429（2026-09-07 客户端分发监控统计优化批：三页[频道工作台/分发监控/安全中心]统一自定义时间筛选 / 机器级更新清单与钻取 / 更新活动热力图 / 概览洞察卡同环比与口径解读 / 布局统一重排；**UI mock 先行**——devmock 模式完成可演示再接真栈，当前工作区内直跑不建 worktree）
+
+FR-425~429（2026-09-07 客户端分发监控统计优化批：三页[频道工作台/分发监控/安全中心]统一自定义时间筛选 / 机器级更新清单与钻取 / 更新活动热力图 / 概览洞察卡同环比与口径解读 / 布局统一重排；**UI mock 先行**——devmock 模式完成可演示再接真栈，当前工作区内直跑不建 worktree）→ 需 spec 的两项：FR-426 `docs/specs/client-dist-machine-drilldown/spec.md`、FR-428 `docs/specs/client-dist-insight-cards/spec.md`；免 spec 的三项：FR-425 / FR-427 / FR-429
+
+### FR-425~429（2026-09-07 客户端分发监控统计优化批…
+
+FR-425~429（2026-09-07 客户端分发监控统计优化批：三页[频道工作台/分发监控/安全中心]统一自定义时间筛选 / 机器级更新清单与钻取 / 更新活动热力图 / 概览洞察卡同环比与口径解读 / 布局统一重排；**UI mock 先行**——devmock 模式完成可演示再接真栈，当前工作区内直跑不建 worktree） → `docs/specs/client-dist-machine-drilldown/spec.md`
+

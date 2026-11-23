@@ -1,0 +1,234 @@
+# 错误码定义
+# 每个错误码一个 schema，通过 discriminator 精确定位（见 external.yaml 的错误响应）
+
+ErrorBase:
+  type: object
+  required: [code, message]
+  properties:
+    code:
+      type: string
+    message:
+      type: string
+    requestId:
+      type: string
+      format: uuid
+
+# ── 通用 ──────────────────────────────────────────────
+
+UnauthorizedError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: UNAUTHORIZED
+          description: Token 缺失、无效或已过期
+
+ForbiddenError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: FORBIDDEN
+          description: Token scope 不覆盖目标资源
+
+NotFoundError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          enum: [INSTANCE_NOT_FOUND, NOT_FOUND]
+          description: |
+            目标不存在或无权访问。**两者刻意不区分**——区分会泄露资源存在性。
+
+RateLimitedError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: RATE_LIMITED
+        retryAfterSec:
+          type: integer
+
+# ── 业务通道 ──────────────────────────────────────────
+
+InstanceOfflineError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: INSTANCE_OFFLINE
+          description: 实例未处于运行态。**写操作在此状态下不产生任何副作用。**
+
+ProbeUnavailableError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: PROBE_UNAVAILABLE
+          description: 实例在运行但探针未连接
+
+DomainUnavailableError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: DOMAIN_UNAVAILABLE
+          description: |
+            该 `domain` 未在探针注册。可能是插件未安装、被禁用，或未实现自注册。
+        domain:
+          type: string
+
+ActionUnsupportedError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: ACTION_UNSUPPORTED
+          description: |
+            动作未在该域的 manifest 中声明。调用前应先查询 manifest。
+        domain:
+          type: string
+        action:
+          type: string
+
+IdempotencyKeyReusedError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: IDEMPOTENCY_KEY_REUSED
+          description: |
+            同一 `requestId` 携带了不同的 `payload`。
+            这通常是调用方 bug——静默返回首次结果会掩盖问题，故显式报错。
+
+# ── 批量与确认 ────────────────────────────────────────
+
+TargetEmptyError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: TARGET_EMPTY
+          description: 目标解析后无实例，未执行任何操作
+
+TargetChangedError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: TARGET_CHANGED
+          description: |
+            `confirmToken` 绑定的实例集与当前解析结果不一致（分组在预览后发生增删）。
+            **必须重新预览**——这是防止「确认时看到 87 台、实际执行 95 台」的机制。
+        expectedHash:
+          type: string
+        actualHash:
+          type: string
+
+TokenExpiredError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: TOKEN_EXPIRED
+          description: "`confirmToken` 已过期（默认 5 分钟）"
+
+TokenMismatchError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: TOKEN_MISMATCH
+          description: "`confirmToken` 不属于当前调用者"
+
+ConfirmationRequiredError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: CONFIRMATION_REQUIRED
+          description: 高风险操作缺少 `confirmToken`。先调用 `/business/batch/preview`。
+        riskLevel:
+          $ref: './schemas.yaml#/RiskLevel'
+
+ReasonRequiredError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: REASON_REQUIRED
+          description: "`DESTRUCTIVE` 级动作必须提供操作原因"
+
+# ── 事件流 ────────────────────────────────────────────
+
+ReplayGapError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: REPLAY_GAP
+          description: |
+            请求的补读位点早于缓冲窗口。**收到后应触发一次全量对账**——
+            仅靠事件无法补齐缺口。
+        requestedSeq:
+          type: integer
+        oldestAvailableSeq:
+          type: integer
+
+# ── 统计 ──────────────────────────────────────────────
+
+PageSizeExceededError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: PAGE_SIZE_EXCEEDED
+          description: |
+            `pageSize` 超过上限。**刻意不静默截断**——
+            静默截断会让调用方以为拿到了全部数据。
+        maxPageSize:
+          type: integer
+          example: 200
+
+TimeRangeExceededError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: TIME_RANGE_EXCEEDED
+          description: 查询时间窗超过该接口上限
+        maxRange:
+          type: string
+          example: '720h'
+
+RawRangeExceededError:
+  allOf:
+    - $ref: '#/ErrorBase'
+    - type: object
+      properties:
+        code:
+          const: TIME_RANGE_EXCEEDED
+          description: |
+            `resolution=raw` 时时间窗超过 1 小时上限。
+            **刻意不静默降级到 5m**——那会让调用方以为拿到了原始采样。
+        maxRange:
+          type: string
+          const: 1h

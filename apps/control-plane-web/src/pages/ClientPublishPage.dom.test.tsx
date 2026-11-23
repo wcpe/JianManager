@@ -5,17 +5,34 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 import { mockInject } from '@jianmanager/devmock/inject'
+import { Route, Routes } from 'react-router'
 import ClientPublishPage from './ClientPublishPage'
 
-/**
- * ClientPublishPage 强断言（FR-250）：发布改「本地暂存 + 延迟批量上传」。
+/** 
+ * ClientPublishPage 强断言：发布改「本地暂存 + 延迟批量上传」。
  * 核心行为契约：选文件/拖拽**不上传**、点发布才批量上传、发布前删除的文件不上传、失败保草稿。
  * 用 MSW 假后端的 upload/version 端点 + request:start 事件计数上传请求，验证时机。
  */
 
 /** 统计命中「上传」端点的请求数——发布前应恒为 0。
- * 覆盖 FR-251 分块三段（.../uploads*）与 FR-346 增效端点（files/precheck、files/batch）：
- * 行为契约不变（选文件零请求、点发布才上传），仅线上协议随 FR-346 演进。 */
+ * 覆盖分块三段（.../uploads*）与增效端点（files/precheck、files/batch）：
+ * 行为契约不变（选文件零请求、点发布才上传），仅线上协议随演进。 */
+/** 
+ * 按真实路由挂载发布页。
+ *
+ * `renderWithProviders` 只 pushState 改 URL，不声明 `<Route>`，`useParams()` 会返回空对象——
+ * 页面于是在「已挂载但没有 :id」这个不可能的状态下运行。此前靠 `channelId!` 把 undefined
+ * 一路传下去（上传路径里出现 undefined 也不报错），缺陷被掩盖。此处补上路由声明。
+ */
+function renderPublishPage() {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/client-channels/:id/publish" element={<ClientPublishPage />} />
+    </Routes>,
+    { route: CH },
+  )
+}
+
 function countUploadRequests(): { get: () => number; stop: () => void } {
   let n = 0
   const listener = ({ request }: { request: Request }) => {
@@ -59,7 +76,7 @@ function crc32(bytes: Uint8Array): number {
   return ~c >>> 0
 }
 
-/**
+/** 
  * 拼一个含单个 GBK 文件名 STORE entry 的最小 zip（UTF-8 标志位不置）——模拟中文 Windows 打包（BUG-G）。
  * 文件名字节由调用方给（GBK 码点手工拼），内容任意。
  */
@@ -91,7 +108,7 @@ function buildGbkZip(nameBytes: Uint8Array, data: Uint8Array): File {
   return new File([new Uint8Array(out)], 'pack.zip', { type: 'application/zip' })
 }
 
-describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', () => {
+describe('ClientPublishPage（本地暂存 + 延迟批量上传）', () => {
   let uploads: ReturnType<typeof countUploadRequests>
   beforeEach(() => {
     uploads = countUploadRequests()
@@ -101,7 +118,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
   it('选文件入草稿但不触发任何上传请求（延迟上传）', async () => {
     loginMockUser()
     const user = userEvent.setup()
-    const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+    const { container } = renderPublishPage()
     // 落区渲染出来（页面就绪）。
     expect(await screen.findByTestId('publish-dropzone')).toBeInTheDocument()
     expect(await screen.findByTestId('embedded-updater-summary')).toHaveTextContent('内嵌更新器 v0.9.0 · core 3')
@@ -117,7 +134,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
 
   it('拖拽文件夹按目录结构进草稿、仍不上传（原生回调式 entry，BUG-F 回归）', async () => {
     loginMockUser()
-    renderWithProviders(<ClientPublishPage />, { route: CH })
+    renderPublishPage()
     const zone = await screen.findByTestId('publish-dropzone')
 
     // 造 webkitGetAsEntry 的**浏览器原生**形态（回调式，非 Promise）：
@@ -174,7 +191,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
   it('上传 GBK 文件名 zip：解包后草稿路径为正确中文（BUG-G 回归）', async () => {
     loginMockUser()
     const user = userEvent.setup()
-    const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+    const { container } = renderPublishPage()
     await screen.findByTestId('publish-dropzone')
 
     // 文件名 "模组/配置.txt" 以 GBK 编码、不置 UTF-8 位（"模"=C4A3 "组"=D7E9 "配"=C5E4 "置"=D6C3）。
@@ -193,7 +210,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     const user = userEvent.setup()
     const versionPub = countVersionPublishRequests()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await screen.findByTestId('publish-dropzone')
       await user.upload(addFilesInput(container), new File(['data'], 'mod.jar'))
       await screen.findByText('mod.jar')
@@ -219,7 +236,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     const user = userEvent.setup()
     const versionPub = countVersionPublishRequests()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await screen.findByTestId('publish-dropzone')
       const input = addFilesInput(container)
       await user.upload(input, new File(['keep'], 'keep.jar'))
@@ -258,7 +275,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     const user = userEvent.setup()
     const versionPub = countVersionPublishRequests()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await screen.findByTestId('publish-dropzone')
       const input = addFilesInput(container)
       // 整合包常见形态：普通文件 + 0 字节占位文件（.gitkeep / 空配置）。
@@ -283,11 +300,11 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     loginMockUser()
     const user = userEvent.setup()
     const versionPub = countVersionPublishRequests()
-    // 注入聚合上传失败（FR-346 小文件路径的字节上传步）：预查 miss 后 batch 500，发布中断。
+    // 注入聚合上传失败（小文件路径的字节上传步）：预查 miss 后 batch 500，发布中断。
     // 预查失败会被降级吞掉（纯优化），batch 才是必经的字节上传步——注入点选它。
     mockInject('post', '/client-channels/:channelId/files/batch', { kind: 'status', status: 500 })
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await screen.findByTestId('publish-dropzone')
       await user.upload(addFilesInput(container), new File(['x'], 'boom.jar'))
       await screen.findByText('boom.jar')
@@ -313,11 +330,11 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
   })
 })
 
-/**
- * FR-255：清理范围目录树编辑器 + clean-all 哨兵 + 自定义排除 + 发布二次确认。
+/** 
+ *：清理范围目录树编辑器 + clean-all 哨兵 + 自定义排除 + 发布二次确认。
  * 验证 meta 步勾选/开关产出正确的 manifest 字段，clean-all 发布触发 DangerConfirm。
  */
-describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
+describe('ClientPublishPage（清理范围编辑器）', () => {
   /** 捕获发布版本请求体（最后一次 POST .../versions 的 body，clone 不干扰 handler）。 */
   function capturePublishBody(): { get: () => Promise<Record<string, unknown>>; stop: () => void } {
     let bodyP: Promise<Record<string, unknown>> = Promise.resolve({})
@@ -349,10 +366,10 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
     const user = userEvent.setup()
     const pub = capturePublishBody()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await gotoMeta(user, container)
 
-      // 右键 config/foo 目录 → 标记为清理（FR-262 新交互）
+      // 右键 config/foo 目录 → 标记为清理（新交互）
       const row = container.querySelector('[data-testid="clean-scope-dir-row"][data-dir-path="config/foo"]') as HTMLElement
       fireEvent.contextMenu(row, { button: 2, clientX: 100, clientY: 100 })
       const menu = await screen.findByTestId('clean-scope-context-menu')
@@ -379,12 +396,12 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
     const user = userEvent.setup()
     const pub = capturePublishBody()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await gotoMeta(user, container)
 
       // 开启「清空整个游戏目录」开关。
       await user.click(screen.getByTestId('clean-all-toggle'))
-      // 目录树标注 clean-all（FR-262：全目录标记为清理红色、交互禁用）。
+      // 目录树标注 clean-all（：全目录标记为清理红色、交互禁用）。
       expect(screen.getByTestId('clean-scope-tree')).toHaveAttribute('data-clean-all', 'true')
 
       // meta → review。
@@ -419,7 +436,7 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
     const user = userEvent.setup()
     const pub = capturePublishBody()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await gotoMeta(user, container)
 
       // 添加自定义目录「玩家mod」。
@@ -455,7 +472,7 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
     const user = userEvent.setup()
     const pub = capturePublishBody()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await gotoMeta(user, container)
       await user.click(screen.getByTestId('clean-all-toggle'))
       await user.click(screen.getByRole('button', { name: /下一步/ }))

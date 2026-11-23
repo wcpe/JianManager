@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-365 状态新鲜度窗口：快照周期约 3 秒，默认 10 秒未刷新则从 connected/connecting 收敛。
+// 状态新鲜度窗口：快照周期约 3 秒，默认 10 秒未刷新则从 connected/connecting 收敛。
 const (
 	botFreshnessStaleWindow   = 10 * time.Second
 	botFreshnessMissingWindow = 90 * time.Second
@@ -85,7 +85,7 @@ func (r *gormBotFreshnessRepository) MarkExecutorOffline(ctx context.Context, no
 	return result.RowsAffected, result.Error
 }
 
-// BotFreshnessService 按时间窗将幽灵在线收敛为 disconnected/error（FR-365）。
+// BotFreshnessService 按时间窗将幽灵在线收敛为 disconnected/error。
 type BotFreshnessService struct {
 	repository BotFreshnessRepository
 	clock      BotLoadClock

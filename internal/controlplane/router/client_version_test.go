@@ -24,7 +24,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
-// setupClientDistRouter 建一个仅含 FR-086/087 客户端分发路由的最小引擎，
+// setupClientDistRouter 建一个仅含087 客户端分发路由的最小引擎，
 // 发布端点挂 JWT 平台管理员组、消费端点挂公网（拉取密钥鉴权）组。返回引擎与制品库服务（供断言）。
 func setupClientDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.ClientVersionService) {
 	t.Helper()
@@ -107,7 +107,7 @@ func uploadClientFile(t *testing.T, r *gin.Engine, token, channelID string, cont
 }
 
 // TestClientDist_PublishAndManifest_EndToEnd 走完整链路：上传制品 → 发布版本 → 玩家拉取 manifest →
-// 断言基本字段可解析 + ETag/304/Cache-Control（FR-256 起不再验签）。
+// 断言基本字段可解析 + ETag/304/Cache-Control（起不再验签）。
 func TestClientDist_PublishAndManifest_EndToEnd(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)
@@ -346,7 +346,7 @@ func TestClientDist_Manifest_NoVersion(t *testing.T) {
 	}
 }
 
-// verifyManifestParses 解析响应 manifest，断言基本字段可被客户端解析（FR-256 起不再验签，
+// verifyManifestParses 解析响应 manifest，断言基本字段可被客户端解析（起不再验签，
 // 信任靠 HTTPS + 拉取密钥鉴权）。并确认 manifest 不再含 sig 段。
 func verifyManifestParses(t *testing.T, raw []byte) {
 	t.Helper()
@@ -357,13 +357,13 @@ func verifyManifestParses(t *testing.T, raw []byte) {
 	if m.Channel == "" || m.Version == 0 {
 		t.Fatalf("manifest 缺基本字段: %+v", m)
 	}
-	// FR-256 起不再签名，响应不应含 sig 段。
+	// 起不再签名，响应不应含 sig 段。
 	var rawObj map[string]any
 	if err := json.Unmarshal(raw, &rawObj); err != nil {
 		t.Fatalf("解析 manifest 原始对象失败: %v", err)
 	}
 	if _, ok := rawObj["sig"]; ok {
-		t.Fatalf("manifest 不应再含 sig 段（FR-256 验签已去）")
+		t.Fatalf("manifest 不应再含 sig 段（验签已去）")
 	}
 }
 
@@ -374,7 +374,7 @@ func sha256Hex2(s string) string {
 }
 
 // TestClientDist_PublishWithCleanExclude 发布含 cleanExclude + managedDirs=["*"] 的版本，
-// 验证 manifest 输出含 cleanExclude 且签名有效（FR-255）。
+// 验证 manifest 输出含 cleanExclude 且签名有效。
 func TestClientDist_PublishWithCleanExclude(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)
@@ -428,7 +428,7 @@ func TestClientDist_PublishWithCleanExclude(t *testing.T) {
 	}
 }
 
-// TestClientDist_PublishRejectsInvalidCleanExclude 校验 cleanExclude 路径合法性（FR-255）。
+// TestClientDist_PublishRejectsInvalidCleanExclude 校验 cleanExclude 路径合法性。
 func TestClientDist_PublishRejectsInvalidCleanExclude(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)

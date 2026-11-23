@@ -1,14 +1,16 @@
 import { beforeAll, describe, it, expect } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import { useAuthStore } from '@/stores/auth'
 import InstanceBackupSegment from './InstanceBackupSegment'
 
-/**
- * InstanceBackupSegment 强断言（FR-339 备份·定时分区接真）。
+/** 
+ * InstanceBackupSegment 强断言（备份·定时分区接真）。
  * devmock 种子：实例1 定时任务 每晚重启(启用) / 每日备份(停用)；实例1 备份 full-2026-06-01(已完成) / inc-2026-06-02(增量·挂 #1)；
  * 实例1 状态 RUNNING（domains/instance.ts）→ 恢复入口按运行态守卫禁用。定时/备份均为实例原生作用域（天然按 instanceId=1）。
  */
@@ -100,7 +102,7 @@ describe('InstanceBackupSegment（mock 假后端）', () => {
     await waitFor(() => expect(within(panelByTitle('定时任务')).queryByText('每日备份')).not.toBeInTheDocument())
   })
 
-  it('渲染本实例备份列表；实例运行中 → 恢复入口禁用并提示先停止（FR-013 守卫）', async () => {
+  it('渲染本实例备份列表；实例运行中 → 恢复入口禁用并提示先停止（守卫）', async () => {
     loginMockUser()
     renderWithProviders(<InstanceBackupSegment instanceId={1} />)
 
@@ -134,6 +136,24 @@ describe('InstanceBackupSegment（mock 假后端）', () => {
     await waitFor(() => {
       expect(within(panelByTitle('备份管理')).getAllByText(/^full-/).length).toBeGreaterThanOrEqual(2)
     })
+  })
+
+  /*
+    备份列表取数失败必须与「暂无备份」分开：写 0 条会让运维以为备份全没了（或从未做过），
+    进而去做错误的灾备判断。错误态还要给重试入口。
+  */
+  it('备份列表 500：显示错误态而非「暂无备份」，可重试', async () => {
+    loginMockUser()
+    server.use(
+      http.get(API('/instances/1/backups'), () => HttpResponse.json({ message: 'boom' }, { status: 500 })),
+    )
+    renderWithProviders(<InstanceBackupSegment instanceId={1} />)
+
+    const backups = panelByTitle('备份管理')
+    expect(await within(backups).findByTestId('instance-backups-error')).toBeInTheDocument()
+    expect(within(backups).getByRole('button', { name: '重试' })).toBeInTheDocument()
+    // 不能同时出现空态文案（那是「确实没有备份」的结论）。
+    expect(within(backups).queryByText(/暂无备份/)).toBeNull()
   })
 
   it('点备份「删除」弹 DangerConfirm 确认框（危险确认拦截）', async () => {

@@ -144,7 +144,7 @@ go install github.com/go-task/task/v3/cmd/task@latest
 task dist    # 前端 + Bot Worker + 全部内嵌资产 + Windows/Linux amd64 四个二进制 → dist/
 ```
 
-`task dist` 会把 Bot Worker 的生产构建归档内嵌进 Control Plane，并为所有 Go 产物注入同一版本。源码版本真值来自 `internal/version/version.go`；当前正式发布提交为 `0.22.0`（CHANGELOG 见 `## 0.22.0`；本地 tag `v0.22.0` 可在发版确认后补打）。进入下一开发窗口时再切换为下一目标版本的 `X.Y.Z-dev`。
+`task dist` 会把 Bot Worker 的生产构建归档内嵌进 Control Plane，并为所有 Go 产物注入同一版本。源码版本真值来自 `internal/version/version.go`；上一个正式发布提交为 `0.23.0`（CHANGELOG 见 `## 0.23.0`；tag `v0.23.0` 已打），当前处于下一开发窗口，源码版本为 `0.24.0-dev`（序列：`v0.23.0` 以来含 `feat`，按 SemVer 升 MINOR）。
 </details>
 
 ## 🏗 架构
@@ -212,7 +212,7 @@ docs/                  # 架构 / API / 部署 / ADR 全套文档
 
 CI 在 PR 与分支 push 上跑 `web-quality`（lint + vitest + 构建 + E2E）与 `bot-quality`（生产依赖审计 + typecheck + lint + build）双门禁。发布 workflow 另以独立 metadata job 校验源码版本、Git ref 与 tag，同版本构建/内嵌 Bot Worker 和四个 Go 产物，再分别在 Linux / Windows 原生 runner 执行四项 `--version` smoke；全部通过后才创建 Release。
 
-版本规则见 [ADR-074](docs/adr/074-release-version-provenance-and-smoke.md)：正式 Git tag / Release 为 `vX.Y.Z`，二进制内部版本为裸 `X.Y.Z`；开发构建为 `X.Y.Z-dev+g<sha>`。当前工作区实现尚未 push，远端 GitHub Actions 运行结果待验。提交信息遵循 Conventional Commits（中文描述），详见 [docs/CONVENTIONS.md](docs/CONVENTIONS.md)。
+版本规则见 [ADR-108](docs/adr/108-release-version-provenance-and-smoke.md)：正式 Git tag / Release 为 `vX.Y.Z`，二进制内部版本为裸 `X.Y.Z`；开发构建为 `X.Y.Z-dev+g<sha>`。当前工作区实现尚未 push，远端 GitHub Actions 运行结果待验。提交信息遵循 Conventional Commits（中文描述），详见 [docs/CONVENTIONS.md](docs/CONVENTIONS.md)。
 
 ## 📚 文档
 
@@ -221,6 +221,7 @@ CI 在 PR 与分支 push 上跑 `web-quality`（lint + vitest + 构建 + E2E）�
 | [DEPLOY.md](docs/DEPLOY.md) | 部署与运维手册（发布产物 / systemd / 网络与密钥 / 排障） |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构（进程模型 / 通信协议 / 数据模型） |
 | [API.md](docs/API.md) | REST API 参考 |
+| [LOGS.md](docs/LOGS.md) | 日志系统说明书（进程文本 / 实例检索分析 / 实时跟随 / 排障） |
 | [PRD.md](docs/PRD.md) | 产品需求与功能索引 |
 | [CONVENTIONS.md](docs/CONVENTIONS.md) | 编码与协作规范 |
 | [docs/adr/](docs/adr/) | 全部架构决策记录（ADR） |

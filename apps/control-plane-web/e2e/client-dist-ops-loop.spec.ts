@@ -3,8 +3,8 @@ import { login } from './helpers'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-/**
- * 客户端分发运营闭环 · mock 真浏览器冒烟（FR-430 两页化后）。
+/** 
+ * 客户端分发运营闭环 · mock 真浏览器冒烟（两页化后）。
  * 旧 `/client-dist-monitor`、`/client-dist-security` 重定向到 `/client-dist-ops`；
  * 深链与「打开安全中心」均指向运维页 query，不再有独立 security/monitor data-page。
  * 证据截图：.tmp/acceptance/client-dist-ops-loop/
@@ -22,17 +22,17 @@ test.describe('客户端分发运营闭环', () => {
     await expect(page.getByRole('heading', { name: '客户端分发运维' })).toBeVisible()
 
     await expect(page.getByRole('tab', { name: '统计' })).toBeVisible()
-    await expect(page.getByText('请求成功率').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('请求成功率').first()).toBeVisible()
     await expect(page.locator('[data-kpi-scope="client-dist-monitor-statistics"]')).toBeVisible()
     await expect(page.locator('[data-kpi-scope="client-dist-monitor-statistics"]').getByText('更新成功率')).toHaveCount(0)
 
     await page.screenshot({ path: path.join(evidenceDir, '01-ops-statistics.png'), fullPage: true })
 
     await page.getByRole('tab', { name: /实时监控/ }).click()
-    await expect(page.getByText('错误码 Top 10').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('错误码 Top 10').first()).toBeVisible()
     await page.screenshot({ path: path.join(evidenceDir, '02-ops-monitor-errors.png'), fullPage: true })
 
-    await expect(page.getByRole('button', { name: '导出 CSV' }).first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByRole('button', { name: '导出 CSV' }).first()).toBeVisible()
   })
 
   test('运维日志/处置：标题与处置入口（旧 security 重定向）', async ({ page }) => {
@@ -44,17 +44,27 @@ test.describe('客户端分发运营闭环', () => {
 
     // 旧 events → 运维「实时监控/异常」分档；处置动作在「处置」Tab
     await page.getByRole('tab', { name: '处置' }).click()
-    await expect(page.getByRole('button', { name: '封禁 IP' }).first()).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: '改 key 态' }).first()).toBeVisible()
-    await expect(page.getByRole('button', { name: '频道防护' }).first()).toBeVisible()
+    // 处置页有**两组**按钮，文案还不完全一样，别按名字瞎撞：
+    //   顶部动作按钮（稳定 testid）：封禁 IP / **密钥状态** / 频道防护
+    //   事件行内按钮（仅当有事件数据时渲染）：封禁 IP / **改 key 态** / 频道防护
+    // mock 的处置动作流水为空（快照：「暂无处置动作」），事件行不出现，
+    // 所以「改 key 态」永远匹配不到；而「封禁 IP」两处同名，`.first()` 会点到顶部那个。
+    // 这里直接锚 testid，既避开同名，也不受事件数据有无影响。
+    const actions = page.getByTestId('ops-actions')
+    await expect(actions.getByTestId('action-open-block-ip')).toBeVisible({ timeout: 15_000 })
+    await expect(actions.getByTestId('action-open-key-state')).toBeVisible()
+    await expect(actions.getByTestId('action-open-protection')).toBeVisible()
 
-    const banBtn = page.getByRole('button', { name: '封禁 IP' }).first()
+    const banBtn = actions.getByTestId('action-open-block-ip')
     await banBtn.click()
     const banDialog = page.getByRole('dialog')
     await expect(banDialog).toBeVisible()
-    // 现网处置弹窗：标题「封禁 IP」+ 描述含「临时封禁」（旧 DangerConfirm 的「临时封禁 IP {{ip}}」已下线）
+    // 处置弹窗标题是**固定文案** `clientDistOps.actions.blockIpTitle`=「封禁 IP」；
+    // 描述是 `blockIpDesc`=「对可疑来源 IP 下发临时封禁，可限定频道。」
+    // 【旧写法错在哪】它断言 /^临时封禁 IP /（动态带 IP），但现网标题并不插值 IP；
+    // 历史注释里前人也在这两者间反复横跳，一律以 i18n 真值为准。
     await expect(banDialog.getByRole('heading', { name: '封禁 IP', exact: true })).toBeVisible()
-    await expect(banDialog.getByText(/临时封禁/).first()).toBeVisible()
+    await expect(banDialog.getByText(/对可疑来源 IP 下发临时封禁/).first()).toBeVisible()
     await page.keyboard.press('Escape')
 
     await page.screenshot({ path: path.join(evidenceDir, '03-ops-actions.png'), fullPage: true })
@@ -63,17 +73,17 @@ test.describe('客户端分发运营闭环', () => {
   test('频道工作台：统计 KPI 更新成功率 + 安全摘要深链到运维页', async ({ page }) => {
     await login(page)
     await page.goto('/client-channels?channel=skyblock-s1&tab=stats')
-    await expect(page.locator('[data-page="client-channel-workbench"]')).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('[data-page="client-channel-workbench"]')).toBeVisible()
 
     const summary = page.getByTestId('channel-security-summary')
-    await expect(summary).toBeVisible({ timeout: 15_000 })
+    await expect(summary).toBeVisible()
     await expect(summary.getByText('安全摘要')).toBeVisible()
     await expect(summary.getByRole('link', { name: '打开安全中心' })).toHaveAttribute(
       'href',
       /\/client-dist-ops\?channelId=skyblock-s1/,
     )
 
-    await expect(page.getByText('更新成功率').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('更新成功率').first()).toBeVisible()
     await expect(page.locator('[data-kpi-scope="client-stats-panel"]')).toBeVisible()
 
     await page.screenshot({ path: path.join(evidenceDir, '04-channel-stats-security.png'), fullPage: true })
@@ -89,7 +99,7 @@ test.describe('客户端分发运营闭环', () => {
       await expect(page).toHaveURL(/errCode=INVALID_CLIENT_KEY/)
       await expect(page.locator('[data-page="client-dist-ops"]')).toBeVisible()
       await expect(page.getByRole('heading', { name: '客户端分发运维' })).toBeVisible()
-      await expect(page.getByRole('combobox').filter({ hasText: '空岛一区' }).first()).toBeVisible({ timeout: 10_000 })
+      await expect(page.getByRole('combobox').filter({ hasText: '空岛一区' }).first()).toBeVisible()
     }
 
     await page.goto('/client-dist-monitor?channelId=skyblock-s1&errCode=INVALID_CLIENT_KEY&tab=logs')

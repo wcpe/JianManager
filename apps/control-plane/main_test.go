@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -102,8 +104,92 @@ func TestRunControlPlaneServer_ClosesSubscriptionsBeforeReturningError(t *testin
 	wantErr := errors.New("listen failed")
 	closed := false
 
-	err := runControlPlaneServer(func() error { return wantErr }, func() { closed = true })
+	err := runControlPlaneServer(
+		func() error { return wantErr },
+		nil,
+		func() { closed = true },
+		nil,
+		make(chan os.Signal), // 永不触发：本用例走 run 自行返回这一支
+	)
 
 	require.ErrorIs(t, err, wantErr)
 	require.True(t, closed)
+}
+
+// TestRunControlPlaneServer_ClosesLoggerOnSignal 守护 CP 的日志优雅关闭。
+//
+// 背景：修复前 CP 全无 signal 处理，且 closePlatformLogger 全仓零调用，
+// 于是 rollog.Writer.Close 里「等后台 gzip 收尾」永不执行——SIGTERM 直接杀进程，
+// 退出时留未压缩的 .gz.tmp。Worker 侧一直是对的，两边行为分叉。
+//
+// 断言的是可观测契约本身：收到退出信号 ⇒ closeLogger 被调用一次。
+func TestRunControlPlaneServer_ClosesLoggerOnSignal(t *testing.T) {
+	// 三个回调都在 runControlPlaneServer 的 goroutine 里执行，断言在主 goroutine。
+	// 用带缓冲 channel 传递事实而不是写共享 bool：后者是真实的数据竞态
+	// （-race 能抓到），且“没调到”与“还没跑到”会混成一个值。
+	shutdownCh := make(chan struct{}, 1)
+	subsCh := make(chan struct{}, 1)
+	loggerCh := make(chan struct{}, 1)
+
+	sigCh := make(chan os.Signal, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runControlPlaneServer(
+			func() error { select {} }, // 永不自行返回：必须靠信号退出
+			func(context.Context) error { shutdownCh <- struct{}{}; return nil },
+			func() { subsCh <- struct{}{} },
+			func() { loggerCh <- struct{}{} },
+			sigCh,
+		)
+	}()
+
+	sigCh <- syscall.SIGTERM
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err, "正常退出不应报错")
+	case <-time.After(5 * time.Second):
+		t.Fatal("收到信号后未在 5s 内退出")
+	}
+
+	// runControlPlaneServer 返回时三个回调必已执行完毕，故这里非阻塞收。
+	select {
+	case <-loggerCh:
+	default:
+		t.Fatal("收到退出信号必须调用 closeLogger，否则后台 gzip 收尾被硬切")
+	}
+	select {
+	case <-subsCh:
+	default:
+		t.Fatal("收到退出信号必须关闭订阅")
+	}
+	select {
+	case <-shutdownCh:
+	default:
+		t.Fatal("必须先优雅关闭 HTTP 服务，切断在途请求是旧行为")
+	}
+}
+
+// TestRunControlPlaneServer_ClosesLoggerWhenRunFailsWithoutSignal 守护启动失败路径。
+//
+// 旧实现只在 err != nil 时关 subscriptions，日志则从未关过；
+// 端口被占这类启动失败同样需要把日志文件收尾。
+func TestRunControlPlaneServer_ClosesLoggerWhenRunFailsWithoutSignal(t *testing.T) {
+	wantErr := errors.New("address already in use")
+	loggerCalls := make(chan struct{}, 1)
+
+	err := runControlPlaneServer(
+		func() error { return wantErr },
+		nil,
+		nil,
+		func() { loggerCalls <- struct{}{} },
+		make(chan os.Signal),
+	)
+
+	require.ErrorIs(t, err, wantErr)
+	select {
+	case <-loggerCalls:
+	default:
+		t.Fatal("启动失败也必须收尾日志文件")
+	}
 }

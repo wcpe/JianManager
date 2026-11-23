@@ -11,6 +11,10 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
+// 说明：不直接用 t.TempDir() 是因为它生成的路径较长，而 Unix domain socket 的
+// sun_path 有 108 字节上限、Windows Named Pipe 亦有长度约束（见下方用例中
+// 「Unix socket 保持短路径」的说明）——wrapper 的 pid/socket 路径由本目录派生。
+// 故保留 os.MkdirTemp("") 的短前缀 jm-daemon-，但显式注册清理，避免往 /tmp 留残留。
 func shortDaemonPIDDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "jm-daemon-")

@@ -1,11 +1,16 @@
 package grpc
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
-	"context"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -20,49 +25,111 @@ import (
 // 与 internal/worker/heartbeat 中的常量保持一致。
 const nodeSecretHeader = "node-secret"
 
-// enrollTokenHeader 注册请求中携带 enrollment token 的 gRPC metadata header 名（FR-080，见 ADR-020）。
+// enrollTokenHeader 注册请求中携带 enrollment token 的 gRPC metadata header 名。
 // 与 internal/worker/register 中的常量保持一致。token 经 metadata 传递、不改 proto。
 const enrollTokenHeader = "enroll-token"
 
-// nodeUUIDHeader 注册请求中携带本地持久化 node_uuid 的 gRPC metadata header 名（见 ADR-039）。
+// nodeUUIDHeader 注册请求中携带本地持久化 node_uuid 的 gRPC metadata header 名。
 // 与 internal/worker/register 中的常量保持一致。升级后的 Worker 重注册时经 metadata 出示
 // node_uuid + node_secret 证明身份，CP 据此按 UUID（而非可重复的 name）匹配既有节点，
 // 杜绝「另一台机器用同名注册覆写旧节点身份」的 BUG-A。uuid 经 metadata 传递、不改 proto。
 const nodeUUIDHeader = "node-uuid"
 
-// MetricIngester 把心跳负载里的节点/实例指标落库为时序样本（FR-060）。
+// MetricIngester 把心跳负载里的节点/实例指标落库为时序样本。
 // 在 grpc 包内以接口声明、由 service.MetricService 实现，避免 grpc→service 反向依赖
 // （service 已 import grpc）；接口只引用中立的 workerpb，无循环。
 type MetricIngester interface {
 	IngestHeartbeat(req *workerpb.HeartbeatRequest) error
 }
 
-// TaskIngester 把心跳负载里的运行中任务快照汇聚落库 + 终态副作用（FR-183，见 ADR-040）。
+// TaskIngester 把心跳负载里的运行中任务快照汇聚落库 + 终态副作用。
 // 同 MetricIngester 以接口声明、由 service.TaskService 实现，避免 grpc→service 反向依赖。
 type TaskIngester interface {
 	IngestSnapshots(nodeUUID string, snaps []*workerpb.TaskSnapshot) error
-	// PendingCancelTaskIDsByNodeUUID 返回该节点「已请求取消且未终态」的任务 id，供心跳下发 cancel_task_ids（FR-227）。
+	// PendingCancelTaskIDsByNodeUUID 返回该节点「已请求取消且未终态」的任务 id，供心跳下发 cancel_task_ids。
 	PendingCancelTaskIDsByNodeUUID(nodeUUID string) []string
 }
 
-// EnrollmentValidator 校验并消费 enrollment token（FR-080，见 ADR-020）。
+// EnrollmentValidator 校验并消费 enrollment token。
 // 在 grpc 包内以接口声明、由 service.EnrollTokenService 实现，避免 grpc→service 反向依赖。
 // ConsumeForNewNode 仅当 token 当前有效（未消费/未吊销/未过期）时原子消费、返回 nil；
 // 否则返回非 nil（注册据此拒绝新节点）。
 type EnrollmentValidator interface {
 	ConsumeForNewNode(plaintext, nodeUUID string) (presetNodeName string, err error)
+	// ValidateOnly 只判断 token 当前是否有效，**不消费**（启动进度上报用）。
+	//
+	// 为什么必须有一个只读版本：启动进度上报发生在 Register **之前**，
+	// 若那里就把 token 消费掉，紧接着的正式注册会因「token 已失效」被拒——
+	// 观测功能把主流程弄坏，是最不可接受的失败方式。
+	ValidateOnly(plaintext string) bool
 }
 
-// NodeProxyResolver 计算某节点的期望出站代理 + generation，供心跳响应下发（FR-185，见 ADR-043）。
+// NodeProxyResolver 计算某节点的期望出站代理 + generation，供心跳响应下发。
 // 同 MetricIngester 以接口声明、由 service.NodeProxyService 实现，避免 grpc→service 反向依赖。
 // 返回 url/noProxy 为期望代理（url 空=期望直连），generation 为其哈希（Worker 据此判定是否重建）。
 type NodeProxyResolver interface {
 	EffectiveNodeProxyByUUID(nodeUUID string) (url, noProxy, generation string)
 }
 
+// DirectProbeTimeoutResolver 提供 MC 直探（SLP / Query）当前生效超时，供心跳响应下发。
+// 同 MetricIngester 以接口声明、由 service.SettingsService 实现，避免 grpc→service 反向依赖。
+// 返回 <=0 表示未配置（Worker 回退内置默认）。
+type DirectProbeTimeoutResolver interface {
+	DirectProbeTimeouts() (slp, query time.Duration)
+}
+
+// HealthPolicySnapshot 是一次实例健康巡检策略的只读快照，供心跳响应下发 Worker。
+// 值 <=0 的周期/阈值表示未配置，Worker 侧归一取默认。
+type HealthPolicySnapshot struct {
+	Enabled                 bool
+	ScanInterval            time.Duration
+	ProbeKind               string
+	SuspicionThreshold      int
+	Action                  string
+	CircuitBreakerThreshold int
+	CircuitBreakerWindow    time.Duration
+	// StartupWarmup 启动宽限期（复审项 2）；SelfHealMaxRestarts 假死自愈次数上限（复审项 7）。
+	StartupWarmup       time.Duration
+	SelfHealMaxRestarts int
+}
+
+// HealthPolicyResolver 提供实例健康巡检当前生效策略，供心跳响应下发。
+// 同 MetricIngester 以接口声明、由 service.SettingsService 实现，避免 grpc→service 反向依赖。
+type HealthPolicyResolver interface {
+	HealthScanPolicy() HealthPolicySnapshot
+}
+
+// LogAcqPolicySnapshot 是某节点当前生效的日志采集配置的只读快照，供心跳响应下发。
+//
+// GzScanInterval <=0 表示未配置（关闭定时扫描）；PathOverrides 为空表示无覆盖。
+type LogAcqPolicySnapshot struct {
+	RulesEnabled    bool
+	RealtimeTail    bool
+	GzImportEnabled bool
+	GzScanInterval  time.Duration
+	// PathOverrides 是实例级路径覆盖：targetID（`inst:<id>`）→ 相对实例工作目录的路径
+	// （安全约束：不接受绝对路径，也不接受折叠 .. 后逃出工作目录的路径）。
+	PathOverrides map[string]string
+}
+
+// LogAcqPolicyResolver 提供某节点当前生效的日志采集配置，供心跳响应下发。
+//
+// 按 nodeUUID 解析以支持 Worker 级覆盖（两层语义：Worker 覆盖 > 平台默认）；
+// 同 HealthPolicyResolver 以接口声明、由 service.SettingsService 实现，避免反向依赖。
+type LogAcqPolicyResolver interface {
+	LogAcqPolicy(nodeUUID string) LogAcqPolicySnapshot
+}
+
+// HealthAlertNotifier 在健康巡检上报熔断时投递站内信告警（T4「发站内信告警」）。
+// 由 service 侧实现（组装站内信 + 收件人查询），以接口声明避免 grpc→service 反向依赖。
+// 未注入则只落审计与日志（仍保证「不静默」）。
+type HealthAlertNotifier interface {
+	NotifyInstanceCircuitBroken(nodeUUID, instanceUUID, reason string)
+}
+
 // ControlPlaneHandler Control Plane 侧的 gRPC 处理器。
 // 处理来自 Worker Node 的 Register 和 Heartbeat 请求。
-// OrphanRuntimeIngester 心跳反向对账入口（FR-326）；由 service.OrphanRuntimeTracker 实现。
+// OrphanRuntimeIngester 心跳反向对账入口；由 service.OrphanRuntimeTracker 实现。
 // 声明在 grpc 包避免 controlplane/grpc → service 循环依赖。
 type OrphanRuntimeIngester interface {
 	ObserveHeartbeat(nodeUUID string, reported []*workerpb.InstanceState)
@@ -70,52 +137,121 @@ type OrphanRuntimeIngester interface {
 
 type ControlPlaneHandler struct {
 	workerpb.WorkerServiceServer
-	db            *gorm.DB
-	pool          *ClientPool
-	metrics       MetricIngester        // 时序指标入库（nil 时心跳不落时序）
-	tasks         TaskIngester          // 任务进度入库（nil 时心跳不落任务，FR-183）
-	enroll        EnrollmentValidator   // enrollment token 校验消费（nil 时退化为 FR-004 自助注册）
-	proxy         NodeProxyResolver     // 节点期望代理解析（nil 时心跳响应不携带代理，FR-185）
-	wsTokenSecret string                // CP↔Worker WS 令牌密钥（空时注册/心跳响应不携带，FR-275）
-	orphans       OrphanRuntimeIngester // 反向对账（nil 时不启用，FR-326）
+	db          *gorm.DB
+	pool        *ClientPool
+	metrics     MetricIngester             // 时序指标入库（nil 时心跳不落时序）
+	tasks       TaskIngester               // 任务进度入库（nil 时心跳不落任务）
+	enroll      EnrollmentValidator        // enrollment token 校验消费（nil 时退化为自助注册）
+	proxy       NodeProxyResolver          // 节点期望代理解析（nil 时心跳响应不携带代理）
+	directProbe DirectProbeTimeoutResolver // MC 直探超时解析（nil 时心跳响应不携带直探超时）
+	// healthPolicy 实例健康巡检策略解析（nil 时心跳响应不携带巡检策略）。
+	healthPolicy HealthPolicyResolver
+	// logAcqPolicy 日志采集配置解析（nil 时心跳响应不携带该配置，）。
+	logAcqPolicy LogAcqPolicyResolver
+	// healthNotifier 健康熔断站内信告警投递（nil 时只落审计/日志，）。
+	healthNotifier HealthAlertNotifier
+	// healthAlerted 记录各实例最近一次已告警的熔断原因，避免每拍重复发信（按 nodeUUID+uuid 去重）。
+	healthAlertedMu sync.Mutex
+	healthAlerted   map[string]string
+	wsTokenSecret   string                // CP↔Worker WS 令牌密钥（空时注册/心跳响应不携带）
+	orphans         OrphanRuntimeIngester // 反向对账（nil 时不启用）
+	// evidence 进程侧证据拉取客户端（nil 时 syncInstanceStates 退化为旧行为③）。
+	evidence EvidenceProbeClient
+	// orphanAudit 孤儿处置审计落库器（nil 时丢弃上报456）。
+	orphanAudit OrphanAuditRecorder
+	// resyncTrigger 注册成功后/心跳兜底触发的幂等重推入口（②）；nil 时不触发。
+	resyncTrigger func(nodeUUID string)
+	// reconcileGrace 记录「DB 运行态但清单缺失、进程侧证据未确认停机」的连续心跳拍数（③）。
+	reconcileMu    sync.Mutex
+	reconcileGrace map[string]int
+	// reconcileDispatcher 派发一次证据对账任务（F10）；nil 时同步内联执行（保持既有语义，
+	// 测试默认）。生产装配为「按节点单飞 + 异步」的派发器，把最长 8s 的证据拉取移出心跳应答关键路径。
+	reconcileDispatcher func(nodeUUID string, task func())
 }
 
 // NewControlPlaneHandler 创建处理器。
 func NewControlPlaneHandler(db *gorm.DB, pool *ClientPool) *ControlPlaneHandler {
-	return &ControlPlaneHandler{db: db, pool: pool}
+	return &ControlPlaneHandler{db: db, pool: pool, reconcileGrace: make(map[string]int), healthAlerted: make(map[string]string)}
 }
 
-// SetMetricIngester 注入时序指标入库器（FR-060）；不注入则心跳仅更新节点当前值不落时序。
+// SetResyncTrigger 注入实例规格重推的幂等入口（②）。
+// 注入后：Register 成功与心跳均触发该入口（由实现方按节点去重），使重推触发多源化、消除单点漏推。
+func (h *ControlPlaneHandler) SetResyncTrigger(fn func(nodeUUID string)) {
+	h.resyncTrigger = fn
+}
+
+// SetReconcileDispatcher 注入证据对账任务的派发器（F10）。
+// 注入后，心跳里的「清单缺失实例 + 进程侧证据」对账在派发器上执行（生产为异步单飞、移出心跳应答
+// 关键路径，避免最长 8s 的证据拉取阻塞心跳）；不注入则同步内联执行（保持既有语义）。
+func (h *ControlPlaneHandler) SetReconcileDispatcher(fn func(nodeUUID string, task func())) {
+	h.reconcileDispatcher = fn
+}
+
+// triggerResync 触发幂等重推（未注入/空节点则忽略）。
+func (h *ControlPlaneHandler) triggerResync(nodeUUID string) {
+	if h.resyncTrigger != nil && nodeUUID != "" {
+		h.resyncTrigger(nodeUUID)
+	}
+}
+
+// SetMetricIngester 注入时序指标入库器；不注入则心跳仅更新节点当前值不落时序。
 func (h *ControlPlaneHandler) SetMetricIngester(m MetricIngester) {
 	h.metrics = m
 }
 
-// SetTaskIngester 注入任务进度入库器（FR-183，见 ADR-040）；不注入则心跳不处理任务快照。
+// SetTaskIngester 注入任务进度入库器；不注入则心跳不处理任务快照。
 func (h *ControlPlaneHandler) SetTaskIngester(t TaskIngester) {
 	h.tasks = t
 }
 
-// SetEnrollmentValidator 注入 enrollment token 校验器（FR-080，见 ADR-020）。
+// SetEnrollmentValidator 注入 enrollment token 校验器。
 // 注入后：新节点（name 未命中）注册必须携带有效 enrollment token；
-// 不注入则退化为 FR-004 行为（任何 name 均可自助注册），保证开发环境与既有部署零配置可用。
+// 不注入则退化为行为（任何 name 均可自助注册），保证开发环境与既有部署零配置可用。
 func (h *ControlPlaneHandler) SetEnrollmentValidator(v EnrollmentValidator) {
 	h.enroll = v
 }
 
-// SetNodeProxyResolver 注入节点期望代理解析器（FR-185，见 ADR-043）。
+// SetNodeProxyResolver 注入节点期望代理解析器。
 // 注入后每次心跳响应携带该节点期望代理（url/no_proxy/generation），Worker 据 generation
 // 变化运行时重建出站 client；不注入则心跳响应不带代理（退化为 Worker 仅用本地 yaml/env，向后兼容）。
 func (h *ControlPlaneHandler) SetNodeProxyResolver(r NodeProxyResolver) {
 	h.proxy = r
 }
 
-// SetOrphanRuntimeIngester 注入实例反向对账跟踪器（FR-326）。
+// SetDirectProbeTimeoutResolver 注入 MC 直探超时解析器。
+// 注入后每次心跳响应携带直探超时毫秒值，Worker 据此配置采集编排链（无需重启 Worker）；
+// 不注入则心跳响应不带该字段（0），Worker 回退内置默认 3s（向后兼容）。
+func (h *ControlPlaneHandler) SetDirectProbeTimeoutResolver(r DirectProbeTimeoutResolver) {
+	h.directProbe = r
+}
+
+// SetHealthPolicyResolver 注入实例健康巡检策略解析器。
+// 注入后每次心跳响应携带巡检策略（enabled/interval/probe_kind/阈值/动作），Worker 据此配置
+// 巡检器（无需重启 Worker）；不注入则心跳响应不带该字段，Worker 回退本地 worker.yml。
+func (h *ControlPlaneHandler) SetHealthPolicyResolver(r HealthPolicyResolver) {
+	h.healthPolicy = r
+}
+
+// SetLogAcqPolicyResolver 注入日志采集配置解析器。
+// 注入后每次心跳响应携带该节点生效的采集配置（规则开关/gz/实时采集/路径覆盖），
+// Worker 比对生效值变化才热应用（无需重启）；不注入则心跳响应不带该字段，
+// Worker 回退本地 worker.yml（向后兼容）。
+func (h *ControlPlaneHandler) SetLogAcqPolicyResolver(r LogAcqPolicyResolver) {
+	h.logAcqPolicy = r
+}
+
+// SetHealthAlertNotifier 注入健康熔断站内信告警投递器；不注入则只落审计/日志。
+func (h *ControlPlaneHandler) SetHealthAlertNotifier(n HealthAlertNotifier) {
+	h.healthNotifier = n
+}
+
+// SetOrphanRuntimeIngester 注入实例反向对账跟踪器。
 // 注入后每拍心跳在正向对账之后观察 Worker 在管清单；不注入则反向对账关闭（向后兼容/测试默认）。
 func (h *ControlPlaneHandler) SetOrphanRuntimeIngester(o OrphanRuntimeIngester) {
 	h.orphans = o
 }
 
-// SetWSTokenSecret 注入 CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）。
+// SetWSTokenSecret 注入 CP↔Worker WS 令牌密钥。
 // 注入后注册响应（首注册/重注册）与每拍心跳响应均携带该密钥，Worker 持久化并热应用到
 // 终端/插件桥校验；不注入（零值）则响应不携带，Worker 回退本地 jwt_secret（向后兼容）。
 func (h *ControlPlaneHandler) SetWSTokenSecret(s string) {
@@ -191,11 +327,18 @@ func (h *ControlPlaneHandler) reregisterExisting(node *model.Node, req *workerpb
 	}
 	slog.Info("节点已重新注册", "name", req.Name, "uuid", node.UUID, "matchBy", matchBy)
 
-	// WS 令牌密钥随重注册下发（FR-275）：存量节点升级/重启即拿到密钥，无需人工同步。
+	// ②：注册成功即触发一次幂等重推（去重器吸收与隧道 onOpen 的重复触发）。
+	h.triggerResync(node.UUID)
+
+	// 把首装期「按名字」记录的启动进度行归并到真实 UUID。
+	// 必须做，否则面板会同时看到「按名字的启动中」与「该 UUID 已在线」两条，比没有进度更误导。
+	RekeyStartupProgress(h.db, node.Name, node.UUID)
+
+	// WS 令牌密钥随重注册下发：存量节点升级/重启即拿到密钥，无需人工同步。
 	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret, WsTokenSecret: h.wsTokenSecret}, nil
 }
 
-// createNewNode 创建全新节点：凭有效 enrollment token 准入（FR-080，见 ADR-020），
+// createNewNode 创建全新节点：凭有效 enrollment token 准入，
 // 换发全新 UUID/secret。未注入校验器（开发/既有部署零配置）则退化为自助注册。
 func (h *ControlPlaneHandler) createNewNode(ctx context.Context, req *workerpb.RegisterRequest) (*workerpb.RegisterResponse, error) {
 	newUUID := uuid.New().String()
@@ -237,21 +380,29 @@ func (h *ControlPlaneHandler) createNewNode(ctx context.Context, req *workerpb.R
 	}
 	slog.Info("新节点已注册", "name", req.Name, "uuid", node.UUID)
 
-	// WS 令牌密钥随首注册下发（FR-275）：一键安装的新节点开箱终端/插件桥可用。
+	// 首装期的进度行按名字占位，注册成功后归并到真实 UUID 并清掉
+	//（节点已可服务，进度不再有意义；不清理会让面板一直显示「启动中」）。
+	RekeyStartupProgress(h.db, node.Name, node.UUID)
+	MarkStartupProgressDone(h.db, node.UUID)
+
+	// ②：首注册成功即触发一次幂等重推（新节点此刻可能尚无实例，重推为空亦无副作用）。
+	h.triggerResync(node.UUID)
+
+	// WS 令牌密钥随首注册下发：一键安装的新节点开箱终端/插件桥可用。
 	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret, WsTokenSecret: h.wsTokenSecret}, nil
 }
 
-// enrollTokenFromContext 从 gRPC metadata 取 enrollment token 明文（FR-080）；缺失返回空串。
+// enrollTokenFromContext 从 gRPC metadata 取 enrollment token 明文；缺失返回空串。
 func enrollTokenFromContext(ctx context.Context) string {
 	return metadataValue(ctx, enrollTokenHeader)
 }
 
-// nodeUUIDFromContext 从 gRPC metadata 取 Worker 出示的 node_uuid（ADR-039）；缺失返回空串。
+// nodeUUIDFromContext 从 gRPC metadata 取 Worker 出示的 node_uuid；缺失返回空串。
 func nodeUUIDFromContext(ctx context.Context) string {
 	return metadataValue(ctx, nodeUUIDHeader)
 }
 
-// nodeSecretFromContext 从 gRPC metadata 取 Worker 出示的 node_secret（ADR-039）；缺失返回空串。
+// nodeSecretFromContext 从 gRPC metadata 取 Worker 出示的 node_secret；缺失返回空串。
 func nodeSecretFromContext(ctx context.Context) string {
 	return metadataValue(ctx, nodeSecretHeader)
 }
@@ -283,7 +434,7 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		if err != nil {
 			// Worker 每拍心跳「发一拍→收响应→cancel 流」属正常收尾（每 worker 每 30s 一次），
 			// 按 WARN 刷屏会淹没真异常（真机 2 小时 484 条）：Canceled/EOF 降 Debug，
-			// 其余（网络中断/协议错）保留 WARN 并带节点标识（FR-322）。
+			// 其余（网络中断/协议错）保留 WARN 并带节点标识。
 			if err == io.EOF || status.Code(err) == codes.Canceled {
 				slog.Debug("心跳流正常收尾", "nodeUUID", lastNodeUUID)
 			} else {
@@ -311,7 +462,7 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 
 		// 更新节点指标和心跳时间
 		updates := map[string]interface{}{
-			"cpu_usage":          req.CpuUsage,
+			"log_ingest_healthy": req.LogIngestHealthy,
 			"memory_usage":       req.MemoryUsage,
 			"disk_usage":         req.DiskUsage,
 			"memory_used_mb":     req.MemoryUsedMb,
@@ -322,6 +473,36 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			"last_heartbeat":     time.Now(),
 			"status":             model.NodeStatusOnline,
 		}
+		// CPU 构成表明当前窗口有效，允许真实空闲值 0；旧 Worker 兼容正数标量。
+		// 无效窗口全为零时保留已有当前值，不把缺测覆盖成空闲；时序入口另写 NULL 断点。
+		if req.CpuUsage > 0 || req.CpuUser > 0 || req.CpuNice > 0 || req.CpuSystem > 0 ||
+			req.CpuIdle > 0 || req.CpuIrq > 0 || req.CpuSoftirq > 0 || req.CpuSteal > 0 || req.Iowait > 0 {
+			updates["cpu_usage"] = req.CpuUsage
+		}
+		// 主机级标量列。只在**上报了**才写（用指针区分「未上报」与「读数为 0」）。
+		//
+		// 为什么必须区分：老 Worker 不报这些字段，若无条件写零值，
+		// 面板会把「不知道负载」显示成「负载 0」——前者要升级 Worker，后者意味着机器空闲，
+		// 运维动作完全不同。
+		if req.LoadAvg5 != 0 || req.LoadAvg15 != 0 {
+			updates["load_avg5"] = req.LoadAvg5
+			updates["load_avg15"] = req.LoadAvg15
+		}
+		if req.ProcsTotal > 0 {
+			updates["procs_running"] = req.ProcsRunning
+			updates["procs_total"] = req.ProcsTotal
+		}
+		// CPU 构成同理：全为 0 视为未上报（真实读数不可能七个分量全为 0，
+		// 因为 idle 分量必然占大头）。
+		if req.CpuUser != 0 || req.CpuIdle != 0 || req.CpuSystem != 0 {
+			updates["cpu_user"] = req.CpuUser
+			updates["cpu_nice"] = req.CpuNice
+			updates["cpu_system"] = req.CpuSystem
+			updates["cpu_idle"] = req.CpuIdle
+			updates["cpu_irq"] = req.CpuIrq
+			updates["cpu_soft_irq"] = req.CpuSoftirq
+			updates["cpu_steal"] = req.CpuSteal
+		}
 		for key, value := range managedRuntimeUpdates(req.ManagedRuntime) {
 			updates[key] = value
 		}
@@ -330,17 +511,49 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			slog.Warn("更新心跳数据失败", "nodeUUID", req.NodeUuid, "error", err)
 		}
 
-		// 同步实例状态并对账（即使 Worker 上报空也要对账：
-		// Worker 重启未恢复某实例时，DB 会永远卡在 RUNNING 致所有生命周期操作 422）。
-		h.syncInstanceStates(req.NodeUuid, req.Instances)
-
-		// 反向对账（FR-326）：Worker 有、CP 无记录的无主运行时跟踪/宽限/自动处置。
-		// 在正向对账之后执行；不改写正向语义。nil 注入=关闭。
-		if h.orphans != nil {
-			h.orphans.ObserveHeartbeat(req.NodeUuid, req.Instances)
+		// 多值维度（分挂载点 / 整机 top-N）落独立快照表。
+		//
+		// 不进 nodes 表：它们是「一台机器 N 条」，宽表表达不了（见 model 注释）。
+		// 失败只告警不阻断心跳——观测数据不该让存活判定失败。
+		if err := h.upsertHostSnapshots(req); err != nil {
+			slog.Warn("写入主机级观测快照失败", "nodeUUID", req.NodeUuid, "error", err)
 		}
 
-		// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
+		// 归属过滤（隔离边界）：认证只证明「这条流属于本节点」，不证明载荷里每个实例都属于本节点。
+		// 不加这一层，一个持有合法凭据的节点可以上报别的节点的实例 UUID，改写其状态/健康原因
+		// 并向其历史曲线注入本机数据（实例状态 UPDATE 仅按 uuid）。这里以库中的
+		// instances.node_id 为准，剔除不属于本节点的实例载荷，并记一条告警（不静默）。
+		//
+		// ownerChecked=false 表示归属校验本身失败：此时**整拍跳实例相关处理**，而不是当成
+		// 「Worker 上报空清单」——后者会让正向对账把本节点所有运行实例置为 STOPPED。
+		// 节点自身指标（上面的 nodes 表更新与主机快照）不受影响。
+		req, ownerChecked := h.filterForeignInstances(req)
+		if ownerChecked {
+			// 同步实例状态并对账（即使 Worker 上报空也要对账：
+			// Worker 重启未恢复某实例时，DB 会永远卡在 RUNNING 致所有生命周期操作 422）。
+			h.syncInstanceStates(req.NodeUuid, req.Instances)
+
+			// 运行态漂移：消费 Worker 上报的「实例工作目录下有外来活进程」，写/清 instances.runtime_drift_*。
+			// 与反向对账（无主运行时）方向不同：此处只针对**已存在实例**记录观测，命中 0 行忽略。
+			h.applyRuntimeDrift(req.Instances)
+
+			// 实例工作目录占用：组配额存储口径的真实来源，落 instances.work_dir_bytes_*。
+			// 同样只记观测、不阻断心跳——配额数据不该让存活判定失败。
+			h.applyWorkDirUsages(req.WorkDirUsages)
+
+			// 反向对账：Worker 有、CP 无记录的无主运行时跟踪/宽限/自动处置。
+			// 在正向对账之后执行；不改写正向语义。nil 注入=关闭。
+			if h.orphans != nil {
+				h.orphans.ObserveHeartbeat(req.NodeUuid, req.Instances)
+			}
+		} else {
+			slog.Warn("心跳实例归属校验失败，本拍跳过实例状态与对账", "nodeUUID", req.NodeUuid)
+		}
+
+		// ②：心跳作为重推的自然兜底触发源（低频；由 ResyncDeduper 按节点节流吸收）。
+		h.triggerResync(req.NodeUuid)
+
+		// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照）。
 		// 失败不影响心跳本身（节点当前值已更新），仅记录告警。
 		if h.metrics != nil {
 			if err := h.metrics.IngestHeartbeat(req); err != nil {
@@ -348,7 +561,7 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			}
 		}
 
-		// 心跳负载里的运行中任务快照汇聚落库 + 终态副作用（落 NodeJDK / 发站内信，FR-183，见 ADR-040）。
+		// 心跳负载里的运行中任务快照汇聚落库 + 终态副作用（落 NodeJDK / 发站内信）。
 		// 失败不影响心跳本身，仅记录告警。
 		if h.tasks != nil && len(req.Tasks) > 0 {
 			if err := h.tasks.IngestSnapshots(req.NodeUuid, req.Tasks); err != nil {
@@ -356,16 +569,56 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			}
 		}
 
-		// 返回响应；携带该节点期望出站代理供 Worker 运行时应用（FR-185，见 ADR-043）。
+		// 返回响应；携带该节点期望出站代理供 Worker 运行时应用。
 		// generation 变化时 Worker 才重建出站 client（避免每拍重建）；重连/重启天然由后续心跳重发。
 		resp := &workerpb.HeartbeatResponse{Timestamp: time.Now().Unix()}
-		// WS 令牌密钥每拍携带（FR-275，见 ADR-061）：Worker 比对变化才热应用 + 持久化，
+		// WS 令牌密钥每拍携带：Worker 比对变化才热应用 + 持久化，
 		// 仅能到达本处的流已完成 node_secret 鉴权，密钥可以安全下发。
 		resp.WsTokenSecret = h.wsTokenSecret
 		if h.proxy != nil {
 			resp.ProxyUrl, resp.ProxyNoProxy, resp.ProxyGeneration = h.proxy.EffectiveNodeProxyByUUID(req.NodeUuid)
 		}
-		// 携带该节点「已请求取消」的任务 id，Worker 据此真中断对应运行中任务（FR-227）。
+		// 携带 MC 直探（SLP / Query）超时：取自平台设置 direct_probe.*，Worker 存内存
+		// 并填入采集编排链，使超时真可配且无需重启 Worker。每次心跳重发，幂等。
+		if h.directProbe != nil {
+			slp, query := h.directProbe.DirectProbeTimeouts()
+			resp.DirectProbeSlpTimeoutMs = int32(slp / time.Millisecond)
+			resp.DirectProbeQueryTimeoutMs = int32(query / time.Millisecond)
+		}
+		// 携带实例健康巡检策略：取自平台设置 health.*，Worker 存内存并写入巡检器生效值。
+		// enabled 用 optional（非 nil）表达「本 CP 已下发策略」，每次心跳重发、幂等。
+		if h.healthPolicy != nil {
+			p := h.healthPolicy.HealthScanPolicy()
+			enabled := p.Enabled
+			resp.HealthScanEnabled = &enabled
+			resp.HealthScanIntervalMs = int32(p.ScanInterval / time.Millisecond)
+			resp.HealthProbeKind = p.ProbeKind
+			resp.HealthSuspicionThreshold = int32(p.SuspicionThreshold)
+			resp.HealthAction = p.Action
+			resp.HealthCircuitBreakerThreshold = int32(p.CircuitBreakerThreshold)
+			resp.HealthCircuitBreakerWindowMs = int32(p.CircuitBreakerWindow / time.Millisecond)
+			resp.HealthStartupWarmupMs = int32(p.StartupWarmup / time.Millisecond)
+			resp.HealthSelfHealMaxRestarts = int32(p.SelfHealMaxRestarts)
+		}
+		// 携带该节点生效的日志采集配置：按 nodeUUID 解析以支持 Worker 级覆盖
+		// （两层语义：Worker 覆盖 > 平台默认）。present 用 optional（非 nil）表达
+		// 「本 CP 已下发配置」，每次心跳重发、幂等；Worker 比对生效值变化才热应用。
+		if h.logAcqPolicy != nil {
+			p := h.logAcqPolicy.LogAcqPolicy(req.NodeUuid)
+			present := true
+			resp.LogAcqPresent = &present
+			resp.LogAcqRulesEnabled = p.RulesEnabled
+			resp.LogAcqRealtimeTail = p.RealtimeTail
+			resp.LogAcqGzImportEnabled = p.GzImportEnabled
+			resp.LogAcqGzScanIntervalMs = int32(p.GzScanInterval / time.Millisecond)
+			// 路径覆盖序列化为 JSON 文本（proto 侧是 string，见 proto 注释）。
+			if len(p.PathOverrides) > 0 {
+				if b, err := json.Marshal(p.PathOverrides); err == nil {
+					resp.LogAcqPathOverridesJson = string(b)
+				}
+			}
+		}
+		// 携带该节点「已请求取消」的任务 id，Worker 据此真中断对应运行中任务。
 		if h.tasks != nil {
 			resp.CancelTaskIds = h.tasks.PendingCancelTaskIDsByNodeUUID(req.NodeUuid)
 		}
@@ -454,38 +707,506 @@ func StartOfflineDetector(db *gorm.DB) {
 	slog.Info("离线检测器已启动", "threshold", "90s")
 }
 
+// filterForeignInstances 校验心跳实例载荷的节点归属。
+// Instances 还承担孤儿运行时对账：库中未知的 UUID 可保留为状态观察，
+// 但正式的指标、进程快照与工作目录用量只接受已登记且属于本节点的实例。
+// 查询失败时清空实例载荷并返回 ownerChecked=false；调用方跳过状态同步与对账，
+// 不能把校验失败当作 Worker 主动上报空清单，否则会误停本节点的运行实例。
+// 节点自身指标与心跳响应不受影响。
+func (h *ControlPlaneHandler) filterForeignInstances(req *workerpb.HeartbeatRequest) (*workerpb.HeartbeatRequest, bool) {
+	if req == nil {
+		return req, true
+	}
+	hasInstances := len(req.Instances) > 0
+	hasMetrics := len(req.InstanceMetrics) > 0
+	hasWorkDir := len(req.WorkDirUsages) > 0
+	hasProcess := len(req.ProcessMetrics) > 0
+	if !hasInstances && !hasMetrics && !hasWorkDir && !hasProcess {
+		return req, true
+	}
+
+	uuids := make([]string, 0, len(req.Instances)+len(req.InstanceMetrics)+len(req.WorkDirUsages)+len(req.ProcessMetrics))
+	seen := map[string]struct{}{}
+	add := func(uuid string) {
+		if uuid == "" {
+			return
+		}
+		if _, ok := seen[uuid]; ok {
+			return
+		}
+		seen[uuid] = struct{}{}
+		uuids = append(uuids, uuid)
+	}
+	for _, s := range req.Instances {
+		if s != nil {
+			add(s.InstanceUuid)
+		}
+	}
+	for _, im := range req.InstanceMetrics {
+		if im != nil {
+			add(im.InstanceUuid)
+		}
+	}
+	for _, w := range req.WorkDirUsages {
+		if w != nil {
+			add(w.InstanceUuid)
+		}
+	}
+	for _, pm := range req.ProcessMetrics {
+		if pm != nil {
+			add(pm.InstanceUuid)
+		}
+	}
+
+	// 同一次查询生成正式载荷的允许集合与状态观察的排除集合。
+	// 未知 UUID 只可进入 Instances，不能由孤儿对账的例外流入正式指标。
+	owned := map[string]struct{}{}
+	foreign := map[string]struct{}{}
+	if len(uuids) > 0 {
+		var node model.Node
+		if err := h.db.Select("id").Where("uuid = ?", req.NodeUuid).First(&node).Error; err != nil {
+			slog.Warn("心跳实例归属校验失败：节点不存在，跳过本拍实例处理", "nodeUUID", req.NodeUuid, "error", err)
+			return stripInstancePayload(req), false
+		}
+		var rows []struct {
+			UUID   string
+			NodeID uint
+		}
+		if err := h.db.Model(&model.Instance{}).Select("uuid", "node_id").
+			Where("uuid IN ?", uuids).Scan(&rows).Error; err != nil {
+			slog.Warn("心跳实例归属校验失败，跳过本拍实例处理", "nodeUUID", req.NodeUuid, "error", err)
+			return stripInstancePayload(req), false
+		}
+		for _, r := range rows {
+			if r.NodeID == node.ID {
+				owned[r.UUID] = struct{}{}
+			} else {
+				foreign[r.UUID] = struct{}{}
+			}
+		}
+	}
+
+	// 仅状态观察允许未知实例；其他三种正式载荷必须命中 owned。
+	filtered := 0
+	keep := func(uuid string, allowUnknown bool) bool {
+		if uuid == "" {
+			return false
+		}
+		if _, ok := owned[uuid]; ok {
+			return true
+		}
+		if _, bad := foreign[uuid]; allowUnknown && !bad {
+			return true
+		}
+		filtered++
+		return false
+	}
+
+	if hasInstances {
+		out := req.Instances[:0]
+		for _, s := range req.Instances {
+			if s != nil && keep(s.InstanceUuid, true) {
+				out = append(out, s)
+			}
+		}
+		req.Instances = out
+	}
+	if hasMetrics {
+		out := req.InstanceMetrics[:0]
+		for _, im := range req.InstanceMetrics {
+			if im != nil && keep(im.InstanceUuid, false) {
+				out = append(out, im)
+			}
+		}
+		req.InstanceMetrics = out
+	}
+	if hasWorkDir {
+		out := req.WorkDirUsages[:0]
+		for _, w := range req.WorkDirUsages {
+			if w != nil && keep(w.InstanceUuid, false) {
+				out = append(out, w)
+			}
+		}
+		req.WorkDirUsages = out
+	}
+	if hasProcess {
+		out := req.ProcessMetrics[:0]
+		for _, pm := range req.ProcessMetrics {
+			if pm != nil && keep(pm.InstanceUuid, false) {
+				out = append(out, pm)
+			}
+		}
+		req.ProcessMetrics = out
+	}
+	if filtered > 0 {
+		slog.Warn("心跳实例载荷未通过登记或节点归属校验，已丢弃", "nodeUUID", req.NodeUuid, "filtered", filtered)
+	}
+	return req, true
+}
+
+// stripInstancePayload 把请求的实例载荷就地清空（用于归属校验失败时的 fail-closed）。
+//
+// 不复用 proto 结构体（`clone := *req`）：proto 消息内含 sync.Mutex，拷贝会触发 vet，
+// 也可能在并发场景下复制锁状态。就地清空等价且安全。
+func stripInstancePayload(req *workerpb.HeartbeatRequest) *workerpb.HeartbeatRequest {
+	if req == nil {
+		return nil
+	}
+	req.Instances = nil
+	req.InstanceMetrics = nil
+	req.WorkDirUsages = nil
+	req.ProcessMetrics = nil
+	return req
+}
+
 // syncInstanceStates 从心跳数据同步实例状态到数据库。
 func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*workerpb.InstanceState) {
+	emptyReason := ""
 	reported := make([]string, 0, len(states))
 	for _, s := range states {
 		reported = append(reported, s.InstanceUuid)
 		status := model.InstanceStatus(s.State)
-		q := h.db.Model(&model.Instance{}).Where("uuid = ?", s.InstanceUuid)
-		// DAMAGED（FR-342 搭建失败损毁）是 CP 侧生命周期态，Worker 不感知：损毁实例在 Worker
+		// status_reason 的待写值（nil=本拍无可写原因，不动该列）。
+		// 终验 Major：status 与 status_reason 的写入条件不同，必须拆成两条 UPDATE——
+		// status 恒写（仅带 DAMAGED 守卫），status_reason 在泛化原因场景下额外带「库中原因为空」
+		// 的 WHERE 条件。若二者挤在同一条 UPDATE，该条件会连带冻结 status：实例 RUNNING 被判假死
+		// 写入非空 status_reason 后真崩溃，本拍命中 CRASHED 分支置 reasonEmptyCond=true，
+		// 整条 UPDATE 因 status_reason 非空而不匹配 → status 永远停在 RUNNING（desync 卡死）。
+		var reasonValue *string
+		// reasonEmptyCond：仅当库中 status_reason 为空/未记录时才写巡检泛化原因（见下方分支）。
+		reasonEmptyCond := false
+		// reasonClearCond：本拍要清空库中 status_reason（巡检明确健康）。清空必须附加来源条件，
+		// 只清心跳自己写的巡检原因（见下方 ② 与 statusReasonSourceWorker 说明）。
+		reasonClearCond := false
+		// 健康巡检原因 → instances.status_reason。
+		//   - 熔断原因（health=="circuit_broken"）是需要在面板可见的具体升级原因 → 恒写入；
+		//   - CRASHED 的巡检原因是泛化文案（如「实例已崩溃…」），**不得覆盖 CP 已写入的具体原因**
+		//     （如「未绑定 JDK」「Worker 操作失败: …」）：仅在库中原因为空时补写；
+		//   - 其余情况（假死/嫌疑）按上报写入，使假死在面板与健康墙可见；
+		//   - 巡检明确健康（health=="healthy"）且无原因 → 清空历史原因（假死已恢复），
+		//     但仅限心跳自己写的巡检原因；CP 写入的失败原因须留存（见 ②）。
+		// 老 Worker 不上报 health/status_reason（均空），此分支不触发，保持既有语义。
+		switch {
+		case s.StatusReason == "" && status == model.InstanceStatusRunning && s.Health == healthFaultHealthy:
+			reasonValue = &emptyReason
+			reasonClearCond = true
+		case s.StatusReason == "":
+			// 心跳明确上报了一个**终态**（STOPPED/CRASHED）且未带原因：说明心跳自己此前写的
+			// 巡检原因已经过期，必须清掉，否则面板会停在自相矛盾的组合上——
+			// 真机实测：lobby-1 已落 STOPPED，却仍挂着上一拍对账写的
+			// 「进程侧证据显示实例仍在运行（心跳清单暂缺，已延迟对账）」。
+			//
+			// 为什么之前清不掉：清空路径原本只覆盖「RUNNING + healthy」一种，而实例真正停下来时
+			// 心跳报的正是 STOPPED + 空原因，根本落不到那条分支上。
+			// 只清来源为 worker 的行（reasonClearCond 自带该条件），CP 写入的生命周期失败原因保留。
+			//
+			// STARTING/STOPPING 不在此列：那两态是过程态，心跳可能在中途丢掉巡检原因，
+			// 此时清空会把「假死」这类仍是事实的结论抹掉。
+			if status == model.InstanceStatusStopped || status == model.InstanceStatusCrashed {
+				reasonValue = &emptyReason
+				reasonClearCond = true
+			}
+		case s.Health == healthFaultCircuitBroken:
+			reasonValue = &s.StatusReason
+		case status == model.InstanceStatusCrashed:
+			// 具体原因优先：仅当库中原因为空/未记录时写入泛化巡检原因。
+			reasonValue = &s.StatusReason
+			reasonEmptyCond = true
+		default:
+			reasonValue = &s.StatusReason
+		}
+		// DAMAGED（搭建失败损毁）是 CP 侧生命周期态，Worker 不感知：损毁实例在 Worker
 		// 记账里本就是「没在跑」（STOPPED/CRASHED），与损毁不矛盾。此前无条件覆写会在搭建失败后的
 		// 下一个心跳把 DAMAGED 降级成 STOPPED，启动守卫随即失效（真机回归）。仅当 Worker 上报
 		// 运行类状态（进程确实活着）才允许覆盖 DAMAGED。
-		if status == model.InstanceStatusStopped || status == model.InstanceStatusCrashed {
-			q = q.Where("status <> ?", model.InstanceStatusDamaged)
+		damagedGuard := status == model.InstanceStatusStopped || status == model.InstanceStatusCrashed
+
+		// ① status 恒写（不含 reasonEmptyCond，避免原因条件连带冻结状态）。
+		statusQ := h.db.Model(&model.Instance{}).Where("uuid = ?", s.InstanceUuid)
+		if damagedGuard {
+			statusQ = statusQ.Where("status <> ?", model.InstanceStatusDamaged)
 		}
-		if err := q.Update("status", status).Error; err != nil {
+		if err := statusQ.Update("status", status).Error; err != nil {
 			slog.Warn("同步实例状态失败", "instanceUUID", s.InstanceUuid, "state", s.State, "error", err)
 		}
+
+		// ② status_reason 单独写：泛化原因场景附加「库中原因为空」条件；DAMAGED 守卫与 status 一致，
+		//    以免把巡检原因写到不打算改动状态的损毁实例上。
+		//    来源标记一并与正文同写（见 statusReasonSourceWorker）：心跳写下的原因归心跳所有，
+		//    下一拍健康心跳才清得掉、健康墙才据它判降级。
+		//    清空路径（reasonClearCond）反过来只作用于 status_reason_source='worker' 的行：
+		//    CP 写入的生命周期失败原因（如「重启前同步最新启动规格失败，已取消重启: …」）必须留存，
+		//    不能被下一拍 RUNNING+healthy 的心跳抹平成空；同时把来源复位为空串，避免残留的
+		//    'worker' 标记让「CP 随后写入的原因」被误判成心跳自有原因而在将来被清掉。
+		if reasonValue != nil {
+			reasonQ := h.db.Model(&model.Instance{}).Where("uuid = ?", s.InstanceUuid)
+			if damagedGuard {
+				reasonQ = reasonQ.Where("status <> ?", model.InstanceStatusDamaged)
+			}
+			if reasonEmptyCond {
+				reasonQ = reasonQ.Where("status_reason IS NULL OR status_reason = ''")
+			}
+			reasonSource := statusReasonSourceWorker
+			if reasonClearCond {
+				reasonQ = reasonQ.Where("status_reason_source = ?", statusReasonSourceWorker)
+				reasonSource = ""
+			}
+			if err := reasonQ.Updates(map[string]interface{}{
+				"status_reason":        *reasonValue,
+				"status_reason_source": reasonSource,
+			}).Error; err != nil {
+				slog.Warn("同步实例状态原因失败", "instanceUUID", s.InstanceUuid, "state", s.State, "error", err)
+			}
+		}
+		// 熔断上报 → 站内信告警（按实例去重，原因变化才重发）。
+		h.maybeNotifyCircuitBroken(nodeUUID, s)
 	}
 
-	// 对账：本节点上 DB 认为在运行（RUNNING/STARTING/STOPPING）但 Worker 未上报的实例，
-	// 说明 Worker 已不再持有它（如 Worker 重启未恢复），置为 STOPPED，
-	// 否则实例永远卡 RUNNING、start/stop/kill 全部 422，无法操作。
+	// 对账：本节点上 DB 认为在运行（RUNNING/STARTING/STOPPING）但 Worker 未上报的实例。
+	// 旧行为一律置 STOPPED——但心跳清单只是「Worker 内存表」的快照，任何让内存表暂缺已运行实例的
+	// 情形（：CP 重启后 63 实例集体失联）都会误判成「面板 STOPPED 而进程在跑」。
+	// ③：先向该 Worker 拉进程侧证据，证据也认为不在跑才落 STOPPED；证据显示在跑则保持当前态。
+	// ③ / F7：本拍清单里出现的实例，其「连续缺失」宽限计数必须复位——否则实例重新上报后
+	// 计数不归零，下一拍再缺失就会累计到阈值而误落 STOPPED（宽限语义要求「连续 N 拍缺失」）。
+	for _, uuid := range reported {
+		h.clearReconcileGrace(uuid)
+	}
+
 	var node model.Node
 	if err := h.db.Where("uuid = ?", nodeUUID).First(&node).Error; err != nil {
 		return
 	}
-	q := h.db.Model(&model.Instance{}).
-		Where("node_id = ? AND status IN ?", node.ID, []string{"RUNNING", "STARTING", "STOPPING"})
+	// F10：证据对账（进程侧拉取，最长 evidenceProbeTimeout=8s）交由派发器执行，生产装配为
+	// 「按节点单飞 + 异步」，把耗时移出心跳应答关键路径（与 spec §2.4「重推不应阻塞心跳」一致）；
+	// 未注入派发器则同步内联（保持既有语义，测试默认）。
+	if h.reconcileDispatcher != nil {
+		h.reconcileDispatcher(node.UUID, func() { h.reconcileMissingInstances(node, reported) })
+		return
+	}
+	h.reconcileMissingInstances(node, reported)
+}
+
+// runtimeDriftCmdlineMax 是写入 instances.runtime_drift_cmdline 的命令行字节上限，
+// 与 model.Instance.RuntimeDriftCmdline 的 varchar(512) 列宽对齐。
+const runtimeDriftCmdlineMax = 512
+
+// applyRuntimeDrift 消费心跳上报的外来运行时漂移。
+//
+// 需求背景：农场由 tmux 在平台之外启动，DB 记 STOPPED 而磁盘在跑。Worker 在孤儿扫描中把
+// 「已注册实例工作目录下存在活进程、但实例未被认作运行」这一观测经心跳的 foreign_pid/foreign_cmdline
+// 上报，CP 据此落库，供前端提示「运行态漂移」并给出接管入口。
+//
+// 语义边界：
+// 仅对**已存在实例**更新（按 uuid 匹配）；命中 0 行直接忽略，绝不越界到的孤儿语义
+//
+//	  （无主运行时的跟踪/宽限/自动处置由 OrphanRuntimeTracker 独立负责）。
+//	- 上报状态属运行类（RUNNING/STARTING/STOPPING）时，进程归受管生命周期所有，不算漂移；
+//	  本拍若无外来进程或已回归受管，则把漂移清零（要求库中原值非 0，避免每拍对全量实例产生无谓写）。
+//	- 本函数只观测落库，不触发任何处置动作（接管须运维显式发起）。
+func (h *ControlPlaneHandler) applyRuntimeDrift(states []*workerpb.InstanceState) {
+	now := time.Now()
+	for _, s := range states {
+		if s == nil || s.InstanceUuid == "" {
+			continue
+		}
+
+		if s.ForeignPid > 0 && !reportedRunningState(s.State) {
+			err := h.db.Model(&model.Instance{}).
+				Where("uuid = ?", s.InstanceUuid).
+				Updates(map[string]any{
+					"runtime_drift_pid":     int64(s.ForeignPid),
+					"runtime_drift_cmdline": truncateCmdline(s.ForeignCmdline, runtimeDriftCmdlineMax),
+					"runtime_drift_at":      now,
+				}).Error
+			if err != nil {
+				slog.Warn("写入实例运行态漂移失败", "instanceUUID", s.InstanceUuid, "error", err)
+			}
+			continue
+		}
+
+		// 漂移消失：本拍无外来进程（ForeignPid==0）或实例已被受管拉起。仅在原值非 0 时清零，
+		// 使稳态下每条心跳一个实例最多产生一次有效写。
+		err := h.db.Model(&model.Instance{}).
+			Where("uuid = ? AND runtime_drift_pid <> 0", s.InstanceUuid).
+			Updates(map[string]any{
+				"runtime_drift_pid":     int64(0),
+				"runtime_drift_cmdline": "",
+				"runtime_drift_at":      nil,
+			}).Error
+		if err != nil {
+			slog.Warn("清除实例运行态漂移失败", "instanceUUID", s.InstanceUuid, "error", err)
+		}
+	}
+}
+
+// reportedRunningState 判断心跳上报状态是否属「运行类」（RUNNING/STARTING/STOPPING）。
+func reportedRunningState(state string) bool {
+	switch state {
+	case string(model.InstanceStatusRunning), string(model.InstanceStatusStarting), string(model.InstanceStatusStopping):
+		return true
+	}
+	return false
+}
+
+// truncateCmdline 按 UTF-8 边界把命令行截断到至多 maxBytes 字节；超长时以省略号结尾，
+// 保证截断后的总长度仍不超过 maxBytes（varchar(512) 落库安全，不强依赖 MySQL 宽松模式）。
+// 未超长时原样返回，不误伤正常路径。
+func truncateCmdline(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	const ellipsis = "…" // 3 字节
+	budget := maxBytes - len(ellipsis)
+	if budget < 0 {
+		budget = 0
+	}
+	var b strings.Builder
+	b.Grow(budget)
+	for _, r := range s {
+		if b.Len()+utf8.RuneLen(r) > budget {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String() + ellipsis
+}
+
+// runningStatuses DB 侧「运行类」状态集合。
+var runningStatuses = []string{"RUNNING", "STARTING", "STOPPING"}
+
+// 健康巡检结论标识（与 internal/worker/process 的 HealthFault* 取值对齐）。
+const (
+	healthFaultHealthy       = "healthy"
+	healthFaultCircuitBroken = "circuit_broken"
+)
+
+// statusReasonSourceWorker 是 instances.status_reason_source 的 Worker 心跳来源标记：
+// 该 status_reason 由心跳携带的健康巡检结论写入，心跳可以清空/覆盖；
+// 其余取值（含空串=历史行）表示原因是 CP 写入的生命周期失败原因，心跳不得抹平。
+const statusReasonSourceWorker = "worker"
+
+// maybeNotifyCircuitBroken 在心跳上报健康熔断时为实例投递站内信告警（T4）。
+// 按 nodeUUID+uuid 去重：原因未变化不重复发信；实例恢复（health 不再为熔断）时清除记录。
+func (h *ControlPlaneHandler) maybeNotifyCircuitBroken(nodeUUID string, s *workerpb.InstanceState) {
+	if s == nil || s.InstanceUuid == "" {
+		return
+	}
+	key := nodeUUID + "|" + s.InstanceUuid
+	if s.Health != healthFaultCircuitBroken {
+		h.healthAlertedMu.Lock()
+		delete(h.healthAlerted, key)
+		h.healthAlertedMu.Unlock()
+		return
+	}
+	reason := s.StatusReason
+	h.healthAlertedMu.Lock()
+	prev, seen := h.healthAlerted[key]
+	if seen && prev == reason {
+		h.healthAlertedMu.Unlock()
+		return
+	}
+	h.healthAlerted[key] = reason
+	notifier := h.healthNotifier
+	h.healthAlertedMu.Unlock()
+	if notifier != nil {
+		notifier.NotifyInstanceCircuitBroken(nodeUUID, s.InstanceUuid, reason)
+	}
+}
+
+// reconcileMissingInstances 处理「DB 运行态但心跳清单缺失」的实例（③）。
+// 未注入证据客户端时退化为旧行为（直接落 STOPPED）。
+func (h *ControlPlaneHandler) reconcileMissingInstances(node model.Node, reported []string) {
+	q := h.db.Model(&model.Instance{}).Where("node_id = ? AND status IN ?", node.ID, runningStatuses)
 	if len(reported) > 0 {
 		q = q.Where("uuid NOT IN ?", reported)
 	}
-	if err := q.Update("status", "STOPPED").Error; err != nil {
-		slog.Warn("对账离线实例状态失败", "nodeUUID", nodeUUID, "error", err)
+	if h.evidence == nil {
+		if err := q.Update("status", "STOPPED").Error; err != nil {
+			slog.Warn("对账离线实例状态失败", "nodeUUID", node.UUID, "error", err)
+		}
+		return
+	}
+
+	var missing []struct {
+		UUID   string
+		Status string
+	}
+	if err := q.Select("uuid", "status").Scan(&missing).Error; err != nil {
+		slog.Warn("对账查询缺失实例失败", "nodeUUID", node.UUID, "error", err)
+		return
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	uuids := make([]string, 0, len(missing))
+	for _, m := range missing {
+		uuids = append(uuids, m.UUID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), evidenceProbeTimeout)
+	defer cancel()
+	evidence, evErr := h.evidence.ProbeInstanceEvidence(ctx, node.UUID, uuids)
+	if evErr != nil {
+		slog.Warn("实例对账证据拉取失败，本轮按不可得宽限处理", "nodeUUID", node.UUID, "error", evErr)
+	}
+
+	for _, m := range missing {
+		running, hasEvidence := evidence[m.UUID]
+		switch {
+		case evErr == nil && hasEvidence && running:
+			// 证据确认仍在跑：保持当前态 + 标 statusReason（消除通道抖动误判），清宽限计数。
+			// 该文案同属**心跳侧巡检**结论（描述「心跳清单暂缺」这一通道状态），来源标记按 worker 写：
+			// 实例重新出现在心跳清单且健康时应被清掉（否则面板长期残留过期对账文案），
+			// 健康墙的 degraded 口径也据此把它算作降级信号。
+			h.clearReconcileGrace(m.UUID)
+			// 带运行类状态守卫：对账是**异步派发**的，「证据显示仍在跑」只对「此刻仍在运行类状态」的
+			// 实例成立。若快照之后状态已落 STOPPED/CRASHED，这条「仍在运行」的文案就是谎言，
+			// 写上去也没人再清（面板自相矛盾）。行不匹配时本次写入自然空转，无需额外处理。
+			if err := h.db.Model(&model.Instance{}).
+				Where("uuid = ? AND status IN ?", m.UUID, runningStatuses).
+				Updates(map[string]interface{}{
+					"status_reason":        "进程侧证据显示实例仍在运行（心跳清单暂缺，已延迟对账）",
+					"status_reason_source": statusReasonSourceWorker,
+				}).Error; err != nil {
+				slog.Warn("更新对账 statusReason 失败", "instanceUUID", m.UUID, "error", err)
+			}
+		case evErr == nil && hasEvidence && !running:
+			// 证据确认已不在跑：落 STOPPED（PID 无、socket 不可达）。
+			h.clearReconcileGrace(m.UUID)
+			h.setStopped(m.UUID)
+		default:
+			// 证据缺失/拉取失败：宽限计数，连续 N 拍才落 STOPPED，避免抖动误判。
+			beats := h.bumpReconcileGrace(m.UUID)
+			if beats >= evidenceReconcileGraceBeats {
+				h.clearReconcileGrace(m.UUID)
+				h.setStopped(m.UUID)
+			} else if err := h.db.Model(&model.Instance{}).
+				Where("uuid = ? AND status IN ?", m.UUID, runningStatuses).
+				Updates(map[string]interface{}{
+					"status_reason":        fmt.Sprintf("进程侧证据暂不可得，宽限对账中（第 %d/%d 拍）", beats, evidenceReconcileGraceBeats),
+					"status_reason_source": statusReasonSourceWorker,
+				}).Error; err != nil {
+				slog.Warn("更新对账 statusReason 失败", "instanceUUID", m.UUID, "error", err)
+			}
+		}
+	}
+}
+
+// setStopped 把实例置 STOPPED 并清空 statusReason。
+//
+// status 与 status_reason 必须拆成两条 UPDATE：原因清空附加了「来源为心跳」条件，
+// 若与 status 挤在同一条 UPDATE，CP 写入的失败原因（来源非 worker）会让整条 UPDATE 不匹配，
+// status 就永远停在 RUNNING（与 syncInstanceStates 里同一个踩坑模式）。
+func (h *ControlPlaneHandler) setStopped(uuid string) {
+	if err := h.db.Model(&model.Instance{}).Where("uuid = ?", uuid).
+		Update("status", "STOPPED").Error; err != nil {
+		slog.Warn("对账落 STOPPED 失败", "instanceUUID", uuid, "error", err)
+	}
+	// 只清心跳自写的巡检原因（假死/宽限对账等）；CP 写入的生命周期失败原因须留存供面板展示，
+	// 同时把来源复位为空串，避免残留的 'worker' 标记让后续 CP 写入的原因被误清。
+	if err := h.db.Model(&model.Instance{}).
+		Where("uuid = ? AND status_reason_source = ?", uuid, statusReasonSourceWorker).
+		Updates(map[string]interface{}{"status_reason": "", "status_reason_source": ""}).Error; err != nil {
+		slog.Warn("对账清空巡检原因失败", "instanceUUID", uuid, "error", err)
 	}
 }

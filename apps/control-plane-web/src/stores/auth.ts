@@ -1,11 +1,103 @@
 import { create } from 'zustand'
-import { decodeJwt } from '@/lib/jwt'
+import { decodeJwt } from '@/lib/auth/jwt'
+import { resetDraftScope, setDraftScopeUserId } from '@/lib/assistant/chat-draft'
+import { queryClient } from '@/lib/shared/query-client'
 
 /** 登录/恢复后异步拉取 /auth/me，填充权限 store（失败由 store 自身回落）。 */
 function schedulePermissionsLoad(): void {
-  void import('@/stores/permissions').then((m) => {
-    void m.usePermissionsStore.getState().loadFromAuthMe()
-  })
+  // 两段都要登记：① 模块本身还没加载完；② 模块加载后 `loadFromAuthMe()` 还会发一个
+  // `await api.get('/auth/me')`（后者会把 axios 拉进模块图）。只登记 ① 的话，flush 会在
+  // 「模块就绪」时就返回，而 ② 仍在飞 → 拆卸环境时它才去读 axios，报
+  // EnvironmentTeardownError（CI 实测：408 files / 3294 tests 全 passed 却判失败）。
+  void trackDynamicImport(
+    trackDynamicImport(loadPermissionsModule(), (m) =>
+      m.usePermissionsStore.getState().loadFromAuthMe(),
+    ),
+  )
+}
+
+/** 权限 store 的动态 import 入口。 */
+export function loadPermissionsModule() {
+  return import('@/stores/permissions')
+}
+
+/** 终端会话管理器的动态 import 入口（理由同上：xterm 不进首屏 chunk，但要可等待）。 */
+export function loadTerminalSessionManager() {
+  return import('@/lib/console/terminal-session-manager')
+}
+
+/** 
+ * 在途动态 import 的登记表：`logout`/`schedulePermissionsLoad` 每次发起都登记其 Promise，
+ * 由 `flushAuthDynamicImports` 统一收口。
+ *
+ * 为什么用登记表而不是「flush 时重新 import 一次」：重新 import 在**已加载**时虽命中
+ * ES 模块缓存，但首次仍要发起一次新的解析/加载（尤其 `terminal-session-manager` 会把
+ * 真 xterm 拉进模块图），在测试拆卸阶段引入额外 tick —— 本文件 setup.ts ② 条注释
+ * 明确规避的正是这类污染。登记表只等**已经发起**的那些，不新增加载。
+ */
+const inFlightDynamicImports = new Set<Promise<unknown>>()
+
+/**
+ * 登记一次动态 import **及其后续动作**，使 `flushAuthDynamicImports` 能等到真正安静。
+ *
+ * 为什么要把 `then` 续体也算进来（2026-10-19 修）：原先只跟踪 `import()` 本身，于是
+ * `import().then((m) => ...)` 里的续体在 flush 眼中是「已经结束」的——若该续体又触发了
+ * 新的加载（例如权限 store 初始化过程中再取模块），这段加载完全不在登记表里，环境拆除时
+ * 就会以 `Cannot load axios ... after the environment was torn down` 的形式漏成
+ * unhandled rejection（CI 实测：2516 个用例全 passed 仍判失败）。
+ * 现在把续体并进同一个 promise，flush 一定等到「加载 + 续体」整体落地。
+ *
+ * 续体抛错按加载失败处理（该路径本就有失败回落语义），不让拆卸阶段因它抛错。
+ */
+// 导出仅为测试：生产代码一律经 logout / schedulePermissionsLoad 间接触发。
+// 测试需要直接验证「续体是否被纳管」，否则只能靠时序竞态去猜（评审 M-5 的教训）。
+export function trackDynamicImport<T, R>(
+  promise: Promise<T>,
+  then?: (module: T) => R | Promise<R>,
+): Promise<void> {
+  // `tracked` 必须**永不 reject**（2026-10-19 评审补）：
+  // 它被两处以「不等待」的形式消费——`void tracked.finally(...)` 与返回给调用方的
+  // `void trackDynamicImport(...)`。只要 reject 沿 `tracked` 漏出去，`.finally` 链上就会
+  // 新生成一个无人接管的 rejected promise，届时先前的努力（本函数存在的全部意义）就白费了。
+  // 两道都得有：第一道吞 import 失败，第二道吞**续体自身**抛错/返回 rejected。
+  // 续体抛错按加载失败处理，生产语义本就如此；测试里则由 flush 统一等待其收口。
+  const tracked: Promise<unknown> = promise
+    .then((module) => (then ? then(module) : undefined))
+    .catch(() => undefined)
+  inFlightDynamicImports.add(tracked)
+  void tracked.finally(() => inFlightDynamicImports.delete(tracked))
+  return tracked.then(() => undefined)
+}
+
+/**
+ * 等待本模块**已经发起**的全部动态 import（含其续体）落地（幂等；无在途时为 no-op）。
+ *
+ * 供测试 setup 的 afterEach 调用：`logout()` 保持同步（生产调用点无需等待），
+ * 但测试必须知道「在途 import 已结束」才能安全拆除环境，否则 node 报
+ * `EnvironmentTeardownError: Cannot load '.../axios/index.js' ... after the environment
+ * was torn down` 的 unhandled rejection —— **全部用例都通过**的轮次仍以非零码退出
+ * （2026-10-12 主干 CI 实测：319 files / 2505 tests 全 passed 却判失败；
+ * 2026-10-19 再次复现：2516 tests 全 passed、320 files 全 passed，仍判失败）。
+ *
+ * 为什么要**循环**而不是只等一次快照：续体（`.then`）本身可能再发起新的动态加载，
+ * 单次 `Promise.all` 只覆盖调用瞬间的那批。这里每轮先排空微任务再判断，直到登记表
+ * 连续为空才返回；上限 10 轮是防御性封顶（正常路径 1～2 轮即返回，不会拖慢拆卸）。
+ */
+export function flushAuthDynamicImports(): Promise<void> {
+  if (inFlightDynamicImports.size === 0) return Promise.resolve()
+  // 【为何要循环】collect 只等**快照那一刻**已发起的那些；而 await 它们的过程中，
+  // 被等到的模块可能又发起新的动态 import（典型链：auth → permissions → api/client → axios）。
+  // 只 await 一轮快照就返回，等于把后一波留在飞——拆卸环境时它们才去读模块，
+  // 于是报 `EnvironmentTeardownError: Cannot load '.../axios/index.js' ... after the
+  // environment was torn down` 的 unhandled rejection，**全部用例都通过**的轮次仍以
+  // 非零码退出（CI 实测：408 files / 3294 tests 全 passed 却判失败）。
+  // 循环到「登记表为空」才真安定；每轮只等已存在的 Promise，不新增解析。
+  const settle = (): Promise<void> => {
+    if (inFlightDynamicImports.size === 0) return Promise.resolve()
+    const wave = [...inFlightDynamicImports]
+    return Promise.all(wave).then(settle)
+  }
+  return settle()
 }
 
 interface AuthState {
@@ -16,6 +108,13 @@ interface AuthState {
   role: number | null
   /** 当前用户名（从 access token 解码），用于 UI 展示。 */
   username: string | null
+  /** 
+   * 当前用户 ID（从 access token 解码）。
+   *
+   * 用途仅限「按用户隔离本地状态」（如助手草稿、上次会话游标），
+   * 不作为任何权限判据——权限一律由后端 RBAC 决定。
+   */
+  claimsUserId: number | null
   login: (accessToken: string, refreshToken: string) => void
   logout: () => void
   loadFromStorage: () => void
@@ -28,6 +127,9 @@ const hasStorage = typeof localStorage !== 'undefined'
 const storedAccess = hasStorage ? localStorage.getItem('accessToken') : null
 const storedRefresh = hasStorage ? localStorage.getItem('refreshToken') : null
 const storedClaims = decodeJwt(storedAccess)
+// 首帧就把草稿作用域对齐到已登录用户：否则在 login() 被调用前渲染的视图
+// 会以 `anon` 作用域读到别人的草稿（刷新页面时正是这条路径）。
+setDraftScopeUserId(storedClaims?.userId ?? 0)
 
 export const useAuthStore = create<AuthState>((set) => ({
   accessToken: storedAccess,
@@ -35,35 +137,55 @@ export const useAuthStore = create<AuthState>((set) => ({
   isAuthenticated: !!storedAccess,
   role: storedClaims?.role ?? null,
   username: storedClaims?.username ?? null,
+  claimsUserId: storedClaims?.userId ?? null,
 
   login: (accessToken, refreshToken) => {
+    queryClient.clear()
     localStorage.setItem('accessToken', accessToken)
     localStorage.setItem('refreshToken', refreshToken)
     const claims = decodeJwt(accessToken)
+    // 草稿作用域跟随登录用户（「换用户不串号」）：
+    // resetDraftScope 会清掉**上一个用户**的持久化草稿与模块级缓存，
+    // 再把作用域切到新用户。不这么做的话，「新会话」草稿 key 在换用户后会碰撞。
+    resetDraftScope(claims?.userId ?? 0)
     set({
       accessToken,
       refreshToken,
       isAuthenticated: true,
       role: claims?.role ?? null,
       username: claims?.username ?? null,
+      claimsUserId: claims?.userId ?? null,
     })
     schedulePermissionsLoad()
   },
 
   logout: () => {
+    queryClient.clear()
+    // 草稿与「上次会话」都按用户隔离，登出即释放：
+    // sessionStorage 不随登出消失，不清的话下一个人能读到上一个人的未发送内容。
+    resetDraftScope(0)
     localStorage.removeItem('accessToken')
     localStorage.removeItem('refreshToken')
-    set({ accessToken: null, refreshToken: null, isAuthenticated: false, role: null, username: null })
-    void import('@/stores/permissions').then((m) => m.usePermissionsStore.getState().reset())
-    // 登出即整体释放全部终端会话（FR-295/296，ADR-067）：连接常驻管理器不随组件卸载断开，
-    // 必须在此统一 dispose 防孤儿 WS。动态 import 避免把 xterm 卷进首屏 chunk。
-    void import('@/lib/terminal-session-manager').then((m) => m.terminalSessionManager.disposeAll())
+    set({ accessToken: null, refreshToken: null, isAuthenticated: false, role: null, username: null, claimsUserId: null })
+    // 两处都经 trackDynamicImport 登记（**不是**裸 `void import(...)`）：保持动态 import
+    // 语义不变，但让测试能经 flushAuthDynamicImports 等待在途加载收口（见其文档）。
+    // 登记整条链（含 .then 里的同步 reset）：只登记模块 import 的话，flush 会提前返回，
+    // 后面的 reset 仍可能在拆卸后才跑（虽不快，但保持与 schedulePermissionsLoad 同一口径）。
+    void trackDynamicImport(
+      trackDynamicImport(loadPermissionsModule(), (m) => m.usePermissionsStore.getState().reset()),
+    )
+    // 登出即整体释放全部终端会话（296）：连接常驻管理器不随组件卸载断开，
+    // 必须在此统一 dispose 防孤儿 WS。动态 import 避免把会话管理器卷进首屏 chunk。
+    void trackDynamicImport(
+      trackDynamicImport(loadTerminalSessionManager(), (m) => m.terminalSessionManager.disposeAll()),
+    )
   },
 
   loadFromStorage: () => {
     const accessToken = localStorage.getItem('accessToken')
     const refreshToken = localStorage.getItem('refreshToken')
     const claims = decodeJwt(accessToken)
+    setDraftScopeUserId(claims?.userId ?? 0)
     const authenticated = !!accessToken
     set({
       accessToken,
@@ -71,6 +193,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       isAuthenticated: authenticated,
       role: claims?.role ?? null,
       username: claims?.username ?? null,
+      claimsUserId: claims?.userId ?? null,
     })
     if (authenticated) schedulePermissionsLoad()
   },

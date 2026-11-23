@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 实例组织分组树相关错误（FR-165，见 ADR-033）。
+// 实例组织分组树相关错误。
 var (
 	ErrInstanceGroupNotFound       = errors.New("实例分组不存在")
 	ErrInstanceGroupParentNotFound = errors.New("父分组不存在")
@@ -18,9 +18,9 @@ var (
 	ErrInstanceGroupNotEmpty       = errors.New("分组非空，请先清空子分组与成员")
 )
 
-// InstanceGroupService 管理「实例组织分组树」（FR-165 / ADR-033）：
+// InstanceGroupService 管理「实例组织分组树」：
 // 自引用邻接表的多级嵌套分组 + 实例 M:N，仅供组织归类、折叠、批量运维，
-// 与用户组（ADR-004 RBAC/配额）、网络群组（ADR-007 部署）三者正交，仅 CP 读写。
+// 与用户组（RBAC/配额）、网络群组（部署）三者正交，仅 CP 读写。
 type InstanceGroupService struct {
 	db *gorm.DB
 }
@@ -30,7 +30,8 @@ func NewInstanceGroupService(db *gorm.DB) *InstanceGroupService {
 	return &InstanceGroupService{db: db}
 }
 
-// InstanceGroupNodeView 树视图中的一个分组节点：基础字段 + 子树聚合（去重）实例数。
+// InstanceGroupNodeView 树视图中的一个分组节点：基础字段 + 子树聚合（去重）实例数
+// + 直接挂载的实例 ID（：供列表页 groupTree 维度一次取数做「实例→组」映射，避免 per-group N+1）。
 type InstanceGroupNodeView struct {
 	ID            uint   `json:"id"`
 	UUID          string `json:"uuid"`
@@ -38,6 +39,8 @@ type InstanceGroupNodeView struct {
 	ParentID      *uint  `json:"parentId"`
 	Sort          int    `json:"sort"`
 	InstanceCount int    `json:"instanceCount"`
+	// MemberInstanceIDs 该组**直接**挂载（不含后代）的实例 ID；空组为 []。
+	MemberInstanceIDs []uint `json:"memberInstanceIds"`
 }
 
 // InstanceGroupMemberView 分组成员实例概要。
@@ -169,13 +172,18 @@ func (s *InstanceGroupService) Tree() ([]InstanceGroupNodeView, error) {
 	counts := subtreeCounts(nodes, members)
 	out := make([]InstanceGroupNodeView, 0, len(nodes))
 	for _, n := range nodes {
+		direct := members[n.ID]
+		if direct == nil {
+			direct = []uint{}
+		}
 		out = append(out, InstanceGroupNodeView{
-			ID:            n.ID,
-			UUID:          n.UUID,
-			Name:          n.Name,
-			ParentID:      n.ParentID,
-			Sort:          n.Sort,
-			InstanceCount: counts[n.ID],
+			ID:                n.ID,
+			UUID:              n.UUID,
+			Name:              n.Name,
+			ParentID:          n.ParentID,
+			Sort:              n.Sort,
+			InstanceCount:     counts[n.ID],
+			MemberInstanceIDs: direct,
 		})
 	}
 	return out, nil
@@ -406,4 +414,9 @@ func (s *InstanceGroupService) get(id uint) (*model.InstanceGroupNode, error) {
 		return nil, fmt.Errorf("查询分组失败: %w", err)
 	}
 	return &node, nil
+}
+
+// Get 按 ID 取分组节点（只读）；供上层解析目标名称等用途，例如 MCP destructive 精确确认。
+func (s *InstanceGroupService) Get(id uint) (*model.InstanceGroupNode, error) {
+	return s.get(id)
 }

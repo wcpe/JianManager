@@ -1,5 +1,5 @@
 # JianManager Control Plane 一键下载（Windows PowerShell）。
-# 见 FR-355：从 GitHub Releases 拉取 control-plane[-slim]-windows-amd64.exe；不做服务化。
+#  见：从 GitHub Releases 拉取 control-plane[-slim]-windows-amd64.exe；不做服务化。
 # 用法:
 #   irm https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.ps1 | iex
 #   .\install-cp.ps1 -InstallDir C:\jianmanager -Start
