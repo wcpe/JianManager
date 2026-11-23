@@ -1,0 +1,141 @@
+# 通用响应与参数组件
+# 供 paths/*.yaml 通过 $ref 引用
+
+Error:
+  type: object
+  required: [code, message]
+  properties:
+    code:
+      type: string
+      description: |
+        机器可读的稳定错误码。调用方应按此字段分支处理，
+        **不要匹配 message 文本**（可能随版本调整措辞）。
+      examples: [INSTANCE_OFFLINE]
+    message:
+      type: string
+      description: 人可读的错误描述，仅供展示与排障。
+    requestId:
+      type: string
+      format: uuid
+      description: 请求标识，便于与审计日志对账。
+
+ErrorResponse:
+  description: 统一错误响应
+  content:
+    application/json:
+      schema:
+        $ref: './errors.yaml#/ErrorBase'
+
+Unauthorized:
+  description: 认证失败（Token 无效、过期或缺失）
+  content:
+    application/json:
+      schema:
+        $ref: './errors.yaml#/UnauthorizedError'
+
+Forbidden:
+  description: 权限不足（Token scope 不覆盖目标资源）
+  content:
+    application/json:
+      schema:
+        $ref: './errors.yaml#/ForbiddenError'
+
+NotFound:
+  description: 目标不存在或无权访问（**不区分两者，避免泄露存在性**）
+  content:
+    application/json:
+      schema:
+        $ref: './errors.yaml#/NotFoundError'
+
+RateLimited:
+  description: 触发限流
+  headers:
+    Retry-After:
+      description: 建议的重试等待秒数
+      schema:
+        type: integer
+      example: 5
+    X-RateLimit-Remaining:
+      description: 当前窗口剩余配额
+      schema:
+        type: integer
+      example: 0
+  content:
+    application/json:
+      schema:
+        $ref: './errors.yaml#/RateLimitedError'
+
+# ── 通用参数 ──────────────────────────────────────────
+
+Page:
+  name: page
+  in: query
+  description: 页码，从 1 开始
+  schema:
+    type: integer
+    minimum: 1
+    default: 1
+
+PageSize:
+  name: pageSize
+  in: query
+  description: 每页条数。**超过上限返回 PAGE_SIZE_EXCEEDED，不静默截断。**
+  schema:
+    type: integer
+    minimum: 1
+    maximum: 200
+    default: 100
+
+From:
+  name: from
+  in: query
+  description: |
+    起始时间（RFC3339）。缺省视接口而定，各接口的窗口上限见其 description。
+    超出上限返回 `TIME_RANGE_EXCEEDED`，响应体含 `maxRange`。
+  schema:
+    type: string
+    format: date-time
+  example: '2026-10-23T00:00:00Z'
+
+To:
+  name: to
+  in: query
+  description: 结束时间（RFC3339）。缺省为当前时间。
+  schema:
+    type: string
+    format: date-time
+  example: '2026-10-23T12:00:00Z'
+
+Resolution:
+  name: resolution
+  in: query
+  description: |
+    聚合粒度。
+    - `raw`：原始采样，**仅允许时间窗 ≤ 1 小时**，超出返回 `TIME_RANGE_EXCEEDED`（`maxRange: 1h`）
+    - `15s` / `1m` / `5m` / `1h`：走预聚合表，性能更好
+
+    **注意**：存储层只有 `raw` / `5m` / `1h` 三档表。
+    `15s` 与 `1m` 会归一到 `5m`（唯一「返回非请求粒度」的情形）。
+  schema:
+    type: string
+    enum: [raw, 15s, 1m, 5m, 1h]
+    default: 5m
+
+# ── 通用响应头 ────────────────────────────────────────
+
+PaginationHeaders:
+  X-Total-Count:
+    description: 符合条件的总条数
+    schema:
+      type: integer
+    example: 120
+  X-Page:
+    description: 当前页码
+    schema:
+      type: integer
+    example: 1
+  X-Page-Size:
+    description: 本页条数
+    schema:
+      type: integer
+    example: 100

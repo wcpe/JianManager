@@ -79,7 +79,7 @@ func (l *localStore) List(ctx context.Context, prefix string, limit int) ([]Obje
 	return out, err
 }
 
-// ListPage 分页枚举（FR-349）：全量 Walk 后按键排序，token=上一页末键（start-after 游标语义）。
+// ListPage 分页枚举：全量 Walk 后按键排序，token=上一页末键（start-after 游标语义）。
 // local 渠道不参与对账（本地文件系统由 CAS 自管），此实现保证接口完备与与 s3 一致的遍历语义。
 func (l *localStore) ListPage(_ context.Context, prefix string, limit int, token string) ([]ObjectInfo, string, error) {
 	if limit <= 0 {

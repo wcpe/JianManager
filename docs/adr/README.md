@@ -16,6 +16,30 @@
 
 ## 索引（最近新增）
 
+- [ADR-110](110-native-instance-log-tail-stream.md) 实例 VL 原生尾流经反向隧道与认证 HTTP SSE 桥接（兼容新增 `LogTailLive`；有界队列、权限复核、取消与有限回放；节点/平台仍读文件）
+- [ADR-109](109-instance-logs-advanced-query-boundary.md) 实例高级查询使用 filter-only 表达式与独立授权 selector（两输入入口共用语法边界、整请求预算与 Query View，草稿和已应用 scope 分离）
+- [ADR-108](108-release-version-provenance-and-smoke.md) 发布版本溯源、Bot 内嵌与原生烟测（**原 ADR-074，2026-11-09 改号**——与 Bot 分布式压测调度的 ADR-074 重号，按「改引用面小的一方」处置；修订 ADR-036，部分被 ADR-083 取代）
+- [ADR-107](107-business-event-cursor-ledger.md) 业务事件位点账本——不落 payload 的可恢复投递（**精化 ADR-106 边界而非突破**：位点是传输元数据、payload 才是业务数据；新增 `business_event_cursors` 表与 `GET /business/cursor`，只存/只返位点，差集由业务台计算）
+- [ADR-106](106-business-capability-retirement.md) 业务能力退役（JM 不持有任何业务语义与业务数据表，只保留纯透传通道）
+- [ADR-105](105-ai-assistant-in-go-cp.md) AI 助手内置在 Go Control Plane（FR-514～520 的根决策：纯 Go 进程内实现、人类 JWT 与 jmat Token 两条授权链、写入逐调用确认、外部 MCP 仅远程 Streamable HTTP；**不改动 `/api/v1/mcp` 契约**）
+- [ADR-104](104-danger-gate-self-judged.md) 危险操作的角色门禁由 DangerConfirm 自行判定（**修订 ADR-103** 保留的 a+b 范式中的门禁归属一环：删除 `allowed` prop，漏配即静默空转的失效模式随之消失）
+- [ADR-103](103-business-views-return-to-app.md) 业务视图与业务契约退回应用，组件库回归设计系统（收起「业务组件并入包」的归属决策；a+b 双范式作为组件写法保留，包内只留设计系统）
+- [ADR-102](102-log-partition-catalog-from-victorialogs.md) 日志分区目录以 VictoriaLogs 为事实来源（FR-477 配套；删除自维护分区映射，改为以 VL 为唯一事实源）
+- [ADR-101](101-manual-gap-abandonment-with-audit-trail.md) 永久空洞只许人工裁定放弃且必须留痕（结构化凭据 + 操作人闸 + 回收链带上界放行；FR-474 配套）
+- [ADR-100](100-archive-generation-ownership-enforcement.md) 归档代次归属必须有执行体（禁止"假设当前代次"；FR-474/475 配套）
+- [ADR-099](099-log-cost-governance-and-invariant-r.md) 日志成本治理与不变量 R（采样折叠/默认不丢/单位成本结论；FR-501 配套）
+- [ADR-098](098-log-retention-tiering-and-archive.md) 日志保留、分层与归档（热 90 天分级/冷 730 天统一/删前归档；FR-501 + FR-477/478 配套）
+- [ADR-097](097-daemon-cgroup-isolation.md) daemon 子树脱离 Worker 单元 cgroup（`KillMode=process` 硬约束：重启 Worker 不得杀死运行中的服务器；FR-500，补强 ADR-003/ADR-093）
+- [ADR-096](096-mcp-stateless-endpoint.md) MCP 端点在 Streamable HTTP 路径上无状态化（FR-489，部分取代 ADR-077 的会话运维模型、修订 ADR-080 决策 6 的论证）
+- [ADR-093](093-process-lifecycle-resilience.md) 进程生命周期韧性与孤儿治理（FR-455/456/459：防误杀、孤儿周期兜底、状态真源收敛、重推多源化）
+- [ADR-092](092-config-surface-and-direct-probe.md) 实例配置源明面化与 MC 直探能力（FR-446/447/451：SLP+Query 直探、配置项内联/文件引用二态）
+- [ADR-091](091-instance-capability-profile.md) 实例能力画像与多形态详情界面（FR-445/448/449/450/452/453：(type,role) 声明式画像驱动 Tab 显隐）
+- [ADR-090](090-binary-provision-and-beacon-sync.md) 通用二进制搭建与 Beacon 可选协同（FR-441~444）
+- [ADR-089](089-configurable-permission-tree-and-six-domain-nav.md) 可配置权限树与六域导航 IA（FR-431/432）
+- [ADR-088](088-client-dist-ia-merge-ops-page.md) 客户端分发信息架构合并（FR-430）
+- [ADR-095](095-canonical-event-store-on-disk.md) canonical 事件体的落盘 compact 存储（FR-484，细化 ADR-094/FR-473 §4.3/§5.3 的存储介质）
+- [ADR-094](094-worker-log-local-data-plane.md) Worker 日志本地数据面与 Control Plane 联邦查询（FR-473～484，**accepted**）
+
 - [ADR-087](087-console-immersive-visible-controls.md) 沉浸控制台采用可见控制优先的工作台（取代未入库的 tmux 前缀键提案）
 - [ADR-085](085-local-serverprobe-upload-source.md) ServerProbe 本地上传来源（FR-411，修订 ADR-083 来源范围）
 - [ADR-078](078-explorer-cross-window-clipboard-dnd.md) 资源管理器跨窗剪贴板与拖放总线（FR-377）

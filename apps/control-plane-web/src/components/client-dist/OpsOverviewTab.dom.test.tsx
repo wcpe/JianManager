@@ -5,9 +5,9 @@ import { loginMockUser } from '@/test/auth'
 import { useAuthStore } from '@/stores/auth'
 import OpsOverviewTab from './OpsOverviewTab'
 
-/**
+/** 
  * 总览 Tab（全面融合：分发健康 + 运行态 + 请求侧 + 安全态势）。
- * 验收：分区齐备；请求成功率与更新成功率分标（FR-356）；安全排行深链可点。
+ * 验收：分区齐备；请求成功率与更新成功率分标；安全排行深链可点。
  */
 
 const ADMIN_TOKEN = `mock.${btoa(

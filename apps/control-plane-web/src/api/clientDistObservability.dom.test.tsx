@@ -5,8 +5,8 @@ import { createElement, type ReactNode } from 'react'
 import { loginMockUser } from '@/test/auth'
 import { useClientDistObservability } from './clientDistObservability'
 
-/**
- * useClientDistObservability 强断言（FR-219 消费 FR-217）。
+/** 
+ * useClientDistObservability 强断言（消费）。
  * 走 MSW 假后端的 /client-dist/observability handler（domains/client.ts），断言时序/分布/汇总解析；
  * enabled=false（channelId 为 null）时不触发请求。setup.ts 已 onUnhandledRequest:'error'。
  */
@@ -15,13 +15,13 @@ function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client: qc }, children)
 }
 
-describe('useClientDistObservability（FR-217 消费）', () => {
+describe('useClientDistObservability（消费）', () => {
   it('按 channelId + range 取观测视图（时序/分布/汇总）', async () => {
     loginMockUser()
     const { result } = renderHook(() => useClientDistObservability('skyblock-s1', '30d'), { wrapper })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
-    // FR-425 起 mock 按真实时间确定性生成（数值随时间漂移），断言口径与形态而非写死数值。
+    // 起 mock 按真实时间确定性生成（数值随时间漂移），断言口径与形态而非写死数值。
     const d = result.current.data!
     expect(d.summary.activeMachines).toBeGreaterThan(0)
     // 30d 超明细保留窗 → 人次近似（activeMachinesExact=false）。
@@ -33,7 +33,7 @@ describe('useClientDistObservability（FR-217 消费）', () => {
     expect(d.versionDist[0].version).toBeGreaterThanOrEqual(30)
     expect(d.platformDist[0]).toMatchObject({ os: 'windows' })
     expect(d.lagDist[0]).toMatchObject({ lag: 0 })
-    // FR-428：compare=前一等长窗口同环比基数。
+    // compare=前一等长窗口同环比基数。
     expect(d.compare).toBeDefined()
     expect(d.compare?.updateTotal).toBeGreaterThanOrEqual(0)
   })

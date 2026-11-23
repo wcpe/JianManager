@@ -126,7 +126,7 @@
 | `CLAUDE.md` | 项目结构大改时 | Claude Code 入口指引 |
 | `.claude/rules/*.md` | 流程优化时 | 规则调整需谨慎 |
 | `.claude/skills/*.md` | 新增工作流时 | 技能可逐步扩展 |
-| `scripts/check-sdd.sh` | CI 调整时 | 门禁脚本 |
+| `scripts/check-sdd.sh` | 改 PRD/API 的**格式**时 | 门禁脚本（**未接入 CI**，靠手动跑）。只做结构检查：文件在不在、P0 FR 数、P0 FR 的 spec 路径能否解到、API endpoint 权限标注覆盖度。它不验证内容质量，且判据与文档格式强耦合——文档改版而脚本不改，它会静默空转仍打 ✅（2026-11-08 实测：四条门禁全失效，其中 Gate 2 因写小写 `conventions.md` 而恒报错多年无人知） |
 
 ---
 

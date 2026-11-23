@@ -16,7 +16,7 @@ var (
 	ErrAlertEventNotFound = errors.New("告警事件不存在")
 )
 
-// AlertService 告警服务（FR-011 + FR-085）。
+// AlertService 告警服务。
 type AlertService struct {
 	db *gorm.DB
 }
@@ -26,7 +26,7 @@ func NewAlertService(db *gorm.DB) *AlertService {
 	return &AlertService{db: db}
 }
 
-// CreateRuleRequest 创建告警规则请求（FR-011 + FR-085 扩展）。
+// CreateRuleRequest 创建告警规则请求（扩展）。
 type CreateRuleRequest struct {
 	Name        string `json:"name" binding:"required"`
 	TriggerType string `json:"triggerType"`
@@ -40,6 +40,14 @@ type CreateRuleRequest struct {
 	Threshold   float64 `json:"threshold"`
 	DurationSec int     `json:"durationSec"`
 
+	// 动态基线 / 饱和度触发
+	BaselineMethod    string  `json:"baselineMethod"`
+	BaselineWindowSec int     `json:"baselineWindowSec"`
+	Sensitivity       float64 `json:"sensitivity"`
+	MinDelta          float64 `json:"minDelta"`
+	Direction         string  `json:"direction"`
+	Scope             string  `json:"scope"`
+
 	// 非指标触发
 	Keyword    string `json:"keyword"`
 	EventMatch string `json:"eventMatch"`
@@ -51,7 +59,7 @@ type CreateRuleRequest struct {
 	SilenceEnd     string `json:"silenceEnd"`
 	NotifyRecover  *bool  `json:"notifyRecover"`
 
-	// FR-011 兼容
+	// 兼容
 	NotifyType   string `json:"notifyType"`
 	NotifyTarget string `json:"notifyTarget"`
 }
@@ -61,7 +69,19 @@ var validTriggerTypes = map[string]bool{
 	model.AlertTriggerMetric: true, model.AlertTriggerInstanceCrash: true,
 	model.AlertTriggerNodeOffline: true, model.AlertTriggerLogKeyword: true,
 	model.AlertTriggerPlayerEvent: true, model.AlertTriggerBackupFailed: true,
+	model.AlertTriggerBaseline: true, model.AlertTriggerSaturation: true,
+	model.AlertTriggerQuotaExceeded: true,
 }
+
+// 动态基线/饱和度字段合法枚举。
+var validBaselineMethods = map[string]bool{
+	"": true, model.BaselineMethodEWMA: true, model.BaselineMethodROC: true,
+	model.BaselineMethodMoM: true, model.BaselineMethodYoY: true,
+}
+var validBaselineDirections = map[string]bool{
+	"": true, model.BaselineDirectionUp: true, model.BaselineDirectionDown: true, model.BaselineDirectionBoth: true,
+}
+var validRuleScopes = map[string]bool{"": true, "node": true, "instance": true}
 var validLevels = map[string]bool{
 	model.AlertLevelInfo: true, model.AlertLevelWarn: true, model.AlertLevelCritical: true,
 }
@@ -72,7 +92,7 @@ var validPlayerEventMatches = map[string]bool{
 	"": true, "join": true, "quit": true, "chat": true, "cross_server": true,
 }
 
-// normalizeRuleTypeAndLevel 填充 FR-011 兼容默认值，并校验触发类型/级别枚举。
+// normalizeRuleTypeAndLevel 填充兼容默认值，并校验触发类型/级别枚举。
 func normalizeRuleTypeAndLevel(triggerType, level string) (string, string, error) {
 	if triggerType == "" {
 		triggerType = model.AlertTriggerMetric
@@ -89,14 +109,68 @@ func normalizeRuleTypeAndLevel(triggerType, level string) (string, string, error
 	return triggerType, level, nil
 }
 
-// expectedTargetTypeForTrigger 返回触发类型要求的目标类型。
+// expectedTargetTypeForTrigger 返回触发类型要求的目标类型；空串表示 targetType 均可
+// （baseline/saturation 的维度由 Scope 决定，node/instance 都合法）。
 func expectedTargetTypeForTrigger(triggerType string) string {
 	switch triggerType {
-	case model.AlertTriggerMetric, model.AlertTriggerNodeOffline:
+	case model.AlertTriggerNodeOffline:
+		// 离线判定只在节点维度（心跳来自 Worker），故强制 node。
 		return "node"
+	case model.AlertTriggerMetric:
+		// metric 触发在 node 与 instance 两个维度都有评估器
+		// （evaluateNodeMetricRule / evaluateInstanceMetricRule，后者由补齐），
+		// 故两种目标都合法——此前只放行 node，导致实例级 metric 规则建不出来，
+		// 连带的实例维度容量趋势告警不可达（Notify 按 target_type="instance" 查规则）。
+		return ""
+	case model.AlertTriggerBaseline, model.AlertTriggerSaturation, model.AlertTriggerQuotaExceeded:
+		return ""
 	default:
 		return "instance"
 	}
+}
+
+// scopeForRule 解析规则评估维度：显式 Scope 优先，否则按 TargetType 推导。
+func scopeForRule(scope, targetType string) string {
+	if scope == "node" || scope == "instance" {
+		return scope
+	}
+	if targetType == "instance" {
+		return "instance"
+	}
+	return "node"
+}
+
+// validateBaselineFields 校验基线/饱和度扩展字段。
+func validateBaselineFields(triggerType, method, direction, scope string) error {
+	if !validBaselineMethods[method] {
+		return fmt.Errorf("非法基线方法: %s", method)
+	}
+	if !validBaselineDirections[direction] {
+		return fmt.Errorf("非法偏离方向: %s", direction)
+	}
+	if !validRuleScopes[scope] {
+		return fmt.Errorf("非法评估维度: %s", scope)
+	}
+	return nil
+}
+
+// normalizeBaselineFields 为基线规则补默认值（方法 ewma / 方向 both / 窗口 3600s / 灵敏度 3）。
+func normalizeBaselineFields(triggerType, method string, window int, sensitivity float64, direction string) (string, int, float64, string) {
+	if triggerType == model.AlertTriggerBaseline {
+		if method == "" {
+			method = model.BaselineMethodEWMA
+		}
+		if direction == "" {
+			direction = model.BaselineDirectionBoth
+		}
+	}
+	if window <= 0 {
+		window = baselineDefaultWindowSec
+	}
+	if sensitivity <= 0 {
+		sensitivity = 3
+	}
+	return method, window, sensitivity, direction
 }
 
 // validateSilenceTime 校验 HH:MM 静默时间，空串表示未设置。
@@ -110,12 +184,24 @@ func validateSilenceTime(value string) error {
 	return nil
 }
 
+// validateSaturationThreshold 校验饱和度阈值落在 (0,100]。threshold 缺省 0 会使
+// `pct >= 0` 恒真（告警风暴），故饱和度规则必须显式给出合法阈值。其余触发类型不约束。
+func validateSaturationThreshold(triggerType string, threshold float64) error {
+	if triggerType != model.AlertTriggerSaturation {
+		return nil
+	}
+	if threshold <= 0 || threshold > 100 {
+		return fmt.Errorf("饱和度阈值必须落在 (0,100]，当前 %g", threshold)
+	}
+	return nil
+}
+
 // validateRuleFields 校验规则字段之间的语义约束。
 func validateRuleFields(triggerType, targetType, keyword, eventMatch, silenceStart, silenceEnd string, durationSec, dedupWindowSec int) error {
 	if !validTargetTypes[targetType] {
 		return fmt.Errorf("非法目标类型: %s", targetType)
 	}
-	if want := expectedTargetTypeForTrigger(triggerType); targetType != want {
+	if want := expectedTargetTypeForTrigger(triggerType); want != "" && targetType != want {
 		return fmt.Errorf("触发类型 %s 必须使用 %s 目标", triggerType, want)
 	}
 	if durationSec < 0 {
@@ -175,6 +261,12 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 	if err := validateRuleFields(triggerType, req.TargetType, req.Keyword, req.EventMatch, req.SilenceStart, req.SilenceEnd, req.DurationSec, req.DedupWindowSec); err != nil {
 		return nil, err
 	}
+	if err := validateBaselineFields(triggerType, req.BaselineMethod, req.Direction, req.Scope); err != nil {
+		return nil, err
+	}
+	if err := validateSaturationThreshold(triggerType, req.Threshold); err != nil {
+		return nil, err
+	}
 	if err := s.validateChannelIDs(req.ChannelIDs); err != nil {
 		return nil, err
 	}
@@ -187,6 +279,14 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 		notifyRecover = *req.NotifyRecover
 	}
 
+	baselineMethod, baselineWindow, sensitivity, direction := normalizeBaselineFields(triggerType, req.BaselineMethod, req.BaselineWindowSec, req.Sensitivity, req.Direction)
+
+	// baseline 规则不使用静态阈值（基线自算），忽略并清零 threshold，避免误配。
+	threshold := req.Threshold
+	if triggerType == model.AlertTriggerBaseline {
+		threshold = 0
+	}
+
 	channelIDs := ""
 	if len(req.ChannelIDs) > 0 {
 		raw, err := json.Marshal(req.ChannelIDs)
@@ -197,25 +297,31 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 	}
 
 	rule := &model.AlertRule{
-		Name:           req.Name,
-		TriggerType:    triggerType,
-		Level:          level,
-		TargetType:     req.TargetType,
-		TargetID:       req.TargetID,
-		Metric:         req.Metric,
-		Operator:       req.Operator,
-		Threshold:      req.Threshold,
-		DurationSec:    req.DurationSec,
-		Keyword:        req.Keyword,
-		EventMatch:     req.EventMatch,
-		ChannelIDs:     channelIDs,
-		DedupWindowSec: req.DedupWindowSec,
-		SilenceStart:   req.SilenceStart,
-		SilenceEnd:     req.SilenceEnd,
-		NotifyRecover:  notifyRecover,
-		NotifyType:     req.NotifyType,
-		NotifyTarget:   req.NotifyTarget,
-		Enabled:        true,
+		Name:              req.Name,
+		TriggerType:       triggerType,
+		Level:             level,
+		TargetType:        req.TargetType,
+		TargetID:          req.TargetID,
+		Metric:            req.Metric,
+		Operator:          req.Operator,
+		Threshold:         threshold,
+		DurationSec:       req.DurationSec,
+		BaselineMethod:    baselineMethod,
+		BaselineWindowSec: baselineWindow,
+		Sensitivity:       sensitivity,
+		MinDelta:          req.MinDelta,
+		Direction:         direction,
+		Scope:             scopeForRule(req.Scope, req.TargetType),
+		Keyword:           req.Keyword,
+		EventMatch:        req.EventMatch,
+		ChannelIDs:        channelIDs,
+		DedupWindowSec:    req.DedupWindowSec,
+		SilenceStart:      req.SilenceStart,
+		SilenceEnd:        req.SilenceEnd,
+		NotifyRecover:     notifyRecover,
+		NotifyType:        req.NotifyType,
+		NotifyTarget:      req.NotifyTarget,
+		Enabled:           true,
 	}
 	if err := s.db.Create(rule).Error; err != nil {
 		return nil, fmt.Errorf("创建告警规则失败: %w", err)
@@ -235,7 +341,7 @@ func (s *AlertService) ListRules() ([]model.AlertRule, error) {
 	return rules, nil
 }
 
-// validateLegacyWebhook 收紧 FR-011 兼容直发通道：URL 常含 token，只允许环境变量引用。
+// validateLegacyWebhook 收紧兼容直发通道：URL 常含 token，只允许环境变量引用。
 func validateLegacyWebhook(notifyType, notifyTarget string) error {
 	if notifyType == "" && notifyTarget == "" {
 		return nil
@@ -258,6 +364,14 @@ type UpdateRuleRequest struct {
 	NotifyRecover  *bool    `json:"notifyRecover"`
 	Keyword        *string  `json:"keyword"`
 	EventMatch     *string  `json:"eventMatch"`
+
+	// 动态基线 / 饱和度可调字段。
+	BaselineMethod    *string  `json:"baselineMethod"`
+	BaselineWindowSec *int     `json:"baselineWindowSec"`
+	Sensitivity       *float64 `json:"sensitivity"`
+	MinDelta          *float64 `json:"minDelta"`
+	Direction         *string  `json:"direction"`
+	Scope             *string  `json:"scope"`
 }
 
 // UpdateRule 更新告警规则。
@@ -301,6 +415,31 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 	if err := validateRuleFields(ruleTriggerType(&current), current.TargetType, keyword, eventMatch, silenceStart, silenceEnd, current.DurationSec, dedup); err != nil {
 		return nil, err
 	}
+	// 饱和度阈值必须合法（缺省 0 会恒真）；baseline 忽略阈值。
+	triggerType := ruleTriggerType(&current)
+	effectiveThreshold := current.Threshold
+	if req.Threshold != nil {
+		effectiveThreshold = *req.Threshold
+	}
+	if err := validateSaturationThreshold(triggerType, effectiveThreshold); err != nil {
+		return nil, err
+	}
+	// 合并并校验基线/饱和度字段。
+	baselineMethod := current.BaselineMethod
+	if req.BaselineMethod != nil {
+		baselineMethod = *req.BaselineMethod
+	}
+	direction := current.Direction
+	if req.Direction != nil {
+		direction = *req.Direction
+	}
+	scope := current.Scope
+	if req.Scope != nil {
+		scope = *req.Scope
+	}
+	if err := validateBaselineFields(ruleTriggerType(&current), baselineMethod, direction, scope); err != nil {
+		return nil, err
+	}
 	if req.ChannelIDs != nil {
 		if err := s.validateChannelIDs(*req.ChannelIDs); err != nil {
 			return nil, err
@@ -311,7 +450,7 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled
 	}
-	if req.Threshold != nil {
+	if req.Threshold != nil && triggerType != model.AlertTriggerBaseline {
 		updates["threshold"] = *req.Threshold
 	}
 	if req.Level != nil {
@@ -342,6 +481,25 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 	if req.EventMatch != nil {
 		updates["event_match"] = *req.EventMatch
 	}
+	// 扩展字段。
+	if req.BaselineMethod != nil {
+		updates["baseline_method"] = *req.BaselineMethod
+	}
+	if req.BaselineWindowSec != nil {
+		updates["baseline_window_sec"] = *req.BaselineWindowSec
+	}
+	if req.Sensitivity != nil {
+		updates["sensitivity"] = *req.Sensitivity
+	}
+	if req.MinDelta != nil {
+		updates["min_delta"] = *req.MinDelta
+	}
+	if req.Direction != nil {
+		updates["direction"] = *req.Direction
+	}
+	if req.Scope != nil {
+		updates["scope"] = *req.Scope
+	}
 	if len(updates) > 0 {
 		if err := s.db.Model(&current).Updates(updates).Error; err != nil {
 			return nil, err
@@ -359,23 +517,36 @@ func (s *AlertService) DeleteRule(id uint) error {
 	return s.db.Delete(&model.AlertRule{}, id).Error
 }
 
-// EventFilter 告警事件列表筛选条件（FR-085 + FR-149：关键字 / 时间范围 / 分页）。
+// EventFilter 告警事件列表筛选条件（：关键字 / 时间范围 / 分页）。
 type EventFilter struct {
 	RuleID       *uint
 	Resolved     *bool
 	Acknowledged *bool
 	Level        string
 	TriggerType  string
-	Keyword      string     // 模糊匹配 message（FR-149）
-	From         *time.Time // fired_at 下界（含），FR-149
-	To           *time.Time // fired_at 上界（含），FR-149
-	Page         int        // 页码，从 1 起；FR-149
-	PageSize     int        // 每页条数，<=0 取默认 50；FR-149
+	Keyword      string     // 模糊匹配 message
+	From         *time.Time // fired_at 下界（含）
+	To           *time.Time // fired_at 上界（含）
+	Page         int        // 页码，从 1 起
+	PageSize     int        // 每页条数，<=0 取默认 50
 }
 
-// ListEvents 返回告警事件分页列表（FR-011 + FR-085 多维筛选 + FR-149 关键字/时间范围/分页）。
-// 预加载规则名；返回当前页与命中总数。
-func (s *AlertService) ListEvents(f EventFilter) ([]model.AlertEvent, int64, error) {
+// AlertEventView 告警事件列表项：在 model.AlertEvent 之上补一个实例名（仅当规则维度是实例）。
+//
+// 【为什么要判定 rule.TargetType】事件的 TargetID 是「规则目标 id」，含义随规则维度而变：
+// instance 维度才是实例 id，node 维度是节点 id。不判定就会把节点 id 当成实例 id 去查名。
+//
+// 【可见性说明——有意为之的取舍，决策记录】本端点没有 scope 收敛，加 instanceName 会把实例名
+// 交给每个能读告警事件的人。我们显式接受：改造前前端为了显示实例名直接拉**全量实例列表**
+// （千级约 1MB + 30 秒兜底轮询），对调用者暴露的实例清单更完整。将来若补 scope 收敛，同步复查此处。
+type AlertEventView struct {
+	model.AlertEvent
+	InstanceName string `json:"instanceName,omitempty"`
+}
+
+// ListEvents 返回告警事件分页列表（多维筛选关键字/时间范围/分页）。
+// 预加载规则名；为 instance 维度的事件回填实例名；返回当前页与命中总数。
+func (s *AlertService) ListEvents(f EventFilter) ([]AlertEventView, int64, error) {
 	page := f.Page
 	if page < 1 {
 		page = 1
@@ -418,13 +589,45 @@ func (s *AlertService) ListEvents(f EventFilter) ([]model.AlertEvent, int64, err
 		Limit(pageSize).Offset((page - 1) * pageSize).Find(&events).Error; err != nil {
 		return nil, 0, err
 	}
-	if events == nil {
-		events = []model.AlertEvent{}
+	views := make([]AlertEventView, len(events))
+	for i := range events {
+		views[i] = AlertEventView{AlertEvent: events[i]}
 	}
-	return events, total, nil
+
+	// 一次主键 IN 查询回填实例名，避免按行查（N+1）。**必须先用 rule.TargetType 判定**：
+	// 事件的 TargetID 语义随规则维度而变，node 维度的值不是实例 id。
+	ids := make([]uint, 0, len(events))
+	seen := make(map[uint]struct{}, len(events))
+	for i := range events {
+		if events[i].Rule.TargetType != "instance" || events[i].TargetID == 0 {
+			continue
+		}
+		if _, ok := seen[events[i].TargetID]; ok {
+			continue
+		}
+		seen[events[i].TargetID] = struct{}{}
+		ids = append(ids, events[i].TargetID)
+	}
+	if len(ids) > 0 {
+		// 实例是软删除：已删实例查不到名字 → 留空，由前端回退显示 #id。
+		// 刻意不用 Unscoped()，那会把已删实例的存在也暴露出去。
+		var insts []model.Instance
+		s.db.Select("id", "name").Where("id IN ?", ids).Find(&insts)
+		nameByID := make(map[uint]string, len(insts))
+		for _, in := range insts {
+			nameByID[in.ID] = in.Name
+		}
+		for i := range views {
+			if views[i].Rule.TargetType == "instance" {
+				views[i].InstanceName = nameByID[views[i].TargetID]
+			}
+		}
+	}
+
+	return views, total, nil
 }
 
-// Acknowledge 确认/认领一条告警事件（FR-085）。记录确认人与时间，并置为已读。
+// Acknowledge 确认/认领一条告警事件。记录确认人与时间，并置为已读。
 func (s *AlertService) Acknowledge(eventID uint, userID uint) (*model.AlertEvent, error) {
 	now := time.Now()
 	result := s.db.Model(&model.AlertEvent{}).Where("id = ?", eventID).Updates(map[string]interface{}{
@@ -446,7 +649,7 @@ func (s *AlertService) Acknowledge(eventID uint, userID uint) (*model.AlertEvent
 	return &event, nil
 }
 
-// MarkRead 标记一条或全部告警事件为已读（FR-085 站内已读）。eventID 为 0 时标记全部未读。
+// MarkRead 标记一条或全部告警事件为已读（站内已读）。eventID 为 0 时标记全部未读。
 func (s *AlertService) MarkRead(eventID uint) error {
 	q := s.db.Model(&model.AlertEvent{}).Where("read = ?", false)
 	if eventID != 0 {

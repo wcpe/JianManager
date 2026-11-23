@@ -131,3 +131,13 @@ domainRoute('put', '/backup-storages/:id', …)
 - **软删除行占用名称的既有瑕疵**：`name` uniqueIndex 含软删行——已删除后端仍占名，预检（默认 scope 排除软删）通过但落库撞索引回 500。属 FR-057 既有现状、本 FR 不修（记录在案，如需修复另立 FR：部分索引或改 uniqueIndex 含 deleted_at）。
 - **PUT 全量替换 vs PATCH**（拍板）：PUT 全量——编辑表单受控回显天然携带全量字段，复用 `createStorageRequest`/`storageFromRequest` 零新类型，省 patch 合并歧义；代价是老客户端不可部分更新（无此消费方）。
 - **PRD 行措辞校准**：PRD/任务描述中「名称冲突校验（复用）」与「定时任务引用」两处与源码不符——名称冲突预检为**新增**逻辑（现仅 DB 索引兜底），定时任务不引用存储后端；本 spec 按源码事实执行，PRD 行不需改（索引行粒度无此细节）。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-338 备份存储配置编辑（feat，增强 FR-057，验收分诊
+
+**需求补充**：备份存储自交付起前后端均无 Update，改配置只能删了重建）：后端 `PUT /backup-storages/:id`（复用既有 validateCandidate/凭证 ${ENV} 引用校验/名称冲突校验，404/422 语义与 Create 一致）；前端编辑弹窗（受控填入现值、区分 create/update）+ 表格编辑入口；devmock 同步 → `docs/specs/backup-storage-update/spec.md`
+
+**交付状态**：✅ 已交付@v0.17.0

@@ -40,7 +40,7 @@ func TestNode_Delete_Offline_Success(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-// TestNode_Delete_WithInstances_Conflict 离线节点名下有实例时删除被 409 拒绝并列出实例（FR-309）。
+// TestNode_Delete_WithInstances_Conflict 离线节点名下有实例时删除被 409 拒绝并列出实例。
 func TestNode_Delete_WithInstances_Conflict(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -74,7 +74,7 @@ func TestNode_Delete_WithInstances_Conflict(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-// TestNode_Delete_ForceCascades 离线节点 ?force=true 级联删除实例记录（FR-309，不清理远端文件）。
+// TestNode_Delete_ForceCascades 离线节点 ?force=true 级联删除实例记录（不清理远端文件）。
 func TestNode_Delete_ForceCascades(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -104,7 +104,7 @@ func TestNode_Delete_ForceCascades(t *testing.T) {
 	assert.Zero(t, count)
 }
 
-// TestNode_Delete_ForceInvalidValue force 参数非法时 400（FR-309）。
+// TestNode_Delete_ForceInvalidValue force 参数非法时 400。
 func TestNode_Delete_ForceInvalidValue(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -116,7 +116,7 @@ func TestNode_Delete_ForceInvalidValue(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestNode_Archived_ListAndGet 下线后主列表消失、归档列表可见（FR-393）。
+// TestNode_Archived_ListAndGet 下线后主列表消失、归档列表可见。
 func TestNode_Archived_ListAndGet(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -160,7 +160,7 @@ func TestNode_Archived_ListAndGet(t *testing.T) {
 	assert.NotEmpty(t, body["deletedAt"])
 }
 
-// TestNode_Purge_HardDelete 归档清理后双侧不可见（FR-394）。
+// TestNode_Purge_HardDelete 归档清理后双侧不可见。
 func TestNode_Purge_HardDelete(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -184,7 +184,7 @@ func TestNode_Purge_HardDelete(t *testing.T) {
 	assert.Zero(t, count)
 }
 
-// TestNode_Purge_ActiveRejected 未下线节点不可清理（FR-394）。
+// TestNode_Purge_ActiveRejected 未下线节点不可清理。
 func TestNode_Purge_ActiveRejected(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -196,7 +196,7 @@ func TestNode_Purge_ActiveRejected(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 }
 
-// TestNode_Purge_WithInstances_Force 有实例须 force 级联硬删（FR-394）。
+// TestNode_Purge_WithInstances_Force 有实例须 force 级联硬删。
 func TestNode_Purge_WithInstances_Force(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -248,7 +248,7 @@ func TestNode_List_AdminOnly(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
-// TestNode_Maintenance_Toggle 置/解维护模式翻转标记（FR-048）。
+// TestNode_Maintenance_Toggle 置/解维护模式翻转标记。
 func TestNode_Maintenance_Toggle(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -300,7 +300,7 @@ func TestNode_Maintenance_RejectsScheduling(t *testing.T) {
 	assert.Equal(t, "NODE_MAINTENANCE", parseJSON(t, w)["error"])
 }
 
-// TestNode_Drain_StopsRunning 排空停止节点上运行实例（FR-048）。
+// TestNode_Drain_StopsRunning 排空停止节点上运行实例。
 func TestNode_Drain_StopsRunning(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -338,7 +338,7 @@ func TestNode_Drain_AdminOnly(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
-// TestNode_Maintenance_Audited 维护操作写入审计日志（FR-048 / FR-015）。
+// TestNode_Maintenance_Audited 维护操作写入审计日志。
 func TestNode_Maintenance_Audited(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

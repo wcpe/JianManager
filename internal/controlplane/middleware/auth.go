@@ -80,7 +80,7 @@ func RequireRole(minRole model.UserRole) gin.HandlerFunc {
 	}
 }
 
-// RequirePerm 要求权限树节点（FR-432 / ADR-089）。
+// RequirePerm 要求权限树节点。
 // 平台管理员始终放行；其余用户按 UserAccess.Nodes 判断。
 func RequirePerm(node string) gin.HandlerFunc {
 	return RequireAnyPerm(node)
@@ -116,7 +116,7 @@ func RequireAnyPerm(nodes ...string) gin.HandlerFunc {
 }
 
 // LoadAccess 加载当前用户的授权上下文并写入 gin.Context(CtxAccess)。
-// 必须在 JWTAuth 之后执行。参见 ADR-004: 用户组替代多租户。
+// 必须在 JWTAuth 之后执行。: 用户组替代多租户。
 func LoadAccess(authz *service.AuthzService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, exists := c.Get(CtxUserID)

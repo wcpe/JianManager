@@ -52,7 +52,7 @@ func parseBotFilter(c *gin.Context) service.BotFilter {
 	return f
 }
 
-// List Bot 列表，分页 + 多维筛选（FR-038）。
+// List Bot 列表，分页 + 多维筛选。
 // 平台管理员返回全部；其余按其可访问实例集合在 SQL 层收敛。
 func (h *BotHandler) List(c *gin.Context) {
 	access := getAccess(c)
@@ -79,7 +79,7 @@ func (h *BotHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// Summary Bot 计数聚合（全局或按 groupBy 分组），不返回逐条 Bot（FR-038）。
+// Summary Bot 计数聚合（全局或按 groupBy 分组），不返回逐条 Bot。
 func (h *BotHandler) Summary(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil || !access.HasPermission(service.PermBotRead) {
@@ -117,7 +117,7 @@ type batchRequest struct {
 	Target   string               `json:"target"`
 }
 
-// Batch 批量执行 set-behavior/start/stop/delete，经 gRPC 委托对应 Worker（FR-038）。
+// Batch 批量执行 set-behavior/start/stop/delete，经 gRPC 委托对应 Worker。
 func (h *BotHandler) Batch(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil || !access.HasPermission(service.PermBotManage) {
@@ -241,6 +241,13 @@ func (h *BotHandler) Create(c *gin.Context) {
 }
 
 // Delete 删除 Bot。
+//
+// 与 UpdateBehavior / SendCommand / Batch 同口径：先过 `bot.manage` **权限节点**，
+// 再过 CanManageBot（资源级 = 实例组归属）。
+//
+// 只做 CanManageBot 是不够的：它最终落到 CanManageInstance，而那个只看
+// IsPlatformAdmin || CanAccessGroup，**根本不看 bot:manage**——缺这一行时，
+// 只有 bot.read 的同组 viewer 也能删除 Bot（真会停连 + 软删记录）。
 func (h *BotHandler) Delete(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -250,6 +257,10 @@ func (h *BotHandler) Delete(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN"})
+		return
+	}
+	if !access.HasPermission(service.PermBotManage) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
 		return
 	}
 	ok, err := h.authz.CanManageBot(access, id)
@@ -285,6 +296,16 @@ func (h *BotHandler) UpdateBehavior(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN"})
 		return
 	}
+	// 权限节点闸：与 Batch / Create 同口径（docs/API.md 声明 behavior 需 `bot:manage`）。
+	//
+	// 只做 CanManageBot（资源级）是不够的：它最终落到 CanManageInstance，
+	// 而那个只看 IsPlatformAdmin || CanAccessGroup，**根本不看 bot:manage**。
+	// 缺这一行时，有实例组访问权但未授予 bot:manage 的普通组员可以发消息/切行为，
+	// 而同样操作走 /bots/batch 却被拒——同一类能力两条路一开一闭。
+	if !access.HasPermission(service.PermBotManage) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
 	ok, err := h.authz.CanManageBot(access, id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
@@ -315,7 +336,7 @@ type sendBotCommandRequest struct {
 	Command string `json:"command" binding:"required"`
 }
 
-// SendCommand 向 Bot 下发聊天/控制命令（FR-009）。
+// SendCommand 向 Bot 下发聊天/控制命令。
 func (h *BotHandler) SendCommand(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -325,6 +346,12 @@ func (h *BotHandler) SendCommand(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN"})
+		return
+	}
+	// 权限节点闸：与 Batch / Create 同口径（docs/API.md 声明 command 需 `bot:manage`）。
+	// 这是**下发游戏内命令**的路径，越权代价比读类接口高得多，因此不能只靠资源级判定。
+	if !access.HasPermission(service.PermBotManage) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
 		return
 	}
 	ok, err := h.authz.CanManageBot(access, id)
@@ -355,7 +382,7 @@ func (h *BotHandler) SendCommand(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已发送"})
 }
 
-// Events SSE 推送单个 Bot 的实时状态、聊天和行为事件（FR-041）。
+// Events SSE 推送单个 Bot 的实时状态、聊天和行为事件。
 func (h *BotHandler) Events(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {

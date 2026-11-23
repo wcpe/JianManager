@@ -11,7 +11,7 @@ import (
 
 // TestBackupStorage_TestCandidate_RealMinIO 用真实 MinIO 端到端验证 CP 侧
 // 「测试连接」全链路：TestCandidate → ${ENV_VAR} 凭证解析 → probeS3Storage 的
-// HEAD-bucket + signS3Probe（手写 SigV4）。覆盖 FR-152 盲区：此前该路径仅有针对
+// HEAD-bucket + signS3Probe（手写 SigV4）。覆盖盲区：此前该路径仅有针对
 // 假服务器的单测，从未证明 CP 的 SigV4 探测能被真实 S3 接受。
 //
 // 由 JM_ACC_MINIO_ENDPOINT 门控，不影响常规 CI。

@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// F-01~F-06 平台管理域写路径门禁（FR-432 全量重审）。
+// F-01~F-06 平台管理域写路径门禁（全量重审）。
 
 func TestWriteGate_PlatformDomainWrites(t *testing.T) {
 	gin.SetMode(gin.TestMode)

@@ -10,8 +10,8 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import ConfigVersionDrawer from './ConfigVersionDrawer'
 
-/**
- * ConfigVersionDrawer 强断言（FR-205 配置浏览器版本/diff/回滚联动）：复用 FR-031 配置版本端点
+/** 
+ * ConfigVersionDrawer 强断言（配置浏览器版本/diff/回滚联动）：复用配置版本端点
  * （versions / diff / rollback）。聚焦此抽屉子组件——只命中 configs 域三端点，避开 ResourceExplorer
  * 的文件域跨端点噪声。
  *
@@ -58,14 +58,14 @@ describe('ConfigVersionDrawer 版本/diff/回滚（mock 假后端）', () => {
     const row2 = screen.getByText('#2').closest('li') as HTMLElement
     await user.click(within(row1).getByRole('button', { name: '从' }))
     await user.click(within(row2).getByRole('button', { name: '到' }))
-    // unifiedDiff 逐行着色渲染（FR-141 UnifiedDiff）：每行独立 <span>，故 --- 头与 +++ 头分属两节点。
+    // unifiedDiff 逐行着色渲染（UnifiedDiff）：每行独立 <span>，故 --- 头与 +++ 头分属两节点。
     expect(await screen.findByText('--- #1')).toBeInTheDocument()
     expect(screen.getByText('+++ #2')).toBeInTheDocument()
   })
 
   it('diff 增删行使用语义颜色区分（+ 绿 / - 红 / @@ 蓝，上下文不着色）', async () => {
     const user = userEvent.setup()
-    // 覆盖 diff 端点返回可控 unified diff（含 @@ 头与上下文行），断言逐行语义着色（FR-141）。
+    // 覆盖 diff 端点返回可控 unified diff（含 @@ 头与上下文行），断言逐行语义着色。
     server.use(
       http.get(API('/instances/:id/configs/diff/:file'), () =>
         HttpResponse.json({

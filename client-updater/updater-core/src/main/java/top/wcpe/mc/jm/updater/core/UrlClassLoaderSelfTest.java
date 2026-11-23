@@ -7,7 +7,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 /**
- * 生产自检（FR-091）：以独立 {@link URLClassLoader}（parent=平台加载器，<b>不</b>委派当前 core 的类）
+ * 生产自检：以独立 {@link URLClassLoader}（parent=平台加载器，<b>不</b>委派当前 core 的类）
  * 加载新 jar 的 {@code top.wcpe.mc.jm.updater.core.Core}，校验 {@code run(Map)} 入口存在、并调用其
  * {@code selfTest()} 返回 OK——一并验证 fat jar 内置依赖（zstd 等）可在仅该 jar 的加载器下解析。
  *

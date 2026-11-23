@@ -1,0 +1,136 @@
+import * as React from 'react'
+import { ChevronRightIcon } from 'lucide-react'
+
+import { cn } from '../../lib/utils'
+import { PageHelp } from './PageHelp'
+
+/** 
+ * 页头（阶段 3）：内容页的统一开头——可选面包屑 + 标题 + 可选计数 + 说明图标 + 右侧操作区。
+ *
+ * 布局规范要求任何内容页的第一个子元素都是它，从而消除「页名重复出现在面包屑、
+ * 页面大标题、外层卡壳」的冗余（原型第四节：去掉重复的页名、指标和外层卡壳）。
+ *
+ * 计数用 `<span>` 贴在标题右侧（原型 `.page-title-count`，12px muted），
+ * 而不是另起一行——标题行永远只有一行高，避免页头膨胀。
+ *
+ * 【页面说明使用点击浮层】`description` 是一行说明时也使用标题旁的 PageHelp 点击浮层；
+ * 多段操作说明通过 `help` 传入结构化 Popover。Tooltip 只保留给单行动作提示，
+ * 不再承担页面说明。
+ *
+ * 面包屑为**可选**：普通内容页不传。原型第四节明确「普通首页和列表不放无信息增量的
+ * 单级面包屑」；真正需要它的是**多步流程页**——原型里 `wizardPage`（创建实例）与
+ * `publishPage`（发布客户端版本）都用「`实例 > 创建实例` + 取消按钮」这一形态。
+ *
+ * 渲染与 `ObjectPageHeader` 的面包屑同款（分隔符、当前项语义、焦点环一致），但那边是
+ * 对象详情专用（另带图标/状态/元信息/指标条/工具导航），流程页不需要那一套，故在此另开。
+ */
+
+/** 面包屑的一级。`to` 存在即渲染为链接，否则为纯文本（通常是当前页自身）。 */
+export interface PageBreadcrumb {
+  label: React.ReactNode
+  to?: string
+}
+
+export function PageHeader({
+  title,
+  count,
+  description,
+  help,
+  actions,
+  breadcrumbs,
+  className,
+  ...props
+}: Omit<React.ComponentProps<'div'>, 'title'> & {
+  title: React.ReactNode
+  /** 标题右侧计数；数字自动按 zh-CN 千分位。 */
+  count?: number | string
+  /** 
+   * 一句话页面说明。收进标题旁点击式 PageHelp 浮层，不再使用 Tooltip。
+   *
+   * 传字符串时会同时用作图标的可访问名，读屏直接念出说明内容。
+   *
+   * 【何时改用 help】需要分点或分类讲清楚时用 `help`；两者同时给时以 `help` 为准。
+   */
+  description?: React.ReactNode
+  /**
+   * 结构化帮助浮层内容（点击问号展开）。
+   *
+   * 与 `description` 互斥：同时给时以 `help` 为准（浮层能装下的内容一定能装下一句话），
+   * 避免标题旁出现两个问号。
+   */
+  help?: React.ReactNode
+  /** 右侧操作区（按钮组等）。 */
+  actions?: React.ReactNode
+  /** 面包屑层级；通常只由多步流程页传。 */
+  breadcrumbs?: PageBreadcrumb[]
+}) {
+  const crumbs = breadcrumbs ?? []
+  // 单级面包屑（如「实例」）不提供层级信息，直接不渲染这一行——与 ObjectPageHeader 同判据。
+  const showBreadcrumbs = crumbs.length > 1
+  // help 优先：两者同时给时只渲染点击浮层，不叠一个 Tooltip 问号。
+  const helpPopover = help
+
+  return (
+    <div data-slot="page-header" className={cn('flex shrink-0 flex-col', className)} {...props}>
+      {showBreadcrumbs && (
+        <nav
+          data-slot="page-breadcrumb"
+          aria-label="面包屑"
+          className="mb-[5px] flex items-center gap-[5px] text-[10px] text-muted-foreground"
+        >
+          {crumbs.map((crumb, index) => (
+            // 面包屑是静态有序列表，位置即身份；用 index 作 key 不会引起复用错位。
+            <React.Fragment key={index}>
+              {index > 0 && <ChevronRightIcon className="size-3 shrink-0 opacity-60" aria-hidden />}
+              {crumb.to ? (
+                <a
+                  href={crumb.to}
+                  className="truncate rounded-xs transition-colors duration-[var(--motion-duration-normal)] ease-ios hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  {crumb.label}
+                </a>
+              ) : (
+                <span
+                  data-slot="page-breadcrumb-current"
+                  aria-current={index === crumbs.length - 1 ? 'page' : undefined}
+                  className="truncate"
+                >
+                  {crumb.label}
+                </span>
+              )}
+            </React.Fragment>
+          ))}
+        </nav>
+      )}
+      {/* 标题行单独一层：不传面包屑时这一层的样式与旧版外层完全一致，行为不变。 */}
+      <div className="flex items-center justify-between gap-[15px]">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h1 className="truncate text-xl font-bold text-foreground">
+            {title}
+            {count !== undefined && (
+              <span className="ml-2 align-middle text-xs font-normal text-muted-foreground">
+                {typeof count === 'number' ? count.toLocaleString('zh-CN') : count}
+              </span>
+            )}
+          </h1>
+          {helpPopover}
+          {description && !helpPopover && (
+            <span
+              data-slot="page-header-help"
+              aria-label={typeof description === 'string' ? description : undefined}
+            >
+              <PageHelp
+                testId="page-header-help-popover"
+                title={typeof title === 'string' ? title : 'Page help'}
+                intro={description}
+                ariaLabel={typeof description === 'string' ? description : undefined}
+                sections={[]}
+              />
+            </span>
+          )}
+        </div>
+        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      </div>
+    </div>
+  )
+}

@@ -50,7 +50,7 @@ func TestCopyDirExcluding(t *testing.T) {
 	require.Contains(t, skipped, "session.lock")
 }
 
-// cloneIncluded（FR-231）：include 空=全包含；非空按首段匹配（精确 / basename glob / 去 /** 后缀）。
+// cloneIncluded：include 空=全包含；非空按首段匹配（精确 / basename glob / 去 /** 后缀）。
 func TestCloneIncluded(t *testing.T) {
 	require.True(t, cloneIncluded("anything", nil), "include 空=全包含")
 	inc := []string{"*.jar", "plugins", "server.properties", "*.yml"}
@@ -64,7 +64,7 @@ func TestCloneIncluded(t *testing.T) {
 	require.True(t, cloneIncluded(filepath.Join("plugins", "x"), []string{"plugins/**"}), "/** 后缀归一")
 }
 
-// 快速复制（FR-231）：include=核心+插件+根配置 → 只复制这些，world/logs 不复制。
+// 快速复制：include=核心+插件+根配置 → 只复制这些，world/logs 不复制。
 func TestCopyDirFiltered_QuickInclude(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()

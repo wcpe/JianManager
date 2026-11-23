@@ -1,4 +1,4 @@
-/**
+/** 
  * IPC 消息类型定义。
  * Bot Worker 通过 stdin/stdout JSON 行协议与 Worker Node 通信。
  */
@@ -112,6 +112,17 @@ export interface BotConfig {
   connectNotBefore?: number
   connectNotBeforeUnixMs?: number
   correlationSeed?: string
+  /** 
+   * 关闭 Mineflayer 客户端物理模拟（默认 true=关闭）。
+   *
+   * 压测 Bot 只做登录/聊天/统计，不需要本地碰撞与重力模拟；
+   * 而 Mineflayer 为每个 Bot 起一个 50ms 物理 timer，数百 Bot 会把
+   * 单线程事件循环打爆（实测 500 容量下 p95 达 5s），keepalive 跟不上
+   * 导致服务器集体判 Timed out 踢人。默认关闭以保证大规模常驻稳定。
+   */
+  disablePhysics?: boolean
+  /** 客户端上报的视距（'tiny'|'short'|'normal'|'far' 或 2..32 数值）；越小下行区块越少。 */
+  viewDistance?: number | string
 }
 
 /** probe/barrier/cancel 等外部动作信号的冻结信封。 */
@@ -242,7 +253,7 @@ export interface ActionEvent {
   }
 }
 
-/** FR-369 单 occurrence 计划。 */
+/** 单 occurrence 计划。 */
 export interface CommandScheduleOccurrence {
   commandId: string
   occurrence: number
@@ -253,20 +264,20 @@ export interface CommandScheduleOccurrence {
   command: string
 }
 
-/** FR-369 occurrence 跳过/取消引用键。 */
+/** occurrence 跳过/取消引用键。 */
 export interface CommandOccurrenceKey {
   commandId: string
   occurrence: number
 }
 
-/** FR-369 冻结的命令计划。 */
+/** 冻结的命令计划。 */
 export interface CommandSchedulePlan {
   durationMs: number
   jitterMs: number
   occurrences: CommandScheduleOccurrence[]
 }
 
-/** FR-369 Worker → Bot Worker：下发计划。 */
+/** Worker → Bot Worker：下发计划。 */
 export interface CommandScheduleCommand {
   cmd: 'command-schedule'
   requestId: string
@@ -286,7 +297,7 @@ export interface CommandScheduleCommand {
   skipOccurrences: CommandOccurrenceKey[]
 }
 
-/** FR-369 Worker → Bot Worker：barrier 释放。 */
+/** Worker → Bot Worker：barrier 释放。 */
 export interface CommandScheduleReleaseCommand {
   cmd: 'command-schedule-release'
   requestId: string
@@ -299,7 +310,7 @@ export interface CommandScheduleReleaseCommand {
   releaseAtUnixMs: number
 }
 
-/** FR-369 Worker → Bot Worker：取消计划。 */
+/** Worker → Bot Worker：取消计划。 */
 export interface CommandScheduleCancelCommand {
   cmd: 'command-schedule-cancel'
   requestId: string

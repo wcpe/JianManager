@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 生产 selftest 对真实构建出的 core fat jar 的端到端验证（FR-091）。
+ * 生产 selftest 对真实构建出的 core fat jar 的端到端验证。
  * 真 jar 路径经 build.gradle.kts 注入系统属性 {@code jm.updater.core.jar}。
  * 证明 {@link UrlClassLoaderSelfTest} 能以独立 classloader 加载真 jar、调 {@code Core.selfTest()}（含 zstd 解码链路）通过；
  * 并对损坏 jar 判否——保证自更新绝不切到坏 core。

@@ -9,9 +9,9 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// RuntimeAssetsHandler 运行时与制品全局页（FR-082）聚合路由。
+// RuntimeAssetsHandler 运行时与制品全局页聚合路由。
 // 跨节点 JDK 矩阵 + 每项引用实例、制品按类型占用/去重/冷热统计——平台级共享资源，限平台管理员。
-// FR-301 扩展：overview 加性携带多运行时矩阵与每节点同步时间；refresh 强制全节点库存同步（写审计）。
+// 扩展：overview 加性携带多运行时矩阵与每节点同步时间；refresh 强制全节点库存同步（写审计）。
 type RuntimeAssetsHandler struct {
 	svc *service.RuntimeAssetsService
 	// audit 审计服务；为 nil 时刷新审计静默跳过（与 RuntimeLibraryHandler 同约定）。
@@ -24,7 +24,7 @@ func NewRuntimeAssetsHandler(svc *service.RuntimeAssetsService, audit *service.A
 }
 
 // Overview GET /runtime-assets/overview — 一次性返回 JDK 矩阵 + 引用关系 + 制品分组统计
-// （FR-301 起另含 runtimes 多运行时矩阵 / runtimeSyncs / syncedAt，加性扩展）。
+// （起另含 runtimes 多运行时矩阵 / runtimeSyncs / syncedAt，加性扩展）。
 func (h *RuntimeAssetsHandler) Overview(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -37,7 +37,7 @@ func (h *RuntimeAssetsHandler) Overview(c *gin.Context) {
 	c.JSON(http.StatusOK, ov)
 }
 
-// Refresh POST /runtime-assets/refresh — 强制全节点库存 syncFromWorker（FR-301）。
+// Refresh POST /runtime-assets/refresh — 强制全节点库存 syncFromWorker。
 // 失败容忍：单节点同步失败不阻断整体，结果逐节点回报 ok/error（前端据此显旧数据 + 提示），
 // 故除服务未装配/查库失败外恒 200。
 func (h *RuntimeAssetsHandler) Refresh(c *gin.Context) {

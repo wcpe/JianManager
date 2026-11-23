@@ -5,13 +5,98 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
+
+// S3ObjectStore exposes the standard-library SigV4 backend to other Worker
+// data-plane packages (logs archive uses the same path-style implementation).
+type S3ObjectStore struct{ backend *s3Backend }
+
+// NewS3ObjectStore creates a real S3-compatible client. It does not perform a
+// network call until an operation is invoked.
+func NewS3ObjectStore(cfg Config) (*S3ObjectStore, error) {
+	b, err := newS3Backend(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &S3ObjectStore{backend: b.(*s3Backend)}, nil
+}
+
+func (s *S3ObjectStore) Upload(ctx context.Context, key string, r io.Reader, size int64) error {
+	return s.backend.Upload(ctx, key, r, size)
+}
+
+func (s *S3ObjectStore) Download(ctx context.Context, key string) (io.ReadCloser, error) {
+	return s.backend.Download(ctx, key)
+}
+
+func (s *S3ObjectStore) Delete(ctx context.Context, key string) error {
+	return s.backend.Delete(ctx, key)
+}
+
+// Exists performs a signed HEAD without consuming object data.
+func (s *S3ObjectStore) Exists(ctx context.Context, key string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, s.backend.objURL(key), nil)
+	if err != nil {
+		return false, err
+	}
+	if err := s.backend.sign(req, emptyPayloadHash); err != nil {
+		return false, err
+	}
+	resp, err := s.backend.client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer drainClose(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode/100 != 2 {
+		return false, fmt.Errorf("S3 HEAD 失败: HTTP %d", resp.StatusCode)
+	}
+	return true, nil
+}
+
+// List returns keys below a path-style S3 prefix using ListObjectsV2.
+func (s *S3ObjectStore) List(ctx context.Context, prefix string) ([]string, error) {
+	u := fmt.Sprintf("%s://%s/%s?list-type=2&prefix=%s", s.backend.scheme, s.backend.endpoint, s.backend.bucket, awsURIEncode(prefix))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.backend.sign(req, emptyPayloadHash); err != nil {
+		return nil, err
+	}
+	resp, err := s.backend.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("S3 LIST 失败: HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		Contents []struct {
+			Key string `xml:"Key"`
+		} `xml:"Contents"`
+	}
+	if err := xml.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(result.Contents))
+	for _, item := range result.Contents {
+		keys = append(keys, item.Key)
+	}
+	return keys, nil
+}
 
 // s3Backend 通过 AWS Signature V4 对接 S3 兼容对象存储（AWS S3 / MinIO / 阿里 OSS 等）。
 // 仅依赖标准库实现签名与 path-style 寻址，不引入 SDK，便于在受限网络下构建。
@@ -51,7 +136,7 @@ func newS3Backend(cfg Config) (Backend, error) {
 		region:    region,
 		accessKey: cfg.AccessKey,
 		secretKey: cfg.SecretKey,
-		client:    defaultHTTPClient(),
+		client:    backendHTTPClient(cfg),
 	}, nil
 }
 
@@ -94,10 +179,59 @@ func (s *s3Backend) Download(ctx context.Context, key string) (io.ReadCloser, er
 		return nil, err
 	}
 	if resp.StatusCode/100 != 2 {
-		drainClose(resp.Body)
-		return nil, fmt.Errorf("S3 下载失败: HTTP %d", resp.StatusCode)
+		drainErr := drainS3DownloadError(ctx, resp.Body)
+		return nil, &s3DownloadStatusError{status: resp.StatusCode, cause: drainErr}
 	}
 	return resp.Body, nil
+}
+
+const s3DownloadErrorDrainBytes int64 = 64 << 10
+
+// s3DownloadStatusError 保留既有HTTP主错误文本，附属读/关闭/取消错误可由errors.Is核实。
+// 不输出远端正文或任意reader错误文本，避免改变状态契约和暴露对象内容。
+type s3DownloadStatusError struct {
+	status int
+	cause  error
+}
+
+func (e *s3DownloadStatusError) Error() string {
+	return fmt.Sprintf("S3 下载失败: HTTP %d", e.status)
+}
+
+func (e *s3DownloadStatusError) Unwrap() error { return e.cause }
+
+// drainS3DownloadError 仅有限复用连接，不让远端错误正文绕过归档预读预算。
+// 错误正文不缓冲、不输出；读/关闭失败不能覆盖原HTTP状态，也不声称传输层零预取。
+func drainS3DownloadError(ctx context.Context, body io.ReadCloser) (drainErr error) {
+	if body == nil {
+		return ctx.Err()
+	}
+	var once sync.Once
+	var closeErr error
+	closeBody := func() { once.Do(func() { closeErr = body.Close() }) }
+	stop := context.AfterFunc(ctx, closeBody)
+	defer func() {
+		stop()
+		closeBody()
+		drainErr = errors.Join(drainErr, closeErr, ctx.Err())
+	}()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, drainErr = io.Copy(io.Discard, io.LimitReader(s3DownloadErrorReader{ctx: ctx, body: body}, s3DownloadErrorDrainBytes))
+	return drainErr
+}
+
+type s3DownloadErrorReader struct {
+	ctx  context.Context
+	body io.Reader
+}
+
+func (r s3DownloadErrorReader) Read(dst []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.body.Read(dst)
 }
 
 func (s *s3Backend) Delete(ctx context.Context, key string) error {

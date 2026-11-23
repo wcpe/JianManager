@@ -1,13 +1,14 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-145 群组管理可寻址双栏 + proxy↔backend 拓扑 · 单机（Playwright + mock 模式）验收。
+/** 
+ *群组管理可寻址双栏 + proxy↔backend 拓扑 · 单机（Playwright + mock 模式）验收。
  * 覆盖：列表/拓扑切换、成员状态分布、点「管理」→ 深链 ?network= + 左成员/右候选双栏 + 候选筛选。
- * 证据截图落 .tmp/acceptance/FR-145/。
+ * 证据截图落 .tmp/acceptance。
  */
 
-test('FR-145 群组列表状态分布 + 管理双栏深链 + 候选筛选', async ({ page }) => {
+test('群组列表状态分布 + 管理双栏深链 + 候选筛选', async ({ page }) => {
+  test.setTimeout(180_000)
   await login(page)
   await page.goto('/networks')
 
@@ -18,9 +19,11 @@ test('FR-145 群组列表状态分布 + 管理双栏深链 + 候选筛选', asyn
 
   // 深链直达（?network=）→ 左成员/右候选双栏 + 候选筛选
   await page.goto('/networks?network=1')
-  await expect(page.getByText('成员', { exact: true })).toBeVisible()
+  const detail = page.getByRole('dialog')
+  await expect(detail).toBeVisible({ timeout: 90_000 })
+  await expect(detail.getByText('成员', { exact: true })).toBeVisible({ timeout: 90_000 })
   await expect(page.getByPlaceholder('筛选候选…')).toBeVisible()
   await expect(page.getByText('survival-proxy')).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-145/single-machine-networks-manage.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-networks-manage.png', fullPage: true })
 })

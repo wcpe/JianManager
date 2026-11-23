@@ -3,7 +3,6 @@ package service
 import (
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
@@ -21,10 +20,10 @@ func (dbBrowseTestRow) TableName() string { return "db_browse_test_rows" }
 
 func newDBBrowseTestService(t *testing.T) (*DBBrowseService, *gorm.DB) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
+	db := openTestSQLite(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &dbBrowseTestRow{}))
-	// cache=shared 共享同库，逐用例清表。
+	// 库名含 t.Name()（见 openTestSQLite），逐用例独立；这里仍清表是历史习惯，
+	// 保留它可让「同一用例内多次调用该函数」也拿到干净状态。
 	require.NoError(t, db.Exec("DELETE FROM users").Error)
 	require.NoError(t, db.Exec("DELETE FROM db_browse_test_rows").Error)
 	return NewDBBrowseService(db), db

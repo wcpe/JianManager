@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BotLoadTemplateHandler 命令压测模板 HTTP（FR-370）。
+// BotLoadTemplateHandler 命令压测模板 HTTP。
 type BotLoadTemplateHandler struct {
 	svc   *service.BotLoadTemplateService
 	authz *service.AuthzService

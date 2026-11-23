@@ -1,6 +1,6 @@
 //go:build botloadacceptance
 
-// FR-370 Bot Load acceptance harness — 固定真机验收测试。
+// Bot Load acceptance harness — 固定真机验收测试。
 //
 // 运行：
 //
@@ -106,7 +106,7 @@ const (
 	thresholdMaxCrashes       = 0.0
 )
 
-// TestBotLoadAcceptance 执行 FR-370 真机固定验收测试。
+// TestBotLoadAcceptance 执行真机固定验收测试。
 //
 // 流程：登录 → 创建模板 → 从模板创建 run → preflight → start →
 // 轮询连接 → 持续监控指标 → stop → 验证报告 → 输出 JSON 证据。
@@ -151,7 +151,7 @@ func TestBotLoadAcceptance(t *testing.T) {
 	defer func() {
 		ev.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 		out, _ := json.MarshalIndent(ev, "", "  ")
-		fmt.Printf("\n=== FR-370 Bot Load Acceptance Evidence ===\n%s\n", string(out))
+		fmt.Printf("\n===Bot Load Acceptance Evidence ===\n%s\n", string(out))
 	}()
 
 	// 3. 登录获取 token。
@@ -322,7 +322,7 @@ func acceptanceCreateTemplate(t *testing.T, c *acceptanceClient, env acceptanceE
 	}
 	body := map[string]interface{}{
 		"name":            fmt.Sprintf("acceptance-%d", time.Now().Unix()),
-		"description":     "FR-370 自动验收模板",
+		"description":     "自动验收模板",
 		"commandSchedule": commandSchedule,
 		"loadProfile":     loadProfile,
 		"thresholds":      thresholds,
@@ -544,7 +544,7 @@ func acceptanceExtractMetricSummary(sample map[string]interface{}, targetBots in
 func acceptanceStop(t *testing.T, c *acceptanceClient, runID uint) error {
 	t.Helper()
 	resp, data, err := c.do("POST", fmt.Sprintf("/api/v1/bots/stress-sessions/%d/stop", runID), map[string]interface{}{
-		"reason": "FR-370 验收测试结束",
+		"reason": "验收测试结束",
 	})
 	if err != nil {
 		return err
@@ -559,7 +559,7 @@ func acceptanceStop(t *testing.T, c *acceptanceClient, runID uint) error {
 func acceptanceTryStop(t *testing.T, c *acceptanceClient, runID uint) {
 	t.Helper()
 	resp, _, err := c.do("POST", fmt.Sprintf("/api/v1/bots/stress-sessions/%d/stop", runID), map[string]interface{}{
-		"reason": "FR-370 验收测试异常清理",
+		"reason": "验收测试异常清理",
 	})
 	if err != nil {
 		t.Logf("清理停止失败: %v", err)

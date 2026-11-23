@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 func TestBackupStorage_ListIncludesStats(t *testing.T) {
@@ -56,7 +57,7 @@ func TestBackupStorage_LocalStats(t *testing.T) {
 	require.Equal(t, float64(1), resp["backupCount"])
 }
 
-// TestBackupStorage_Update PUT 编辑链路（FR-338）：全量替换生效 + lastTest* 清空，
+// TestBackupStorage_Update PUT 编辑链路：全量替换生效 + lastTest* 清空，
 // 404 / 改 type 422 / 名称冲突 422（排除自身）语义与既有端点对齐。
 func TestBackupStorage_Update(t *testing.T) {
 	db := setupTestDB(t)
@@ -114,7 +115,7 @@ func TestBackupStorage_Update(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestBackupStorage_CreateNameConflict Create 撞名由 500 收口为 422（FR-338 对称收口）。
+// TestBackupStorage_CreateNameConflict Create 撞名由 500 收口为 422（对称收口）。
 func TestBackupStorage_CreateNameConflict(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -130,6 +131,10 @@ func TestBackupStorage_CreateNameConflict(t *testing.T) {
 }
 
 func TestBackupStorage_TestCandidateAndSaved(t *testing.T) {
+	// 测试用 httptest 监听 127.0.0.1，而生产策略默认阻断回环（SSRF 防护）；
+	// 这里显式开测试例外，用完立即恢复。
+	service.SetProbeAllowLoopbackForTest(true)
+	t.Cleanup(func() { service.SetProbeAllowLoopbackForTest(false) })
 	t.Setenv("JM_TEST_BK_AK", "ak")
 	t.Setenv("JM_TEST_BK_SK", "sk")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

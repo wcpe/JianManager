@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// maxDecompileInputBytes 是反编译输入 class/jar 的字节上限（ADR-018 决策 4）。
+// maxDecompileInputBytes 是反编译输入 class/jar 的字节上限。
 // 超限拒绝，避免巨 jar 拖垮节点内存/耗时。
 const maxDecompileInputBytes = 16 * 1024 * 1024
 
@@ -22,7 +22,7 @@ const maxDecompileInputBytes = 16 * 1024 * 1024
 func (s *Server) SetDecompiler(p *decompiler.Provider) { s.decompiler = p }
 
 // DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码。
-// 全程只读 + 超时 + 体积上限 + 失败降级（ADR-018）：CFR 静态分析字节码，不加载/运行目标代码。
+// 全程只读 + 超时 + 体积上限 + 失败降级：CFR 静态分析字节码，不加载/运行目标代码。
 // 失败/降级返回 success=false + error（结构化），不抛错（除实例不存在/路径越界这类前置校验）。
 func (s *Server) DecompileClass(ctx context.Context, req *workerpb.DecompileClassRequest) (*workerpb.DecompileClassResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
@@ -106,7 +106,7 @@ func (s *Server) prepareDecompileTarget(absPath, relPath, entry string) (target,
 			return "", "", nil, fmt.Errorf("仅支持反编译 .class 条目: %s", entry)
 		}
 		// 单条目反编译：不按宿主 jar 大小判限（server.jar 等核心 jar 常达数十 MB，远超上限，
-		// 但其中单个 class 通常仅几十 KB）。改由 extractClassFromJar 按该 class 条目解压后大小判限（FR-075）。
+		// 但其中单个 class 通常仅几十 KB）。改由 extractClassFromJar 按该 class 条目解压后大小判限。
 		tmp, terr := extractClassFromJar(absPath, entry)
 		if terr != nil {
 			return "", "", nil, terr
@@ -119,7 +119,7 @@ func (s *Server) prepareDecompileTarget(absPath, relPath, entry string) (target,
 }
 
 // extractClassFromJar 从 jar 中抽出某 .class 条目到临时 .class 文件，返回临时文件路径。
-// 限流按该 class 条目解压后大小判定（而非宿主 jar 大小，FR-075）：条目超上限即拒绝，
+// 限流按该 class 条目解压后大小判定（而非宿主 jar 大小）：条目超上限即拒绝，
 // 不静默截断——截断出的残缺 class 无法反编译，只会得到含糊错误。
 func extractClassFromJar(jarPath, entry string) (string, error) {
 	zr, err := zip.OpenReader(jarPath)

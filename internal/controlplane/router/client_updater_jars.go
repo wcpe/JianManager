@@ -8,7 +8,7 @@ import (
 	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 )
 
-// ClientUpdaterJarsHandler 提供内嵌客户端 OTA 更新器 jar（wedge / updater-core）的版本查询与下载（FR-107）。
+// ClientUpdaterJarsHandler 提供内嵌客户端 OTA 更新器 jar（wedge / updater-core）的版本查询与下载。
 //
 // 面向运营方「接入指引」：让运营方在后台一页拿到客户端更新器两件套。属管理/接入动作，
 // 限平台管理员（JWT），与面向玩家的消费端点（拉取密钥鉴权）隔离——见 architecture-invariants。

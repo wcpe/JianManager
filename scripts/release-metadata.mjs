@@ -67,6 +67,8 @@ export function assertFormalTagCommitOnMaster(sha, opts = {}) {
 export function resolveReleaseMetadata({ ref, sha, sourceVersion, exactTags = [], onMaster = true }) {
   if (!ref || !sha) throw new Error('缺少 Git ref 或提交 SHA')
   const shortSha = sha.slice(0, 7)
+  // exactTags：本提交上的 tag 列表（`git tag --points-at HEAD`）。软跳过路径当前不依赖它，
+  // 保留参数以兼容正式 tag 路径与既有测试签名。
 
   if (ref.startsWith('refs/tags/')) {
     const releaseTag = ref.slice('refs/tags/'.length)
@@ -88,9 +90,11 @@ export function resolveReleaseMetadata({ ref, sha, sourceVersion, exactTags = []
   }
 
   if (BARE_VERSION_RE.test(sourceVersion)) {
-    if (!exactTags.includes(`v${sourceVersion}`)) {
-      throw new Error(`普通分支源码使用裸版本 ${sourceVersion}，但当前提交没有同 SHA tag v${sourceVersion}`)
-    }
+    // 非 tag ref（如 master）上的裸 X.Y.Z：正式发布只由 tag 流水线产出。
+    // 发版顺序是「先合 master 再打 tag」，master 的 release 与 tag 的 release 双触发时，
+    // master 侧可能尚看不到同 SHA tag——此前硬失败会打红一条无意义的 run。
+    // 现统一软跳过：无论 tag 是否已在本提交上，publishRelease 皆为 false，不发 latest。
+    // 同 SHA 已有 tag 时行为与历史一致；tag 未就绪时也不阻塞 CI。
     return {
       version: sourceVersion,
       releaseTag: 'latest',
@@ -129,6 +133,13 @@ function writeOutputs(metadata) {
     appendFileSync(process.env.GITHUB_OUTPUT, `${lines.join('\n')}\n`)
   }
   process.stdout.write(`${JSON.stringify(metadata)}\n`)
+  // 非 tag 推送 + 裸版本 + 未发布：在日志里点明原因，便于对照双触发流水线。
+  if (!metadata.isRelease && !metadata.publishRelease && BARE_VERSION_RE.test(metadata.version)) {
+    process.stdout.write(
+      `publish_release=false：非 tag ref 源码为裸版本 ${metadata.version}，` +
+        '跳过 latest；正式发布由 tag push（refs/tags/vX.Y.Z）触发。\n',
+    )
+  }
 }
 
 function main() {

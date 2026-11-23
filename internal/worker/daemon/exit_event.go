@@ -6,12 +6,12 @@ import (
 	"syscall"
 )
 
-// EventJavaExit 是 ExitEvent.Event 的取值：被托管进程非正常退出（FR-313）。
+// EventJavaExit 是 ExitEvent.Event 的取值：被托管进程非正常退出。
 // 事件字段留作区分未来其他 wrapper 事件，Worker 侧按值过滤、未知事件忽略。
 const EventJavaExit = "java_exit"
 
 // ExitEvent 是 wrapper 检测到被托管进程非正常退出时，经控制通道（ChannelControl +
-// TypeEvent）上抛给 Worker 的事件负载（JSON，FR-313）。daemon 模式下进程由 wrapper
+// TypeEvent）上抛给 Worker 的事件负载（JSON）。daemon 模式下进程由 wrapper
 // 直接托管，退出码/信号只有 wrapper 能拿到，须经此事件转交 Worker 组装崩溃快照。
 type ExitEvent struct {
 	// Event 事件类型，恒为 EventJavaExit。
@@ -48,7 +48,7 @@ func DecodeExitEvent(payload []byte) (ExitEvent, bool) {
 	return ev, true
 }
 
-// ExitInfo 从进程退出状态提取退出码与信号名（FR-313）。
+// ExitInfo 从进程退出状态提取退出码与信号名。
 // ps 为 nil（Wait 出错且无退出状态）时退出码取 -1。信号仅 Unix 有意义：被信号终止时
 // 返回 syscall.Signal 的字符串形式（如 killed/terminated）；Windows 的 WaitStatus
 // Signaled() 恒为 false，信号恒为空（与 spec「Windows 信号留空」一致）。

@@ -68,7 +68,7 @@ func (c *poolDisposeClient) DisposeOrphanRuntime(ctx context.Context, nodeUUID, 
 	return nil
 }
 
-// OrphanRuntimeTracker CP 侧无主运行时跟踪与处置（FR-326）。
+// OrphanRuntimeTracker CP 侧无主运行时跟踪与处置。
 //
 // 每拍心跳：比对 Worker 上报 instances 与 DB instances（含软删视为无）；
 // 发现 orphan → pending；宽限内 CP 又有记录 → cancelled；宽限后 confirmed，
@@ -137,7 +137,7 @@ func (t *OrphanRuntimeTracker) autoDispose() bool {
 	return t.settings.EffectiveValue(SettingKeyOrphanAutoDispose) == "true"
 }
 
-// ObserveHeartbeat 心跳反向对账入口（FR-326）。
+// ObserveHeartbeat 心跳反向对账入口。
 //
 // 兼容：reported 为 nil 时视为「老 Worker / 未携带清单」——不创建新 pending，也不因「本拍未见」
 // 推进已有记录（避免误杀）。空切片表示新 Worker 明确上报「本节点无在管实例」：可取消

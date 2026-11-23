@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BackupStorageHandler 备份远程存储后端路由处理器（FR-057）。
+// BackupStorageHandler 备份远程存储后端路由处理器。
 type BackupStorageHandler struct {
 	svc *service.BackupStorageService
 }
@@ -66,7 +66,7 @@ func (h *BackupStorageHandler) Create(c *gin.Context) {
 	}
 	created, err := h.svc.Create(st)
 	if err != nil {
-		// 类型非法 / 凭证非 ${ENV_VAR} 引用 / 名称冲突为可预期校验错误，回 422（FR-338 收口）。
+		// 类型非法 / 凭证非 ${ENV_VAR} 引用 / 名称冲突为可预期校验错误，回 422（收口）。
 		if errors.Is(err, service.ErrInvalidStorageType) || errors.Is(err, service.ErrCredentialNotEnvRef) ||
 			errors.Is(err, service.ErrStorageNameConflict) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
@@ -78,7 +78,7 @@ func (h *BackupStorageHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, created)
 }
 
-// Update 全量替换式编辑存储后端（FR-338）。body 同 Create（复用 createStorageRequest）；
+// Update 全量替换式编辑存储后端。body 同 Create（复用 createStorageRequest）；
 // type 不可改、名称冲突排除自身，404/422 语义与既有端点对齐。
 func (h *BackupStorageHandler) Update(c *gin.Context) {
 	if !requireNodes(c, "node.manage") {
@@ -128,7 +128,14 @@ func storageFromRequest(req createStorageRequest) model.BackupStorage {
 	return st
 }
 
+// TestCandidate 测试未保存的存储配置。
+//
+// 必须要求 node.manage（而非只靠路由组的 backup.read）：该端点会用调用方提供的任意
+// endpoint 从控制面主机发起出站请求，属于主动网络行为，不能开放给只读角色。
 func (h *BackupStorageHandler) TestCandidate(c *gin.Context) {
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	var req createStorageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
@@ -138,7 +145,11 @@ func (h *BackupStorageHandler) TestCandidate(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// TestSaved 测试已保存的存储后端。同样要求 node.manage（会发起真实出站探测）。
 func (h *BackupStorageHandler) TestSaved(c *gin.Context) {
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -204,7 +215,12 @@ func (h *BackupStorageHandler) LocalStats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
+// TestConnection 经在线 Worker 对远端存储做非破坏性读写探测。
+// 同样要求 node.manage：探测由 Worker 发起，但会把存储凭证下发给节点。
 func (h *BackupStorageHandler) TestConnection(c *gin.Context) {
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return

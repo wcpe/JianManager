@@ -6,8 +6,8 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import { loginMockUser } from '@/test/auth'
 import FavoritesBar from './FavoritesBar'
 
-/**
- * FavoritesBar 强断言（FR-205 配置浏览器「已发现配置」面板）：验 `GET /configs/discover`
+/** 
+ * FavoritesBar 强断言（配置浏览器「已发现配置」面板）：验 `GET /configs/discover`
  * 把种子配置文件渲染出来 + 点选打开回调 + 收藏切换回调 + discover 500 错误注入显错误态。
  *
  * 聚焦此子组件而非整棵 ConfigExplorer：ConfigExplorer 内嵌 ResourceExplorer 会拉文件域

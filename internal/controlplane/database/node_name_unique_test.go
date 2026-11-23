@@ -20,7 +20,7 @@ func newMigratedDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// TestNodeNameUnique_IndexCreated AutoMigrate 后节点名活跃唯一索引存在（ADR-039 §3）。
+// TestNodeNameUnique_IndexCreated AutoMigrate 后节点名活跃唯一索引存在。
 func TestNodeNameUnique_IndexCreated(t *testing.T) {
 	db := newMigratedDB(t)
 	require.True(t, db.Migrator().HasIndex(&model.Node{}, nodeNameUniqueIndexName),
@@ -36,7 +36,7 @@ func TestNodeNameUnique_BlocksDuplicateActive(t *testing.T) {
 	require.Error(t, err, "活跃同名节点应被唯一索引拒绝")
 }
 
-// TestNodeNameUnique_AllowsReuseAfterSoftDelete 软删除节点后，同名新节点可创建（name 释放，ADR-039）。
+// TestNodeNameUnique_AllowsReuseAfterSoftDelete 软删除节点后，同名新节点可创建（name 释放）。
 func TestNodeNameUnique_AllowsReuseAfterSoftDelete(t *testing.T) {
 	db := newMigratedDB(t)
 	n := &model.Node{Name: "edge-a", Host: "10.0.0.1", Secret: "s1"}
@@ -51,7 +51,7 @@ func TestNodeNameUnique_AllowsReuseAfterSoftDelete(t *testing.T) {
 }
 
 // TestDedupeActiveNodeNames_RenamesExtras 存量重名活跃节点：去重保留最近心跳者、其余加后缀，
-// 且之后能成功建唯一索引（ADR-039 §修复，migration 前去重）。
+// 且之后能成功建唯一索引（migration 前去重）。
 func TestDedupeActiveNodeNames_RenamesExtras(t *testing.T) {
 	// 先建一个「无唯一索引」的库以注入重名脏数据，再跑去重+建索引。
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"

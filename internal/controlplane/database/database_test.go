@@ -18,6 +18,14 @@ func closeDB(t *testing.T, db *gorm.DB) {
 	require.NoError(t, sqlDB.Close())
 }
 
+// cleanupDB 登记底层连接清理，避免 Windows 在 t.TempDir 清理前仍被 SQLite 文件句柄占用。
+func cleanupDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+}
+
 // TestNew_CreatesMissingParentDir 复现并守护问题1：DSN 指向尚不存在的目录时，
 // New 必须自动创建父目录（含多级）并成功打开数据库。
 //

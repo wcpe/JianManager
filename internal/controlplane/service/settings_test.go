@@ -11,6 +11,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/platform/directprobe"
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
@@ -18,6 +19,12 @@ func newSettingsTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.PlatformSetting{}))
 	return db
 }
@@ -34,7 +41,6 @@ func testConfig() *config.Config {
 	cfg.JWT.AccessTTL = 15 * time.Minute
 	cfg.JWT.RefreshTTL = 168 * time.Hour
 	cfg.Log.Level = "info"
-	cfg.LogStore.RetentionDays = 14
 	return cfg
 }
 
@@ -62,7 +68,7 @@ func TestGet_BaselineWhenNoOverride(t *testing.T) {
 
 	retention, ok := findItem(view.Editable, SettingKeyBackupRetentionDays)
 	require.True(t, ok)
-	require.Equal(t, "14", retention.Value)
+	require.Equal(t, "7", retention.Value)
 }
 
 // TestGet_DBOverrideWins DB 覆盖存在时，有效值取覆盖值（DB > env > YAML）。
@@ -100,7 +106,7 @@ func TestGet_SensitiveMasked(t *testing.T) {
 	require.NotContains(t, dsn.Value, "supersecret") // 口令段被打码
 }
 
-// TestGet_WSTokenSecretDisplay jwt.ws_secret 只读展示（FR-275，见 ADR-061）：
+// TestGet_WSTokenSecretDisplay jwt.ws_secret 只读展示：
 // 显式配置掩码；未配置按 dev_mode 显示来源描述，不回显 autogen 解析出的密钥值。
 func TestGet_WSTokenSecretDisplay(t *testing.T) {
 	// 显式配置 → 掩码 + sensitive。
@@ -192,6 +198,87 @@ func TestUpdate_RejectsInvalidValue(t *testing.T) {
 	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyBackupRetentionDays: "-1"}), ErrSettingValueInvalid)
 }
 
+// TestDirectProbeTimeoutsSetting MC 直探超时可配：默认 3s、覆盖生效、非正/超上界被拒。
+// 上界与「单拍采集预算 < 心跳节拍」自洽（复审 NEW-ISSUE A），故断言直接引用共享常量，
+// 上界调整时本用例自动跟随。
+func TestDirectProbeTimeoutsSetting(t *testing.T) {
+	db := newSettingsTestDB(t)
+	svc := NewSettingsService(db, testConfig())
+
+	// 基线默认。
+	slp, query := svc.DirectProbeTimeouts()
+	require.Equal(t, 3*time.Second, slp)
+	require.Equal(t, 3*time.Second, query)
+	view, err := svc.Get()
+	require.NoError(t, err)
+	item, ok := findItem(view.Editable, SettingKeyDirectProbeSLPTimeout)
+	require.True(t, ok, "直探超时须作为可编辑平台设置项暴露")
+	require.Equal(t, "3s", item.Value)
+	require.False(t, item.EffectiveImmediately, "Worker 侧生效，非 CP 内即时")
+
+	// 覆盖生效。
+	require.NoError(t, svc.Update(map[string]string{
+		SettingKeyDirectProbeSLPTimeout:   "1500ms",
+		SettingKeyDirectProbeQueryTimeout: "2s",
+	}))
+	slp, query = svc.DirectProbeTimeouts()
+	require.Equal(t, 1500*time.Millisecond, slp)
+	require.Equal(t, 2*time.Second, query)
+
+	// 恰好等于上界可接受；超上界（哪怕 1s）被拒。
+	require.NoError(t, svc.Update(map[string]string{
+		SettingKeyDirectProbeQueryTimeout: maxDirectProbeTimeout.String(),
+	}))
+	_, query = svc.DirectProbeTimeouts()
+	require.Equal(t, maxDirectProbeTimeout, query)
+
+	// 非法值被拒（非 duration / 非正 / 超上界）。
+	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyDirectProbeSLPTimeout: "abc"}), ErrSettingValueInvalid)
+	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyDirectProbeSLPTimeout: "0s"}), ErrSettingValueInvalid)
+	require.ErrorIs(t, svc.Update(map[string]string{
+		SettingKeyDirectProbeQueryTimeout: (maxDirectProbeTimeout + time.Second).String(),
+	}), ErrSettingValueInvalid)
+	// 被拒后仍是上一有效值。
+	slp, query = svc.DirectProbeTimeouts()
+	require.Equal(t, 1500*time.Millisecond, slp)
+	require.Equal(t, maxDirectProbeTimeout, query)
+}
+
+// TestDirectProbeTimeoutBoundMatchesSharedContract 锁定 CP 侧（写校验/读钳制/实时链路估算所引用的）
+// 直探超时默认与上界与共享契约包一致（复审 NEW-ISSUE A）：任一处改走独立字面量即失败。
+func TestDirectProbeTimeoutBoundMatchesSharedContract(t *testing.T) {
+	require.Equal(t, directprobe.DefaultTimeout, defaultDirectProbeTimeout)
+	require.Equal(t, directprobe.MaxTimeout, maxDirectProbeTimeout)
+	require.Equal(t, directprobe.ProbeScrapeTimeoutCap, probeScrapeTimeoutCap)
+
+	// 上界由心跳护栏反推：两个来源都取上界时，单拍预算仍须 ≤ 节拍 − 余量。
+	require.LessOrEqual(t,
+		directprobe.CollectBudgetFor(directprobe.MaxTimeout, directprobe.MaxTimeout)+directprobe.HeartbeatTickReserve,
+		directprobe.HeartbeatInterval)
+}
+
+// TestDirectProbeTimeoutsFallsBackOnBadPersistedValue 落库值非法时回退默认，不把消费方卡死。
+func TestDirectProbeTimeoutsFallsBackOnBadPersistedValue(t *testing.T) {
+	db := newSettingsTestDB(t)
+	require.NoError(t, db.Save(&model.PlatformSetting{Key: SettingKeyDirectProbeQueryTimeout, Value: "garbage"}).Error)
+	svc := NewSettingsService(db, testConfig())
+
+	_, query := svc.DirectProbeTimeouts()
+	require.Equal(t, 3*time.Second, query)
+}
+
+// TestDirectProbeTimeoutsClampsReadSideToUpperBound 读/下发路径同样钳制到共享上界（复审 N3）：
+// 绕过写校验直接落库（模拟 yaml/env 基线或历史值）也不得把生效超时推到上界之上，
+// 否则每实例每拍最坏阻塞量会拖垮心跳采集预算与节拍（NEW-ISSUE A）。
+func TestDirectProbeTimeoutsClampsReadSideToUpperBound(t *testing.T) {
+	db := newSettingsTestDB(t)
+	require.NoError(t, db.Save(&model.PlatformSetting{Key: SettingKeyDirectProbeSLPTimeout, Value: "90s"}).Error)
+	svc := NewSettingsService(db, testConfig())
+
+	slp, _ := svc.DirectProbeTimeouts()
+	require.Equal(t, maxDirectProbeTimeout, slp)
+}
+
 // TestUpdate_AtomicOnPartialInvalid 一批中有非法键时整体拒绝、合法键也不落库（原子性）。
 func TestUpdate_AtomicOnPartialInvalid(t *testing.T) {
 	db := newSettingsTestDB(t)
@@ -220,7 +307,7 @@ func TestNewService_ReplaysPersistedLogLevel(t *testing.T) {
 	config.SetLogLevel("info") // 复位
 }
 
-// === 出站代理（network 分类，FR-185 / ADR-043） ===
+// === 出站代理（network 分类） ===
 
 // TestProxy_KeysEditableAndNetwork proxy.url/proxy.no_proxy 为可编辑项；proxy.url 标 sensitive、脱敏展示。
 func TestProxy_KeysEditableAndNetwork(t *testing.T) {
@@ -305,7 +392,7 @@ func TestProxy_UpdateRebuildsProvider(t *testing.T) {
 	config.SetLogLevel("info")
 }
 
-// === 调试模式开关（FR-225，增强 FR-063） ===
+// === 调试模式开关（增强） ===
 
 // TestDebugMode_DefaultFalseEditableImmediate 无覆盖时 debug.mode 默认 false、可编辑、即时生效。
 func TestDebugMode_DefaultFalseEditableImmediate(t *testing.T) {
@@ -370,7 +457,7 @@ func TestDebugMode_BaselineAppliesGinRelease(t *testing.T) {
 	require.False(t, *ginDebug)
 }
 
-// TestGitHubToken_BaselineFromYAMLAndMasked github.token（FR-063/FR-409）：无 DB 覆盖时展示
+// TestGitHubToken_BaselineFromYAMLAndMasked github.token：无 DB 覆盖时展示
 // yml/env 基线（update.github_token）的掩码，敏感、可编辑、即时生效；生效值走基线。
 func TestGitHubToken_BaselineFromYAMLAndMasked(t *testing.T) {
 	cfg := testConfig()
@@ -422,4 +509,59 @@ func TestGitHubToken_UpdateValidation(t *testing.T) {
 
 	err := svc.Update(map[string]string{SettingKeyGitHubToken: "ghp bad token"})
 	require.ErrorIs(t, err, ErrSettingValueInvalid)
+}
+
+// TestUpdate_SnapshotCreationLimitsWritable R4 复现：快照创建上限（m-2 磁盘防护）宣告可编辑
+// 却写不进去——`Get()` 里这两个键标了 Editable=true，但 `isWritableSettingKey` 的白名单不含
+// 它们，`Update` 必返 ErrSettingKeyNotWritable。
+//
+// 缺陷现场：结果是 `snapshot.max_per_instance` 恒为默认 20、`snapshot.max_total_mb` 恒为默认
+// 0=不限，**m-2 的磁盘防护在产品上完全不可达**；而 UI 把它们显示为可编辑，等于欺骗运维。
+func TestUpdate_SnapshotCreationLimitsWritable(t *testing.T) {
+	db := newSettingsTestDB(t)
+	svc := NewSettingsService(db, testConfig())
+
+	// ① 两键必须在可编辑列表里（否则「可写」这半句就是无意义的）。
+	view, err := svc.Get()
+	require.NoError(t, err)
+	perInstance, ok := findItem(view.Editable, SettingKeySnapshotMaxPerInstance)
+	require.True(t, ok, "snapshot.max_per_instance 必须出现在可编辑列表")
+	require.True(t, perInstance.Editable, "宣告可编辑就必须真的可写")
+	totalMB, ok := findItem(view.Editable, SettingKeySnapshotMaxTotalMB)
+	require.True(t, ok, "snapshot.max_total_mb 必须出现在可编辑列表")
+	require.True(t, totalMB.Editable)
+
+	// ② 真的能写（修复前此处返 ErrSettingKeyNotWritable）。
+	require.NoError(t, svc.Update(map[string]string{SettingKeySnapshotMaxPerInstance: "5"}),
+		"宣告可编辑的键必须写得进去")
+	require.Equal(t, "5", svc.EffectiveValue(SettingKeySnapshotMaxPerInstance))
+	require.NoError(t, svc.Update(map[string]string{SettingKeySnapshotMaxTotalMB: "1024"}))
+	require.Equal(t, "1024", svc.EffectiveValue(SettingKeySnapshotMaxTotalMB))
+
+	// ③ 确认真的落库（不是只在内存里生效）。
+	var rec model.PlatformSetting
+	require.NoError(t, db.Where("key = ?", SettingKeySnapshotMaxPerInstance).First(&rec).Error)
+	require.Equal(t, "5", rec.Value)
+}
+
+// TestUpdate_SnapshotCreationLimitsValueSemantics R4 值语义：两键默认口径下 0 是**有效值**
+// （0=不限），故 0 与正数接受、负数拒绝——与 `intSetting` 只对 n<0 回落缺省的行为对齐
+// （见 snapshot.go 的 intSetting：`err != nil || n < 0` 才用 fallback，0 会被采纳）。
+//
+// 若这里错用 `n < 1`（同族 retention_count 的写法），运维就**无法表达「不限」**，只能改库，
+// 那又是一次「宣告可配而实际不可配」。
+func TestUpdate_SnapshotCreationLimitsValueSemantics(t *testing.T) {
+	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+
+	for _, key := range []string{SettingKeySnapshotMaxPerInstance, SettingKeySnapshotMaxTotalMB} {
+		require.NoError(t, svc.Update(map[string]string{key: "0"}),
+			"%s：0=不限是有效语义，必须接受", key)
+		require.NoError(t, svc.Update(map[string]string{key: "1"}), "%s：正数必须接受", key)
+		require.ErrorIs(t, svc.Update(map[string]string{key: "-1"}), ErrSettingValueInvalid,
+			"%s：负数非法（默认/兜底是 0=不限，负数无对应语义）", key)
+		require.ErrorIs(t, svc.Update(map[string]string{key: "abc"}), ErrSettingValueInvalid,
+			"%s：非整数必须拒绝", key)
+		require.ErrorIs(t, svc.Update(map[string]string{key: ""}), ErrSettingValueInvalid,
+			"%s：空串必须拒绝（空=无意义的缺省，应显式写 0）", key)
+	}
 }

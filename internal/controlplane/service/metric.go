@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 留存与档位常量（ADR-013：分级降采样）。
+// 留存与档位常量（分级降采样）。
 const (
 	metricRawRetention = 48 * time.Hour
 	metric5mRetention  = 30 * 24 * time.Hour
@@ -64,7 +65,7 @@ type Series struct {
 	Points    []SeriesPoint `json:"points"`
 }
 
-// MetricService 时序指标存储与查询（ADR-013：CP 端分级降采样）。
+// MetricService 时序指标存储与查询（CP 端分级降采样）。
 type MetricService struct {
 	db *gorm.DB
 
@@ -75,6 +76,26 @@ type MetricService struct {
 	// lastNet 记录每节点上次心跳的累计网络字节与时刻，用于据相邻差推导速率。
 	netMu   sync.Mutex
 	lastNet map[string]netCounters
+
+	// lastGC 记录每实例上次心跳的累计 GC counter，用于据相邻差推导 GC 速率。
+	gcMu   sync.Mutex
+	lastGC map[string]gcCounters
+
+	// lastVLDrop 记录每节点上次心跳的 VL 超保留期丢弃累计量（2026-10-29），
+	// 用于据相邻差推导丢弃速率（与 lastNet / lastGC 同构）。
+	vlDropMu   sync.Mutex
+	lastVLDrop map[string]vlDropCounter
+
+	// bridgeMu/lastBridge 记录每实例上次心跳的桥拒绝/写失败累计量，用于差分推导速率。
+	// 与 lastGC 同构：差为负（实例重启计数器归零）时跳过该拍。
+	bridgeMu   sync.Mutex
+	lastBridge map[string]bridgeCounters
+}
+
+// vlDropCounter 是 VL 丢弃计数器的上次读数。
+type vlDropCounter struct {
+	dropped uint64
+	ts      time.Time
 }
 
 // netCounters 某节点上次心跳的累计网络字节快照。
@@ -83,9 +104,26 @@ type netCounters struct {
 	ts         time.Time
 }
 
+// gcCounters 某实例上次心跳的累计 GC counter 快照。
+type gcCounters struct {
+	count  int64
+	millis float64
+	ts     time.Time
+}
+
+// bridgeCounters 某实例上次心跳的桥累计计数快照（用于差分推速率）。
+//
+// 把“拒绝”与“写失败”分别求和而不是各存四个字段：CP 对外只有两条速率曲线，
+// 内部保留明细反而多一层不会用到的状态。
+type bridgeCounters struct {
+	rejected  int64 // reliableRejected + bestEffortDropped
+	writeFail int64 // writeFailures + writeTimeouts
+	ts        time.Time
+}
+
 // NewMetricService 创建时序指标服务。
 func NewMetricService(db *gorm.DB) *MetricService {
-	return &MetricService{db: db, lastNet: map[string]netCounters{}}
+	return &MetricService{db: db, lastNet: map[string]netCounters{}, lastGC: map[string]gcCounters{}, lastVLDrop: map[string]vlDropCounter{}, lastBridge: map[string]bridgeCounters{}}
 }
 
 // ResolveInstanceUUID 由数值实例 ID 取 UUID，供进程 TOPN 查询过滤。
@@ -110,6 +148,59 @@ func (s *MetricService) NodeExists(uuid string) (bool, error) {
 	return n > 0, nil
 }
 
+// NodeByUUID 按 UUID 取节点（464：容量预测取名称与容量快照）。不存在返回 found=false。
+func (s *MetricService) NodeByUUID(uuid string) (model.Node, bool) {
+	var node model.Node
+	err := s.db.Where("uuid = ?", uuid).First(&node).Error
+	if err == nil {
+		return node, true
+	}
+	return model.Node{}, false
+}
+
+// NodeIDByUUID 由节点 UUID 取数值 ID（告警事件目标 ID 用）；不存在返回 0。
+func (s *MetricService) NodeIDByUUID(uuid string) (uint, error) {
+	var node model.Node
+	err := s.db.Select("id").Where("uuid = ?", uuid).First(&node).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return node.ID, nil
+}
+
+// InstanceByID 由数值 ID 取实例（：容量趋势告警文案取名称）。不存在返回 found=false。
+func (s *MetricService) InstanceByID(id uint) (model.Instance, bool) {
+	var inst model.Instance
+	err := s.db.First(&inst, id).Error
+	if err == nil {
+		return inst, true
+	}
+	return model.Instance{}, false
+}
+
+// ResolveInstanceUUIDs 批量由数值 ID 取实例 UUID（平台级 SLO 的可见集收敛）。
+// 输入为 nil 时返回 nil（表示不收敛）；查不到的 ID 不出现在结果中。
+func (s *MetricService) ResolveInstanceUUIDs(ids []uint) ([]string, error) {
+	if ids == nil {
+		return nil, nil
+	}
+	out := make([]string, 0, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var instances []model.Instance
+	if err := s.db.Select("uuid").Where("id IN ?", ids).Find(&instances).Error; err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		out = append(out, inst.UUID)
+	}
+	return out, nil
+}
+
 // ResolveInstanceID 由实例 UUID 取数值 ID（供 RBAC 校验）；不存在返回 found=false。
 func (s *MetricService) ResolveInstanceID(uuid string) (uint, bool, error) {
 	var inst model.Instance
@@ -123,7 +214,7 @@ func (s *MetricService) ResolveInstanceID(uuid string) (uint, bool, error) {
 	return 0, false, err
 }
 
-// ResolveInstanceIDs 批量由实例 UUID 取数值 ID（ResolveInstanceID 的批量形态，FR-340）。
+// ResolveInstanceIDs 批量由实例 UUID 取数值 ID（ResolveInstanceID 的批量形态）。
 // 一次 IN 查询返回 uuid→id 映射；查不到的 uuid 不在结果中（调用方据此归入 skipped:not_found）。
 func (s *MetricService) ResolveInstanceIDs(uuids []string) (map[string]uint, error) {
 	out := map[string]uint{}
@@ -184,14 +275,25 @@ func (s *MetricService) Ingest(samples []Sample) error {
 
 // IngestHeartbeat 把一次心跳负载落库为时序样本：节点 CPU/内存/磁盘/网络速率 +
 // 每实例 ServerProbe 富指标（含分世界）。网络速率据相邻心跳累计字节差推导（首拍与计数器
-// 回绕时不出速率样本）。探针不可用的实例写 NULL 断点，缺测不补假值（ADR-013）。
+// 回绕时不出速率样本）。探针不可用的实例写 NULL 断点，缺测不补假值。
 // 实现 grpc.MetricIngester，由 CP 心跳处理器调用。
 func (s *MetricService) IngestHeartbeat(req *workerpb.HeartbeatRequest) error {
-	return s.ingestHeartbeatAt(req, time.Now().UTC())
+	if req == nil || req.NodeUuid == "" {
+		return nil
+	}
+	var node model.Node
+	if err := s.db.Select("memory_mb", "disk_total_mb").Where("uuid = ?", req.NodeUuid).Find(&node).Error; err != nil {
+		return err
+	}
+	return s.ingestHeartbeatWithCapacity(req, time.Now().UTC(), &node)
 }
 
-// ingestHeartbeatAt 是 IngestHeartbeat 的可测内核，now 注入便于断言时间相关逻辑（网络速率）。
+// ingestHeartbeatAt 注入采样时间，不依赖节点注册表。
 func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now time.Time) error {
+	return s.ingestHeartbeatWithCapacity(req, now, nil)
+}
+
+func (s *MetricService) ingestHeartbeatWithCapacity(req *workerpb.HeartbeatRequest, now time.Time, nodeCapacity *model.Node) error {
 	if req == nil || req.NodeUuid == "" {
 		return nil
 	}
@@ -203,14 +305,15 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 	nodeSample := func(key, unit string, v *float64) Sample {
 		return Sample{NodeUUID: node, Scope: model.MetricScopeNode, MetricKey: key, Unit: unit, TS: now, Value: v}
 	}
-	samples = append(samples,
-		nodeSample(model.MetricNodeCPUPct, "pct", ptr(float64(req.CpuUsage)*100)),
-		nodeSample(model.MetricNodeMemUsed, "bytes", ptr(float64(req.MemoryUsedMb)*1024*1024)),
-		nodeSample(model.MetricNodeDiskUsed, "bytes", ptr(float64(req.DiskUsedMb)*1024*1024)),
-	)
-	// load average：取不到为 0（Windows 预热/不支持），此时不落点，曲线优雅留空（FR-062）。
-	if req.LoadAvg1 > 0 {
-		samples = append(samples, nodeSample(model.MetricNodeLoad, "load", ptr(req.LoadAvg1)))
+	samples = append(samples, buildNodeSamplesAt(req, now)...)
+	// 容量使用注册值；心跳 used 已按 MiB 截断，不能用 used/rate 当精确上限。
+	if nodeCapacity != nil {
+		if nodeCapacity.MemoryMB > 0 {
+			samples = append(samples, nodeSample(model.MetricNodeMemTotal, "bytes", ptr(float64(nodeCapacity.MemoryMB)*1024*1024)))
+		}
+		if nodeCapacity.DiskTotalMB > 0 {
+			samples = append(samples, nodeSample(model.MetricNodeDiskTotal, "bytes", ptr(float64(nodeCapacity.DiskTotalMB)*1024*1024)))
+		}
 	}
 
 	// 网络速率：相邻心跳累计字节差 / 间隔秒。差为负（节点重启计数器回绕）时跳过该拍。
@@ -228,6 +331,43 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 	s.lastNet[node] = netCounters{sent: req.NetworkBytesSent, recv: req.NetworkBytesRecv, ts: now}
 	s.netMu.Unlock()
 
+	// ── 日志存储层（VL）磁盘占用（2026-10-29）──
+	//
+	// 老 Worker 不上报这四个字段（全为 0）⇒ 不落任何点，不误报成「磁盘 0 字节」。
+	// UsedBytes>0 作为「有读数」的判据：受管 VL 一定占着磁盘。
+	if req.LogVlDiskUsedBytes > 0 {
+		samples = append(samples, nodeSample(model.MetricLogVLDiskUsed, "bytes", ptr(float64(req.LogVlDiskUsedBytes))))
+		samples = append(samples, nodeSample(model.MetricLogVLPartitions, "count", ptr(float64(req.LogVlPartitions))))
+		// 上限已配时才能算百分比：未配（0）就没有「离上限多远」这个概念。
+		//
+		// 两种口径必须都处理（2026-10-29 审计修复）：字节上限与百分比上限**互斥**，
+		// 配上百分比时 LogVlDiskLimitBytes 恒为 0。原先只按字节算 pct
+		// ⇒ 百分比部署永远没有 log_vl_disk_pct，与配置样例推荐的告警对不上。
+		if req.LogVlDiskLimitBytes > 0 {
+			samples = append(samples, nodeSample(model.MetricLogVLDiskLimit, "bytes", ptr(float64(req.LogVlDiskLimitBytes))))
+			pct := float64(req.LogVlDiskUsedBytes) / float64(req.LogVlDiskLimitBytes) * 100
+			samples = append(samples, nodeSample(model.MetricLogVLDiskPct, "pct", ptr(pct)))
+		} else if req.LogVlDiskLimitPercent > 0 {
+			// 百分比口径：Worker 报的 UsedBytes 是**目录自身大小**，不能直接算百分比
+			// （VL 的 maxDiskUsagePercent 比的是**整块文件系统**使用率）。
+			// 这里只把声明的上限记下来，pct 不落点——真正该盯的信号仍是丢弃计数。
+			samples = append(samples, nodeSample(model.MetricLogVLDiskLimit, "pct", ptr(float64(req.LogVlDiskLimitPercent))))
+		}
+		// 丢弃速率：累计 counter 据相邻心跳差推导（与 lastNet / lastGC 同构）。
+		// 差为负（VL 重启 counter 归零）→ 跳过该拍，不产生负速率假尖峰；首拍无前值同样跳过。
+		// 读前值与写现值放在**同一段**临界区（与上方 lastNet 同构）。
+		s.vlDropMu.Lock()
+		if prev, ok := s.lastVLDrop[node]; ok {
+			if dt := now.Sub(prev.ts).Seconds(); dt > 0 {
+				if d := req.LogVlRowsDroppedTotal; d >= prev.dropped {
+					samples = append(samples, nodeSample(model.MetricLogVLRowsDropped, "rows_per_sec", ptr(float64(d-prev.dropped)/dt)))
+				}
+			}
+		}
+		s.lastVLDrop[node] = vlDropCounter{dropped: req.LogVlRowsDroppedTotal, ts: now}
+		s.vlDropMu.Unlock()
+	}
+
 	// 每实例 ServerProbe 快照（instance 维度 + 分世界 world 维度）。
 	for _, im := range req.InstanceMetrics {
 		iid := im.InstanceUuid
@@ -237,36 +377,114 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 		instSample := func(key, unit string, v *float64) Sample {
 			return Sample{NodeUUID: node, InstanceID: iid, Scope: model.MetricScopeInstance, MetricKey: key, Unit: unit, TS: now, Value: v}
 		}
-		if !im.ProbeAvailable {
-			// 探针不可用：写 NULL 断点（曲线断开，不补假值）。
-			samples = append(samples, instSample(model.MetricInstTPS, "tps", nil))
-			continue
-		}
-		samples = append(samples,
-			instSample(model.MetricInstTPS, "tps", ptr(im.Tps)),
-			instSample(model.MetricInstMSPT, "ms", ptr(im.MsptMillis)),
-			instSample(model.MetricInstPlayersOnline, "count", ptr(float64(im.PlayersOnline))),
-			instSample(model.MetricInstHeapUsed, "bytes", ptr(float64(im.HeapUsedBytes))),
-			instSample(model.MetricInstHeapMax, "bytes", ptr(float64(im.HeapMaxBytes))),
-			instSample(model.MetricInstThreads, "count", ptr(float64(im.Threads))),
-			instSample(model.MetricInstUptime, "seconds", ptr(im.UptimeSeconds)),
-		)
-		// 系统 CPU 0~1，<0 表示探针未取到 → 跳过该指标。
-		if im.CpuLoad >= 0 {
-			samples = append(samples, instSample(model.MetricInstCPUPct, "pct", ptr(im.CpuLoad*100)))
-		}
-		for _, w := range im.Worlds {
-			if w.Name == "" {
-				continue
-			}
-			worldSample := func(key, unit string, v *float64) Sample {
-				return Sample{NodeUUID: node, InstanceID: iid, Scope: model.MetricScopeWorld, World: w.Name, MetricKey: key, Unit: unit, TS: now, Value: v}
-			}
+		// 探针指标（TPS/MSPT/JVM/世界）：仅探针提供。探针不可用 → TPS 写 NULL 断点（曲线断开，不补假值）。
+		if im.ProbeAvailable {
 			samples = append(samples,
-				worldSample(model.MetricWorldLoadedChunks, "count", ptr(float64(w.LoadedChunks))),
-				worldSample(model.MetricWorldEntities, "count", ptr(float64(w.Entities))),
-				worldSample(model.MetricWorldTileEntities, "count", ptr(float64(w.TileEntities))),
+				instSample(model.MetricInstTPS, "tps", ptr(im.Tps)),
+				instSample(model.MetricInstMSPT, "ms", ptr(im.MsptMillis)),
+				instSample(model.MetricInstHeapUsed, "bytes", ptr(float64(im.HeapUsedBytes))),
+				instSample(model.MetricInstHeapMax, "bytes", ptr(float64(im.HeapMaxBytes))),
+				instSample(model.MetricInstThreads, "count", ptr(float64(im.Threads))),
+				instSample(model.MetricInstUptime, "seconds", ptr(im.UptimeSeconds)),
 			)
+			// 系统 CPU 0~1，<0 表示探针未取到 → 跳过该指标。
+			if im.CpuLoad >= 0 {
+				samples = append(samples, instSample(model.MetricInstCPUPct, "pct", ptr(im.CpuLoad*100)))
+			}
+			// GC 速率：探针累计 counter（次数/耗时）据相邻心跳差推导速率。
+			// 差为负（实例重启 counter 归零）→ 跳过该拍，不产生负速率假尖峰；首拍无前值同样跳过。
+			// m3 修复：读前值与写现值放进**同一段**临界区（与上方 lastNet 同构），
+			// 避免两段临界区之间插入其它路径的更新，导致同一心跳被重复差值或前值错位。
+			s.gcMu.Lock()
+			if prevGC, ok := s.lastGC[iid]; ok {
+				if dt := now.Sub(prevGC.ts).Seconds(); dt > 0 {
+					if dc := im.GcCountTotal - prevGC.count; dc >= 0 {
+						samples = append(samples, instSample(model.MetricInstGCCount, "count_per_sec", ptr(float64(dc)/dt)))
+					}
+					if dm := im.GcTimeMillis - prevGC.millis; dm >= 0 {
+						samples = append(samples, instSample(model.MetricInstGCTime, "ms_per_sec", ptr(dm/dt)))
+					}
+				}
+			}
+			s.lastGC[iid] = gcCounters{count: im.GcCountTotal, millis: im.GcTimeMillis, ts: now}
+			s.gcMu.Unlock()
+
+			// 桥中转指标：仅当探针**真的上报了**才落点（BridgeMetricsPresent）。
+			//
+			// 这是本项最关键的一条判定：老探针不发这组字段，若拿零值当数据落库，
+			// 曲线会显示“队列空、零丢失”——恰好与“不知道有没有丢”相反。
+			// 宁可断线（NULL 断点），也不画一条看着健康的假曲线。
+			if im.BridgeMetricsPresent {
+				samples = append(samples,
+					instSample(model.MetricBridgeReliableQueue, "frames", ptr(float64(im.BridgeReliableQueue))),
+					instSample(model.MetricBridgeBestEffortQueue, "frames", ptr(float64(im.BridgeBestEffortQueue))),
+					instSample(model.MetricBridgeReceiptRejected, "count", ptr(float64(im.BridgeReceiptRejectedTotal))),
+				)
+				// 拒绝与写出失败走与 GC 同构的差分：存**速率**而非累计值，
+				// 因为运维看的是“现在每秒丢多少”，而不是一个只增不减的累计数。
+				s.bridgeMu.Lock()
+				if prev, ok := s.lastBridge[iid]; ok {
+					if dt := now.Sub(prev.ts).Seconds(); dt > 0 {
+						// 差为负 ⇒ 实例重启导致 counter 归零：跳过该拍，不产生负速率假尖峰。
+						if dc := im.BridgeReliableRejectedTotal + im.BridgeBestEffortDroppedTotal - prev.rejected; dc >= 0 {
+							samples = append(samples, instSample(model.MetricBridgeRejectedRate, "count_per_sec", ptr(float64(dc)/dt)))
+						}
+						if dc := im.BridgeWriteFailuresTotal + im.BridgeWriteTimeoutsTotal - prev.writeFail; dc >= 0 {
+							samples = append(samples, instSample(model.MetricBridgeWriteFailures, "count_per_sec", ptr(float64(dc)/dt)))
+						}
+					}
+				}
+				s.lastBridge[iid] = bridgeCounters{
+					rejected:  im.BridgeReliableRejectedTotal + im.BridgeBestEffortDroppedTotal,
+					writeFail: im.BridgeWriteFailuresTotal + im.BridgeWriteTimeoutsTotal,
+					ts:        now,
+				}
+				s.bridgeMu.Unlock()
+			}
+			for _, w := range im.Worlds {
+				if w.Name == "" {
+					continue
+				}
+				worldSample := func(key, unit string, v *float64) Sample {
+					return Sample{NodeUUID: node, InstanceID: iid, Scope: model.MetricScopeWorld, World: w.Name, MetricKey: key, Unit: unit, TS: now, Value: v}
+				}
+				samples = append(samples,
+					worldSample(model.MetricWorldLoadedChunks, "count", ptr(float64(w.LoadedChunks))),
+					worldSample(model.MetricWorldEntities, "count", ptr(float64(w.Entities))),
+					worldSample(model.MetricWorldTileEntities, "count", ptr(float64(w.TileEntities))),
+				)
+			}
+		} else {
+			// 探针不可用：TPS 与 GC 速率均写 NULL 断点（缺测不补假值）。
+			samples = append(samples,
+				instSample(model.MetricInstTPS, "tps", nil),
+				instSample(model.MetricInstGCCount, "count_per_sec", nil),
+				instSample(model.MetricInstGCTime, "ms_per_sec", nil),
+			)
+		}
+
+		// 在线人数：仅当**在线人数本身可用**时落点，三源皆无/该指标缺测 → NULL 断点。
+		// 判定主用 im.PlayersOnlineAvailable（Worker 置位，Query 有响应但缺 numplayers 时为 false）。
+		//
+		// 兼容判定（447 复审 N1）：不置该位的旧/中间版本 Worker 有两个来源可安全回退——
+		//  · 探针可用：探针必然给出 players_online（serverprobe_players_online / 代理回退），旧 CP 亦按此判定；
+		//  · SLP 可用：`players.online` 是 SLP 协议**必带**字段（不像 Query 的 numplayers 可缺），直探命中即有真值。
+		// 中间版本 Worker 正是「有直探、置 SlpAvailable=true + 真实 PlayersOnline，但缺 players_online_available」，
+		// 若不回退会把 SLP-only 实例的在线人数整段写成 NULL，污染全网总在线合计与 bot 容量采样。
+		// **Query-only 仍不信任**：Query 可响应而缺 numplayers，回退会重新引入「伪造 0」。
+		if im.PlayersOnlineAvailable || im.ProbeAvailable || im.SlpAvailable {
+			samples = append(samples, instSample(model.MetricInstPlayersOnline, "count", ptr(float64(im.PlayersOnline))))
+		} else {
+			samples = append(samples, instSample(model.MetricInstPlayersOnline, "count", nil))
+		}
+
+		// 人数上限：与在线人数同一套「可用才落点」口径，但**不做**上面那条兼容回退——
+		// 上限不像在线人数那样在三源里都必带（SLP 的 `players.max` 必带，Query 的 `maxplayers` 可缺，
+		// 探针不提供），回退会重新引入「伪造上限」。因此只看显式可用位。
+		if im.MaxPlayersAvailable {
+			samples = append(samples, instSample(model.MetricInstPlayersMax, "count", ptr(float64(im.MaxPlayers))))
+		} else {
+			samples = append(samples, instSample(model.MetricInstPlayersMax, "count", nil))
 		}
 	}
 
@@ -276,15 +494,23 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 	return s.IngestProcessMetrics(req.NodeUuid, req.ProcessMetrics, now)
 }
 
-// ProcessTopQuery 进程 TOPN 查询参数（FR-170）。
+// ProcessTopQuery 进程 TOPN 查询参数。
 type ProcessTopQuery struct {
 	InstanceUUID string
 	NodeUUID     string
 	Sort         string
 	Limit        int
+	/*
+		At 指定「取哪个时刻的进程快照」。零值表示最新（原有行为）。
+
+		为什么需要：前端在历史曲线上悬浮某一时刻时，要能回答「那一刻是谁在吃 CPU/内存」。
+		原实现只取每实例的最新快照，无法回溯。进程快照与原始指标同档保留（48h），
+		因此 48h 内的时间点都能查到对应快照。
+	*/
+	At time.Time
 }
 
-// ProcessTopItem 进程 TOPN 返回项（FR-170）。
+// ProcessTopItem 进程 TOPN 返回项。
 type ProcessTopItem struct {
 	InstanceID       uint      `json:"instanceId"`
 	InstanceUUID     string    `json:"instanceUuid"`
@@ -334,12 +560,17 @@ func (s *MetricService) IngestProcessMetrics(nodeUUID string, samples []*workerp
 	return s.db.Create(&rows).Error
 }
 
+// processTopFreshness 无 At 查询时，进程快照的“当前”有效期。
+// Worker 每 30s 一采集，4 拍容错；超过即视为目标已停更（停机/掉线），不再当作当前进程。
+const processTopFreshness = 2 * time.Minute
+
 // QueryProcessTop 返回最新一拍进程快照中的 TOPN。
 func (s *MetricService) QueryProcessTop(q ProcessTopQuery) ([]ProcessTopItem, error) {
 	limit := q.Limit
 	if limit <= 0 || limit > 50 {
 		limit = 10
 	}
+	freshAfter := time.Now().UTC().Add(-processTopFreshness)
 	latestQuery := s.db.Model(&model.ProcessMetricSnapshot{})
 	if q.InstanceUUID != "" {
 		latestQuery = latestQuery.Where("instance_uuid = ?", q.InstanceUUID)
@@ -356,6 +587,29 @@ func (s *MetricService) QueryProcessTop(q ProcessTopQuery) ([]ProcessTopItem, er
 	}
 
 	var rows []model.ProcessMetricSnapshot
+	/*
+		At 非零 → 取「≤ At 的最近一拍」而不是全局最新。
+		用 `sampled_at <= At` 后取 MAX：进程快照是离散采样，用户悬浮的时刻很少正好落在样本点上，
+		语义上「那一刻正在跑的是哪一批进程」应取该时刻之前最近的一次采集。
+		若该实例在 At 之前完全没有样本（例如刚接入），则该实例不出现在结果里——这是正确行为，
+		不要用「回退到最新」来兜底，那会把「当时还没跑」误报成「当时在跑」。
+	*/
+	if !q.At.IsZero() {
+		latestQuery = latestQuery.Where("sampled_at <= ?", q.At.UTC())
+	}
+	// 新鲜度：无 At（看“当前”）时只认最近一拍。
+	// 进程快照 TTL 是 48h，实例停止后 Worker 不再上报、也不会写空拍清旧值，
+	// 没有这层过滤会把停机实例的旧 PID 当作“正在运行”，列表还能点开探查。
+	// 阈值取 2 分钟（心跳 30s × 4 拍）：容忍偶发丢拍，又能尽快把停机实例清出榜。
+	if q.At.IsZero() {
+		// 必须先限制 MAX 的候选归属：迁移后旧节点若有时间更晚的快照，
+		// 不能先选中它、在外层淘汰后把当前节点的有效快照一起遮掉。
+		latestQuery = latestQuery.
+			Joins("JOIN instances AS latest_i ON latest_i.uuid = process_metric_snapshots.instance_uuid AND latest_i.deleted_at IS NULL").
+			Joins("JOIN nodes AS latest_n ON latest_n.id = latest_i.node_id AND latest_n.uuid = process_metric_snapshots.node_uuid AND latest_n.deleted_at IS NULL").
+			Where("sampled_at >= ? AND latest_i.status = ? AND latest_n.status = ? AND latest_n.last_heartbeat >= ?",
+				freshAfter, model.InstanceStatusRunning, model.NodeStatusOnline, freshAfter)
+	}
 	latestQuery = latestQuery.Select("instance_uuid, MAX(sampled_at) AS sampled_at").Group("instance_uuid")
 	query := s.db.Table("process_metric_snapshots AS p").
 		Select("p.*").
@@ -365,6 +619,14 @@ func (s *MetricService) QueryProcessTop(q ProcessTopQuery) ([]ProcessTopItem, er
 	}
 	if q.NodeUUID != "" {
 		query = query.Where("p.node_uuid = ?", q.NodeUUID)
+	}
+	// 外层仍校验归属，防止不同节点具有同一个 sampled_at 时把旧节点同刻行联回。
+	if q.At.IsZero() {
+		query = query.
+			Joins("JOIN instances AS i ON i.uuid = p.instance_uuid AND i.deleted_at IS NULL").
+			Joins("JOIN nodes AS n ON n.id = i.node_id AND n.uuid = p.node_uuid AND n.deleted_at IS NULL").
+			Where("i.status = ? AND n.status = ? AND n.last_heartbeat >= ?",
+				model.InstanceStatusRunning, model.NodeStatusOnline, freshAfter)
 	}
 	if err := query.Order(order).Limit(limit).Scan(&rows).Error; err != nil {
 		return nil, err
@@ -482,7 +744,7 @@ func (s *MetricService) QuerySeries(q SeriesQuery) (string, []Series, error) {
 	return res, out, nil
 }
 
-// QuerySeriesBatch 批量返回多个实例目标的历史曲线（FR-340：消 N+1）。整批同档同窗，
+// QuerySeriesBatch 批量返回多个实例目标的历史曲线（：消 N+1）。整批同档同窗，
 // 序列表一次 IN 查询后按 instance_id 分组，逐序列点位复用 queryPoints（与单目标版一致）。
 // instanceIDs 为已解析的实例 UUID（每个都是响应中的 targetId 键）；out 保证每个入参 UUID
 // 都有条目（无序列的目标返空数组，与单目标端点空 series 语义一致，前端可区分「无数据」与「被剔除」）。
@@ -513,6 +775,42 @@ func (s *MetricService) QuerySeriesBatch(q SeriesQuery, instanceIDs []string) (s
 		out[sr.InstanceID] = append(out[sr.InstanceID], Series{MetricKey: sr.MetricKey, Unit: sr.Unit, World: sr.World, Points: pts})
 	}
 	return res, out, nil
+}
+
+// LatestValue 返回某 (scope, target, metric_key) 序列在 since 之后的最新非空样本值；
+// 无序列或无样本返回 nil。node scope 用 nodeUUID 定位，instance scope 用 instanceID 定位。
+func (s *MetricService) LatestValue(scope model.MetricScope, nodeUUID, instanceID, metricKey string, since time.Time) (*float64, error) {
+	q := s.db.Model(&model.MetricSeries{}).Where("scope = ? AND metric_key = ?", scope, metricKey)
+	if scope == model.MetricScopeNode {
+		q = q.Where("node_uuid = ?", nodeUUID)
+	} else {
+		q = q.Where("instance_id = ?", instanceID)
+	}
+	var series []model.MetricSeries
+	if err := q.Find(&series).Error; err != nil {
+		return nil, err
+	}
+	var best *float64
+	var bestTS time.Time
+	for _, se := range series {
+		var row model.MetricSampleRaw
+		err := s.db.Where("series_id = ? AND value IS NOT NULL AND ts >= ?", se.ID, since.UTC()).
+			Order("ts DESC").First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if row.Value == nil {
+			continue
+		}
+		if best == nil || !row.TS.Before(bestTS) {
+			v := *row.Value
+			best, bestTS = &v, row.TS
+		}
+	}
+	return best, nil
 }
 
 func (s *MetricService) queryPoints(seriesID uint, res string, from, to time.Time) ([]SeriesPoint, error) {
@@ -561,7 +859,7 @@ type OverviewTotals struct {
 	OnlineNodeCount  int     `json:"onlineNodeCount"`
 	RunningInstances int     `json:"runningInstances"`
 	CPUPct           float64 `json:"cpuPct"`        // 在线节点 CPU 使用率均值
-	LoadAvg          float64 `json:"loadAvg"`       // 在线节点负载利用率均值（load1/核数*100，FR-062）
+	LoadAvg          float64 `json:"loadAvg"`       // 在线节点负载利用率均值（load1/核数*100）
 	MemUsedBytes     int64   `json:"memUsedBytes"`  // 在线节点已用内存合计
 	MemTotalBytes    int64   `json:"memTotalBytes"` // 在线节点内存容量合计
 	OnlinePlayers    int64   `json:"onlinePlayers"` // 各实例最近在线人数合计
@@ -588,7 +886,7 @@ const overviewRecentWindow = 2 * time.Minute
 const overviewNodeFreshWindow = 90 * time.Second
 
 // Overview 汇总跨节点当前总量 + 聚合历史曲线（总 CPU 均值 / 总内存合计 / 总在线玩家合计），
-// 供总览页一屏概览（FR-060）。曲线按区间自动选档并按档位桶跨序列对齐聚合。
+// 供总览页一屏概览。曲线按区间自动选档并按档位桶跨序列对齐聚合。
 func (s *MetricService) Overview(from, to time.Time, resolution string) (OverviewResult, error) {
 	return s.overviewAt(time.Now().UTC(), from, to, resolution)
 }
@@ -612,6 +910,14 @@ func (s *MetricService) overviewAt(now, from, to time.Time, resolution string) (
 		{model.MetricScopeNode, model.MetricNodeLoad, "load", false},
 		{model.MetricScopeNode, model.MetricNodeMemUsed, "bytes", true},
 		{model.MetricScopeInstance, model.MetricInstPlayersOnline, "count", true},
+		/*
+			Bot Worker 的两条共享进程指标也进趋势（首页重构）：
+			它们由 `bot_runtime_metric_sampler` 持续写入，属于「资源视角」，
+			与上面三条同轴呈现才有可比性。前端默认在图例里隐藏，按需勾选显示。
+			求和而非均值：多节点各有一个 Bot Worker 进程，看的是全平台合计占用。
+		*/
+		{model.MetricScopeNode, model.MetricBotWorkerRSSBytes, "bytes", true},
+		{model.MetricScopeNode, model.MetricBotWorkerCPUPct, "pct", true},
 	}
 	for _, sp := range specs {
 		tr, err := s.aggregateTrend(sp.scope, sp.key, sp.unit, from.UTC(), to.UTC(), res, sp.sum)
@@ -669,23 +975,54 @@ func (s *MetricService) overviewTotals(now time.Time) (OverviewTotals, error) {
 }
 
 // latestSum 取某 scope+metric_key 下每条序列在 since 之后的最新非空样本并求和（如总在线人数）。
+//
+// N-8 修复：改为**单条聚合 SQL**。原实现先查序列表、再对每条序列各发一条
+// `ORDER BY ts DESC LIMIT 1`，查询数随序列数线性增长；本函数挂在 `/metrics/overview` 上，
+// 而总览页每 10s 轮询一次（`useMetricOverview` 的 `refetchInterval`），故序列数会直接放大成
+// 持续往返成本。这里用「按序列取 MAX(ts)、再自联接回该行取 value」的经典写法，一条 SQL 搞定。
+//
+// 自联接而非窗口函数：SQLite 在 3.25 才支持窗口函数，而本项目只支持 sqlite 驱动
+// （`database.New` 仅 sqlite 分支），直写 `MAX(ts)`+自联接在所有版本上都可用。
+//
+// B-1 修复：自联接的 ON 条件必须锚定**唯一行**，不能是 `latest.mts = v.ts` 这样的等值匹配。
+// 原本按 ts 匹配时，同一序列同一 ts 有几行就命中几行，外层 SUM 全部计入 → 在线人数被放大。
+// 这不是理论风险：`metric_sample_raws` 无任何唯一约束（仅 id 自增主键）、
+// `idx_metric_raw_series_ts` 是普通索引、`Ingest` 对样本纯追加且无去重，
+// 心跳重放/重试即产生同 (series_id, ts) 多行。
+//
+// 「取一行」的写法有三种，只有第三种同时满足「按 ts 取最新」与「同刻确定性」：
+//   - 只按 `MAX(id)` 锚定（`latest.mid = v.id`）**不够**——它依据写入先后而非 ts：心跳重试
+//     可能让**更旧**的拍后到，此时 id 最大的那行 ts 更旧，会把陈旧值当当前值报出
+//     （实测：最新拍 7 + 陈旧拍 3 后到 → 错报 3）。
+//   - 同时要求 `latest.mts = v.ts AND latest.mid = v.id` **更糟**——但两个 MAX 是独立聚合，
+//     (mts, mid) 未必取自同一行；乱序到达时没有任何行同时满足两个条件 → 该序列 SUM 丢成 0。
+//   - 故：先用 `MAX(ts)` 收敛到「最新拍」（保留原 JOIN），再用相关子查询在该 ts 内取
+//     `MAX(id)` 决胜（`v.id = (SELECT MAX(v3.id) … v3.ts = v.ts)`）。同刻多行只可能是重放，
+//     取最后写入者才是最新观测。子查询只对「已是最新拍的候选行」求值，命中
+//     `(series_id, ts)` 索引；仍是**单条** SQL，不恢复 N+1。
+//
+// 与修复前的时间语义完全一致，只把「同刻多行全取」收紧为「同刻取最后一次观测」。
 func (s *MetricService) latestSum(scope model.MetricScope, metricKey string, since time.Time) (float64, error) {
-	var series []model.MetricSeries
-	if err := s.db.Where("scope = ? AND metric_key = ?", scope, metricKey).Find(&series).Error; err != nil {
+	var sum *float64
+	err := s.db.Raw(
+		"SELECT SUM(v.value) FROM metric_sample_raws AS v "+
+			"JOIN metric_series AS s ON s.id = v.series_id "+
+			"JOIN (SELECT v2.series_id AS sid, MAX(v2.ts) AS mts FROM metric_sample_raws AS v2 "+
+			"JOIN metric_series AS s2 ON s2.id = v2.series_id "+
+			"WHERE s2.scope = ? AND s2.metric_key = ? AND v2.value IS NOT NULL AND v2.ts >= ? "+
+			"GROUP BY v2.series_id) AS latest ON latest.sid = v.series_id AND latest.mts = v.ts "+
+			"WHERE s.scope = ? AND s.metric_key = ? AND v.value IS NOT NULL "+
+			"AND v.id = (SELECT MAX(v3.id) FROM metric_sample_raws AS v3 "+
+			"WHERE v3.series_id = v.series_id AND v3.value IS NOT NULL AND v3.ts = v.ts)",
+		string(scope), metricKey, since.UTC(), string(scope), metricKey,
+	).Scan(&sum).Error
+	if err != nil {
 		return 0, err
 	}
-	var sum float64
-	for _, se := range series {
-		var row model.MetricSampleRaw
-		err := s.db.Where("series_id = ? AND value IS NOT NULL AND ts >= ?", se.ID, since).
-			Order("ts DESC").First(&row).Error
-		if err == nil && row.Value != nil {
-			sum += *row.Value
-		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return 0, err
-		}
+	if sum == nil {
+		return 0, nil
 	}
-	return sum, nil
+	return *sum, nil
 }
 
 // overviewBucket 据查询档位选择跨序列对齐的桶大小（raw 用 1m 把 30s 样本并桶）。
@@ -700,67 +1037,70 @@ func overviewBucket(res string) time.Duration {
 	}
 }
 
+// overviewTrendSource 据查询档位选择样本表与列名。返回 (表名, 值列, 时间列)。
+// 与 queryPoints 的三档选择保持一致（raw→metric_sample_raws、5m→metric_rollup5ms、1h→metric_rollup1hs）。
+func overviewTrendSource(namer interface{ TableName(string) string }, res string) (string, string, string) {
+	switch res {
+	case "1h":
+		return namer.TableName("MetricRollup1h"), "avg", "bucket_ts"
+	case "5m":
+		return namer.TableName("MetricRollup5m"), "avg", "bucket_ts"
+	default: // raw
+		return namer.TableName("MetricSampleRaw"), "value", "ts"
+	}
+}
+
 // aggregateTrend 把某 scope+metric_key 下的所有序列按档位桶对齐后跨序列聚合成一条曲线。
 // 每条序列在同一桶内先取其样本均值作代表值，再按 sum/avg 跨序列合并。
+//
+// N-8 修复：改为**单条聚合 SQL**（原实现先查序列表、再对每条序列调 queryPoints，
+// 且 raw 档 queryPoints 每序列还多发一条 COUNT——查询数随序列数线性增长）。
+// 两级聚合语义与原内存实现严格一致：
+//   - 内层 `GROUP BY series_id, b`：每条序列在同一对外桶内的样本求均值作代表值（对应原 perSeries）；
+//   - 外层 `GROUP BY b`：跨序列按 sum/avg 合并（对应原 combined）。
+//
+// 时间分桶用 `strftime('%s', <ts>) / <桶秒>`（**不是**把 `MIN(<ts>)` 截断到桶起点）：
+// 存储文本在 raw 档带纳秒+时区偏移、rollup 档为分钟对齐，直接截断文本会与 Go 侧
+// `p.TS.Truncate(bucket)` 得出不同结果；`strftime→unix 秒→整除` 才与 Go 侧严格一致。
+// 点位时间取该桶最早样本时刻——与 Truncate 截断是同一个值（桶内任意样本都落在同一桶起点）。
+//
+// 注意：`bucketSec` 与聚合函数名（SUM/AVG）由本函数按 `res`/`sum` 生成，不接受外部输入。
 func (s *MetricService) aggregateTrend(scope model.MetricScope, metricKey, unit string, from, to time.Time, res string, sum bool) (OverviewTrend, error) {
 	bucket := overviewBucket(res)
-	var series []model.MetricSeries
-	if err := s.db.Where("scope = ? AND metric_key = ?", scope, metricKey).Find(&series).Error; err != nil {
+	valueTable, valueCol, tsCol := overviewTrendSource(s.db.NamingStrategy, res)
+	bucketSec := int64(bucket.Seconds())
+
+	outerAgg := "SUM(rep)"
+	if !sum {
+		outerAgg = "AVG(rep)"
+	}
+	sqlText := fmt.Sprintf(
+		"SELECT b, %s AS val, ts_unix FROM ("+
+			"SELECT (CAST(strftime('%%s', v.%s) AS INTEGER) / %d) AS b, "+
+			"AVG(v.%s) AS rep, CAST(strftime('%%s', MIN(v.%s)) AS INTEGER) AS ts_unix "+
+			"FROM %s AS v JOIN metric_series AS s ON s.id = v.series_id "+
+			"WHERE s.scope = ? AND s.metric_key = ? AND v.%s >= ? AND v.%s <= ? AND v.%s IS NOT NULL "+
+			"GROUP BY s.id, b"+
+			") GROUP BY b ORDER BY b",
+		outerAgg, tsCol, bucketSec, valueCol, tsCol, valueTable, tsCol, tsCol, valueCol,
+	)
+
+	var rows []struct {
+		B      int64   `gorm:"column:b"`
+		Val    float64 `gorm:"column:val"`
+		TSUnix int64   `gorm:"column:ts_unix"`
+	}
+	if err := s.db.Raw(sqlText, string(scope), metricKey, from.UTC(), to.UTC()).Scan(&rows).Error; err != nil {
 		return OverviewTrend{}, err
 	}
 
-	type acc struct {
-		sum float64
-		n   int
-	}
-	combined := map[int64]*acc{}
-	for _, se := range series {
-		pts, err := s.queryPoints(se.ID, res, from, to)
-		if err != nil {
-			return OverviewTrend{}, err
-		}
-		perSeries := map[int64]*acc{}
-		for _, p := range pts {
-			if p.Avg == nil {
-				continue
-			}
-			b := p.TS.Truncate(bucket).UnixNano()
-			a := perSeries[b]
-			if a == nil {
-				a = &acc{}
-				perSeries[b] = a
-			}
-			a.sum += *p.Avg
-			a.n++
-		}
-		for b, a := range perSeries {
-			rep := a.sum / float64(a.n)
-			g := combined[b]
-			if g == nil {
-				g = &acc{}
-				combined[b] = g
-			}
-			g.sum += rep
-			g.n++
-		}
-	}
-
-	keys := make([]int64, 0, len(combined))
-	for b := range combined {
-		keys = append(keys, b)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-
-	points := make([]SeriesPoint, 0, len(keys))
-	for _, b := range keys {
-		g := combined[b]
-		v := g.sum
-		if !sum && g.n > 0 {
-			v = g.sum / float64(g.n)
-		}
-		val := v
-		ts := time.Unix(0, b).UTC()
-		points = append(points, SeriesPoint{TS: ts, Avg: &val, Min: &val, Max: &val})
+	points := make([]SeriesPoint, 0, len(rows))
+	for _, r := range rows {
+		val := r.Val
+		points = append(points, SeriesPoint{
+			TS:  time.Unix(r.TSUnix, 0).UTC().Truncate(bucket),
+			Avg: &val, Min: &val, Max: &val,
+		})
 	}
 	return OverviewTrend{MetricKey: metricKey, Unit: unit, Points: points}, nil
 }
@@ -777,35 +1117,219 @@ func (s *MetricService) RollupAndPurge(now time.Time) error {
 	return s.purge(now)
 }
 
+// 分批规模常量。
+//
+// 为什么必须分批（生产实证 2026-10-09，CP 日志统计）：单条
+// `SELECT * FROM metric_sample_raws WHERE ts < ? ORDER BY ts` 要捞 54.5 万行、最慢 145.8 秒，
+// 而 CP 的 SQLite 连接池被刻意收敛为 1 条（避免 COMMIT 因 BUSY 失败后连接毒化）。
+// 于是一条巨查询独占唯一连接期间，同库上「只返回 1 行」的 `SELECT * FROM nodes` 也要排队 4 秒——
+// 这就是用户感知的「日志页慢」的第二层根因（第一层限流已单独修复）。
+//
+// 分批后每批只持锁很短一瞬，批与批之间连接归还连接池，其它请求得以插队。
+// 在单连接前提下，这是唯一能给其它请求让路的办法（不能靠调大连接数，那是另一个 owner 的改动）。
+const (
+	// metricScanBatch 单次采样扫描的行数上限（读）。
+	metricScanBatch = 2000
+	// metricPrefetchChunk 单次「已存在桶」预取覆盖的候选键数量上限（决定 IN 列表规模）。
+	metricPrefetchChunk = 200
+	// metricInsertBatch 单次 INSERT 的行数上限（写）。
+	metricInsertBatch = 200
+	// metricPurgeBatch 单次 DELETE 的行数上限（写）。
+	metricPurgeBatch = 2000
+)
+
+// metricBucketKey 把 (series_id, bucket_ts) 复合键折叠成无碰撞的字符串键。
+//
+// 两个分量都写成十进制整数（series_id 为自增主键、bucket_ts 取 UnixNano）。十进制表示里
+// 不可能出现 '|'，故分隔符位置不存在歧义：series_id=1/bucket=23 得 "1|23"，
+// series_id=12/bucket=3 得 "12|3"，两者不同。反过来，任意两个不同的 (uint, int64) 组合
+// 都映射到不同的十进制拼接串，因此不会出现「不同桶被判为同一个」的漏插。
+// 该格式与改动前逐桶 COUNT 时用的 `fmt.Sprintf("%d|%d", ...)` 一致，便于逐值对照。
+func metricBucketKey(seriesID uint, bucket time.Time) string {
+	return strconv.FormatUint(uint64(seriesID), 10) + "|" + strconv.FormatInt(bucket.UnixNano(), 10)
+}
+
+// bucketCandidate 一个待写入的聚合桶（键 + 复合键的两半，便于分批预取）。
+type bucketCandidate struct {
+	key      string
+	seriesID uint
+	bucket   time.Time
+}
+
+// candidatesOf 整理聚合结果为候选桶列表，并按 (series_id, bucket_ts) 升序排列。
+//
+// 升序不是美观问题：prefetchExistingBuckets 依赖它切块——同块内序列集合与桶时间范围都紧凑，
+// 预取查询才能走覆盖索引的窄范围；顺序不保证的话每块都可能退化到全表范围。
+func candidatesOf[T any](accs map[string]T, pick func(key string, a T) bucketCandidate) []bucketCandidate {
+	cands := make([]bucketCandidate, 0, len(accs))
+	for key, a := range accs {
+		cands = append(cands, pick(key, a))
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].seriesID != cands[j].seriesID {
+			return cands[i].seriesID < cands[j].seriesID
+		}
+		return cands[i].bucket.Before(cands[j].bucket)
+	})
+	return cands
+}
+
+// scanRawSamples 按主键游标分批遍历已完结的原始样本，逐批交给 consume。
+//
+// 为什么用 id 游标而不是 ts 游标：`WHERE ts < ? ORDER BY ts` 的执行计划实测是
+// SCAN + USE TEMP B-TREE FOR ORDER BY——既全表扫描又要为 54 万行建临时排序树，
+// 单条语句就把唯一连接占满上百秒。而 `WHERE ts < ? AND id > ? ORDER BY id LIMIT n`
+// 实测走 INTEGER PRIMARY KEY 范围搜索、无临时 B 树，单批代价与表总行数解耦。
+//
+// 游标单调递增，故每批严格前进、循环必然终止。崩溃/重启后从 id=0 重扫也只是重算同样的聚合
+// （聚合结果与扫描顺序无关，见 accumulateRaw / accumulateFive），因此中断可安全重跑。
+func (s *MetricService) scanRawSamples(cutoff time.Time, consume func([]model.MetricSampleRaw) error) error {
+	var cursor uint
+	for {
+		var rows []model.MetricSampleRaw
+		if err := s.db.Select("id", "series_id", "ts", "value").
+			Where("ts < ? AND id > ?", cutoff, cursor).
+			Order("id").Limit(metricScanBatch).Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		if err := consume(rows); err != nil {
+			return err
+		}
+		cursor = rows[len(rows)-1].ID
+	}
+}
+
+// scanFiveMinuteBuckets 按主键游标分批遍历已完结的 5m 档行（rollup1h 的输入）。
+// 与 scanRawSamples 同构，故同样不产生临时排序树、不多秒持锁。
+func (s *MetricService) scanFiveMinuteBuckets(cutoff time.Time, consume func([]model.MetricRollup5m) error) error {
+	var cursor uint
+	for {
+		var rows []model.MetricRollup5m
+		if err := s.db.Select("id", "series_id", "bucket_ts", "avg", "min", "max", "last", "count").
+			Where("bucket_ts < ? AND id > ?", cutoff, cursor).
+			Order("id").Limit(metricScanBatch).Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		if err := consume(rows); err != nil {
+			return err
+		}
+		cursor = rows[len(rows)-1].ID
+	}
+}
+
+// bucketKeyRow 批量预取已存桶及其有效样本数。
+type bucketKeyRow struct {
+	SeriesID uint      `gorm:"column:series_id"`
+	BucketTS time.Time `gorm:"column:bucket_ts"`
+	Count    int       `gorm:"column:count"`
+}
+
+// prefetchExistingBuckets 按序列和有界 IN 列表预取已存桶的 count。
+// 候选已排序，查询仍走 (series_id, bucket_ts) 索引，避免逐桶查询。
+func prefetchExistingBuckets(cands []bucketCandidate, query func(seriesID uint, buckets []time.Time) ([]bucketKeyRow, error)) (map[string]int, error) {
+	existing := make(map[string]int, len(cands))
+	for i := 0; i < len(cands); {
+		seriesID := cands[i].seriesID
+		buckets := make([]time.Time, 0, metricPrefetchChunk)
+		for i < len(cands) && cands[i].seriesID == seriesID && len(buckets) < metricPrefetchChunk {
+			buckets = append(buckets, cands[i].bucket)
+			i++
+		}
+		rows, err := query(seriesID, buckets)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			existing[metricBucketKey(r.SeriesID, r.BucketTS)] = r.Count
+		}
+	}
+	return existing, nil
+}
+
+// existingRollupBuckets 预取候选桶中已存在于 table 表的键集合（table 由 NamingStrategy 派生，
+// 与 overviewTrendSource 取表名的方式一致，避免硬编码表名漂移）。
+func (s *MetricService) existingRollupBuckets(cands []bucketCandidate, modelName string) (map[string]int, error) {
+	table := s.db.NamingStrategy.TableName(modelName)
+	return prefetchExistingBuckets(cands, func(seriesID uint, buckets []time.Time) ([]bucketKeyRow, error) {
+		var rows []bucketKeyRow
+		err := s.db.Table(table).Select("series_id, bucket_ts, count").
+			Where("series_id = ? AND bucket_ts IN ?", seriesID, buckets).Find(&rows).Error
+		return rows, err
+	})
+}
+
+// pendingRows 从候选桶里滤掉「已存在」的，并映射为待插入行，保持候选顺序。
+//
+// 语义等价性：改动前是「逐桶 COUNT>0 则 continue，否则 Create」。COUNT>0 与
+// 「该 (series_id, bucket_ts) 的键出现在预取集合中」是同一判定，故被跳过的桶集合完全相同，
+// 被写入的桶集合也完全相同（判定与顺序无关，故排序不影响结果集）。
+//
+// 已存桶在各档 rollup 中仅于 count 增长时回写。
+func pendingRows[T any](cands []bucketCandidate, existing map[string]int, toRow func(bucketCandidate) T) []T {
+	rows := make([]T, 0, len(cands))
+	for _, c := range cands {
+		if _, ok := existing[c.key]; ok {
+			continue // 已存在则跳过（幂等：重跑不会重复插入）
+		}
+		rows = append(rows, toRow(c))
+	}
+	return rows
+}
+
+// insertRows 分批写入聚合行。
+//
+// 分批的理由与扫描同源：单条 INSERT 覆盖多行时仍是一次锁持有，批越小越容易被其它请求插队。
+// 批与批之间连接归还连接池（database/sql 的等待者是 FIFO，会立刻拿到），故其它读请求得以推进。
+func insertRows[T any](db *gorm.DB, rows []T) error {
+	for i := 0; i < len(rows); i += metricInsertBatch {
+		batch := rows[i:min(i+metricInsertBatch, len(rows))]
+		if err := db.Create(&batch).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type rawAcc struct {
 	seriesID uint
 	bucket   time.Time
 	sum      float64
 	min, max float64
 	last     float64
-	count    int
+	// lastTS/lastID 记录 last 取自哪一行，用「(ts, id) 取最大」取代对扫描顺序的依赖。
+	// 改动前靠 `ORDER BY ts` 的全局升序让循环里最后一次赋值落在桶内最新行；改为 id 游标分批后
+	// 扫描不再按 ts 排序，故必须显式比较。同刻多行时取 id 最大者——这与改动前驱动实际返回的
+	// 平局顺序（实测 id 升序，取最后一条）一致，但不依赖 SQL 未定义的平局顺序。
+	lastTS time.Time
+	lastID uint
+	count  int
 }
 
-func (s *MetricService) rollup5m(now time.Time) error {
-	cutoff := bucketStart(now, metricBucket5m) // 只卷已完结的桶
-	var raws []model.MetricSampleRaw
-	if err := s.db.Where("ts < ?", cutoff).Order("ts").Find(&raws).Error; err != nil {
-		return err
-	}
-	accs := map[string]*rawAcc{}
-	var order []string
-	for _, r := range raws {
+// accumulateRaw 把一批原始样本累进 5m 聚合桶。
+//
+// 与改动前逐行累加的等价性：
+//   - sum/min/max/count 都是与到达顺序无关的交换/结合运算，分批不改变结果；
+//   - last 改为按 (ts, id) 取最大，得到「桶内最新一行」；改动前 `ORDER BY ts` 升序后取最后一条
+//     同样是「桶内 ts 最大者」，故正常路径逐字段一致（同刻平局见 lastTS/lastID 注释）；
+//   - 缺测（Value == nil）依旧跳过，不计入任何聚合字段，也不建桶（与改动前 continue 一致）。
+func accumulateRaw(accs map[string]*rawAcc, batch []model.MetricSampleRaw) {
+	for _, r := range batch {
 		if r.Value == nil {
 			continue // 缺测不计入聚合
 		}
 		v := *r.Value
 		b := bucketStart(r.TS, metricBucket5m)
-		key := fmt.Sprintf("%d|%d", r.SeriesID, b.UnixNano())
+		key := metricBucketKey(r.SeriesID, b)
 		a := accs[key]
 		if a == nil {
 			a = &rawAcc{seriesID: r.SeriesID, bucket: b, min: v, max: v}
 			accs[key] = a
-			order = append(order, key)
 		}
 		a.sum += v
 		a.count++
@@ -815,23 +1339,62 @@ func (s *MetricService) rollup5m(now time.Time) error {
 		if v > a.max {
 			a.max = v
 		}
-		a.last = v // raws 按 ts 升序，桶内最后一条即最新
+		if a.lastTS.Before(r.TS) || (a.lastTS.Equal(r.TS) && r.ID > a.lastID) {
+			a.last, a.lastTS, a.lastID = v, r.TS, r.ID
+		}
 	}
-	for _, key := range order {
-		a := accs[key]
-		var exists int64
-		if err := s.db.Model(&model.MetricRollup5m{}).
-			Where("series_id = ? AND bucket_ts = ?", a.seriesID, a.bucket).Count(&exists).Error; err != nil {
-			return err
-		}
-		if exists > 0 {
-			continue
-		}
-		row := model.MetricRollup5m{
+}
+
+func (s *MetricService) rollup5m(now time.Time) error {
+	cutoff := bucketStart(now, metricBucket5m) // 只卷已完结的桶
+
+	accs := map[string]*rawAcc{}
+	// 采样分批：raws 由整表捞取（生产 54 万行、最慢单条 145.8 秒）改为有界游标推进。
+	// 累加与顺序无关，故分批不改变任何聚合字段（见 accumulateRaw）。
+	if err := s.scanRawSamples(cutoff, func(batch []model.MetricSampleRaw) error {
+		accumulateRaw(accs, batch)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	cands := candidatesOf(accs, func(key string, a *rawAcc) bucketCandidate {
+		return bucketCandidate{key: key, seriesID: a.seriesID, bucket: a.bucket}
+	})
+	existing, err := s.existingRollupBuckets(cands, "MetricRollup5m")
+	if err != nil {
+		return err
+	}
+	rows := pendingRows(cands, existing, func(c bucketCandidate) model.MetricRollup5m {
+		a := accs[c.key]
+		return model.MetricRollup5m{
 			SeriesID: a.seriesID, BucketTS: a.bucket,
 			Avg: a.sum / float64(a.count), Min: a.min, Max: a.max, Last: a.last, Count: a.count,
 		}
-		if err := s.db.Create(&row).Error; err != nil {
+	})
+	if err := insertRows(s.db, rows); err != nil {
+		return err
+	}
+	return s.reprocessRecentRollup5m(accs, existing, now)
+}
+
+// reprocessRecentRollup5m 仅回写新增了有效 raw 的已存桶。
+// 保留边界之前的 raw 可能已不完整，不能覆盖原来的完整聚合。
+func (s *MetricService) reprocessRecentRollup5m(accs map[string]*rawAcc, existing map[string]int, now time.Time) error {
+	for key, count := range existing {
+		a := accs[key]
+		if a == nil || a.bucket.Before(now.Add(-metricRawRetention)) || a.count <= count {
+			continue
+		}
+		if err := s.db.Model(&model.MetricRollup5m{}).
+			Where("series_id = ? AND bucket_ts = ?", a.seriesID, a.bucket).
+			Updates(map[string]any{
+				"avg":   a.sum / float64(a.count),
+				"min":   a.min,
+				"max":   a.max,
+				"last":  a.last,
+				"count": a.count,
+			}).Error; err != nil {
 			return err
 		}
 	}
@@ -844,25 +1407,28 @@ type fiveAcc struct {
 	weightedSum float64
 	min, max    float64
 	last        float64
-	count       int
+	// lastTS/lastID 同 rawAcc：5m 输入改为 id 游标分批后，不再依赖 `ORDER BY bucket_ts` 的
+	// 到达顺序，改为显式取 (bucket_ts, id) 最大者——即 1h 桶内最新的 5m 桶。
+	lastTS time.Time
+	lastID uint
+	count  int
 }
 
-func (s *MetricService) rollup1h(now time.Time) error {
-	cutoff := bucketStart(now, metricBucket1h)
-	var fives []model.MetricRollup5m
-	if err := s.db.Where("bucket_ts < ?", cutoff).Order("bucket_ts").Find(&fives).Error; err != nil {
-		return err
-	}
-	accs := map[string]*fiveAcc{}
-	var order []string
-	for _, f := range fives {
+// accumulateFive 把一批 5m 档行累进 1h 聚合桶。
+//
+// 与改动前逐行累加的等价性：
+//   - weightedSum/count/min/max 顺序无关，分批不改变结果；
+//   - last 语义为「1h 桶内最新 5m 桶的 last 值」，改动前由 `ORDER BY bucket_ts` 升序的最后一次
+//     赋值实现，这里改为显式 (bucket_ts, id) 取最大，正常路径一致（同刻平局见 lastTS/lastID 注释）；
+//   - Avg = weightedSum / count 的 count 加权口径逐字段不变。
+func accumulateFive(accs map[string]*fiveAcc, batch []model.MetricRollup5m) {
+	for _, f := range batch {
 		b := bucketStart(f.BucketTS, metricBucket1h)
-		key := fmt.Sprintf("%d|%d", f.SeriesID, b.UnixNano())
+		key := metricBucketKey(f.SeriesID, b)
 		a := accs[key]
 		if a == nil {
 			a = &fiveAcc{seriesID: f.SeriesID, bucket: b, min: f.Min, max: f.Max}
 			accs[key] = a
-			order = append(order, key)
 		}
 		a.weightedSum += f.Avg * float64(f.Count)
 		a.count += f.Count
@@ -872,50 +1438,114 @@ func (s *MetricService) rollup1h(now time.Time) error {
 		if f.Max > a.max {
 			a.max = f.Max
 		}
-		a.last = f.Last
+		if a.lastTS.Before(f.BucketTS) || (a.lastTS.Equal(f.BucketTS) && f.ID > a.lastID) {
+			a.last, a.lastTS, a.lastID = f.Last, f.BucketTS, f.ID
+		}
 	}
-	for _, key := range order {
-		a := accs[key]
-		if a.count == 0 {
+}
+
+func (s *MetricService) rollup1h(now time.Time) error {
+	cutoff := bucketStart(now, metricBucket1h)
+
+	accs := map[string]*fiveAcc{}
+	// 采样分批：5m 档整表捞取（生产 21 万行）改为有界游标推进，累加与顺序无关。
+	if err := s.scanFiveMinuteBuckets(cutoff, func(batch []model.MetricRollup5m) error {
+		accumulateFive(accs, batch)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// count 为 0 的桶不建行也不预取：改动前先判 `a.count == 0 { continue }` 再发 COUNT，
+	// 即该分支同样不产生任何查询，故这里在建候选时即剔除，行为一致。
+	cands := candidatesOf(accs, func(key string, a *fiveAcc) bucketCandidate {
+		return bucketCandidate{key: key, seriesID: a.seriesID, bucket: a.bucket}
+	})
+	kept := cands[:0]
+	for _, c := range cands {
+		if accs[c.key].count == 0 {
 			continue
 		}
-		var exists int64
-		if err := s.db.Model(&model.MetricRollup1h{}).
-			Where("series_id = ? AND bucket_ts = ?", a.seriesID, a.bucket).Count(&exists).Error; err != nil {
-			return err
-		}
-		if exists > 0 {
-			continue
-		}
-		row := model.MetricRollup1h{
+		kept = append(kept, c)
+	}
+	cands = kept
+
+	existing, err := s.existingRollupBuckets(cands, "MetricRollup1h")
+	if err != nil {
+		return err
+	}
+	rows := pendingRows(cands, existing, func(c bucketCandidate) model.MetricRollup1h {
+		a := accs[c.key]
+		return model.MetricRollup1h{
 			SeriesID: a.seriesID, BucketTS: a.bucket,
 			Avg: a.weightedSum / float64(a.count), Min: a.min, Max: a.max, Last: a.last, Count: a.count,
 		}
-		if err := s.db.Create(&row).Error; err != nil {
+	})
+	if err := insertRows(s.db, rows); err != nil {
+		return err
+	}
+	// 5m 桶补齐后，向已封存的小时桶传播；输入被清理过的老桶保持原值。
+	for key, count := range existing {
+		a := accs[key]
+		if a == nil || a.bucket.Before(now.Add(-metric5mRetention)) || a.count <= count {
+			continue
+		}
+		if err := s.db.Model(&model.MetricRollup1h{}).
+			Where("series_id = ? AND bucket_ts = ?", a.seriesID, a.bucket).
+			Updates(map[string]any{
+				"avg": a.weightedSum / float64(a.count), "min": a.min,
+				"max": a.max, "last": a.last, "count": a.count,
+			}).Error; err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// purgeByIDCursor 按主键游标分批删除 timeCol < cutoff 的历史行。
+//
+// 为什么分批：SQLite 上单条大 DELETE 会长时间独占写锁（生产上删除 54 万行原始样本是队头阻塞的
+// 组成部分），分批后每批只短暂持锁，批间让其它请求插队。
+//
+// 为什么「先取 id 再按主键删」而不是 `DELETE ... LIMIT n`：SQLite 的 DELETE LIMIT 需编译期开启
+// SQLITE_ENABLE_UPDATE_DELETE_LIMIT，且本项目另有 MySQL 形态，故采用任何驱动都支持的两步式。
+// 取 id 的语句是 `WHERE timeCol < ? AND id > ? ORDER BY id LIMIT n`，实测走 INTEGER PRIMARY KEY
+// 范围搜索（无临时排序树），单批代价与表内剩余行数解耦。
+//
+// 终止性与安全性：游标严格递增（取回的 id 均 > cursor），故循环必然终止；
+// 每批取回的 id 都满足删除条件，不存在「取到却不删」的重复往返。中途失败/重启后重跑，
+// 剩余的行会被下一批（或下一次 tick）继续删除，即删除是收敛的、幂等的。
+func (s *MetricService) purgeByIDCursor(model any, timeCol string, cutoff time.Time) error {
+	var cursor uint
+	for {
+		var ids []uint
+		if err := s.db.Model(model).Select("id").
+			Where(timeCol+" < ? AND id > ?", cutoff, cursor).
+			Order("id").Limit(metricPurgeBatch).Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		if err := s.db.Where("id IN ?", ids).Delete(model).Error; err != nil {
+			return err
+		}
+		cursor = ids[len(ids)-1]
+	}
+}
+
+// purge 按 TTL 清理各档过期数据。保留期常量与改动前完全一致。
 func (s *MetricService) purge(now time.Time) error {
-	if err := s.db.Where("ts < ?", now.Add(-metricRawRetention)).
-		Delete(&model.MetricSampleRaw{}).Error; err != nil {
+	if err := s.purgeByIDCursor(&model.MetricSampleRaw{}, "ts", now.Add(-metricRawRetention)); err != nil {
 		return err
 	}
-	if err := s.db.Where("bucket_ts < ?", now.Add(-metric5mRetention)).
-		Delete(&model.MetricRollup5m{}).Error; err != nil {
+	if err := s.purgeByIDCursor(&model.MetricRollup5m{}, "bucket_ts", now.Add(-metric5mRetention)); err != nil {
 		return err
 	}
-	if err := s.db.Where("bucket_ts < ?", now.Add(-metric1hRetention)).
-		Delete(&model.MetricRollup1h{}).Error; err != nil {
+	if err := s.purgeByIDCursor(&model.MetricRollup1h{}, "bucket_ts", now.Add(-metric1hRetention)); err != nil {
 		return err
 	}
-	if err := s.db.Where("sampled_at < ?", now.Add(-metricRawRetention)).
-		Delete(&model.ProcessMetricSnapshot{}).Error; err != nil {
-		return err
-	}
-	return nil
+	return s.purgeByIDCursor(&model.ProcessMetricSnapshot{}, "sampled_at", now.Add(-metricRawRetention))
 }
 
 // Start 启动后台卷积/清理循环（每 5min，复用 scheduler 式后台 goroutine）。
@@ -956,4 +1586,136 @@ func (s *MetricService) Stop() {
 	close(s.stopCh)
 	s.running = false
 	slog.Info("时序指标卷积器已停止")
+}
+
+// boolToFloat 把布尔指标转成 0/1 浮点值（：采集健康指标）。
+func boolToFloat(v bool) float64 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+// buildNodeSamplesAt 构造节点级样本。
+//
+// 从 ingestHeartbeatAt 里拆出来是为了**可测**：这些样本全是纯计算，
+// 但之前混在带网络速率状态（s.lastNet）和 VL 读数的函数里，写一条断言就要
+// 起整个服务。拆开后测试只验「字段到指标的映射对不对」，不必关心副作用。
+//
+// 注意：网络速率与 VL 磁盘读数**不在**本函数里——它们依赖相邻两次心跳的差分
+// 与外部进程状态，不是纯粹由 req 决定的。
+func buildNodeSamplesAt(req *workerpb.HeartbeatRequest, now time.Time) []Sample {
+	if req == nil {
+		return nil
+	}
+	ptr := func(v float64) *float64 { return &v }
+	node := req.NodeUuid
+	nodeSample := func(key, unit string, v *float64) Sample {
+		return Sample{NodeUUID: node, Scope: model.MetricScopeNode, MetricKey: key, Unit: unit, TS: now, Value: v}
+	}
+
+	out := make([]Sample, 0, 10)
+	// 构成分量证明 CPU 窗口有效；旧 Worker 兼容非零 CPU。有效窗口保留真实 0。
+	validCPU := req.CpuUsage > 0 || req.CpuUser > 0 || req.CpuNice > 0 || req.CpuSystem > 0 ||
+		req.CpuIdle > 0 || req.CpuIrq > 0 || req.CpuSoftirq > 0 || req.CpuSteal > 0 || req.Iowait > 0
+	var cpu, iowait *float64
+	if validCPU {
+		cpu, iowait = ptr(float64(req.CpuUsage)*100), ptr(float64(req.Iowait)*100)
+	}
+	out = append(out,
+		nodeSample(model.MetricNodeCPUPct, "pct", cpu),
+		nodeSample(model.MetricNodeIOWait, "pct", iowait),
+	)
+	out = append(out,
+		nodeSample(model.MetricNodeMemUsed, "bytes", ptr(float64(req.MemoryUsedMb)*1024*1024)),
+		nodeSample(model.MetricNodeDiskUsed, "bytes", ptr(float64(req.DiskUsedMb)*1024*1024)),
+		nodeSample(model.MetricLogIngestHealthy, "bool", ptr(boolToFloat(req.LogIngestHealthy))),
+	)
+
+	// 百分比指标：内存/磁盘利用率。
+	//
+	// 直接用心跳已有的 `memory_usage` / `disk_usage`（0..1 的比值，Worker 侧已填），
+	// 而不是在这里拿 used/total 除——**心跳根本没有 total 字段**
+	// （只有 RegisterRequest 和 GetNodeMetricsResponse 有）。
+	//
+	// 为什么需要这两个指标：告警规则引擎只比「单个指标 vs 阈值」
+	// （evaluateNodeMetricRule），不支持跨指标运算。不落百分比就只能写绝对字节阈值，
+	// 而节点磁盘大小差异很大——同一个字节值在一个节点是告警、在另一个是常态。
+	//
+	// 值为 0 时**不落点**：老 Worker 不上报时 proto 零值也是 0，
+	// 落 0 会让「内存占用 0%」看起来像健康，图表上是一条平坦的好线。
+	// 真·0% 占用物理上不可能（内核自己就要占内存）。
+	if p := rateToPct(req.MemoryUsage); p != nil {
+		out = append(out, nodeSample(model.MetricNodeMemPct, "pct", p))
+	}
+	if p := rateToPct(req.DiskUsage); p != nil {
+		out = append(out, nodeSample(model.MetricNodeDiskPct, "pct", p))
+	}
+
+	// load average：取不到为 0（Windows 预热/不支持），此时不落点，曲线优雅留空。
+	if req.LoadAvg1 > 0 {
+		out = append(out, nodeSample(model.MetricNodeLoad, "load", ptr(req.LoadAvg1)))
+	}
+	return out
+}
+
+// rateToPct 把 0..1 的占比转成 0..100 的百分比；非正数返回 nil（不落点）。
+//
+// 钳位到 [0,100]：used > total 只可能来自采集口径不一致（如 tmpfs 计入内存），
+// 那种情况下 100% 比 103% 更能被告警规则正确理解。
+func rateToPct(rate float32) *float64 {
+	if rate <= 0 {
+		return nil
+	}
+	pct := float64(rate) * 100
+	if pct > 100 {
+		pct = 100
+	}
+	return &pct
+}
+
+// ForgetInstance 丢弃某实例的差分基准（GC / 桥），供实例生命周期事件调用。
+//
+// ## 为什么需要这个
+//
+// lastGC / lastBridge 以实例 UUID 为 key，用来把探针上报的**累计 counter** 差分成速率。
+// 它们本身不会被心跳自然清掉：实例被删、或探针降级到不上报桥字段之后，
+// 对应键仍然留在 map 里——每删一个实例就漏一条，进程存活期间永不释放。
+//
+// ## 为什么是「实例连入时清」而不是定时扫描
+//
+// 与 BridgeService.InvalidateOnProbeConnected 同构：实例重启后其累计 counter 从 0 重新计数，
+// 而旧基准还停在重启前的值——两者相减会得到负值。虽然 CP 侧对负差做了跳过（不产生负速率假尖峰），
+// 但基准本就该随实例生命周期重置，而不是依赖下游兜底。
+// 定时扫描不知道「何时该清」，只会在实例已经错位一段时间之后才能补救。
+//
+// 线程安全：两把锁各自独立，分两次 Lock——不需要原子性，因为两路数据互不相关，
+// 且调用方（探针连入）与心跳并发时，最坏情况是某一拍仍然差到了旧值，下一拍即修正。
+//
+// @param instanceUUID 实例 UUID（与心跳里 im.InstanceUuid 一致）。
+func (s *MetricService) ForgetInstance(instanceUUID string) {
+	if s == nil || instanceUUID == "" {
+		return
+	}
+	s.gcMu.Lock()
+	delete(s.lastGC, instanceUUID)
+	s.gcMu.Unlock()
+
+	s.bridgeMu.Lock()
+	delete(s.lastBridge, instanceUUID)
+	s.bridgeMu.Unlock()
+}
+
+// ForgetNode 丢弃某节点的网络差分基准（节点下线/归档时调用）。
+//
+// lastNet 以**节点 UUID** 为 key（不是实例），所以不能与 ForgetInstance 合并。
+//
+// @param nodeUUID 节点 UUID。
+func (s *MetricService) ForgetNode(nodeUUID string) {
+	if s == nil || nodeUUID == "" {
+		return
+	}
+	s.netMu.Lock()
+	delete(s.lastNet, nodeUUID)
+	s.netMu.Unlock()
 }

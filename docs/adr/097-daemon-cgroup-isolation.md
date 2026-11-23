@@ -1,0 +1,63 @@
+# ADR-097: daemon 子树脱离 Worker 单元 cgroup（运行期自持的 cgroup 边界）
+
+- **日期**: 2026-10-01
+- **状态**: accepted
+- **关联**: FR-500 · 落地并补强 [ADR-003](003-daemon-wrapper.md)（守护进程 Wrapper 模式——`setsid` 游离与 PID 文件基座）/ [ADR-093](093-process-lifecycle-resilience.md)（进程生命周期韧性与孤儿治理——「重启不杀服务器」的硬约束）· 相关 FR-341（daemon 存活与自动重连及其部署层对策 `KillMode=process`）/ FR-455 / FR-497（接管与自动收养——本项不改其语义）
+
+## 上下文
+
+四层模型 `CP → Worker → wrapper（setsid 游离）→ sh -c → java` 的核心承诺是「Worker/CP 重启不牵连服务器」。[ADR-003](003-daemon-wrapper.md) 用 `setsid` 让 wrapper 脱离 Worker 的**进程组**，[ADR-093](093-process-lifecycle-resilience.md) 与 FR-341 在此之上补齐了 SIGPIPE、优雅停机上限与部署层 `KillMode=process`。
+
+**但 2026-10-01 真机证明这条链路仍会整批失守**：每次 `systemctl restart jm-prod-worker` 都杀死全部正在运行的 MC 服务器（当日 11 台全灭）。只读取证给出确定结论：
+
+1. 生产 unit `~/.config/systemd/user/jm-prod-worker.service` **缺 `KillMode=process`**，生效值 `KillMode=control-group` + `KillSignal=15` + `SendSIGKILL=yes`（`systemctl --user show`）。`systemctl restart` 因此向该单元 cgroup 内**全部**进程发 SIGTERM。
+2. `/proc/<pid>/cgroup` 显示 Worker 与 11 个 wrapper 同在 `user.slice/…/app.slice/jm-prod-worker.service`；`ps -o pgid,sid` 显示各 wrapper 的 pgid=sid=自身 pid（`setsid` 确实生效）。**结论：`setsid` 逃得出进程组，逃不出 cgroup**——cgroup 归属与 session/pgrp 正交，子进程在 fork 时继承父进程的 cgroup，此后不因 `setsid` 改变。
+3. Worker 的关闭路径**当时即正确**：生产日志中 `daemon 实例已断开连接（wrapper 继续运行）`（`Manager.StopAll` 的 daemon 分支只 `Close()`）出现在 `wrapper 进程退出 err="signal: terminated"` **之前**，且信号名是 SIGTERM（=15）而非 SIGKILL（=9），与 `KillSignal` 精确吻合。
+4. 11 个实例的 **Java 自身日志**在同一秒打出 `Stopping server`（Paper 的 SIGTERM 钩子），逐实例复核一致——Java 是被 cgroup 级 SIGTERM **直接**打中，不是被「wrapper 死亡」连累。
+
+即：**spec 的承诺是对的，缺口在于该承诺只在部署层（unit 的 `KillMode`）有保障，运行期零保障**——单元一漂移（手写 unit、旧版本 unit、非 systemd 托管），每次部署就赔上全部服务器。
+
+## 决策
+
+1. **daemon 子树在运行期自持 cgroup 边界**：wrapper 启动时把自身迁出 Worker 的 systemd 单元 cgroup，落到其**同级**目录 `…/app.slice/jianmanager-daemons/<实例 UUID>`。迁移必须**早于 spawn 游戏服**——子进程 fork 时继承父进程当时的 cgroup，先迁后生才能让 java（及 `sh -c` 包裹）一并落在隔离目录内。
+2. **接管路径同样迁移**：Worker 启动接管**已在运行**的 wrapper 时（`RecoverDaemonInstances` 成功重连后），按 `/proc/<pid>/stat` 的 PPID 链枚举其**全部后代**（wrapper 与 java 是两棵独立进程组，只迁 wrapper 会漏掉 java）并一并迁移。这条覆盖「部署新版本后的第一个重启」——旧代码 spawn 的 wrapper 仍留在单元 cgroup 内，只有接管方能把它们救出来。
+3. **同级而非更外层**：内核要求迁移者对源与目标的**共同祖先** cgroup 目录有写权限；同级目录的共同祖先是属用户可写的 `app.slice`，越靠外层（直到 root 拥有的 `/sys/fs/cgroup/` 根）反被 `EACCES` 拒绝。同级也保住 systemd **用户会话语义**：登出 / `stop user@<uid>.service` 仍按 KillMode 回收全部 daemon 子树（cgroup 边界只对「单元」放宽，不改变会话生命周期）。
+4. **保守边界 + 失败降级**：仅在自身 cgroup 确为 systemd `*.service` 单元时生效；手工前台运行（session/scope）、容器内、cgroup v1 一律不动（那里不存在「单元连坐」的问题面，且推导规则不同）。任一环节失败（无权限、只读 cgroupfs、无 `0::` 行）**只告警、保持原状**，行为与修复前完全一致。运行期逃生开关 `JM_DAEMON_CGROUP_ISOLATION=0`。
+5. **契约化**：Worker 关闭路径「只断连、不杀实例」与显式停止/删除的例外关系、以及本 cgroup 边界，写入 `docs/specs/daemon-cgroup-isolation/spec.md` 与 `docs/specs/restart-resilience/spec.md` §7，作为后续评审的判据。
+6. **不改**：wrapper 协议、PID 文件/socket 布局、任何对外契约字段；显式停止/删除/重启实例的语义（按进程组与 PID 终止，与 cgroup 归属无关）。
+
+## 理由
+
+- **部署期配置不能承担运行期承诺**：`KillMode=process` 是正确且应保留的部署层对策，但它对「已被部署出来的 unit」无追溯力，实测生产 unit 就是缺该项。硬约束（重启不影响服务器）必须在代码里自持，才能在单元漂移下依然成立。
+- **`setsid` 与 cgroup 是两个维度**：前者是「谁给我发信号」的进程组/会话问题，后者是「systemd 按什么枚举我」的问题。ADR-003 只解决了前者，本 ADR 补上后者——两者都到位，「游离」才名副其实。
+- **为什么不用 `systemd-run --scope` 等外部机制**：那会把 wrapper 的 PID 记账（PID 文件写的是 wrapper 自身 PID，`KillPIDTree`/强杀路径依赖它）与 `systemd-run` 的中间进程语义纠缠在一起，且引入对 `systemd-run` 二进制的依赖；自迁只改 cgroup 成员关系，对既有 PID/socket/接管机制零影响。
+
+## 后果
+
+- **正面**：`systemctl restart <worker 单元>` 在 cgroup 维度也碰不到 daemon 子树，wrapper 与 java 存活并由下一次启动接管；该保障与 unit 的 `KillMode` 取值解耦（配置正确时是纵深防御，配置漂移时是唯一防线）。
+- **代价与边界**：新增一处对 cgroup 层级的写操作（隔离目录 `jianmanager-daemons/<uuid>`），需回收——wrapper 正常退出自清，被 `kill -9` 留下的空壳由 Worker 启动清扫（只删空目录）。**不覆盖** cgroup v1 与「system 级 unit 以非特权用户运行」（父目录属 root，降级为原状，其保障仍依赖 unit 的 `KillMode=process`）。
+- **可转红防护**：真实进程端到端用例（`internal/worker/process/shutdown_cgroup_test.go`）与真实二进制三臂实验共同钉住该行为；逐字移除自迁调用即转红（见 spec §4）。
+
+## 实机确认（2026-10-09，上述边界被真实触发）
+
+真机同时命中本 ADR 两条已登记边界，可作为后续评审的现场证据：
+
+1. **部署层漂移**：实际运行的 `jm-worker-node-main.service` 是仓库外手工创建的 transient 单元，`KillMode=control-group`（`Slice=jm-logs.slice`），而 `scripts/install-worker.sh` 生成的 `jm-prod-worker.service`（`KillMode=process`）处于 inactive。决策 2 的「部署期配置不能承担运行期承诺」被直接验证。**已用 drop-in 补齐**：`~/.config/systemd/user/jm-worker-node-main.service.d/10-killmode.conf` 写入 `KillMode=process`，`daemon-reload` 即生效、无需重启或中断实例。已实测该 drop-in 对**重新创建**的同名 transient 单元同样生效（探针验证），故不是一次性补救。A/B 对照实测：`control-group` 重启会杀该 cgroup 内的子进程，`process` 不会。
+2. **代码层降级路径**：13 个 wrapper 位于 `/system.slice/ssh.service`（归 root，由 PID 1 收养），隔离目标在用户 slice 内，二者**共同祖先是 root 的 `/`**——非特权用户在**任何** cgroup 祖先下都没有可写位置，纯路径回退无解（实测确认，非推测）。日志累计 9102 次 `permission denied`。此处本 ADR 原设计即「只告警、保持原状」，但**告警落在 wrapper 侧且接管路径在零迁移时无任何输出**，导致「这批实例已失去隔离保护」对 CP 不可见。**已补**：接管路径在「零迁移且 wrapper 仍存活」时落 `cgroup.isolate_failed` 审计（`m.pidAlive` 接缝），使无保护成为可观测事实。
+
+**验收实测**（同一现场）：对运行中的生产单元执行 `systemctl --user restart`（即本 ADR 要解决的触发动作），**19/19 实例 java 全部存活**（修复前该动作全灭），新 Worker 自动收养全部活进程并成功迁移 6 个子树；CP 侧确认 19/19 `RUNNING`。另实测对生产 CP 发 `SIGKILL`：worker 存活、21/21 实例存活，CP 重启后隧道自动重建、实例状态自动对账（验证「CP 崩溃不牵连服务器」与「重启自动认领」）。
+
+**仍未覆盖（作为已知残留）**：源单元归 root 时非特权用户无解，只能靠部署侧 `KillMode` 或把 Worker 移入用户单元；隔离状态目前只落审计/日志，未上行到 CP 面板展示。
+
+### 部署侧收口：启动自检（2026-10-09 追加）
+
+上述残留意味着「运行期隔离不可用」时**唯一防线是单元自身的 `KillMode=process`**。但该属性是部署期属性，且真机证明它会**静默缺失**（有人用 `systemd-run` 裸拉起 Worker，transient 单元不带该项，落到默认 `control-group`），而代码无法在运行期修改他人创建的单元属性。
+
+因此补一条**启动自检**（`daemon.WarnIfUnitKillModeUnprotected`，由 `runWorker` 在启动早期调用）：读自身单元的生效 `KillMode`，无保护则显式告警并提示补 `KillMode=process`（含 drop-in 写法）；有保护则记一行 INFO。定位是「把沉默的代价变成一句告警」——让部署者在上线当天就知道「重启这台 Worker 会打死全部服务器」，而不是在下次重启时才以事故形式得知。
+
+实现上有两处**必须**的细节，均由实测得出（否则自检会静默失效或误报）：
+
+1. **单元名由 `/proc/self/cgroup` 反推，不由调用方填写**：`systemctl show <不存在的单元> -p KillMode` 返回默认值 `control-group` 且退出码 0，若不校验就会把「名字猜错」误报成「无保护」；故同时校验 `LoadState=loaded`。
+2. **不用 `--value`**：该选项下输出顺序与 `-p` 书写顺序无关（实测按属性名排序），按位置取值会把 `KillMode` 误当 `LoadState`，使 `LoadState == "loaded"` 恒不成立而**自检完全静默**；改用 `Key=Value` 按名解析。
+
+边界：只告警不阻断启动（单元属性属运维决策，风险只在重启 unit 时兑现）；非 systemd 环境（前台运行、容器、cgroup v1）与任何查询失败（`systemctl` 缺失、D-Bus 不可达、超时 3s）一律静默跳过，不引入新的失败面；`JM_DAEMON_CGROUP_ISOLATION=0` 时跳过告警（此时隔离已关闭，该前提不成立，告警会误导）。运维侧的操作指引见 [docs/DEPLOY.md](../DEPLOY.md) §9.2。

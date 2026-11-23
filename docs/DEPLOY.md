@@ -187,6 +187,128 @@ JM_SSH_HOST=<worker-host> JM_SSH_USER=<user> JM_INSTALL_DIR=/home/<user>/jianman
 
 新版本健康检查失败时脚本会恢复先前 `current`；但数据库 schema、CP 制品数据和 Worker 身份不会随回滚倒退。版本化模型仅覆盖 `user` scope；`system` scope 仍是旧的直接二进制加 `.bak` 更新方式。
 
+### 9.2 新 Worker 机器的 systemd 部署（必须带 `KillMode=process`）
+
+> **这一节请务必读完再上新机器。** 漏掉 `KillMode=process` 的后果是：`systemctl restart` / `stop` 该 unit 时，systemd 向整个 cgroup 发信号，**连坐杀掉该机上全部游戏服**（wrapper + java）。
+
+#### 为什么必须带
+
+四层模型 `CP → Worker → wrapper(setsid 游离) → sh -c → java` 承诺「重启 Worker 不牵连服务器」。`setsid` 让 wrapper 逃出 Worker 的**进程组**，但逃不出 systemd 的 **cgroup**：`KillMode=control-group`（systemd 默认值）会在停止 unit 时向该 unit cgroup 内的**全部**进程发 SIGTERM。
+
+运行期还有一层防护（wrapper 自迁到单元同级的 `jianmanager-daemons/`，见 [ADR-097](adr/097-daemon-cgroup-isolation.md)），但它**有失效场景**：当 Worker 所在单元归 root（如手工把 Worker 跑在 `/system.slice/ssh.service` 里）时，非特权用户对源与目标的**共同祖先**（cgroup 根）没有写权限，内核拒绝迁移——此时 **`KillMode=process` 是唯一防线**。2026-10-09 真机事故正是这两层同时失效：实际 unit 是手工 `systemd-run` 创建的 transient 单元（未带该项，落到默认 `control-group`），13 个实例又因源单元归 root 无法运行期隔离。
+
+#### 正确做法
+
+**方式 A（推荐）：用安装脚本** —— `scripts/install-worker.sh` 生成的 unit 已含 `KillMode=process`：
+
+```bash
+scripts/install-worker.sh --service --service-scope user \
+  --control-plane <cp-host>:9100 --token <jmet_...>
+```
+
+（`--token` 亦可用环境变量 `JIANMANAGER_ENROLL_TOKEN` 传入，避免明文出现在命令行与进程列表）
+
+或用仓库的版本化部署 `scripts/deploy-worker.sh`（首次部署会内部调用 `install-worker.sh`，同样带该项）：
+
+```bash
+JM_SSH_HOST=<worker-host> JM_SSH_USER=<user> JM_SERVICE_SCOPE=user \
+  JM_CONTROL_PLANE=<cp-host>:9100 JM_ENROLL_TOKEN=<jmet_...> scripts/deploy-worker.sh
+```
+
+**方式 B：手工创建 unit** —— 必须在 `[Service]` 段显式写上：
+
+```ini
+[Service]
+Type=simple
+WorkingDirectory=<安装根>
+ExecStart=<安装根>/jianmanager-worker
+Restart=always
+RestartSec=5
+KillMode=process      # ← 必须；漏掉则重启 unit 会杀掉全部游戏服
+```
+
+> ⚠️ **不要**用 `systemd-run --unit=... <worker>` 直接拉起 Worker：这样创建的是 transient 单元，**不带** `KillMode=process`，落到默认 `control-group`。若确需 `systemd-run`，必须显式加 `-p KillMode=process`。
+
+#### 部署后验证（务必执行）
+
+```bash
+# user 档
+systemctl --user show <unit> -p KillMode
+# 期望输出：KillMode=process
+# system 档
+systemctl show <unit> -p KillMode
+```
+
+若输出 `KillMode=control-group`，对**已在运行**的单元可用 drop-in 补上（无需重启、不中断服务）：
+
+```bash
+systemctl --user edit <unit>          # system 档去掉 --user
+# 写入：
+#   [Service]
+#   KillMode=process
+systemctl --user daemon-reload
+systemctl --user show <unit> -p KillMode   # 复核：应变为 process
+```
+
+该 drop-in 对**同名 transient 单元被重新创建**后依然生效（已实测），故是一次性补救而非临时措施。
+
+#### 启动自检（新版 Worker 自动告警）
+
+新版 Worker 启动时会读取自身单元的生效 `KillMode`，若发现**无保护**则打印告警，提示补 `KillMode=process`；有保护时打印一行 INFO。该自检：
+
+- **只告警、不阻断启动**——单元属性属运维决策，且风险只在重启 unit 时才兑现，不应因此拒绝服务；
+- 覆盖**任何**部署方式（含手工 `systemd-run`、手写 unit 等不走脚本的场景）；
+- 非 systemd 环境（前台运行、容器、cgroup v1）与任何查询失败（`systemctl` 缺失、D-Bus 不可达、超时）一律静默跳过，不引入新的失败面；
+- 可用 `JM_DAEMON_CGROUP_ISOLATION=0` 关闭（该开关同时关闭运行期隔离，此时不再告警以免误导）。
+
+#### 契约用例（「重启不连坐」的自动化验收）
+
+`TestDaemonSubtreeSurvivesWorkerUnitCgroupKill`（`internal/worker/process/shutdown_cgroup_test.go`）是本项**唯一**的端到端防线：它把「Worker 关闭路径」与「单元级 cgroup SIGTERM」依次施加到真实 wrapper 子树上，断言 wrapper 与 java **存活**、可被下次启动接管，且显式 Stop 仍能停。
+
+它需要**用户可写的 cgroup 子树**，否则会 `SKIP`（不是通过）。执行入口：
+
+```bash
+# 有 user systemd 的环境（把测试放进可写的 scope cgroup）
+systemd-run --user --scope go test ./internal/worker/process/ \
+  -run TestDaemonSubtreeSurvivesWorkerUnitCgroupKill -count=1 -v
+
+# 若系统已有可写子树，也可直接指向它
+JM_TEST_CGROUP_ROOT=/sys/fs/cgroup/<你的可写子树> \
+  go test ./internal/worker/process/ \
+  -run TestDaemonSubtreeSurvivesWorkerUnitCgroupKill -count=1 -v
+```
+
+**⚠️ CI 的限制（如实登记）**：GitHub 托管 runner 通常既无 user systemd session、也无 `/sys/fs/cgroup` 写权限，故 CI 里本用例会 SKIP。release 流水线有一道 `cgroup 隔离端到端契约` 步骤：能跑时**必须 PASS 且不得 SKIP**；不能跑时打 `::warning::` 明确声明「本项端到端契约**本次未验证**」——**绝不静默跳过**。上新机器或改动了 cgroup 隔离相关代码后，请按上面的入口在真机手工执行一次。
+
+### 9.3 CP 直接启停的受控 POSIX 模板
+
+仓库当前没有受控的 `start.sh` / `stop.sh`。需要在非 systemd 场景下直接管理 CP 时，使用仓库中的单入口模板 `scripts/cp-lifecycle.sh`，通过 `start` / `stop` 子命令避免两份启停逻辑漂移：
+
+```bash
+JM_CP_INSTALL_DIR=/opt/jianmanager-cp \
+JM_CP_BINARY=/opt/jianmanager-cp/current/jianmanager-cp \
+JM_CP_CONFIG=/opt/jianmanager-cp/control-plane.yml \
+  sh scripts/cp-lifecycle.sh start
+
+JM_CP_INSTALL_DIR=/opt/jianmanager-cp \
+JM_CP_BINARY=/opt/jianmanager-cp/current/jianmanager-cp \
+JM_CP_CONFIG=/opt/jianmanager-cp/control-plane.yml \
+  sh scripts/cp-lifecycle.sh stop
+```
+
+模板要求 Linux `/proc`、`awk`、`readlink` 以及 `ss` 或 `netstat`。它会校验配置中的 `server.port` / `grpc.port`、PID 为正整数，并把 PID、进程 starttime、`/proc/<pid>/exe`、cwd、命令行关联的二进制和配置路径写入 0600 PID 文件；启停前后都校验端口归属。发现 stale PID 只清理 PID 文件，发现 PID reuse、身份变化或外部端口占用则拒绝发送信号。TERM 等待超时后，必须再次通过完整身份与端口校验才允许向同一 PID 发送 KILL；脚本不使用按命令行模糊匹配的批量杀进程命令。
+
+目标机若没有该模板，不应直接修改生产目录或手工拼接启停脚本。应先在操作机审查版本与摘要，再按以下步骤由具备权限的运维人员同步到目标机的受控脚本目录（示例路径不等于生产路径）：
+
+```bash
+sha256sum scripts/cp-lifecycle.sh
+scp scripts/cp-lifecycle.sh <用户>@<目标机>:/tmp/cp-lifecycle.sh.new
+ssh <用户>@<目标机> 'install -m 0755 /tmp/cp-lifecycle.sh.new <受控脚本目录>/cp-lifecycle.sh'
+ssh <用户>@<目标机> 'sh -n <受控脚本目录>/cp-lifecycle.sh'
+```
+
+同步前后应由运维确认安装根、二进制、配置、PID 文件和日志路径，并确保没有 systemd unit 或其他 supervisor 同时管理同一 CP。`scripts/cp-lifecycle.test.sh` 只使用临时目录和伪造 `ss`，不会连接或修改任何目标机。
+
 ## 10. 多节点
 
 Control Plane 一台，Worker 多台：各 Worker 设相同 `JIANMANAGER_CONTROL_PLANE_GRPC`（指向同一 CP）、不同 `JIANMANAGER_NODE_NAME`；WS 令牌密钥经注册/心跳自动下发（FR-275），无需在各 Worker 同步 `JIANMANAGER_JWT_SECRET`。注册后在「节点」页统一可见、可分别调度实例。

@@ -7,13 +7,13 @@ import { db } from '@jianmanager/devmock/db'
 import type { MockInstance } from '@jianmanager/devmock/handlers/domains/instance'
 import InstanceConsolePage from './InstanceConsolePage'
 
-/**
- * FR-331：长操作在途实例硬性禁止启动——实例控制台侧（FR-323 扩展导入/克隆）。
+/** 
+ *：长操作在途实例硬性禁止启动——实例控制台侧（扩展导入/克隆）。
  * provision/import/clone 任务未终态期间实例 STOPPED + statusReason「搭建中/导入中/克隆中：…」，
  * 启动按钮直接禁用（tooltip 引导看任务中心），横幅走琥珀状态样式
  * 而非红色「上次启动失败」（是进行时不是失败）；reason 清空后自然解禁。
  */
-describe('InstanceConsolePage 长操作在途禁启（FR-331）', () => {
+describe('InstanceConsolePage 长操作在途禁启', () => {
   beforeEach(() => {
     loginMockUser()
   })
@@ -37,7 +37,7 @@ describe('InstanceConsolePage 长操作在途禁启（FR-331）', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('导入中（FR-323 搬迁在途）：同样禁启 + 琥珀横幅带 reason 全文', async () => {
+  it('导入中（搬迁在途）：同样禁启 + 琥珀横幅带 reason 全文', async () => {
     db<MockInstance>('instances').update(3, {
       status: 'STOPPED',
       statusReason: '导入中：正在搬迁目录（完成前请勿启动）',

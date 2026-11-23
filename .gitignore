@@ -7,6 +7,9 @@
 # Go
 /bin/
 /dist/
+# 裸 go build 默认落根目录的 CP/Worker 二进制（正式产物在 bin/ 与 dist/）
+/control-plane
+/worker
 *.exe
 *.exe~
 *.dll
@@ -43,7 +46,10 @@ preview.html
 docs/**/preview.html
 docs/compose/
 .tmp/
-logs/
+# 仅忽略仓库根运行时日志目录；internal/worker/logs/** 是 FR-473+ 源码包，必须入库。
+/logs/
+/data/logs/
+/evidence/logs/
 
 # 操作系统
 .DS_Store
@@ -79,3 +85,20 @@ blob-report/
 
 # 本地工具目录（原先只写在本机 .git/info/exclude，换机器克隆会漏成未跟踪噪声）
 /.narrafork/
+
+# 运行时 PID 记录（本机手动起服务落在仓库根的副产物，每次起停都会刷新成未跟踪噪声）。
+# 生产部署的 pid 在安装目录的 run/ 与 logs/ 下（前者由 cp-lifecycle.sh 管理，后者随 /logs/ 忽略），不受本规则影响。
+*.pid
+
+# Vantaloom 运行时生成的项目文档（含本机绝对路径，不入库）
+vantaloom.md
+# Vantaloom 本地运行时产物（技能副本 / 私有记忆副本），不属于工程源码
+.vantaloom/
+/.vantaloom/
+
+# Python 运行缓存（验收脚本 scripts/fr-acceptance/ 会产生，不入库）
+__pycache__/
+*.pyc
+
+# 验收脚本的运行产物（一次性输出，不入库；脚本本身 scripts/fr-acceptance/*.py 要入库）
+scripts/fr-acceptance/evidence/

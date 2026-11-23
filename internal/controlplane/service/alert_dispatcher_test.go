@@ -19,6 +19,12 @@ func newAlertTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.AlertRule{}, &model.AlertEvent{}, &model.AlertChannel{}))
 	return db
 }
@@ -184,8 +190,8 @@ func TestDispatcher_NotifyRoutesToChannels(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
-// TestDispatcher_FR011WebhookFallback 验证未配 ChannelIDs 时回退到 FR-011 单 webhook 直发。
-func TestDispatcher_FR011WebhookFallback(t *testing.T) {
+// TestDispatcher_WebhookFallback 验证未配 ChannelIDs 时回退到单 webhook 直发。
+func TestDispatcher_WebhookFallback(t *testing.T) {
 	db := newAlertTestDB(t)
 	d := NewAlertDispatcher(db)
 
@@ -205,8 +211,8 @@ func TestDispatcher_FR011WebhookFallback(t *testing.T) {
 	assert.Equal(t, int64(1), atomic.LoadInt64(&hits))
 }
 
-// TestDispatcher_FR011WebhookFallbackRejectsPlaintext 存量明文 URL 不得继续用于外发。
-func TestDispatcher_FR011WebhookFallbackRejectsPlaintext(t *testing.T) {
+// TestDispatcher_WebhookFallbackRejectsPlaintext 存量明文 URL 不得继续用于外发。
+func TestDispatcher_WebhookFallbackRejectsPlaintext(t *testing.T) {
 	db := newAlertTestDB(t)
 	d := NewAlertDispatcher(db)
 
@@ -223,6 +229,29 @@ func TestDispatcher_FR011WebhookFallbackRejectsPlaintext(t *testing.T) {
 
 	d.Fire(AlertTrigger{Rule: rule, TargetID: 1, DedupKey: "k", Message: "m", Resolvable: true})
 	assert.Equal(t, int64(0), atomic.LoadInt64(&hits))
+}
+
+// TestDispatcher_DedupRefreshesDirection 覆盖 N6：去抖窗口内复发时，事件方向应同步为最新
+// 偏离方向（baseline 由 up 翻转为 down），避免事件长期显示过期方向误导排障。
+func TestDispatcher_DedupRefreshesDirection(t *testing.T) {
+	db := newAlertTestDB(t)
+	d := NewAlertDispatcher(db)
+	clock := time.Now()
+	d.now = func() time.Time { return clock }
+
+	rule := &model.AlertRule{Name: "base", Level: model.AlertLevelWarn, TriggerType: model.AlertTriggerBaseline, DedupWindowSec: 300}
+	require.NoError(t, db.Create(rule).Error)
+
+	key := "baseline:1:tps"
+	d.Fire(AlertTrigger{Rule: rule, TargetID: 1, DedupKey: key, Value: 150, Direction: model.BaselineDirectionUp, Message: "突升", Resolvable: true})
+	clock = clock.Add(30 * time.Second)
+	d.Fire(AlertTrigger{Rule: rule, TargetID: 1, DedupKey: key, Value: 20, Direction: model.BaselineDirectionDown, Message: "突降", Resolvable: true})
+
+	var events []model.AlertEvent
+	require.NoError(t, db.Find(&events).Error)
+	require.Len(t, events, 1, "去抖窗口内仍应只有一个活跃事件")
+	assert.Equal(t, model.BaselineDirectionDown, events[0].Direction, "复发应同步最新方向")
+	assert.Equal(t, 2, events[0].Count)
 }
 
 // itoa 避免在测试中引 strconv。

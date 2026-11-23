@@ -10,13 +10,13 @@ import { useAuthStore } from '@/stores/auth'
 import type { Session } from '@jianmanager/devmock/handlers/domains/auth'
 import InstancePlayersSegment from './InstancePlayersSegment'
 
-/**
- * InstancePlayersSegment 强断言（FR-339 玩家分区接真）。
+/** 
+ * InstancePlayersSegment 强断言（玩家分区接真）。
  * devmock 种子（domains/plugin.ts）：在线 Alice@实例1 / Bob@实例2；封禁 Griefer(生效·全局) / Spammer(已解除·单服)；
  * 实例1 白名单 [Alice, Bob]。本分区按 instanceId=1 过滤在线列表（只剩 Alice），封禁列表全量展示（不按实例过滤）。
  */
 
-/**
+/** 
  * 登录为平台管理员（role=10）：踢/封确认为普通 Dialog（无角色门禁），但解封走 DangerConfirm scope=group，
  * 需 store.role≥1 才放行确认按钮。构造带 role 的 fakeJWT 灌入 auth store + sessions（复用 PlayersPage 范式）。
  */
@@ -32,8 +32,8 @@ function panelByTitle(title: string): HTMLElement {
   return screen.getByText(title).closest('[data-slot="panel"]') as HTMLElement
 }
 
-/**
- * 按玩家名定位其所在行卡片（FR-423：在线玩家与白名单由 2 列表格改为 ul/li 行卡片，
+/** 
+ * 按玩家名定位其所在行卡片（：在线玩家与白名单由 2 列表格改为 ul/li 行卡片，
  * 故行容器是 li 而非 tr；封禁记录仍是宽表，继续用 tr）。
  */
 function playerRow(scope: HTMLElement, name: string): HTMLElement {
@@ -148,7 +148,7 @@ describe('InstancePlayersSegment（mock 假后端）', () => {
     await waitFor(() => expect(within(panelByTitle('白名单')).getByText('Carl')).toBeInTheDocument())
   })
 
-  it('分栏后三块内容同屏可达且各自可操作（FR-423）', async () => {
+  it('分栏后三块内容同屏可达且各自可操作', async () => {
     const user = userEvent.setup()
     loginMockAdmin()
     renderWithProviders(<InstancePlayersSegment instanceId={1} />)
@@ -170,7 +170,7 @@ describe('InstancePlayersSegment（mock 假后端）', () => {
     const splitRoot = leftColumn.parentElement as HTMLElement
     expect(rightColumn.parentElement).toBe(splitRoot)
 
-    // 分栏根遵循 FR-422 骨架契约（吃满内容区），并在 xl 起分左右；左 38% / 右 62% 权重。
+    // 分栏根遵循骨架契约（吃满内容区），并在 xl 起分左右；左 38% / 右 62% 权重。
     expect(splitRoot).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col', 'xl:flex-row')
     expect(leftColumn).toHaveClass('xl:flex-1')
     expect(rightColumn).toHaveClass('xl:flex-[1.6]')

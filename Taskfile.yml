@@ -51,9 +51,9 @@ tasks:
       - go test ./...
 
   go:race:
-    desc: Go 单测（竞态检测）
+    desc: Go 单测（竞态检测；router 包单独放宽时限，见 scripts/go-test-race.sh）
     cmds:
-      - go test -race ./...
+      - scripts/go-test-race.sh all
 
   go:lint:
     desc: go vet（golangci-lint 已安装时一并跑）

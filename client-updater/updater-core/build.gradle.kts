@@ -3,9 +3,9 @@ import java.time.Instant
 
 // updater-core：更新主体，被楔子动态加载（URLClassLoader 内存加载，便于自更新换 jar）。
 // target Java 8：须能被低版本（Java 8）MC 的 JVM 加载——老整合包/启动器仍在用 Java 8，
-// 若编到 17 则 UnsupportedClassVersionError、楔子加载失败（见 FR-089 真机）。
+// 若编到 17 则 UnsupportedClassVersionError、楔子加载失败（真机实测）。
 // 代价：Java 8 无 java.net.http（改用 HttpURLConnection）。
-// FR-256 起去掉 Ed25519 验签（BouncyCastle 依赖移除），信任靠 HTTPS + 拉取密钥鉴权。
+// 已去掉 Ed25519 验签（BouncyCastle 依赖移除），信任靠 HTTPS + 拉取密钥鉴权。
 // 仍只用 JDK 自带能力 + 轻量 JSON（自写）+ zstd 解压。
 java {
     sourceCompatibility = JavaVersion.VERSION_1_8
@@ -93,11 +93,11 @@ tasks.processResources {
 
 tasks.test {
     useJUnitPlatform()
-    // FR-099：测试一律 headless——既防 CI/本地误弹 Swing 窗口，也让进度工厂走文本降级路径可验。
+    // 测试一律 headless——既防 CI/本地误弹 Swing 窗口，也让进度工厂走文本降级路径可验。
     systemProperty("java.awt.headless", "true")
-    // FR-091 自更新 selftest 需以独立 classloader 加载真实构建出的 core jar 自证可用，
+    // 自更新 selftest 需以独立 classloader 加载真实构建出的 core jar 自证可用，
     // 故把自身 jar 制品路径注入测试（CoreSelfTestRealJarTest）。test 依赖 jar 不成环（jar 不依赖 test）。
-    // FR-256 起 SelfUpdater 已删，但 CoreSelfTestRealJarTest 仍验证真 jar 可加载、Core.selfTest()（zstd）通过。
+    // SelfUpdater 已删，但 CoreSelfTestRealJarTest 仍验证真 jar 可加载、Core.selfTest()（zstd）通过。
     dependsOn(tasks.named("jar"))
     val selfJar = tasks.named("jar")
     inputs.files(selfJar)

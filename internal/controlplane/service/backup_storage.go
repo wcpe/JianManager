@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -33,9 +34,9 @@ var (
 	ErrInvalidStorageType = errors.New("非法的存储后端类型")
 	// ErrStorageInUse 存储后端被备份引用，禁止删除。
 	ErrStorageInUse = errors.New("存储后端被备份引用，无法删除")
-	// ErrStorageTypeImmutable 存储后端类型不可修改（改型=删重建，FR-338）。
+	// ErrStorageTypeImmutable 存储后端类型不可修改（改型=删重建）。
 	ErrStorageTypeImmutable = errors.New("存储后端类型不可修改")
-	// ErrStorageNameConflict 存储后端名称已存在（FR-338）。
+	// ErrStorageNameConflict 存储后端名称已存在。
 	ErrStorageNameConflict = errors.New("存储后端名称已存在")
 	// ErrCredentialEnvMissing 凭证引用的环境变量未设置。
 	ErrCredentialEnvMissing = errors.New("凭证环境变量未设置")
@@ -45,10 +46,13 @@ var (
 
 const backupStorageProbeTimeout = 2 * time.Second
 
-// envRefPattern 匹配整串恰为一个 ${VAR} 引用（VAR 为字母/数字/下划线）。
-var envRefPattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
+// envRefPattern 匹配整串恰为一个 ${VAR} 引用（VAR 为字母/数字/下划线/连字符）。
+//
+// 允许连字符是为了 QQ 扫码绑定：凭据文件名约定为 etc/qq-<appId>.key，
+// 变量名取小写化后的同名形态（QQ-<appId>），否则「变量名 → 密钥文件」不再是单射。
+var envRefPattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_-]*)\}$`)
 
-// BackupStorageService 备份远程存储后端服务（FR-057）。
+// BackupStorageService 备份远程存储后端服务。
 // 负责后端 CRUD 与「把存储配置 + 从 ${ENV_VAR} 解析的明文凭证」组装为下发 Worker 的传输参数。
 type BackupStorageService struct {
 	db   *gorm.DB
@@ -91,7 +95,7 @@ func (s *BackupStorageService) SetDataRoot(root *dataroot.Root) {
 }
 
 // Create 创建远程存储后端。校验类型合法且凭证字段为 ${ENV_VAR} 引用（非空时）；
-// 名称冲突预检回 422 语义错误（FR-338 对称收口，替代裸撞 DB 唯一索引的 500）。
+// 名称冲突预检回 422 语义错误（对称收口，替代裸撞 DB 唯一索引的 500）。
 func (s *BackupStorageService) Create(st *model.BackupStorage) (*model.BackupStorage, error) {
 	if !model.ValidBackupStorageType(st.Type) {
 		return nil, ErrInvalidStorageType
@@ -112,7 +116,7 @@ func (s *BackupStorageService) Create(st *model.BackupStorage) (*model.BackupSto
 	return st, nil
 }
 
-// Update 全量更新存储后端配置（FR-338）。类型不可改（改型=删重建）；校验与 Create 同源
+// Update 全量更新存储后端配置。类型不可改（改型=删重建）；校验与 Create 同源
 // （仅静态校验，不在保存时强制探活——连通性由「测试连接」显式做）；成功后清空 lastTest*
 // （配置已变，旧测试结论失效）。被备份引用的后端允许编辑（换密钥/endpoint 为合法运维场景，不加引用锁）。
 func (s *BackupStorageService) Update(id uint, st model.BackupStorage) (*model.BackupStorage, error) {
@@ -155,7 +159,7 @@ func (s *BackupStorageService) Update(id uint, st model.BackupStorage) (*model.B
 	return s.GetByID(id)
 }
 
-// checkNameConflict 名称冲突预检（FR-338）：与其他后端同名回 ErrStorageNameConflict；
+// checkNameConflict 名称冲突预检：与其他后端同名回 ErrStorageNameConflict；
 // excludeID 排除自身（Create 传 0）。并发窗口由 DB uniqueIndex 兜底。
 func (s *BackupStorageService) checkNameConflict(name string, excludeID uint) error {
 	var count int64
@@ -334,6 +338,11 @@ func (s *BackupStorageService) ResolveSpec(id uint) (*workerpb.StorageBackendSpe
 }
 
 // TestConnection 通过在线 Worker 对远程存储后端做一次非破坏性读写探测。
+//
+// 【为什么下发前还要在 CP 校验一次】这条路径读的是**已保存**的存储配置，
+// 它可能在门禁上线前就已入库，也可能从其它写入路径进来。若只靠“保存时校验”，
+// 历史脏数据会原样下发给 Worker 去探测——而 Worker 通常在内网，探测面更宽。
+// 这里与 TestCandidate/TestSaved 用同一套校验，保证三条路径口径一致。
 func (s *BackupStorageService) TestConnection(id uint) (*StorageTestResult, error) {
 	spec, err := s.ResolveSpec(id)
 	if err != nil {
@@ -341,6 +350,10 @@ func (s *BackupStorageService) TestConnection(id uint) (*StorageTestResult, erro
 			return failedStorageTest("CREDENTIAL_ENV_MISSING", err.Error(), 0, ""), nil
 		}
 		return nil, err
+	}
+	// 探测前校验目标地址（fail-closed）：不合法直接判失败，不下发 Worker。
+	if err := validateProbeSpecTarget(spec); err != nil {
+		return failedStorageTest("ENDPOINT_BLOCKED", err.Error(), 0, ""), nil
 	}
 	client, nodeUUID := s.firstWorkerClient()
 	if client == nil || client.Worker == nil {
@@ -505,7 +518,12 @@ func validateCredentialRefs(st *model.BackupStorage) error {
 }
 
 // resolveEnvRef 解析 ${ENV_VAR} 引用为环境变量值。空引用返回空串（如匿名 WebDAV）。
-// 非 ${...} 形式或变量未设置则报错，杜绝明文与静默空凭证。
+// 非 ${...} 形式则报错（杜绝明文）。
+//
+// 取值顺序：环境变量 > 数据根 etc/<VAR_NAME>.key 密钥文件。文件回落是为 QQ 扫码绑定
+// 服务的——绑定拿到的 appSecret 落盘为密钥文件，配置里只引用 ${ENV} 名，
+// 无需运维把密钥抄进环境变量。文件不存在时行为与纯环境变量版本完全一致（仍报
+// ErrCredentialEnvMissing），既有备份/Webhook 凭证配置不受影响。
 func resolveEnvRef(ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -515,11 +533,77 @@ func resolveEnvRef(ref string) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("%w: %q", ErrCredentialNotEnvRef, ref)
 	}
-	val, ok := os.LookupEnv(m[1])
-	if !ok {
-		return "", fmt.Errorf("%w: %s", ErrCredentialEnvMissing, m[1])
+	if val, ok := os.LookupEnv(m[1]); ok {
+		return val, nil
 	}
-	return val, nil
+	if val, ok := readCredentialKeyFile(m[1]); ok {
+		return val, nil
+	}
+	return "", fmt.Errorf("%w: %s", ErrCredentialEnvMissing, m[1])
+}
+
+// credentialDataRootOverride 数据根的进程级覆盖（空 = 按 JIANMANAGER_DATA_DIR 解析）。
+// 密钥目录由它派生为 <root>/etc/qq，不接受直接指定目录（见 SetCredentialDataRoot）。
+// 只在启动时写一次；用 atomic.Value 是为了让并发的凭证解析无锁读取。
+var credentialDataRootOverride atomic.Value
+
+// QQSecretSubdir QQ 扫码绑定密钥在数据根 `etc/` 下的子目录名。
+//
+// **必须与 CP 主密钥隔离**：凭证回落查找用的是「变量名小写 + .key」这一通用映射，
+// 若回落目录直接指向 `etc/`，则 `${WS-TOKEN-SECRET}` / `${CLIENT-KEY-ENC}` 这类
+// 引用会精确命中 CP 主密钥文件（`ws-token-secret.key` / `client-key-enc.key`），
+// 而任何持 `alert.manage` 的用户都能建一条 webhook 通道、把地址填成该引用，
+// 再借「测试发送」的错误回显把它读出来——构成跨权限边界的密钥泄露。
+// 因此回落只看 `etc/qq/`，从根上与主密钥不相交（隔离而非黑名单）。
+const QQSecretSubdir = "qq"
+
+// SetCredentialDataRoot 注册数据根（CP 启动时注入）。
+//
+// 刻意只接受「数据根」而非「密钥目录」：兜底目录固定派生为 `<dataRoot>/etc/qq`，
+// 调用方无法把它指到 `etc/` 本身。若开放成「直接指定目录」，一旦误配成 `etc/`，
+// `${WS-TOKEN-SECRET}` 这类引用就会命中 CP 主密钥文件（详见 QQSecretSubdir 注释）——
+// 把这种可能从接口上消除，比事后校验更可靠。传空串恢复「按数据根解析」的默认行为。
+func SetCredentialDataRoot(dataRoot string) {
+	credentialDataRootOverride.Store(strings.TrimSpace(dataRoot))
+}
+
+// credentialKeyDir 返回密钥文件查找目录：显式注入的数据根优先，否则按数据根解析。
+// 恒为 `<dataRoot>/etc/qq`；数据根解析失败返回空串（等同「没有回落目录」）。
+func credentialKeyDir() string {
+	if v, ok := credentialDataRootOverride.Load().(string); ok && v != "" {
+		return filepath.Join(v, "etc", QQSecretSubdir)
+	}
+	root, err := dataroot.Resolve("")
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(root.EtcDir(), QQSecretSubdir)
+}
+
+// credentialKeyFileName 凭证变量名 → 密钥文件名：小写化 + ".key"。
+// 例：QQ-1020001 → qq-1020001.key。变量名已由 envRefPattern 限定字符集，
+// 不含路径分隔符，故拼接后不可能越出 etc/ 目录。
+func credentialKeyFileName(varName string) string {
+	return strings.ToLower(strings.TrimSpace(varName)) + ".key"
+}
+
+// readCredentialKeyFile 读取 etc/<VAR_NAME>.key；文件不存在、不可读或内容为空时返回 ok=false
+// （交给调用方报「环境变量未设置」，不在这里报错，以免掩盖真正的原因）。
+// 内容做首尾空白裁剪：密钥文件常以换行结尾，行尾字符不属于密钥本身。
+func readCredentialKeyFile(varName string) (string, bool) {
+	dir := credentialKeyDir()
+	if dir == "" {
+		return "", false
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, credentialKeyFileName(varName)))
+	if err != nil {
+		return "", false
+	}
+	val := strings.TrimSpace(string(raw))
+	if val == "" {
+		return "", false
+	}
+	return val, true
 }
 
 func probeBackupStorage(st model.BackupStorage, accessKey, secretKey string) error {
@@ -557,7 +641,7 @@ func probeS3Storage(ctx context.Context, st model.BackupStorage, accessKey, secr
 		}
 		signS3Probe(req, region, accessKey, secretKey)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := backupProbeHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("S3 连接失败: %w", err)
 	}
@@ -583,7 +667,7 @@ func probeWebDAVStorage(ctx context.Context, st model.BackupStorage, user, pass 
 	if user != "" || pass != "" {
 		req.SetBasicAuth(user, pass)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := backupProbeHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("WebDAV 连接失败: %w", err)
 	}
@@ -602,16 +686,48 @@ func probeSFTPStorage(ctx context.Context, st model.BackupStorage, user, pass st
 	if err != nil {
 		return err
 	}
+	// SSRF 防护：SFTP 是裸 TCP，必须在拨号前校验目标地址。
+	if err := validateProbeHost(addr); err != nil {
+		return err
+	}
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.Password(pass)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         backupStorageProbeTimeout,
 	}
-	conn, err := (&net.Dialer{Timeout: backupStorageProbeTimeout}).DialContext(ctx, "tcp", addr)
+	conn, err := probeDialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("SFTP 连接失败: %w", err)
 	}
+	/*
+		【超时必须自己守】`ssh.NewClientConn` 拿到的是已建立的 TCP 连接，**它不读 ctx**；
+		`ssh.ClientConfig.Timeout` 与 `net.Dialer.Timeout` 都只覆盖到 TCP 建连为止。
+		对端若 accept 后不发 SSH banner（防火墙黑洞、假监听），握手会永久阻塞，
+		而本函数的 ctx 是 `context.WithTimeout(15s)`——没有下面这段，超时形同虚设。
+
+		两道保险：
+		  1. conn.SetDeadline —— 让阻塞的读写自己返回；
+		  2. 监护 goroutine —— ctx 取消时立即 Close，不再等 deadline 到期。
+	*/
+	deadline := time.Now().Add(backupStorageProbeTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("SFTP 设置超时失败: %w", err)
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
 		_ = conn.Close()
@@ -640,6 +756,16 @@ func backupStorageProbeURL(endpoint string, useSSL bool) (*url.URL, error) {
 	}
 	if u.Host == "" {
 		return nil, fmt.Errorf("缺少 host")
+	}
+	// SSRF 防护：endpoint 完全由调用方提供，并由控制面主机发起出站请求。
+	// 只放行 http/https，并在解析后校验目标地址（含 DNS 解析结果的逐 IP 复核）。
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return nil, fmt.Errorf("不支持的协议 %q（仅允许 http/https）", u.Scheme)
+	}
+	if err := validateProbeHost(u.Host); err != nil {
+		return nil, err
 	}
 	return u, nil
 }

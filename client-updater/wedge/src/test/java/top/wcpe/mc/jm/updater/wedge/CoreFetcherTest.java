@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * CoreFetcher 测试（FR-258）：JDK 原生 HTTP 下载 + sha256 校验。
+ * CoreFetcher 测试：JDK 原生 HTTP 下载 + sha256 校验。
  *
  * <p>用 {@link HttpServer}（JDK 内置）模拟 CP 端点，覆盖下载成功 / sha256 不符拒绝 / 网络超时重试。
  */

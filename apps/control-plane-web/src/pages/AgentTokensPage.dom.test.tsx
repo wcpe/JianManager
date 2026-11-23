@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { useAuthStore } from '@/stores/auth'
@@ -91,7 +91,7 @@ describe('AgentTokensPage（DOM）', () => {
           ],
         }
       }
-      if (url === '/instances') return { data: [] }
+      if (url === '/instances/search') return { data: { items: [], total: 0, page: 1, pageSize: 50 } }
       if (url === '/nodes') return { data: [] }
       return { data: [] }
     })
@@ -134,11 +134,92 @@ describe('AgentTokensPage（DOM）', () => {
     expect(screen.getByText(/V2/)).toBeInTheDocument()
   })
 
+  /**
+   * 千级实例的判据：实例数是千级（大档 1200），签发对话框的实例多选区**不得**全量列举——
+   * 原先容器 `useInstances()` 无门控地拉全量、弹窗里再挂 1200 × 4 个元素，现改为服务端搜索
+   * （默认前 N 条 + 键入 300ms 防抖下发 `q`）+ 虚拟化候选 + 截断提示 + 已选回显。
+   */
+  it('实例候选走服务端搜索：不下发全量 /instances，键入后带 q，且已选项在窗口外也能回显', async () => {
+    login(10)
+    mockedApi.get.mockImplementation(
+      async (url: string, cfg?: { params?: Record<string, unknown> }) => {
+        if (url === '/agent/tokens') return { data: [] }
+        if (url === '/instances/search') {
+          const q = cfg?.params?.q
+          // 带 q 的搜索按服务端语义只回命中项（此处故意不回任何项，验证「候选窗口随 q 变化」）。
+          return {
+            data: {
+              items: q ? [] : [{ id: 7, name: 'survival-07', status: 'RUNNING' }],
+              total: q ? 0 : 1200,
+              page: 1,
+              pageSize: 50,
+            },
+          }
+        }
+        if (url === '/nodes') return { data: [{ id: 1, name: 'node-a' }] }
+        return { data: [] }
+      },
+    )
+
+    const user = userEvent.setup()
+    renderWithProviders(<AgentTokensPage />)
+    await screen.findByText(/暂无 Agent Token|No Agent Tokens/)
+
+    // 弹窗打开前不发实例候选请求（取数时机与节点候选一致）。
+    const searchCalls = () =>
+      mockedApi.get.mock.calls.filter(([url]) => url === '/instances/search') as [
+        string,
+        { params?: Record<string, unknown> },
+      ][]
+    expect(searchCalls()).toEqual([])
+
+    await user.click(screen.getByRole('button', { name: /新建 Token|New Token/ }))
+
+    // 打开后按服务端搜索取候选窗口（默认前 N 条），而不是 /instances 全量列举。
+    const searchBox = await screen.findByLabelText('输入实例名筛选')
+    await waitFor(() =>
+      expect(searchCalls().some(([, cfg]) => cfg?.params?.pageSize === 50)).toBe(true),
+    )
+    expect(mockedApi.get.mock.calls.filter(([url]) => url === '/instances')).toEqual([])
+    // 服务端截断 → 提示继续输入缩小范围。
+    expect(screen.getByText(/已显示前 1 项，共 1200 项/)).toBeInTheDocument()
+
+    // 勾选后立即可见「已勾选 + 实例」回显（键入收窄候选后仍能看见勾了什么）。
+    await user.click(screen.getByRole('checkbox', { name: 'survival-07' }))
+    const picked = screen.getByText('已勾选 1 个实例').parentElement as HTMLElement
+    expect(within(picked).getByText('#7 survival-07')).toBeInTheDocument()
+
+    // 键入 → 300ms 防抖后下发带 q 的服务端搜索（而非本地过滤全量列表）。
+    await user.type(searchBox, 'lobby')
+    await waitFor(
+      () => expect(searchCalls().some(([, cfg]) => cfg?.params?.q === 'lobby')).toBe(true),
+      { timeout: 2000 },
+    )
+    // 候选窗口已随 q 变化（服务端未命中 → 候选空态），而已勾选项仍留在回显里。
+    await waitFor(() => expect(screen.getByText('暂无实例')).toBeInTheDocument())
+    expect(within(picked).getByText('#7 survival-07')).toBeInTheDocument()
+
+    // 关窗重开：搜索框草稿与容器里的关键字一起归零，候选回到未过滤窗口
+    // （否则会出现「框是空的、候选却仍被上次关键字挡住」）。
+    await user.click(screen.getByRole('button', { name: /取消|Cancel/ }))
+    await waitFor(() => expect(screen.queryByLabelText('输入实例名筛选')).not.toBeInTheDocument())
+    const before = searchCalls().length
+    await user.click(screen.getByRole('button', { name: /新建 Token|New Token/ }))
+    expect(await screen.findByLabelText('输入实例名筛选')).toHaveValue('')
+    await waitFor(() => expect(searchCalls().length).toBeGreaterThan(before))
+    // 关键字归零经 300ms 防抖才下发，故最终那次候选请求必须是不带 q 的未过滤窗口。
+    await waitFor(
+      () => expect(searchCalls()[searchCalls().length - 1]?.[1]?.params?.q).toBeUndefined(),
+      { timeout: 2000 },
+    )
+  })
+
   it('创建成功展示一次性明文与 JM_AGENT_TOKEN，并提交 V2 payload', async () => {
     login(10)
     mockedApi.get.mockImplementation(async (url: string) => {
       if (url === '/agent/tokens') return { data: [] }
-      if (url === '/instances') return { data: [{ id: 1, name: 'survival', status: 'STOPPED' }] }
+      if (url === '/instances/search')
+        return { data: { items: [{ id: 1, name: 'survival', status: 'STOPPED' }], total: 1, page: 1, pageSize: 50 } }
       if (url === '/nodes') return { data: [{ id: 1, name: 'node-a' }] }
       return { data: [] }
     })

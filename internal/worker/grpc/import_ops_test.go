@@ -272,7 +272,7 @@ func TestMoveDirCopyFailureKeepsSource(t *testing.T) {
 	assert.FileExists(t, filepath.Join(src, "server.properties"))
 }
 
-// ── 就地实例删除保护（FR-302 关键守则，双保险之一）────────────────────
+// ── 就地实例删除保护（关键守则，双保险之一）────────────────────
 
 // CP 显式传 skip_work_dir：目录一个字节都不动，仅移除注册。
 func TestRemoveInstance_SkipWorkDirKeepsInPlaceDir(t *testing.T) {

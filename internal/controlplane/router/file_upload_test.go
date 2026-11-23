@@ -41,7 +41,7 @@ func (f *fakeUploadRouterStream) CloseAndRecv() (*workerpb.UploadFileResponse, e
 	return &workerpb.UploadFileResponse{Success: true, BytesWritten: n}, nil
 }
 
-// fakeUploadRouterWorker 支持 UploadFile 流式与 FR-051 快照所需的 ReadFile。
+// fakeUploadRouterWorker 支持 UploadFile 流式与快照所需的 ReadFile。
 type fakeUploadRouterWorker struct {
 	workerpb.WorkerServiceClient
 	streams  []*fakeUploadRouterStream
@@ -117,7 +117,7 @@ func postUpload(r http.Handler, url string, body *bytes.Buffer, contentType, tok
 	return w
 }
 
-// TestFileUpload_QueryParamPath 目标路径经 query 参数传递（FR-304 首选契约），内容流式转发完整。
+// TestFileUpload_QueryParamPath 目标路径经 query 参数传递（首选契约），内容流式转发完整。
 func TestFileUpload_QueryParamPath(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
@@ -167,7 +167,7 @@ func TestFileUpload_MissingPath(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 }
 
-// TestFileUpload_SnapshotBeforeOverwrite FR-051 回归：覆盖已存在文件前落改前快照版本。
+// TestFileUpload_SnapshotBeforeOverwrite回归：覆盖已存在文件前落改前快照版本。
 func TestFileUpload_SnapshotBeforeOverwrite(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()

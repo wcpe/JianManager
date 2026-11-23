@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// FR-107 更新器 jar 端点：版本/可用性查询、组件校验、鉴权。
+// 更新器 jar 端点：版本/可用性查询、组件校验、鉴权。
 // 断言**与构建期是否内嵌 jar 无关**（CI 干净检出无 jar / 本地 make embed-client-updater 后有 jar 均须通过）：
 // Info 不断言 available 的具体值；下载据 Info 的 available 判 200（真字节）或 404（未内嵌兜底）。
 

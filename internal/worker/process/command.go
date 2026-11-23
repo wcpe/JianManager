@@ -42,33 +42,33 @@ type CommandSpec struct {
 	AutoRestart bool
 	ProcessType ProcessType
 	// ProbePort 是实例 ServerProbe /metrics 端口（CP 分配后下发）。daemon 策略透传到
-	// wrapper→PID 记录，供 Worker 重启恢复后心跳继续自采（FR-060）；0=未部署探针。
+	// wrapper→PID 记录，供 Worker 重启恢复后心跳继续自采；0=未部署探针。
 	ProbePort int
-	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发，FR-063）。daemon 策略
+	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发）。daemon 策略
 	// 透传到 wrapper 做超时强杀兜底；0=未指定，wrapper 回退 env/默认。值在启动时定型。
 	GracefulStopTimeoutSeconds int
 	// Image 是 docker 模式的容器镜像引用（如 itzg/minecraft-server:latest）。
-	// 仅 docker 策略使用；缺失时 docker 启动报错（ADR-019）。
+	// 仅 docker 策略使用；缺失时 docker 启动报错。
 	Image string
-	// PortMappings 是 docker 模式的容器端口↔宿主端口映射（宿主端口来自 FR-032 端口池）。
-	// 仅 docker 策略使用，发布容器内端口到宿主（ADR-019）。
+	// PortMappings 是 docker 模式的容器端口↔宿主端口映射（宿主端口来自端口池）。
+	// 仅 docker 策略使用，发布容器内端口到宿主。
 	PortMappings []PortMapping
 	// CPULimit 是 docker 模式的 CPU 核数上限（如 1.5 表示 1.5 核），注入 HostConfig.NanoCPUs。
-	// 仅 docker 策略使用；0=不限制（FR-079，见 ADR-019）。
+	// 仅 docker 策略使用；0=不限制。
 	CPULimit float64
 	// MemLimitMB 是 docker 模式的内存上限（MiB），注入 HostConfig.Memory。
-	// 仅 docker 策略使用；0=不限制（FR-079，见 ADR-019）。
+	// 仅 docker 策略使用；0=不限制。
 	MemLimitMB int64
 	// DiskLimitMB 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入 HostConfig。
-	// bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容（FR-079）。
+	// bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容。
 	DiskLimitMB int64
 }
 
-// PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。
+// PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式）。
 type PortMapping struct {
 	// ContainerPort 容器内监听端口（由镜像约定，如 MC 容器内 25565）。
 	ContainerPort int
-	// HostPort 宿主发布端口（来自 FR-032 端口池分配）。
+	// HostPort 宿主发布端口（来自端口池分配）。
 	HostPort int
 	// Protocol 端口协议，tcp（默认）或 udp（如 MC query）。
 	Protocol string
@@ -84,20 +84,32 @@ var pathKey = func() string {
 	return "PATH"
 }()
 
+// javaHomeKey 是 JAVA_HOME 变量名。Windows 上变量名大小写不敏感，但 Go 的 os/exec 去重按字面
+// 比较，故基线里若写成 `Java_Home` 之类不会被本处剥离——实际部署（systemd / shell）都写全大写，
+// 沿用同一字面即与既有 PATH 处理口径一致。
+const javaHomeKey = "JAVA_HOME"
+
 // ComposeEnv 合成进程最终环境：
 // 1) Worker 自身环境（os.Environ）作为基线，保留系统 PATH/编码等；
-// 2) 注入 JAVA_HOME（如果提供）和对应 PATH 前缀；
+// 2) **剥离基线里继承的 JAVA_HOME**，再按实例绑定注入自己的 JAVA_HOME 与 PATH 前缀；
 // 3) 叠加实例自定义 EnvVars（覆盖基线同名键）。
 // 始终不修改调用方的 map。
+//
+// 为什么要剥离继承的 JAVA_HOME（真机事故 2026-10-09）：基线来自 Worker 自身进程环境，而 Worker
+// 可能被部署成继承一个**可变**的 JAVA_HOME——真机为 `~/.sdkman/candidates/java/current` 软链，
+// 该软链被切到 Java 8 后，10 台 Paper 1.20 实例全部启动即崩（Paper 需 Java 17+）。若不剥离，
+// 实例的 Java 运行时就成了「Worker 环境碰巧是什么」的函数，而非由实例的 JDK 绑定决定：
+// 绑定了 JDK 也会被继承值污染，未绑定则凭空指向一个漂移的软链。
 func ComposeEnv(base []string, spec CommandSpec) []string {
 	out := append([]string(nil), base...)
+	out = dropEnvKey(out, javaHomeKey)
 
 	javaBin := spec.JDKBinPath
 	if javaBin == "" && spec.JavaHome != "" {
 		javaBin = joinPath(spec.JavaHome, "bin")
 	}
 	if spec.JavaHome != "" {
-		out = append(out, "JAVA_HOME="+spec.JavaHome)
+		out = append(out, javaHomeKey+"="+spec.JavaHome)
 	}
 	if javaBin != "" {
 		// 找到原 PATH/Path，将其前置 javaBin；找不到则追加。
@@ -117,16 +129,23 @@ func ComposeEnv(base []string, spec CommandSpec) []string {
 
 	for k, v := range spec.EnvVars {
 		// 同名键移除 base 中的旧值，确保子进程实际生效的是实例 env。
-		removed := out[:0]
-		for _, kv := range out {
-			if name, _, ok := splitEnvKey(kv); !ok || name != k {
-				removed = append(removed, kv)
-			}
-		}
-		out = removed
+		out = dropEnvKey(out, k)
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+// dropEnvKey 返回剔除所有键为 key 的条目后的切片（原地复用底层数组）。
+// 环境数组里出现重复键时，Go os/exec 只保留**最后**一个，故「先剔除、再追加」可确保
+// 实例侧的值是唯一且最终生效的那个，不受基线继承值影响。
+func dropEnvKey(env []string, key string) []string {
+	kept := env[:0]
+	for _, kv := range env {
+		if name, _, ok := splitEnvKey(kv); !ok || name != key {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
 }
 
 func joinPath(dir, leaf string) string {
@@ -145,7 +164,7 @@ func splitEnvKey(kv string) (key, value string, ok bool) {
 // IProcessCommand 进程启动策略接口。
 // Manager 按 instance.ProcessType 选择具体实现（direct/daemon/docker），
 // 把「如何启动/停止/发送命令」的差异收敛到策略内部，Manager 只负责路由和生命周期记账。
-// 参见 ADR-003: 守护进程 Wrapper 模式。
+// 守护进程 Wrapper 模式。
 type IProcessCommand interface {
 	// Start 启动实例进程。ctx 用于取消启动阶段（如连接 wrapper 超时）。
 	Start(ctx context.Context) error
@@ -166,7 +185,7 @@ type IProcessCommand interface {
 }
 
 // newStrategy 按 ProcessType 构造对应策略。
-// direct 走 Worker 直连子进程；daemon 走 wrapper 子进程隔离；docker 走本机 Docker 容器（ADR-019）；
+// direct 走 Worker 直连子进程；daemon 走 wrapper 子进程隔离；docker 走本机 Docker 容器；
 // rcon 暂未实现，返回 ErrNotImplemented，避免误用未落地能力。
 func (m *Manager) newStrategy(spec CommandSpec) (IProcessCommand, error) {
 	switch spec.ProcessType {

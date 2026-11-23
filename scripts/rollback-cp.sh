@@ -1,5 +1,5 @@
 #!/bin/sh
-# JianManager Control Plane 用户级版本化部署回滚脚本（FR-410）。
+#  JianManager Control Plane 用户级版本化部署回滚脚本。
 set -eu
 
 SVC="jianmanager-cp"

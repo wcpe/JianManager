@@ -1,9 +1,9 @@
-/**
- * devmock 自持 API 契约类型（FR-284，见 ADR-064 / monorepo-unification spec §3）。
+/** 
+ * devmock 自持 API 契约类型（见 monorepo-unification spec §3）。
  *
  * 依赖反转：devmock 不 import 应用内部（@/…）——本文件按 `docs/API.md` 契约
  * 自持 handler 所需的请求/响应形状（与 app 的 `src/api/*.ts` 同源心智模型）。
- * 形状漂移由既有 dom 测试看守（真组件打真 mock，字段错位即红，ADR-047 机制）；
+ * 形状漂移由既有 dom 测试看守（真组件打真 mock，字段错位即红）；
  * 将来出现第二个消费 app 再评估抽独立 api-contracts 包（YAGNI）。
  */
 
@@ -16,7 +16,7 @@ export interface InstanceInfo {
   nodeId: number
   name: string
   type: string
-  /** 群组服角色（FR-032）：proxy / backend / universal。 */
+  /** 群组服角色：proxy / backend / universal。 */
   role: string
   processType: string
   status: string
@@ -48,7 +48,7 @@ export interface BackupInfo {
   fileSizeMb: number
   /** 触发来源：0=手动, 1=定时 */
   type: number
-  /** 备份模式：0=全量, 1=增量（FR-056） */
+  /** 备份模式：0=全量, 1=增量 */
   mode: number
   /** 状态：0=待处理, 1=进行中, 2=已完成, 3=失败 */
   status: number
@@ -69,7 +69,7 @@ export interface CreateBackupBody {
 
 // ─────────────────────── 备份存储（backup-storages） ───────────────────────
 
-/** 备份远程存储后端。凭证以 ${ENV_VAR} 引用，后端不返回明文（FR-057）。 */
+/** 备份远程存储后端。凭证以 ${ENV_VAR} 引用，后端不返回明文。 */
 export interface BackupStorage {
   id: number
   name: string
@@ -103,9 +103,9 @@ export interface CreateBackupStorageBody {
   useSsl?: boolean
 }
 
-// ─────────────────── 制品存储渠道（artifact-storages，FR-347） ───────────────────
+// ─────────────────── 制品存储渠道（artifact-storages） ───────────────────
 
-/** 制品存储渠道：client-file 制品落点路由配置。响应永不含凭证明文/密文（ADR-073）。 */
+/** 制品存储渠道：client-file 制品落点路由配置。响应永不含凭证明文/密文。 */
 export interface ArtifactStorageChannel {
   id: number
   name: string
@@ -160,7 +160,7 @@ export interface Task {
   updatedAt: string
 }
 
-/** 制品存量迁移登记与实时计数（FR-348）。 */
+/** 制品存量迁移登记与实时计数。 */
 export interface ArtifactMigrationInfo {
   taskId: string
   targetChannelId: number
@@ -178,7 +178,7 @@ export interface ArtifactMigrationStatus {
   migration: ArtifactMigrationInfo | null
 }
 
-/** 迁移失败明细一条（sha256 + 原因，FR-348）。 */
+/** 迁移失败明细一条（sha256 + 原因）。 */
 export interface ArtifactMigrationFailure {
   id: number
   taskId: string
@@ -235,6 +235,11 @@ export interface ScheduleInfo {
   id: number
   uuid: string
   instanceId: number
+  /** 
+   * 实例展示名（真后端 `/schedules` 已回填）。前端优先用它，不必为了显示名字而拉全量实例列表。
+   * 可选：实例被删时后端留空，前端回退显示 #id。
+   */
+  instanceName?: string
   name: string
   cronExpr: string
   /** 动作：start / stop / restart / command / backup。 */
@@ -275,7 +280,7 @@ export interface UpdateScheduleBody {
 
 // ─────────────────────────── 群组网络（networks） ───────────────────────────
 
-/** 成员实例按运行状态的计数桶（五态零补齐，FR-335）。 */
+/** 成员实例按运行状态的计数桶（五态零补齐）。 */
 export interface MemberStatusCounts {
   running: number
   stopped: number
@@ -291,7 +296,7 @@ export interface NetworkSummary {
   name: string
   description: string
   memberCount: number
-  /** 成员健康计数桶（FR-335）。 */
+  /** 成员健康计数桶。 */
   memberStatus: MemberStatusCounts
   createdAt: string
 }
@@ -355,7 +360,7 @@ export interface CreateRegistrationBody {
   enabled?: boolean
 }
 
-// ─────────────────────────── 拓扑聚合（topology，FR-335） ───────────────────────────
+// ─────────────────────────── 拓扑聚合（topology） ───────────────────────────
 
 /** 拓扑聚合里的单个代理概要 + 其注册（与 GET /proxies/:id/registrations 同构）。 */
 export interface TopologyProxy {
@@ -374,15 +379,28 @@ export interface TopologyNetwork {
   memberInstanceIds: number[]
 }
 
-/** 全量群组拓扑聚合响应（GET /topology，FR-335）。 */
+/** 拓扑里的全量实例最小投影（453）：含未注册实例与配套服务。 */
+export interface TopologyInstance {
+  id: number
+  name: string
+  type: string
+  role: string
+  status: string
+  nodeId: number
+  serverPort: number
+  tags: string
+}
+
+/** 全量群组拓扑聚合响应（GET /topology）。 */
 export interface TopologyResponse {
   proxies: TopologyProxy[]
   networks: TopologyNetwork[]
+  instances: TopologyInstance[]
 }
 
 // ─────────────────────────── 搭建代理（proxy） ───────────────────────────
 
-/** 搭建代理请求体（对应后端 service.ProvisionProxyRequest，FR-035）。 */
+/** 搭建代理请求体（对应后端 service.ProvisionProxyRequest）。 */
 export interface ProvisionProxyBody {
   nodeId: number
   name: string
@@ -402,3 +420,97 @@ export interface ProvisionProxyResult {
   registrations: unknown[]
   warnings?: string[]
 }
+
+// ─────────────────── 观测·统计（464/465/469） ───────────────────
+// 与 docs/API.md 及 CP `internal/controlplane/service/{slo,capacity,attribution,ranking}.go`
+// 的响应 DTO 同构；形状漂移由 dom 测试看守（真组件打真 mock）。
+
+/** 性能归因因子。correlation 为与目标指标的 Pearson 相关，weight 为归一化贡献权重。 */
+export interface AttributionFactorInfo {
+  metricKey: string
+  label: string
+  correlation: number
+  weight: number
+  note?: string
+}
+
+/** 性能归因结果。status=insufficient 时 factors 为空，不伪造排序。 */
+export interface AttributionInfo {
+  target: string
+  window: { from: string; to: string }
+  status: 'ok' | 'insufficient'
+  tldr: string
+  factors: AttributionFactorInfo[]
+  samples: number
+}
+
+/** 跨实例排行一项。 */
+export interface RankingItemInfo {
+  instanceId: number
+  instanceUuid: string
+  name: string
+  nodeUuid: string
+  value: number
+  rank: number
+  sampledAt: string
+}
+
+/** 跨实例排行结果。scoped=true 表示非管理员的受限视图。 */
+export interface RankingResultInfo {
+  metricKey: string
+  order: 'asc' | 'desc'
+  windowSeconds: number
+  scoped: boolean
+  skippedNoData: number
+  items: RankingItemInfo[]
+}
+
+/** 玩家在线趋势与时段分析。hourlyDist 恒为 24 项，按 timezone 分桶。 */
+export interface PlayerTrendInfo {
+  resolution: string
+  timezone: string
+  trend: { ts: string; avg: number | null; min: number | null; max: number | null }[]
+  hourlyDist: number[]
+  peakValue: number
+  peakAt: string | null
+  dailyAvg: number
+}
+
+/** 可用性/SLO 结果。mttrSeconds/mtbfSeconds 为 null 表示无已恢复故障/无故障（非 Infinity）。 */
+export interface SLOInfo {
+  scope: 'platform' | 'node' | 'instance'
+  availability: number
+  totalSamples: number
+  upSamples: number
+  incidents: number
+  activeIncidents: number
+  mttrSeconds: number | null
+  mtbfSeconds: number | null
+  budgetAllowedSec: number
+  budgetBurnedSec: number
+  target: number
+  approximatedBuckets: boolean
+  /** false=窗口内无可用证据（分母为 0）：可用率与误差预算均不适用（m1）。 */
+  applicable: boolean
+}
+
+/** 容量外推结果。exhaust* 为 null 表示无增长/样本不足，不伪造预测。 */
+export interface ForecastInfo {
+  targetId: string
+  metricKey: string
+  nowValue: number
+  limitValue: number
+  slopePerSec: number
+  exhaustAt: string | null
+  exhaustLowDays: number | null
+  exhaustHighDays: number | null
+  confidence: 'high' | 'low' | 'insufficient'
+  samples: number
+  note?: string
+}
+
+/** 容量预测响应。 */
+export interface CapacityForecastInfo {
+  forecasts: ForecastInfo[]
+}
+

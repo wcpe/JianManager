@@ -1,14 +1,14 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-235 实例列表页重设计（1000+ 实例）· 单机（Playwright + mock 模式）验收。
+/** 
+ *实例列表页重设计（1000+ 实例）· 单机（Playwright + mock 模式）验收。
  * 覆盖 spec §5：1200 mock 实例下 `/instances` 首屏只请求分页搜索 `GET /instances/search`
  * 与聚合 `GET /instances/aggregate`，不再请求裸数组 `GET /instances`；虚拟渲染只挂可视窗口。
- * 证据落 .tmp/acceptance/FR-235/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-235 实例列表首屏走服务端分页搜索，不拉裸数组', async ({ page }) => {
+test('实例列表首屏走服务端分页搜索，不拉裸数组', async ({ page }) => {
   await login(page)
 
   // 在导航到 /instances 之前挂请求监听，捕获首屏所有 /api/v1/instances* 请求。
@@ -18,10 +18,10 @@ test('FR-235 实例列表首屏走服务端分页搜索，不拉裸数组', asyn
     if (pathname.startsWith('/api/v1/instances')) instancePaths.push(pathname)
   })
 
-  await page.goto('/instances')
+  await page.goto('/instances?view=list')
 
-  // 首屏虚拟渲染壳就位（默认卡片视图），data-total-count 反映 1200 规模数据集。
-  const surface = page.getByTestId('instances-card-virtual')
+  // 列表视图首屏表格壳就位（服务端分页），data-total-count 反映 1200 规模数据集。
+  const surface = page.getByTestId('instances-table-virtual')
   await expect(surface).toBeVisible()
   await expect
     .poll(async () => Number((await surface.getAttribute('data-total-count')) ?? '0'))
@@ -34,16 +34,16 @@ test('FR-235 实例列表首屏走服务端分页搜索，不拉裸数组', asyn
   // 首屏绝不请求裸数组列表端点 GET /instances（1200 全量拉取）。
   expect(instancePaths).not.toContain('/api/v1/instances')
 
-  // 先等待虚拟项实际挂载，再断言可视窗口 + overscan 远少于 1200 全量卡片。
-  const virtualItems = page.getByTestId('instances-card-virtual-item')
-  await expect.poll(() => virtualItems.count()).toBeGreaterThan(0)
-  const cardCount = await virtualItems.count()
-  expect(cardCount).toBeLessThan(80)
+  // 先等待虚拟行实际挂载，再断言可视窗口 + overscan 远少于 1200 全量行/卡片。
+  const virtualRows = surface.locator('tbody tr')
+  await expect.poll(() => virtualRows.count()).toBeGreaterThan(0)
+  const renderedCount = await virtualRows.count()
+  expect(renderedCount).toBeLessThan(80)
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-235/single-machine-instances.png', fullPage: false })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-instances.png', fullPage: false })
 })
 
-test('FR-235 URL 深链刷新后恢复筛选/排序/视图', async ({ page }) => {
+test('URL 深链刷新后恢复筛选/排序/视图', async ({ page }) => {
   await login(page)
 
   const searchQueries: URLSearchParams[] = []

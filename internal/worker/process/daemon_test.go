@@ -1,6 +1,7 @@
 package process
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +27,26 @@ func keepAliveCmd() string {
 		return "ping -n 30 127.0.0.1 > nul"
 	}
 	return "sleep 30"
+}
+
+// stdinConsumingCmd 返回一个「保持存活且持续消费 stdin」的替身命令。
+//
+// 为什么必须与 keepAliveCmd 区分：Windows 命名管道（以及任何 OS 管道）的缓冲是有限的
+// （匿名管道约 4KiB）。真实 Minecraft 服务端是常驻读 stdin 的进程，控制台命令写入后即被
+// 取走；而 ping/sleep 替身从不读 stdin——并发下发用例一次写入 128 条 1KiB 命令时，第 4 条
+// 即塞满 wrapper→替身 的 stdin 管道缓冲，后续写入被阻塞长达替身的剩余寿命（ping -n 30
+// 场景下实测 28.9s），替身退出瞬间缓冲数据随之丢失，与测试收尾竞态——这是夹具造成的
+// 物理假象，不是产品缺陷（Linux 上 unix socket 缓冲约 208KiB 可整体吸收 128KiB 载荷，
+// 表现为「静默堆积」，掩盖了同一夹具问题，故 CI 长期为绿）。
+//
+// more（Windows）/ cat（unix）逐字节读 stdin 到 EOF 才退出，与真实服务端的消费语义一致；
+// EOF 由 wrapper 在 stop/kill 路径关闭 stdin 管道触发，替身随即退出，不产生孤儿。
+func stdinConsumingCmd() string {
+	if runtime.GOOS == "windows" {
+		// more 逐块回显 stdin 到 EOF；输出由 wrapper 的 wrapperOutput 吞掉（stdout 无断言依赖）。
+		return "more"
+	}
+	return "cat"
 }
 
 // 注：daemonStrategy.Start 通过 os.Executable() spawn worker 二进制的 daemon 子命令。
@@ -67,10 +88,16 @@ func TestManager_DaemonRecover(t *testing.T) {
 	m2 := NewManager(pidDir)
 	recovered, err := m2.RecoverDaemonInstances()
 	require.NoError(t, err)
-	assert.Equal(t, 1, recovered)
+	// 不能断言 recovered==1：两阶段化后 RecoverDaemonInstances 只同步做「快速首拨」，
+	// 首拨失败时该记录转入**后台**有界重试、函数立即返回 0，靠后台补上的不计入返回值。
+	// 整包并发下首拨会因调度延迟一时拨不通，直接断言 recovered==1 即间歇红。
+	// 故与 TestManager_DaemonStopAllGraceful 同口径：先让后台重试收敛，再断言终态。
+	require.True(t, m2.WaitStartupTakeover(10*time.Second), "后台接管重试应在超时内收敛")
 
-	st, _ := m2.GetState(uuid)
-	assert.Equal(t, StateRunning, st)
+	st, stErr := m2.GetState(uuid)
+	require.NoError(t, stErr)
+	require.Equal(t, StateRunning, st,
+		fmt.Sprintf("应接管为 RUNNING（同步返回的 recovered=%d，首拨失败时由后台重试补齐）", recovered))
 
 	// 停止并退出，清理 wrapper
 	_ = m2.Stop(uuid)
@@ -110,7 +137,13 @@ func TestManager_DaemonStopAllGraceful(t *testing.T) {
 	// 用 recover 接管已运行的 wrapper
 	recovered, recErr := m.RecoverDaemonInstances()
 	t.Logf("recover: recovered=%d err=%v wrapperPID=%d", recovered, recErr, wrapperPID)
-	require.Equal(t, 1, recovered, "应恢复 1 个 daemon 实例")
+	// 同 TestManager_DaemonReArm：同步返回值只反映「首拨是否当场成功」，首拨失败的记录会转后台
+	// 有界重试（两阶段化）。断言前必须收敛，否则整包并发下是间歇红。
+	require.NoError(t, recErr)
+	require.True(t, m.WaitStartupTakeover(10*time.Second), "后台接管重试应在超时内收敛")
+	st, stErr := m.GetState(uuid)
+	require.NoError(t, stErr)
+	require.Equal(t, StateRunning, st, fmt.Sprintf("应接管为 RUNNING（同步返回的 recovered=%d，首拨失败时由后台重试补齐）", recovered))
 
 	m.StopAll() // daemon 模式：只断开，不杀
 	t.Logf("StopAll done, wrapper alive=%v", daemon.IsPIDAlive(wrapperPID))
@@ -135,4 +168,92 @@ func TestManager_DaemonStopAllGraceful(t *testing.T) {
 	// 注意：本测试在进程内运行 wrapper（goroutine，非子进程），
 	// wrapperPID == os.Getpid()，不可用 killProcessTree（会杀掉测试自身）。
 	// 真实部署中 wrapper 是独立子进程，stop 已通过 taskkill /T 清理 Java 树。
+}
+
+// exitAfterCmd 返回一个「存活若干秒后自行退出」的跨平台命令（验证 wrapper 自动重启用）。
+func exitAfterCmd(seconds int) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("ping -n %d 127.0.0.1 > nul", seconds+1)
+	}
+	return fmt.Sprintf("sleep %d", seconds)
+}
+
+// autoRestartToggler 暴露 daemon 策略的禁用/恢复自动重启控制帧能力（wrapper 协议）。
+type autoRestartToggler interface {
+	DisableAutoRestart() error
+	EnableAutoRestart() error
+}
+
+// 终验 Major 端到端回归：熔断禁用自动重启后经人工解除（对称 enable 帧），仍在托管的
+// wrapper 必须恢复「Java 退出后自动重启」。修复前没有 enable 帧，wrapper 收到禁用后收摊退出，
+// 而 Worker/CP 认为熔断已解除 → Java 下次崩溃不再被拉起（假解除）。
+func TestManager_DaemonEnableRestartReArmsWrapper(t *testing.T) {
+	pidDir := t.TempDir()
+	uuid := "daemon-rearm"
+	cfg := daemon.WrapperConfig{
+		InstanceUUID: uuid,
+		StartCommand: exitAfterCmd(4),
+		WorkDir:      pidDir,
+		AutoRestart:  true,
+		PIDDir:       pidDir,
+	}
+	ready := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() { done <- daemon.RunWithReady(cfg, ready) }()
+	waitDaemonWrapperReady(t, ready, done)
+
+	pidPath := filepath.Join(pidDir, uuid+".pid")
+	pf := daemon.NewPIDFile(pidPath)
+	var firstJavaPID int
+	require.Eventually(t, func() bool {
+		rec, err := pf.ReadRecord()
+		if err != nil || rec.JavaPID == 0 {
+			return false
+		}
+		firstJavaPID = rec.JavaPID
+		return true
+	}, 5*time.Second, 20*time.Millisecond, "应能读到首个 Java pid")
+
+	m := NewManager(pidDir)
+	require.NoError(t, m.Create(uuid, "Daemon", exitAfterCmd(4), "", pidDir, nil, true, ProcessTypeDaemon, "", "", 0, 0))
+	recovered, recErr := m.RecoverDaemonInstances()
+	require.NoError(t, recErr)
+	// RecoverDaemonInstances 现在只同步做「快速首拨」（两阶段化）：首拨失败时该记录转
+	// **后台**有界重试、函数立即返回 0，靠后台重试补上的不计入返回 —— 见
+	// recover_orphan.go startStartupTakeoverRetries 与 recover_orphan_test.go 的说明。
+	// 因此不能直接断言 recovered==1（整包并发下首拨可能一时拨不通，造成间歇红），
+	// 必须先收敛后台重试，再断言**最终**已接管为 RUNNING。
+	require.True(t, m.WaitStartupTakeover(10*time.Second), "后台接管重试应在超时内收敛")
+	st, stErr := m.GetState(uuid)
+	require.NoError(t, stErr)
+	require.Equal(t, StateRunning, st, fmt.Sprintf("应恢复为 RUNNING（同步返回的 recovered=%d，首拨失败时由后台重试补齐）", recovered))
+
+	m.mu.RLock()
+	strategy := m.instances[uuid].strategy
+	m.mu.RUnlock()
+	toggler, ok := strategy.(autoRestartToggler)
+	require.True(t, ok, "daemon 策略应实现禁用/恢复自动重启控制帧")
+
+	// 熔断禁用（此刻 Java 仍在跑：只发禁用帧、保持托管）→ 人工解除（对称 enable 帧复位粘性开关）。
+	require.NoError(t, toggler.DisableAutoRestart())
+	require.NoError(t, toggler.EnableAutoRestart())
+
+	// 首个 Java 退出后 wrapper 应自动拉起新 Java（pid 变化）。
+	// 修复前 enable 缺失 → wrapper 收摊退出、PID 文件被清理，本断言必失败。
+	require.Eventually(t, func() bool {
+		rec, readErr := pf.ReadRecord()
+		return readErr == nil && rec.JavaPID != 0 && rec.JavaPID != firstJavaPID
+	}, 20*time.Second, 100*time.Millisecond, "恢复自动重启后 wrapper 应在 Java 退出后拉起新进程")
+
+	// 清理：下发 kill 结束 wrapper（进程内运行，不能 killProcessTree 自身）。
+	if conn, dialErr := daemon.Dial(daemon.SocketAddr(pidDir, uuid)); dialErr == nil {
+		f := &daemon.Frame{Header: daemon.Header{Channel: daemon.ChannelControl, Type: daemon.TypeCommand}, Payload: []byte(daemon.ControlKill)}
+		_ = f.Encode(conn)
+		_ = conn.Close()
+	}
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		t.Log("wrapper 未在 8s 内退出（清理超时）")
+	}
 }

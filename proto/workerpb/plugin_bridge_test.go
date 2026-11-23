@@ -8,7 +8,7 @@ import (
 
 // TestPluginEvent_RoundTrip 固化插件桥事件 message 的线上往返：Marshal→Unmarshal 后全字段一致。
 // 这同时是 worker.pb.go 由 protoc 正确重生成（而非 sed 改坏）的回归闸——字段号冲突或部分重生成
-// 会让某些字段在往返后丢失/串位，本用例即可捕获（见 ADR-016 与 commit c1cb5af 教训）。
+// 会让某些字段在往返后丢失/串位，本用例即可捕获（见 commit c1cb5af 教训）。
 func TestPluginEvent_RoundTrip(t *testing.T) {
 	src := &PluginEvent{
 		InstanceUuid: "inst-uuid-1",

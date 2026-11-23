@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newClientChannelSvcWithEnc 建一个配了加密器的频道服务（FR-192）。
+// newClientChannelSvcWithEnc 建一个配了加密器的频道服务。
 func newClientChannelSvcWithEnc(t *testing.T) (*ClientChannelService, *KeyEncryptor) {
 	t.Helper()
 	svc := newClientChannelSvc(t)
@@ -40,7 +40,7 @@ func TestCreateKey_WritesKeyEncWhenEncryptorSet(t *testing.T) {
 }
 
 func TestUpdateKey_RewritesKeyEnc(t *testing.T) {
-	// FR-192：改值后 RevealKey 返回新明文（KeyEnc 被重写为新值密文）。
+	// 改值后 RevealKey 返回新明文（KeyEnc 被重写为新值密文）。
 	svc, _ := newClientChannelSvcWithEnc(t)
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
 	require.NoError(t, err)
@@ -62,7 +62,7 @@ func TestUpdateKey_RewritesKeyEnc(t *testing.T) {
 }
 
 func TestUpdateKey_OldHashOnlyKeyBecomesRevealableAfterSetValue(t *testing.T) {
-	// FR-192 迁移边界：存量老哈希密钥（KeyEnc 空）不可查；改值为已知值后即可查看。
+	// 迁移边界：存量老哈希密钥（KeyEnc 空）不可查；改值为已知值后即可查看。
 	svc, _ := newClientChannelSvcWithEnc(t)
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestRevealKey_ChannelAndKeyNotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrPullKeyNotFound)
 }
 
-// TestCreateKey_AutogenEncryptorRevealable 串联 FR-263 三轨生成与 FR-192 可查看：
+// TestCreateKey_AutogenEncryptorRevealable 串联三轨生成与可查看：
 // 用生产态自动生成轨道（非 env 注入）解析加密器并注入频道服务，建密钥后 KeyEnc 非空、RevealKey 回明文。
 func TestCreateKey_AutogenEncryptorRevealable(t *testing.T) {
 	svc := newClientChannelSvc(t)

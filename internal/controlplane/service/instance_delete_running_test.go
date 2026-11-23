@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// fakeStopDeleteWorker 覆盖 StopInstance + RemoveInstance 的伪 Worker 客户端（FR-310）。
+// fakeStopDeleteWorker 覆盖 StopInstance + RemoveInstance 的伪 Worker 客户端。
 // 记录调用次序与「StopInstance 时刻的 DB 状态」，用于断言删除编排全程走状态机合法转换。
 type fakeStopDeleteWorker struct {
 	workerpb.WorkerServiceClient
@@ -79,7 +79,10 @@ func (f *fakeStopDeleteWorker) RemoveInstance(_ context.Context, _ *workerpb.Rem
 func newRunningDeleteEnv(t *testing.T, status model.InstanceStatus) (*InstanceService, *cpgrpc.ClientPool, *model.Node, *model.Instance) {
 	t.Helper()
 	db := newCloneTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NetworkMember{}))
+	// Backups/InstanceSnapshot 必须迁移：删除事务内会级联清理快照底链并降级被增量引用的底链
+	// （N-6/R9/R27），缺表会让删除整体报错。
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NetworkMember{},
+		&model.Backup{}, &model.InstanceSnapshot{}))
 	pool := cpgrpc.NewClientPool()
 	svc := NewInstanceService(db, nil, pool)
 	t.Cleanup(svc.Shutdown)
@@ -101,7 +104,7 @@ func newRunningDeleteEnv(t *testing.T, status model.InstanceStatus) (*InstanceSe
 	return svc, pool, node, inst
 }
 
-// RUNNING 实例删除：先经状态机（RUNNING→STOPPING）同步停止，停成后再清理并删记录（FR-310 主路径）。
+// RUNNING 实例删除：先经状态机（RUNNING→STOPPING）同步停止，停成后再清理并删记录（主路径）。
 func TestDeleteRunningInstanceStopsThenDeletes(t *testing.T) {
 	svc, pool, node, inst := newRunningDeleteEnv(t, model.InstanceStatusRunning)
 	worker := &fakeStopDeleteWorker{db: svc.db, instID: inst.ID}
@@ -143,7 +146,7 @@ func TestDeleteRunningInstanceRetriesCleanupInSettleWindow(t *testing.T) {
 	require.ErrorIs(t, err, ErrInstanceNotFound)
 }
 
-// Worker 停止失败（业务失败）→ 不删记录，返回含原因的可操作错误（FR-310：绝不孤儿化进程）。
+// Worker 停止失败（业务失败）→ 不删记录，返回含原因的可操作错误（：绝不孤儿化进程）。
 func TestDeleteRunningInstanceAbortsWhenStopFails(t *testing.T) {
 	svc, pool, node, inst := newRunningDeleteEnv(t, model.InstanceStatusRunning)
 	worker := &fakeStopDeleteWorker{
@@ -203,7 +206,7 @@ func TestDeleteStoppingInstanceTreatsNotRunningAsStopped(t *testing.T) {
 	require.ErrorIs(t, err, ErrInstanceNotFound)
 }
 
-// STOPPED 实例照常直删：不发 StopInstance，行为与 FR-310 之前完全一致。
+// STOPPED 实例照常直删：不发 StopInstance，行为与之前完全一致。
 func TestDeleteStoppedInstanceSkipsStop(t *testing.T) {
 	svc, pool, node, inst := newRunningDeleteEnv(t, model.InstanceStatusStopped)
 	worker := &fakeStopDeleteWorker{db: svc.db, instID: inst.ID}

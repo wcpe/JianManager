@@ -12,8 +12,12 @@ import (
 
 // TestListenDial_FrameRoundTrip 验证跨平台 socket/pipe 上的帧协议端到端通信。
 // Wrapper 侧监听 → Worker 侧拨号 → 双向收发帧。
+//
+// 用 shortSockDir 而非 t.TempDir：本用例名较长，t.TempDir() 在长 TMPDIR 下会把
+// SocketAddr 顶过 sun_path 上限（实测 111 字节 > 107），导致 bind: invalid argument —
+// 该失败与本用例验证的帧协议无关。同因见 ownership_test.go 的 shortSockDir 注释。
 func TestListenDial_FrameRoundTrip(t *testing.T) {
-	addr := SocketAddr(t.TempDir(), "test-frame-"+t.Name())
+	addr := SocketAddr(shortSockDir(t), "test-frame-"+t.Name())
 
 	ln, err := Listen(addr)
 	require.NoError(t, err)
@@ -79,7 +83,8 @@ func TestSocketAddr(t *testing.T) {
 
 // TestFrame_StreamEcho 通过 socket 模拟多帧流式输出（stdout 连续帧）。
 func TestFrame_StreamEcho(t *testing.T) {
-	addr := SocketAddr(t.TempDir(), "test-stream-"+t.Name())
+	// 同上：用短名避免 TMPDIR 偏长时越过 sun_path 的 108 字节上限。
+	addr := SocketAddr(t.TempDir(), "stream")
 	ln, err := Listen(addr)
 	require.NoError(t, err)
 	defer ln.Close()

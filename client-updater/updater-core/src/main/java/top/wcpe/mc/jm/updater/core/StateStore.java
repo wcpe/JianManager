@@ -8,7 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * updater 本地状态持久化（防降级基准 {@code lastSeenVersion} 等，契约 §3 / ADR-022 决策 7）。
+ * updater 本地状态持久化（防降级基准 {@code lastSeenVersion} 等，契约 §3）。
  *
  * <p>落 {@code <gameDir>/.jm-updater/state.json}。读失败按空状态处理（首次运行）。
  */
