@@ -733,48 +733,15 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 // 真实 java 隔着中间 shell 层（wrapper→sh→java）；direct 模式根进程可能就是 shell。
 // 深度优先遍历后代：优先返回名为 java 的最深进程，无 java 命名者回退最深后代，无后代回退根进程。
 // 指标与运行时环境都读游戏进程本身，而非托管壳。
+//
+// 选择规则在 resolveGameProcIn 中实现（纯算法，可用内存树验证）；
+// 这里只负责取根句柄并把结果还原为 gopsutil 句柄，系统调用顺序与拆分前一致。
 func resolveGameProc(ctx context.Context, pid int32) *psproc.Process {
 	root, err := psproc.NewProcessWithContext(ctx, pid)
 	if err != nil {
 		return nil
 	}
-	deepest, deepestDepth := root, -1
-	var javaDeepest *psproc.Process
-	javaDepth := -1
-	seen := map[int32]struct{}{}
-	var walk func(p *psproc.Process, depth int)
-	walk = func(p *psproc.Process, depth int) {
-		// 进程树规模守卫：受管实例树很小（wrapper/sh/java + 少量子工具），64 足够且防环。
-		if p == nil || len(seen) >= 64 {
-			return
-		}
-		if _, ok := seen[p.Pid]; ok {
-			return
-		}
-		seen[p.Pid] = struct{}{}
-		if depth > deepestDepth {
-			deepestDepth, deepest = depth, p
-		}
-		if name, err := p.NameWithContext(ctx); err == nil {
-			if n := strings.ToLower(name); n == "java" || n == "java.exe" {
-				if depth > javaDepth {
-					javaDepth, javaDeepest = depth, p
-				}
-			}
-		}
-		children, err := p.ChildrenWithContext(ctx)
-		if err != nil {
-			return
-		}
-		for _, c := range children {
-			walk(c, depth+1)
-		}
-	}
-	walk(root, 0)
-	if javaDeepest != nil {
-		return javaDeepest
-	}
-	return deepest
+	return asProcess(resolveGameProcIn(ctx, &gopsutilNode{proc: root}))
 }
 
 // GetInstanceEnv 返回运行中实例 Java 进程的实际环境（环境变量下区）。

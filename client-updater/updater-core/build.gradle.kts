@@ -1,4 +1,3 @@
-import java.io.ByteArrayOutputStream
 import java.time.Instant
 
 // updater-core：更新主体，被楔子动态加载（URLClassLoader 内存加载，便于自更新换 jar）。
@@ -26,36 +25,33 @@ dependencies {
     // 制品按 contract §2 artifact.codec=zstd 压缩；zstd-jni 是轻量、广用的 zstd 绑定（兼容 Java 8）。
     implementation("com.github.luben:zstd-jni:1.5.6-4")
 
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.14.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 fun gitRootDir() = rootProject.projectDir.parentFile ?: rootProject.projectDir
 
+// Gradle 9 移除了 Project.exec：改用 providers.exec（7.5+ 起即有的配置缓存安全写法），
+// 输出由其 ExecOutput 直接承载，无需再手动接 ByteArrayOutputStream。
 fun gitOutput(vararg args: String): String {
-    val out = ByteArrayOutputStream()
-    val result = exec {
+    val execOut = providers.exec {
         workingDir = gitRootDir()
         commandLine("git", *args)
-        standardOutput = out
-        errorOutput = ByteArrayOutputStream()
         isIgnoreExitValue = true
     }
-    if (result.exitValue != 0) {
+    if (execOut.result.get().exitValue != 0) {
         return "unknown"
     }
-    return out.toString(Charsets.UTF_8.name()).trim().ifBlank { "unknown" }
+    return execOut.standardOutput.asText.get().trim().ifBlank { "unknown" }
 }
 
 fun gitDirty(): String {
-    val result = exec {
+    val exitCode = providers.exec {
         workingDir = gitRootDir()
         commandLine("git", "diff", "--quiet", "HEAD", "--")
-        standardOutput = ByteArrayOutputStream()
-        errorOutput = ByteArrayOutputStream()
         isIgnoreExitValue = true
-    }
-    return when (result.exitValue) {
+    }.result.get().exitValue
+    return when (exitCode) {
         0 -> "false"
         1 -> "true"
         else -> "unknown"
