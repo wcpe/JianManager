@@ -6,6 +6,7 @@
     "overrides": {
       "i18next": "26.3.1",
       "react-i18next": "17.0.8",
+      "immer": "11.1.11",
       "@tanstack/react-query": "5.101.0",
       "@tanstack/query-core": "5.101.0"
     }
