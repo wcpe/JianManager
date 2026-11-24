@@ -461,7 +461,13 @@ func (s *ClientVersionService) buildPatchArtifact(oldFile, newFile ManifestFile)
 
 func (s *ClientVersionService) buildPatchFile(oldPath, newPath string, oldSize, newSize int64) (string, func(), bool, error) {
 	if zstdPath, err := exec.LookPath("zstd"); err == nil {
-		return s.buildPatchFileWithZstdCommand(zstdPath, oldPath, newPath)
+		patchPath, cleanup, ok, err := s.buildPatchFileWithZstdCommand(zstdPath, oldPath, newPath)
+		if err == nil {
+			return patchPath, cleanup, ok, nil
+		}
+		// 系统 zstd 过旧(如 1.4.8 的 --patch-from 报 error 11)或与文件不匹配时,
+		// 不直接判死,回退 Go 内存编码——patch 是优化,不该因宿主工具版本缺失。
+		slog.Warn("zstd CLI patch 构建失败,回退内存编码", "error", err)
 	}
 	if oldSize > patchInMemoryFallbackMaxBytes || newSize > patchInMemoryFallbackMaxBytes {
 		return "", nil, false, nil
