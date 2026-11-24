@@ -380,6 +380,39 @@ jobs:
             -o internal/controlplane/embed/worker/worker-linux-amd64 ./apps/worker
           go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/worker --version "${VERSION}"
 
+      - name: 注入 CP 内嵌 jmctl 资产（两平台 + manifest，等价 make embed-jmctl）
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 必须在 CP 编译前注入：go:embed 只打包编译期已存在的文件，漏掉则发布
+          # 版 CP 的 /downloads/jmctl-* 恒 503,install-worker 分发与升级同步失效。
+          LDFLAGS="-s -w -X github.com/wcpe/JianManager/internal/version.Version=${VERSION}"
+          mkdir -p internal/controlplane/embed/jmctl
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" \
+            -o internal/controlplane/embed/jmctl/jmctl-windows-amd64.exe ./apps/jmctl
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" \
+            -o internal/controlplane/embed/jmctl/jmctl-linux-amd64 ./apps/jmctl
+          go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/jmctl --version "${VERSION}" --prefix jmctl
+
+      - name: 校验 jmctl 内嵌产物（缺漏直接失败,不让 503 混进发布）
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in jmctl-linux-amd64 jmctl-windows-amd64.exe manifest.json; do
+            test -s "internal/controlplane/embed/jmctl/$f" || { echo "缺少内嵌产物 $f"; exit 1; }
+          done
+          # 安装脚本依赖 manifest 的 file/sha256 字段做版本比对与校验——
+          # 逐条目断言每个 file 后随自己的 sha256,缺一则直接失败。
+          # 与 install-worker.sh 同一管线:先去空白再截取,不假设美化/紧凑布局。
+          for name in jmctl-linux-amd64 jmctl-windows-amd64.exe; do
+            tr -d '[:space:]' < internal/controlplane/embed/jmctl/manifest.json \
+              | grep -q "\"file\":\"$name\"[^}]*\"sha256\":\"[0-9a-f]\{64\}\"" \
+              || { echo "manifest 中 $name 缺 sha256"; exit 1; }
+          done
+
       - name: 交叉编译 control-plane（full）与 worker
         shell: bash
         env:

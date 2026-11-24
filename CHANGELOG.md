@@ -9,6 +9,7 @@
 > 本段为 `v0.25.0` 开发版归档区；正式发版时整理为新版本段。
 
 ### 修复
+- **发布版 jmctl 分发链路失效**：release.yml 未执行 jmctl 内嵌注入（go:embed 只打包编译期文件），发布版 CP 的 `/downloads/jmctl-*` 恒 503；现补齐两平台构建 + manifest 生成 + 内嵌产物校验，并修复 install-worker.sh 对紧凑 JSON manifest 的 sha256 解析（原先假设美化格式导致校验被静默跳过）。
 - **zstd CLI 失败时客户端分发 patch 静默缺失**：宿主 zstd 过旧（如 1.4.8 的 `--patch-from` 报 error 11）或与文件不匹配时，原实现只告警跳过；现回退 Go 内存编码，并把该路径收敛到全局串行（防 4 个 patch worker 同时把 old/new/patch 全量读入内存打爆小内存宿主）。
 - **指标夹具冷启动导致的 Windows 偶发失败**：进程树的选择与聚合算法抽为纯函数（`resolveGameProcIn` / `collectProcessTreeIn` / `sumTreeRSSIn` / `sumTreeCPUIn` / `uptimeIn`），可用内存树验证，不再依赖真实进程；真实进程只保留验证平台读取能力的用例。夹具就绪等待放宽到 20 秒并在超时时输出根进程状态、握手文件与子进程快照，使失败可判定。生产调用顺序与行为不变。
 - **QQ 网关停机**：停止时取消令牌和网关地址请求，并关闭仍在握手的连接，不再等待平台握手超时；共用同一令牌的其他请求不受发起者停机影响，人工介入诊断仍保留。
