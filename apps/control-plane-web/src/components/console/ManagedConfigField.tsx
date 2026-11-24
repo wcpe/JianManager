@@ -81,8 +81,10 @@ export function ManagedConfigField({
    * 一个合法的 10。故这里先做本地判定，外层结论优先覆盖。
    */
   const localError = isOutOfBounds(meta, value) ? meta.boundsHint || describeBounds(meta) : ''
+  // 未改动的历史越界值只提示（warn）：值是服务端落盘的旧数据，标红成「不通过」
+  // 却又能整层保存，状态自相矛盾；只有用户把它改成越界（dirty）才升 error。
   const state: FieldValidation = localError
-    ? { state: 'error', message: localError }
+    ? { state: dirty ? 'error' : 'warn', message: localError }
     : (validation ?? { state: isSet ? 'ok' : 'idle' })
 
   /*
@@ -163,9 +165,9 @@ export function ManagedConfigField({
       </div>
 
       {/* 错误原因贴在本字段下方：后端逐键返回的 message 带键名，这里只留原因部分。 */}
-      {state.state === 'error' && state.message ? (
+      {(state.state === 'error' || state.state === 'warn') && state.message ? (
         <p
-          className="mt-1 text-xs text-destructive"
+          className={`mt-1 text-xs ${state.state === 'error' ? 'text-destructive' : 'text-amber-600 dark:text-amber-500'}`}
           // 两种来源分开命名，便于用户与测试分清「本地边界」与「后端拒绝」：
           // - 本地越界：`managed-field-bounds-*`（目录里写了 min/max，字段自己就能判）
           // - 后端逐键拒绝：`managed-field-error-*`（禁档 / 未登记档位，只有服务端知道）
@@ -180,9 +182,9 @@ export function ManagedConfigField({
   )
 }
 
-/** 单字段校验态。`error` 时 `message` 必填。 */
+/** 单字段校验态。`warn` 与 `error` 时 `message` 必填；warn 只提示不拦截。 */
 export interface FieldValidation {
-  state: 'idle' | 'ok' | 'error'
+  state: 'idle' | 'ok' | 'warn' | 'error'
   message?: string
 }
 
@@ -201,6 +203,14 @@ function FieldState({ state }: { state: FieldValidation }) {
       <span className="flex items-center gap-1 text-[11px] text-destructive" data-testid="managed-field-state-error">
         <AlertTriangle aria-hidden className="size-3.5" />
         不通过
+      </span>
+    )
+  }
+  if (state.state === 'warn') {
+    return (
+      <span className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-500" data-testid="managed-field-state-warn">
+        <AlertTriangle aria-hidden className="size-3.5" />
+        越界
       </span>
     )
   }
