@@ -52,13 +52,18 @@ const FINGERPRINT_FILES = [...DEPENDENCY_INPUT_FILES, SCRIPT_FILE]
 function sourceFingerprint() {
   const hash = createHash('sha256')
   for (const file of FINGERPRINT_FILES) {
-    hash.update(relative(REPO_ROOT, file))
+    // 分隔符归一为 /：Windows 上 relative 产 \\,同样的输入跨平台哈希不同。
+    hash.update(relative(REPO_ROOT, file).replaceAll('\\', '/'))
     hash.update('\0')
     if (existsSync(file)) {
       hash.update(readFileSync(file))
     }
     hash.update('\0')
   }
+  // Go 依赖的真实输入是源码 import 集而非 go.sum:import 在测试与运行时
+  // 代码间移动不改锁文件,链接集签名也要进指纹,否则清单过期也照用。
+  const linked = goLinkedModulePathsAll()
+  if (linked) hash.update([...linked].sort().join('\n'))
   return hash.digest('hex')
 }
 
@@ -227,14 +232,19 @@ function goModules() {
   return mods
 }
 
-/** go list -deps ./... → 本仓库源码实际 import 到的外部模块路径集。
+/** 发行覆盖的 GOOS——跨平台取链接集并集,否则平台条件依赖(如 Windows
+ * 独有的 go-winio)在 Linux 上扫描时被漏掉,但发布二进制里确有它。 */
+const SHIPPED_GOOS = ['linux', 'windows', 'darwin']
+
+/** go list -deps ./... → 某 GOOS 下本仓库源码实际 import 到的外部模块路径集。
  * 用于兜底路径排除 tool/test-only 依赖(x/tools、honnef、gotest.tools 等
  * 不被任何分发二进制链接,进清单属于误报)。失败返回 null 保持旧行为。 */
-function goLinkedModulePaths() {
+function goLinkedModulePaths(goos) {
   try {
     const out = execSync(`go list -deps -f "{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{end}}" ./...`, {
       cwd: REPO_ROOT,
       maxBuffer: MAX_BUFFER,
+      env: { ...process.env, GOOS: goos },
       stdio: ['ignore', 'pipe', 'ignore'],
     }).toString()
     const set = new Set()
@@ -244,9 +254,24 @@ function goLinkedModulePaths() {
     }
     return set
   } catch (e) {
-    console.warn(`[gen-licenses] go list -deps 失败,fallback 不排除工具依赖:${e.message}`)
+    console.warn(`[gen-licenses] go list -deps (${goos}) 失败,fallback 不排除工具依赖:${e.message}`)
     return null
   }
+}
+
+/** 全部发行 GOOS 的链接模块并集;任一平台失败返回 null(退为不过滤)。 */
+function goLinkedModulePathsAll() {
+  const all = new Set()
+  let complete = true
+  for (const goos of SHIPPED_GOOS) {
+    const set = goLinkedModulePaths(goos)
+    if (set === null) {
+      complete = false
+      continue
+    }
+    for (const p of set) all.add(p)
+  }
+  return complete ? all : null
 }
 
 /** go-licenses 可执行路径（GOPATH/bin），不存在返回空。 */
@@ -310,7 +335,7 @@ function scanGo() {
   // 只保留真正被源码 import 的模块——`go list -m all` 是全图,会把
   // x/tools、honnef、gotest.tools 这类 tool/test-only 依赖也算进分发清单。
   if (byPath.size === 0) {
-    const linked = goLinkedModulePaths()
+    const linked = goLinkedModulePathsAll()
     for (const mod of mods) {
       if (linked && !linked.has(mod.path)) continue
       const text = readLicenseFromDir(mod.dir)
@@ -408,36 +433,44 @@ function assertRequiredScopes(dependencies) {
 
 // ─────────────────────────────────── 主流程 ───────────────────────────────────
 
-const sourceHash = sourceFingerprint()
-const cachedHash = existingSourceHash()
-if (
-  !FORCE &&
-  existingManifestHasRequiredScopes() &&
-  (cachedHash === sourceHash || (!cachedHash && existingOutputIsFreshByMtime()))
-) {
-  console.log(`[gen-licenses] 依赖输入未变化，复用已有清单 → ${OUT_FILE}`)
-  process.exit(0)
+function main() {
+  const sourceHash = sourceFingerprint()
+  const cachedHash = existingSourceHash()
+  if (
+    !FORCE &&
+    existingManifestHasRequiredScopes() &&
+    (cachedHash === sourceHash || (!cachedHash && existingOutputIsFreshByMtime()))
+  ) {
+    console.log(`[gen-licenses] 依赖输入未变化，复用已有清单 → ${OUT_FILE}`)
+    process.exit(0)
+  }
+
+  const deps = [
+    ...scanNpm('web', WEB_DIR),
+    ...scanNpm('bot-worker', BOT_DIR),
+    ...scanGo(),
+    ...scanGradle('client-updater', CLIENT_UPDATER_DIR, ':updater-core', 'runtimeClasspath'),
+  ]
+  assertRequiredScopes(deps)
+  deps.sort((a, b) => a.scope.localeCompare(b.scope) || a.name.localeCompare(b.name))
+
+  const manifest = {
+    // generatedAt 由调用方/CI 注入更稳；脚本内用环境变量或留空（避免不可复现 diff 噪声）。
+    generatedAt: process.env.LICENSES_GENERATED_AT || '',
+    sourceHash,
+    dependencies: deps,
+  }
+
+  mkdirSync(dirname(OUT_FILE), { recursive: true })
+  writeFileSync(OUT_FILE, JSON.stringify(manifest, null, 2) + '\n', 'utf8')
+
+  const runtime = deps.filter((d) => d.type === 'runtime').length
+  const dev = deps.filter((d) => d.type === 'dev').length
+  console.log(`[gen-licenses] 写出 ${deps.length} 条依赖（运行时 ${runtime} / 开发 ${dev}）→ ${OUT_FILE}`)
 }
 
-const deps = [
-  ...scanNpm('web', WEB_DIR),
-  ...scanNpm('bot-worker', BOT_DIR),
-  ...scanGo(),
-  ...scanGradle('client-updater', CLIENT_UPDATER_DIR, ':updater-core', 'runtimeClasspath'),
-]
-assertRequiredScopes(deps)
-deps.sort((a, b) => a.scope.localeCompare(b.scope) || a.name.localeCompare(b.name))
-
-const manifest = {
-  // generatedAt 由调用方/CI 注入更稳；脚本内用环境变量或留空（避免不可复现 diff 噪声）。
-  generatedAt: process.env.LICENSES_GENERATED_AT || '',
-  sourceHash,
-  dependencies: deps,
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main()
 }
 
-mkdirSync(dirname(OUT_FILE), { recursive: true })
-writeFileSync(OUT_FILE, JSON.stringify(manifest, null, 2) + '\n', 'utf8')
-
-const runtime = deps.filter((d) => d.type === 'runtime').length
-const dev = deps.filter((d) => d.type === 'dev').length
-console.log(`[gen-licenses] 写出 ${deps.length} 条依赖（运行时 ${runtime} / 开发 ${dev}）→ ${OUT_FILE}`)
+export { detectLicense }
