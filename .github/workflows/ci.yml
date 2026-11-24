@@ -5,8 +5,9 @@
 #   的门禁由 pull_request 承担，master 上的门禁用于确认主干始终可发布。
 #   正式 tag 产生与发布提交相同 SHA 的 CI，release.yml 复用其结果，不重复执行前端质量门禁。
 #
-# 闸：前端 workspace 的 lint（tsc + eslint）+ vitest（node 项目 / dom 项目 / devmock 包自检分处三个 job 并行）+ build，
-#   Playwright E2E 按文件分成四个独立 runner 并行执行；任一失败 → web-quality 失败 → check 红。
+# 闸：前端 workspace 的 lint（tsc + eslint）+ vitest（node 项目 / devmock 包自检在 web-test-node；
+#   dom 项目在 web-test-dom 按文件分四片）+ build，
+#   Playwright E2E 按文件分成六个独立 runner 并行执行；任一失败 → web-quality 失败 → check 红。
 #   仓库**分支保护**勾选 `web-quality` 为必需 check 即合并前硬挡
 #   （分支保护是仓库设置，CI 只提供 check；见 README.md「前端 mock 模式与测试」）。
 #
@@ -70,7 +71,7 @@ jobs:
   # vitest 的 node 项目（纯逻辑，无 DOM）单独成一个 job，与 web-static 并行。
   # 为什么拆：web-static 里 vitest 全 workspace 占 397s（占该 job 511s 的 77%），
   # 而 node 项目自身只要 ~10s——把纯逻辑测试挪到独立 runner 上并行，关键路径不再叠加。
-  # 注意：这里刻意**不**跑 dom 项目（dom 留在 web-static），两边都显式 --project，
+  # 注意：这里刻意**不**跑 dom 项目（dom 拆到 web-test-dom 分片），两边都显式 --project，
   # 避免任何一侧静默跑全量导致重复计时。
   web-test-node:
     runs-on: ubuntu-24.04
@@ -109,6 +110,45 @@ jobs:
       - name: 假后端自检（devmock 包）
         run: pnpm --filter @jianmanager/devmock test
 
+  # vitest 的 dom 项目（jsdom 组件 / 页面断言）按文件分四片，片间在独立 runner 上真并行。
+  # 为什么分片：dom 套件 278 个文件单跑 ~380s，是 web-static 的关键路径；
+  # 项目内 maxWorkers=2 是为单机稳定性刻意限的并发，唯一的提速出路是横向分片。
+  web-test-dom:
+    name: Web DOM Test / Shard ${{ matrix.shard }} of 4
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout（不需子模块，纯前端门禁）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 缓存 pnpm store
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: 安装依赖（pnpm workspace）
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: 组件 / 页面测试（vitest dom 分片 ${{ matrix.shard }}/4）
+        run: pnpm --filter control-plane-web exec vitest run --project dom --shard=${{ matrix.shard }}/4
+
   web-static:
     runs-on: ubuntu-24.04
     steps:
@@ -144,12 +184,8 @@ jobs:
           pnpm --filter control-plane-web exec tsc -b --noEmit
           pnpm --filter control-plane-web lint
 
-      # node 与 dom 两个项目分开跑、分属不同 job（见 web-test-node）：
-      # web-static 只负责 dom（组件/页面强断言），node 项目并行到另一个 runner 上，
-      # 关键路径因此少一段串行。两者都用 --project 显式指定，避免任一 job 静默跑全量。
-      - name: 组件 / 页面测试（vitest dom 项目）
-        run: pnpm --filter control-plane-web exec vitest run --project dom
-
+      # vitest 两个项目都不在本 job：node → web-test-node，dom → web-test-dom 四片。
+      # web-static 只留 tsc + eslint + 构建，纯前端静态门禁的串行尾段。
       - name: 构建（主控台 + 组件博物馆，等价 task web:build）
         shell: bash
         run: |
@@ -158,12 +194,14 @@ jobs:
           pnpm --filter @jianmanager/ui-museum build
 
   web-e2e:
-    name: Web E2E / Shard ${{ matrix.shard }} of 4
+    name: Web E2E / Shard ${{ matrix.shard }} of 6
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        # 原 4 片最慢一片 457s（各片文件数均分但耗时不均）；加到 6 片把最坏分片压下来，
+        # 分片粒度变细后单文件耗时差异被摊平，关键路径由最慢文件而非文件数决定。
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Checkout（不需子模块，纯前端门禁）
         uses: actions/checkout@v7
@@ -194,9 +232,9 @@ jobs:
         working-directory: apps/control-plane-web
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: E2E 分片 ${{ matrix.shard }}/4
+      - name: E2E 分片 ${{ matrix.shard }}/6
         working-directory: apps/control-plane-web
-        run: pnpm e2e --shard=${{ matrix.shard }}/4
+        run: pnpm e2e --shard=${{ matrix.shard }}/6
 
       - name: 上传 Playwright E2E 测试产物
         if: always()
@@ -209,7 +247,7 @@ jobs:
 
   web-quality:
     if: always()
-    needs: [web-static, web-test-node, web-e2e]
+    needs: [web-static, web-test-node, web-test-dom, web-e2e]
     runs-on: ubuntu-24.04
     steps:
       - name: 汇总前端质量门禁
@@ -217,11 +255,13 @@ jobs:
         env:
           STATIC_RESULT: ${{ needs.web-static.result }}
           NODE_TEST_RESULT: ${{ needs.web-test-node.result }}
+          DOM_TEST_RESULT: ${{ needs.web-test-dom.result }}
           E2E_RESULT: ${{ needs.web-e2e.result }}
         run: |
           set -euo pipefail
           [[ "${STATIC_RESULT}" == "success" ]]
           [[ "${NODE_TEST_RESULT}" == "success" ]]
+          [[ "${DOM_TEST_RESULT}" == "success" ]]
           [[ "${E2E_RESULT}" == "success" ]]
 
   bot-quality:
