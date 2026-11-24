@@ -1,4 +1,5 @@
-// detectLicense 回归测试:混合许可文本(yaml.v3 式 Apache+MIT)与 BSD 两种第三条款写法。
+// gen-licenses 契约测试:detectLicense 混合文本/BSD 变体,以及
+// SHIPPED_TARGETS 与 release.yml 发货矩阵的一致性(矩阵漂移必红)。
 // 运行:node --test scripts/gen-licenses.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -64,7 +65,8 @@ test('SHIPPED_TARGETS 覆盖 release.yml 实际发行矩阵', () => {
   const jmStart = yml.indexOf('交叉编译 jm 客户端')
   assert.ok(buildStart > 0 && jmStart > buildStart, 'release.yml 结构变更,需同步更新本测试的锚点')
   const buildSection = yml.slice(buildStart, jmStart)
-  const expectedFull = [...buildSection.matchAll(/- \{ os: (\w+), arch: (\w+)/g)]
+  // { os: X, arch: Y } 两侧空格容忍,防止 YAML 空格变化误杀/漏检
+  const expectedFull = [...buildSection.matchAll(/- \{\s*os:\s*(\w+),\s*arch:\s*(\w+)/g)]
     .map((m) => `${m[1]}/${m[2]}`)
     .sort()
   const actualFull = SHIPPED_TARGETS.filter((t) => t.pkgs === './...')
@@ -72,19 +74,31 @@ test('SHIPPED_TARGETS 覆盖 release.yml 实际发行矩阵', () => {
     .sort()
   assert.deepEqual(actualFull, expectedFull)
 
-  // jm 客户端 for target 列表:未被全量扫描覆盖的目标,必须按 ./apps/jm 单独扫描
-  const jmctlStart = yml.indexOf('交叉编译 jmctl')
-  assert.ok(jmctlStart > jmStart, 'release.yml 结构变更,需同步更新本测试的锚点')
-  const jmSection = yml.slice(jmStart, jmctlStart)
-  const jmTargets = [...jmSection.matchAll(/for target in ([^;]+); do/g)]
-    .flatMap((m) => m[1].trim().split(/\s+/))
-  assert.ok(jmTargets.length > 0, '未解析到 jm 客户端的 for target 列表')
+  // 各交叉编译步骤的 for target 列表 → 对应 ./apps 包路径;未被全量
+  // 扫描覆盖的目标必须按该包单独扫描,漏配则清单会多算/漏算依赖。
   const covered = new Set(expectedFull)
-  const expectedJm = [...new Set(jmTargets.filter((t) => !covered.has(t)))].sort()
-  const actualJm = SHIPPED_TARGETS.filter((t) => t.pkgs !== './...')
+  const scopedSteps = [
+    { marker: '交叉编译 jm 客户端', pkgs: './apps/jm' },
+    { marker: '交叉编译 jmctl', pkgs: './apps/jmctl' },
+  ]
+  const expectedScoped = []
+  for (const { marker, pkgs } of scopedSteps) {
+    const start = yml.indexOf(marker)
+    assert.ok(start > buildStart, `release.yml 缺少「${marker}」步骤,需同步更新本测试`)
+    const end = yml.indexOf('交叉编译', start + marker.length)
+    const section = yml.slice(start, end > start ? end : undefined)
+    const targets = [...section.matchAll(/for target in ([^;]+); do/g)]
+      .flatMap((m) => m[1].trim().split(/\s+/))
+    assert.ok(targets.length > 0, `未解析到「${marker}」的 for target 列表`)
+    for (const t of new Set(targets.filter((x) => !covered.has(x)))) {
+      const [goos, arch] = t.split('/')
+      expectedScoped.push({ goos, arch, pkgs })
+    }
+  }
+  const actualScoped = SHIPPED_TARGETS.filter((t) => t.pkgs !== './...')
+  const key = (t) => `${t.goos}/${t.arch}/${t.pkgs}`
   assert.deepEqual(
-    actualJm.map((t) => `${t.goos}/${t.arch}`).sort(),
-    expectedJm,
+    actualScoped.map(key).sort(),
+    expectedScoped.map(key).sort(),
   )
-  assert.ok(actualJm.every((t) => t.pkgs === './apps/jm'))
 })
