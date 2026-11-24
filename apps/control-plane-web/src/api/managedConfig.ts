@@ -457,7 +457,14 @@ export function useSaveManagedLayer() {
       return data
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['managed-configs'] })
+      // 不能整体失效 'managed-configs'：前缀匹配会连带层详情查询
+      // ['managed-configs','layer',...] 一起重取，版本号变化会让编辑器重挂、
+      // 其它键的未落盘草稿随旧实例销毁（单键写入 keepDraft 路径就靠不重取层
+      // 保草稿）。这里只刷列表与目录；层详情由调用方按需显式 refetch——
+      // 整层保存在 onSaved 里做，单键写入刻意跳过。
+      void qc.invalidateQueries({
+        predicate: (q) => q.queryKey[0] === 'managed-configs' && q.queryKey[1] !== 'layer',
+      })
       toast.success('配置层已保存')
     },
     onError: (err) => {
