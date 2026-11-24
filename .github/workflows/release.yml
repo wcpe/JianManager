@@ -380,6 +380,23 @@ jobs:
             -o internal/controlplane/embed/worker/worker-linux-amd64 ./apps/worker
           go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/worker --version "${VERSION}"
 
+      - name: 注入 CP 内嵌 jmctl 资产（两平台 + manifest，等价 make embed-jmctl）
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 必须在 CP 编译前注入：go:embed 只打包编译期已存在的文件，漏掉则发布
+          # 版 CP 的 /downloads/jmctl-* 恒 503,install-worker 分发与升级同步失效。
+          LDFLAGS="-s -w -X github.com/wcpe/JianManager/internal/version.Version=${VERSION}"
+          mkdir -p internal/controlplane/embed/jmctl
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" \
+            -o internal/controlplane/embed/jmctl/jmctl-windows-amd64.exe ./apps/jmctl
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" \
+            -o internal/controlplane/embed/jmctl/jmctl-linux-amd64 ./apps/jmctl
+          go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/jmctl --version "${VERSION}" --prefix jmctl
+
       - name: 交叉编译 control-plane（full）与 worker
         shell: bash
         env:
