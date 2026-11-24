@@ -372,10 +372,11 @@ func (m *Manager) markStrategyState(uuid string, newState InstanceState) {
 	}
 	inst.State = newState
 	m.mu.Unlock()
-	m.emitStateChange(uuid, oldState, newState)
-	// 实例清单快照在状态变更后刷新，供 jmctl 等本机只读工具消费（见 instance_index.go）。
-	// 放在解锁后、异步执行：写文件不应阻塞状态机，更不该因磁盘问题影响实例生命周期。
+	// 实例清单快照刷新必须先于状态扇出登记（refreshInstanceIndexAsync 同步置脏后才起
+	// 写盘 goroutine），使观察者收到状态变更信号时 Remove 的排空已能看到在飞写盘；
+	// 颠倒过来则「信号先到、登记后到」，排空会漏掉一次迟到写盘，撞 TempDir 清理。
 	m.refreshInstanceIndexAsync("state:" + string(newState))
+	m.emitStateChange(uuid, oldState, newState)
 }
 
 // InstanceSnapshot 表示单个实例的状态快照（用于心跳上报）。
@@ -1294,29 +1295,19 @@ func (m *Manager) removeLocked(uuid string, inst *Instance) error {
 	return nil
 }
 
-// waitInstanceIndexIdle 等待实例清单的异步写盘静默（无脏标记且无在飞写盘）。
-// 第二次静默复核是为覆盖窄窗口：状态变更回调已扇出、refreshInstanceIndexAsync
-// 尚未登记的瞬间，第一次检查会误判静默。写盘本就毫秒级，超时只放弃等待、不报错。
+// waitInstanceIndexIdle 排空实例清单的异步写盘（无脏标记且无在飞写盘）。
+// markStrategyState 在状态扇出前已登记刷新（见该函数内注释），故 Remove 走到这里时
+// 只需等已在飞的写盘收尾——写盘本就毫秒级，超时只放弃等待、不报错。
 func (m *Manager) waitInstanceIndexIdle(timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for {
 		m.indexMu.Lock()
 		idle := !m.indexRunning && !m.indexDirty
 		m.indexMu.Unlock()
-		if !idle {
-			if time.Now().After(deadline) {
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-			continue
-		}
-		time.Sleep(15 * time.Millisecond)
-		m.indexMu.Lock()
-		stillIdle := !m.indexRunning && !m.indexDirty
-		m.indexMu.Unlock()
-		if stillIdle || time.Now().After(deadline) {
+		if idle || time.Now().After(deadline) {
 			return
 		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
