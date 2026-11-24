@@ -13,7 +13,7 @@
 import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
@@ -46,17 +46,24 @@ const DEPENDENCY_INPUT_FILES = [
 ]
 const FINGERPRINT_FILES = [...DEPENDENCY_INPUT_FILES, SCRIPT_FILE]
 
-/** 计算依赖输入指纹；锁文件未变时可复用已有 licenses.json。 */
+/** 计算依赖输入指纹；锁文件未变时可复用已有 licenses.json。
+ * 文件名按仓库相对路径参与哈希——绝对路径会让同一 checkout 换台机器
+ * (或换个目录)指纹就变,指纹复用形同虚设。 */
 function sourceFingerprint() {
   const hash = createHash('sha256')
   for (const file of FINGERPRINT_FILES) {
-    hash.update(file)
+    // 分隔符归一为 /：Windows 上 relative 产 \\,同样的输入跨平台哈希不同。
+    hash.update(relative(REPO_ROOT, file).replaceAll('\\', '/'))
     hash.update('\0')
     if (existsSync(file)) {
       hash.update(readFileSync(file))
     }
     hash.update('\0')
   }
+  // Go 依赖的真实输入是源码 import 集而非 go.sum:import 在测试与运行时
+  // 代码间移动不改锁文件,链接集签名也要进指纹,否则清单过期也照用。
+  const linked = goLinkedModulePathsAll()
+  if (linked) hash.update([...linked].sort().join('\n'))
   return hash.digest('hex')
 }
 
@@ -120,20 +127,26 @@ function readLicenseFromDir(dir) {
   }
 }
 
-/** 极简 SPDX 启发式识别（仅 go-licenses 不可用时兜底用）。 */
+/** 极简 SPDX 启发式识别（仅 go-licenses 不可用时兜底用）。
+ * 返回全文检出的全部许可证标识,以 ` AND ` 连接——同一文件常内嵌多份
+ * 许可文本(如 yaml.v3 的 Apache-2.0 正文 + libyaml 派生 MIT 声明),
+ * 首个命中即返回会静默丢掉后续许可。 */
 function detectLicense(text) {
-  const t = text.slice(0, 4000)
-  if (/Apache License,?\s+Version 2\.0/i.test(t)) return 'Apache-2.0'
-  if (/MIT License/i.test(t) || /Permission is hereby granted, free of charge/i.test(t)) return 'MIT'
-  if (/Mozilla Public License Version 2\.0/i.test(t)) return 'MPL-2.0'
-  if (/GNU GENERAL PUBLIC LICENSE\s+Version 3/i.test(t)) return 'GPL-3.0'
-  if (/GNU LESSER GENERAL PUBLIC LICENSE/i.test(t)) return 'LGPL'
-  if (/Redistribution and use in source and binary forms/i.test(t)) {
-    if (/Neither the name/i.test(t)) return 'BSD-3-Clause'
-    return 'BSD-2-Clause'
+  const ids = new Set()
+  if (/Apache License,?\s+Version 2\.0/i.test(text)) ids.add('Apache-2.0')
+  if (/MIT License/i.test(text) || /Permission is hereby granted, free of charge/i.test(text)) ids.add('MIT')
+  if (/Mozilla Public License Version 2\.0/i.test(text)) ids.add('MPL-2.0')
+  if (/GNU GENERAL PUBLIC LICENSE\s+Version 3/i.test(text)) ids.add('GPL-3.0')
+  else if (/GNU LESSER GENERAL PUBLIC LICENSE/i.test(text)) ids.add('LGPL')
+  if (/Redistribution and use in source and binary forms/i.test(text)) {
+    // BSD-3 第三条款写法不止一种:"Neither the name ..."(经典)与
+    // "... may not be used to endorse or promote ..."(go-difflib)都算。
+    const clause3 = /Neither the name/i.test(text)
+      || /name.{0,60}may not be used to endorse/i.test(text)
+    ids.add(clause3 ? 'BSD-3-Clause' : 'BSD-2-Clause')
   }
-  if (/The ISC License/i.test(t) || /ISC License/i.test(t)) return 'ISC'
-  return 'Unknown'
+  if (/ISC License/i.test(text)) ids.add('ISC')
+  return ids.size ? [...ids].join(' AND ') : 'Unknown'
 }
 
 /** licenses 字段可能是字符串或数组，归一为 ` / ` 连接的字符串。 */
@@ -219,6 +232,58 @@ function goModules() {
   return mods
 }
 
+/** 发行目标(GOOS/GOARCH × 包集)——与 release.yml 发货矩阵一一对应:
+ * CP/Worker/jmctl 只出 linux+windows amd64;jm 客户端另发
+ * linux/arm64、darwin/amd64、darwin/arm64。只扫发行的包:全量 ./...
+ * 会把「该平台不发货」的包依赖误算进来(如 darwin worker 经 gopsutil
+ * 拉入 purego,实际并无 darwin worker);arch 也需对齐,否则 arm64 独有
+ * 依赖在 amd64 宿主扫描时被漏掉。 */
+const SHIPPED_TARGETS = [
+  { goos: 'linux', arch: 'amd64', pkgs: './...' },
+  { goos: 'windows', arch: 'amd64', pkgs: './...' },
+  { goos: 'linux', arch: 'arm64', pkgs: './apps/jm' },
+  { goos: 'darwin', arch: 'amd64', pkgs: './apps/jm' },
+  { goos: 'darwin', arch: 'arm64', pkgs: './apps/jm' },
+]
+
+/** go list -deps <pkgs> → 某 GOOS 下指定包集实际 import 到的外部模块路径集。
+ * 用于兜底路径排除 tool/test-only 依赖(x/tools、honnef、gotest.tools 等
+ * 不被任何分发二进制链接,进清单属于误报)。失败返回 null 保持旧行为。 */
+function goLinkedModulePaths(goos, arch, pkgs) {
+  try {
+    const out = execSync(`go list -deps -f "{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{end}}" ${pkgs}`, {
+      cwd: REPO_ROOT,
+      maxBuffer: MAX_BUFFER,
+      env: { ...process.env, GOOS: goos, GOARCH: arch },
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).toString()
+    const set = new Set()
+    for (const line of out.split(/\r?\n/)) {
+      const [p, v] = line.trim().split(/\s+/)
+      if (p && v) set.add(p) // 主模块自身无版本,自然跳过
+    }
+    return set
+  } catch (e) {
+    console.warn(`[gen-licenses] go list -deps (${goos}) 失败,fallback 不排除工具依赖:${e.message}`)
+    return null
+  }
+}
+
+/** 全部发行目标的链接模块并集;任一平台失败返回 null(退为不过滤)。 */
+function goLinkedModulePathsAll() {
+  const all = new Set()
+  let complete = true
+  for (const { goos, arch, pkgs } of SHIPPED_TARGETS) {
+    const set = goLinkedModulePaths(goos, arch, pkgs)
+    if (set === null) {
+      complete = false
+      continue
+    }
+    for (const p of set) all.add(p)
+  }
+  return complete ? all : null
+}
+
 /** go-licenses 可执行路径（GOPATH/bin），不存在返回空。 */
 function goLicensesBin() {
   try {
@@ -277,8 +342,12 @@ function scanGo() {
   }
 
   // 回退/兜底：go-licenses 没覆盖到的模块用 go list + 启发式补全（保证版本/全文不丢）。
+  // 只保留真正被源码 import 的模块——`go list -m all` 是全图,会把
+  // x/tools、honnef、gotest.tools 这类 tool/test-only 依赖也算进分发清单。
   if (byPath.size === 0) {
+    const linked = goLinkedModulePathsAll()
     for (const mod of mods) {
+      if (linked && !linked.has(mod.path)) continue
       const text = readLicenseFromDir(mod.dir)
       byPath.set(mod.path, {
         name: mod.path,
@@ -374,36 +443,44 @@ function assertRequiredScopes(dependencies) {
 
 // ─────────────────────────────────── 主流程 ───────────────────────────────────
 
-const sourceHash = sourceFingerprint()
-const cachedHash = existingSourceHash()
-if (
-  !FORCE &&
-  existingManifestHasRequiredScopes() &&
-  (cachedHash === sourceHash || (!cachedHash && existingOutputIsFreshByMtime()))
-) {
-  console.log(`[gen-licenses] 依赖输入未变化，复用已有清单 → ${OUT_FILE}`)
-  process.exit(0)
+function main() {
+  const sourceHash = sourceFingerprint()
+  const cachedHash = existingSourceHash()
+  if (
+    !FORCE &&
+    existingManifestHasRequiredScopes() &&
+    (cachedHash === sourceHash || (!cachedHash && existingOutputIsFreshByMtime()))
+  ) {
+    console.log(`[gen-licenses] 依赖输入未变化，复用已有清单 → ${OUT_FILE}`)
+    process.exit(0)
+  }
+
+  const deps = [
+    ...scanNpm('web', WEB_DIR),
+    ...scanNpm('bot-worker', BOT_DIR),
+    ...scanGo(),
+    ...scanGradle('client-updater', CLIENT_UPDATER_DIR, ':updater-core', 'runtimeClasspath'),
+  ]
+  assertRequiredScopes(deps)
+  deps.sort((a, b) => a.scope.localeCompare(b.scope) || a.name.localeCompare(b.name))
+
+  const manifest = {
+    // generatedAt 由调用方/CI 注入更稳；脚本内用环境变量或留空（避免不可复现 diff 噪声）。
+    generatedAt: process.env.LICENSES_GENERATED_AT || '',
+    sourceHash,
+    dependencies: deps,
+  }
+
+  mkdirSync(dirname(OUT_FILE), { recursive: true })
+  writeFileSync(OUT_FILE, JSON.stringify(manifest, null, 2) + '\n', 'utf8')
+
+  const runtime = deps.filter((d) => d.type === 'runtime').length
+  const dev = deps.filter((d) => d.type === 'dev').length
+  console.log(`[gen-licenses] 写出 ${deps.length} 条依赖（运行时 ${runtime} / 开发 ${dev}）→ ${OUT_FILE}`)
 }
 
-const deps = [
-  ...scanNpm('web', WEB_DIR),
-  ...scanNpm('bot-worker', BOT_DIR),
-  ...scanGo(),
-  ...scanGradle('client-updater', CLIENT_UPDATER_DIR, ':updater-core', 'runtimeClasspath'),
-]
-assertRequiredScopes(deps)
-deps.sort((a, b) => a.scope.localeCompare(b.scope) || a.name.localeCompare(b.name))
-
-const manifest = {
-  // generatedAt 由调用方/CI 注入更稳；脚本内用环境变量或留空（避免不可复现 diff 噪声）。
-  generatedAt: process.env.LICENSES_GENERATED_AT || '',
-  sourceHash,
-  dependencies: deps,
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main()
 }
 
-mkdirSync(dirname(OUT_FILE), { recursive: true })
-writeFileSync(OUT_FILE, JSON.stringify(manifest, null, 2) + '\n', 'utf8')
-
-const runtime = deps.filter((d) => d.type === 'runtime').length
-const dev = deps.filter((d) => d.type === 'dev').length
-console.log(`[gen-licenses] 写出 ${deps.length} 条依赖（运行时 ${runtime} / 开发 ${dev}）→ ${OUT_FILE}`)
+export { detectLicense, SHIPPED_TARGETS }
