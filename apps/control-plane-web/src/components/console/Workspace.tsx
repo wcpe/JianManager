@@ -43,6 +43,7 @@ const ConfigFileDetailPage = lazy(ROUTE_CHUNKS['/config-files/:id'])
 const ConfigAdoptPage = lazy(ROUTE_CHUNKS['/config-adopt'])
 const ConfigDeliveriesPage = lazy(ROUTE_CHUNKS['/config-deliveries'])
 const ConfigDeliveryDetailPage = lazy(ROUTE_CHUNKS['/config-deliveries/:id'])
+const ProbeManagedPage = lazy(ROUTE_CHUNKS['/managed-configs'])
 const NetworksPage = lazy(ROUTE_CHUNKS['/networks'])
 const PlayersPage = lazy(ROUTE_CHUNKS['/players'])
 const UsersPage = lazy(ROUTE_CHUNKS['/users'])
@@ -252,6 +253,13 @@ export default function Workspace() {
             {/* 配置交付编排（532）：分批灰度 → 观察窗 → 熔断/回滚 + 生效编排。 */}
             <Route path="config-deliveries" element={<ConfigDeliveriesPage />} />
             <Route path="config-deliveries/:id" element={<ConfigDeliveryDetailPage />} />
+            {/* 探针托管：单页 3 Tab（配置与下发 / 对账矩阵 / 下发历史），两级路由 /probe/managed。
+                与上面几页的分界：那几页管「配置文件在实例磁盘上的形态」，
+                这里是「探针进程自己的 config.yml」，键的档位由探针侧定档表决定。
+                旧路径 /managed-configs、/managed-matrix 重定向到新入口，避免既有收藏失效。 */}
+            <Route path="probe/managed" element={<ProbeManagedPage />} />
+            <Route path="managed-configs" element={<Navigate to="/probe/managed" replace />} />
+            <Route path="managed-matrix" element={<Navigate to="/probe/managed?tab=matrix" replace />} />
             <Route path="instances/new" element={<InstanceWizardPage />} />
             <Route path="instances/:id" element={<InstanceDetailPage />} />
             {/*文件深链（浏览器新标签）；不并入 instances-console 热缓存 key */}

@@ -4729,6 +4729,241 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 - **错误**: 400 `window` 非时长字符串或超出 1h~168h | 401 未认证 | 403 无权限 | 404 调用流水未启用 | 500 聚合查询失败
 - **管理员干预**：无会话可踢——需要立即阻断某凭据时**吊销该 Token**，下一个请求即失效。
 
+## 探针托管配置（FR-560 / 协议 FR-561）
+
+托管模式下探针不再以本地 `config.yml` 为权威配置，而由控制面经插件桥下发。本组端点覆盖三层配置、
+灰度下发编排与对账矩阵。
+
+- **协议权威定义**：[specs/probe-managed-mode/spec.md](specs/probe-managed-mode/spec.md)（FR-561）——
+  帧格式、载荷位置、字段语义与三档分级。改协议先改那份，本文只描述对外 HTTP 面。
+- **运营面设计**：[specs/probe-managed-config/spec.md](specs/probe-managed-config/spec.md)（FR-560）。
+
+**权限**：读写统一走 `instance.read` / `instance.write`。托管配置会改变所有被覆盖实例的运行行为，
+与「改实例配置」同一风险档，故沿用既有权限节点，不新造。
+
+**三个作用域**：`global`（全平台）→ `node`（某 Worker）→ `instance`（单实例），后者覆盖前者。
+合并只在**扁平点分键**上进行（`aggregation.window` 是一个键，不与 `aggregation` 混淆）。
+
+### GET /api/v1/managed-configs/catalog
+
+- **描述**: 配置键目录——可视化编辑器的数据源。返回 68 个键（66 键权威表 + 2 个预定档键）的完整元数据。
+- **响应**:
+  ```json
+  {
+    "items": [
+      {
+        "key": "collect-period-ticks",
+        "kind": "int",
+        "group": "collect",
+        "tier": "guarded",
+        "title": "指标采集周期",
+        "description": "多久采集一次指标。默认 100（约 5 秒）。调小会让指标更细但增加主线程压力。",
+        "default": 100,
+        "min": 20,
+        "boundsHint": "过小会放大指标量并压主线程（下限 20 tick = 1 秒）",
+        "unit": "tick"
+      }
+    ],
+    "groups": { "collect": "采集节拍", "alert": "告警", "local": "仅本地可改（禁止远程写入）" }
+  }
+  ```
+- **`kind`**（决定前端控件）: `bool`（开关）/ `int` `float`（数字输入）/ `string`（文本框）/ `stringList`（标签列表）/ `object`（结构化编辑器）
+- **`tier`** 是**英文枚举** `forbidden` / `guarded` / `safe`，供机器判断。
+  注意与错误文案里的中文档位（"禁止"/"危险"/"安全"）区分：中文给人看，英文给代码比较。
+- **`min` / `max` / `boundsHint`**: 数值边界与越界时的中文理由，取自探针 `ConfigTier.BOUNDS`。
+  越界值探针会整包拒绝，前端据此提前拦下并说明为什么不行。
+- **`options`**: 枚举键的可选值。非空时前端渲染下拉而非自由输入，避免填出探针不认的值。
+- **`fields`**: 仅 `object` 类型（目前只有 `alert.rules`），给出子字段结构供渲染规则编辑器。
+  子字段的 `tier` 继承父键——它们本身不入定档表，档位由父键决定。
+- **`groups`**: 分组中文名。由服务端维护而非前端 i18n：分组集合是后端定义的，
+  两处维护必然漂移，而漂移的表现是界面出现一个没有标题的空组。
+- **禁止档键也会返回**（`group=local`），前端渲染成只读展示。藏起来会让用户以为"没有这个配置项"，
+  而真相是"存在但不能从这里改"——后者才是可解释的。
+- **缓存**: 目录是编译期常量，前端 `staleTime` 设 30 分钟。
+
+### GET /api/v1/managed-configs
+
+- **描述**: 列出各层配置。不带 `scope` 时三层各取一次（前端一次拿全），带 `scope` 时只取该层。
+- **查询**: `scope`（可选）= `global`|`node`|`instance`
+- **响应**: `{ "layers":[{"id":1,"scope":"global","scopeRefId":0,"scopeName":"全平台","config":"{...}","version":3,"remark":"...","updatedAt":"..."}] }`
+- **说明**: `config` 是该层的**增量**原文（不是合并结果）。要看合并结果用矩阵下钻。
+
+### GET /api/v1/managed-configs/layer
+
+- **描述**: 取单层配置。
+- **查询**: `scope`（必填）、`scopeRefId`（node/instance 时必填）
+- **响应**: 单层对象
+- **错误**: 404 `NOT_FOUND`（该层尚未配置）。前端把 404 当作"这层为空、版本 0"处理。
+
+### PUT /api/v1/managed-configs
+
+- **描述**: 写入某一层（整体替换该层增量）。
+- **请求**: `{ "scope":"instance", "scopeRefId":5, "config":"{\"collect-period-ticks\":40}", "expectedVersion":2, "expectedLayerIdentity":"<层 identity>", "remark":"..." }`
+  - `config`：嵌套对象**文本**；显式 `null` 表示删除该键。
+    服务端按 YAML 解析（YAML 是 JSON 的超集），因此历史 JSON 数据与前端产出的
+    带注释 YAML 都能直接提交；前端编辑器保存的是 YAML。
+  - `expectedVersion`：乐观并发基线，调用方看到的当前版本；`0` 表示「我认为这层还不存在」。不符返回 **409**。
+  - `expectedLayerIdentity`：层身份令牌（层对象的 `identity`），与版本配对校验。
+    删层重建会让版本撞回 `v1`，令牌不同才能识别「这不是同一个层」——基于已删旧层
+    的草稿写入会被 409 拦下。`expectedVersion` 为 `0` 时必须为空串。
+- **响应**: 保存后的层对象（`version` 已递增）。
+- **错误**: 400 `INVALID_CONFIG`（JSON 非法 / 含禁档键）｜ 409 `VERSION_CONFLICT`（`expectedVersion` 或 `expectedLayerIdentity` 不符）
+- **禁档键整包拒绝**: `bridge.*` / `metrics.*` / `mcp.*` / `web.*` 共 18 个键不得远程写入。
+  探针本来也会拒，CP 提前拒是为了让错误出现在**保存时**而不是下发后——否则运维要到矩阵里才发现整批失败。
+- **与探针 `baseVersion` 的区别**: `expectedVersion` 是"这层配置的代数"，探针的 `baseVersion`
+  是它自己的版本序号，两者语义不同、不可互换。
+
+### DELETE /api/v1/managed-configs
+
+- **描述**: 删除某一层（回到"该层未配置"状态，即不参与合并）。
+- **查询**: `scope`、`scopeRefId`
+- **注意**: 删除层**不会**回滚已经下发到探针的配置；要让探针回到上一版请走 `POST /managed-pushes/rollback`。
+
+### POST /api/v1/managed-configs/validate
+
+- **描述**: 只校验不落库（前端保存预览、下发前复校共用）。
+- **请求**: `{ "scope":"global", "scopeRefId":0, "config":"..." }`（`config` 为 YAML 或 JSON 文本）
+- **响应**: `{ "Errors": ["键 \"bridge.token\" 属于禁止远程写入的监听面/凭证（整包拒绝）"] }`
+  - 后端 `ManagedConfigPushValidation` 无 json tag，字段名即 `Errors`；`Errors` 为空数组即通过。
+  - 前端把每条 `Errors` 按其中的键名匹配到具体字段，在输入框旁直接显示该键不通过，
+    不必让用户去页面底部对照一份清单。
+
+### POST /api/v1/managed-configs/impact
+
+- **描述**: 影响预演——这次改动会影响多少台、指标量变成几倍、触及哪些危险档键。
+- **请求**: `{ "scope":"instance", "scopeRefId":5, "config":"{\"collect-period-ticks\":20}" }`
+- **响应**:
+  ```json
+  {
+    "affectedInstances": 1, "totalInstances": 1,
+    "guardedKeys": ["collect-period-ticks"], "forbiddenKeys": null,
+    "metricMultiplier": 1,
+    "defaultCollectPeriodTicks": 20, "effectiveCollectPeriodTicks": 20,
+    "notes": ["触及 1 个危险档键（影响数据量/资源/观测覆盖）"]
+  }
+  ```
+- **口径**: `metricMultiplier = 默认周期 / 生效周期`。周期减半 → 倍率 2（采集频率翻倍 → 指标量翻倍）。
+- **注意**: `affectedInstances` 只计**探针适用**的实例；`totalInstances` 含不适用者，
+  差额由 `notes` 解释（代理/Beacon/二进制不适用，会被跳过）。
+
+### GET /api/v1/managed-pushes
+
+- **描述**: 分页列出下发会话（下发历史的数据源）。
+- **查询**: `status`、`keyword`（匹配 `scopeName` / `reason` / `operator`）、`page`、`pageSize`
+- **响应**: `{ "items":[...], "total":3, "page":1, "pageSize":20 }`
+- **说明**: 此前该路由漏注册，前端被迫降级为「只显示本次访问内创建或推进过的会话」，
+  刷新即丢历史；现已补齐。
+
+### POST /api/v1/managed-pushes
+
+- **描述**: 建下发会话（**不自动开始**，需显式 `start`）。
+- **请求**:
+  ```json
+  { "scope":"instance", "scopeRefId":5, "instanceIds":[], "batchSize":1,
+    "failureRateThreshold":20, "ackTimeoutSec":30, "reason":"..." }
+  ```
+  - `instanceIds` 为空则按作用域自动展开（只取探针适用的**运行中**实例）。
+  - `batchSize=0` 表示单批全量；`failureRateThreshold` 省略用默认 20，`0` 表示关闭熔断。
+- **响应**: 会话对象（含 `configVersion`、`plannedCount`、`totalBatches`、冻结的 `values`/`removals`/`traced`）。
+- **冻结语义**: 会话创建时把当时的合并结果**冻结**进会话。回滚重推的是这份冻结快照，
+  而不是「按现在的层重新合并」——否则中间任何人改过层都会让"已回滚"与真实状态不符。
+- **`configVersion`**: 会话级单调递增（取当前最大值 + 1）。它是 CP 的代数，不是探针的版本号。
+
+### POST /api/v1/managed-pushes/:id/start
+
+- **描述**: 开始推进（异步）。单台下发失败不终止整批——目标是逐台终结的，失败率由熔断阈值管。
+
+### POST /api/v1/managed-pushes/:id/release
+
+- **描述**: 放行下一批（观察窗后人工确认）。
+- **理由**: 逐批人工放行是刻意的。探针配置推错会影响指标精度甚至采集频率，自动推进会让
+  "先看一批效果"变成空话。
+- **错误**: 409 `PUSH_STATE_INVALID`（当前批尚未全部终结 / 已无下一批 / 状态不允许该操作）
+
+### POST /api/v1/managed-pushes/:id/pause ; /resume ; /cancel
+
+- **描述**: 暂停推进（**不自动回滚**）/ 恢复 / 取消。
+- **请求**: `{ "reason":"..." }`（`pause` 用）
+- **注意**: 暂停只是停止推进，已经在探针上生效的配置不会因此改变。
+- **`resume` 只接受 `paused`**: 熔断落的是 **`failed`（终态）**，不可 Resume——触发熔断的配置
+  很可能就是问题本身，一键续推会把已验证的坏配置扩散到剩余批次。熔断后要推进，应改动配置后重建会话。
+- **进程重启的收口**: 启动时把残留在 `running` 的会话置为 `paused`（`pauseKind=restart`），
+  给运维留一条 Resume 通道。`awaiting_release` 不受影响（它本就是待人处理的静止态）。
+
+### POST /api/v1/managed-pushes/:id/targets
+
+- **描述**: 分页查该会话的逐台目标状态。
+- **注意**: 是 **POST**（与其余动作端点一致），不是 GET。
+- **查询/请求体**: `state`、`batchNo`、`page`、`pageSize`
+- **响应**: `{ "items":[{"instanceId":5,"instanceName":"lobby","state":"applied","desiredVersion":7,"baseVersion":6,"ackVersion":7,"errorKind":"","error":"","attempts":1,"pushedAt":"...","finishedAt":"..."}], "total":1 }`
+- **目标状态**: `pending`（未轮到）→ `pushing`（已下发待回执）→ `applied`|`rejected`|`failed`|`timeout`；
+  `skipped` 为非错误终态（实例未运行 / 不适用探针 / 实例不存在）。
+- **错误分类 `errorKind`**: `VERSION_CONFLICT`（探针回 `rejected` 且错误以 conflict 开头）、
+  `REJECTED`（其余整包拒绝）、`APPLY_FAILED`（探针应用失败）、`ACK_TIMEOUT`（下发后超时未回执）、
+  `PROBE_UNREACHABLE`（节点/探针未连接，指令根本没送到）、`INSTANCE_OFFLINE`（实例未运行，跳过）、
+  `PROBE_NOT_APPLICABLE`（不适用探针，跳过）、`CANCELLED_BY_USER`（会话被取消，未下发目标一并跳过）。
+- **为什么 `conflict` 单独分类**: 版本冲突与协议错误的运维动作完全不同（前者重发，后者查探针）。
+  注意 `conflict` **不是** `result` 取值，它是 `rejected` 的错误前缀。
+
+### POST /api/v1/managed-pushes/rollback
+
+- **描述**: 回滚——重推上一次 **completed** 会话的冻结快照。
+- **请求**: `{ "sourceSessionId":12, "instanceIds":[], "reason":"...", "confirmed":true }`
+- **必填**: `reason` 不可为空；`confirmed` 必须为 `true`（二次确认）。
+- **响应**: 新建的回滚会话。
+- **错误**: 400 `CONFIRM_REQUIRED`（`confirmed` 非 true / `reason` 为空）｜ 409 `PUSH_STATE_INVALID`（源会话未 completed）
+- **重推的是「当时实际发出去的内容」**: 载荷取自源目标下发时留存的 `pushed_payload_json`（**每台各一份**），
+  不按当前配置层重新合并——两次推送之间只要有人改过 global 层，重新合并出的就是一份从未在任何机器上
+  生效过的配置，"回到上一次推送的状态"也就不成立。
+  只复用内容（values/removals）：`configVersion` 是回滚会话新铸的版本、`baseVersion` 是该实例当前真实基线，
+  原样复用旧版本号会让回执永远对不上。
+- **不做自动回滚**: 配置错可能只是"指标不准"，而自动回滚会在没有任何人决策的情况下再次改动全平台。
+
+### GET /api/v1/managed-matrix
+
+- **描述**: 对账矩阵——"这台机器现在跑的是不是我要的那份配置"。
+- **查询**: `nodeId`、`keyword`（实例名/UUID 模糊）、`consistency`、`connection`、`configuration`、`page`、`pageSize`
+- **响应**:
+  ```json
+  { "items":[{
+      "instanceId":5,"instanceUuid":"...","instanceName":"lobby","nodeId":1,"nodeName":"w1",
+      "desiredVersion":7,"observedVersion":7,"mode":"managed",
+      "connection":"connected","reportedConnection":"online",
+      "cacheAgeSeconds":28,"lastError":"","reportedAt":"...",
+      "consistency":"inSync","lastTargetState":"applied","lastPushError":"","configuration":"cp"
+    }], "total":1 }
+  ```
+- **一致性四态**:
+  | 判定 | 条件 |
+  |---|---|
+  | `failed` | 最近目标状态 ∈ {failed, rejected, timeout} |
+  | `neverReported` | 状态行不存在，或 `config_version IS NULL` |
+  | `inSync` | `COALESCE(desiredVersion, 0) = observedVersion` |
+  | `drift` | 其余（有观测且不等） |
+- **`null` 与 `0` 严格区分**：`desiredVersion=null` 表示**从未下发**（0 是探针首次托管前的合法版本号）；
+  `cacheAgeSeconds=null` 表示**从未成功应用**（0 会被误读成"刚刚生效过"）。
+- **两个连接态**：
+  - `connection` 是**合成值**（`connected`/`degraded`/`unauthorized`/`disconnected`），桥断连即为 `disconnected`；
+  - `reportedConnection` 是探针自报，取探针自己的词表：`online`/`degraded`/`unauthorized`/`disconnected`。
+    **注意 `online` 对应合成值的 `connected`**——两套词表只有"在线"这一项拼写不同。
+    断连时它会停在**过期值**，仅供排障。
+  - 判在线一律用 `connection`：`config_state` 走同一条桥，断连时根本发不出去，
+    只信自报会把"早就掉线"的实例显示成在线。
+  - `unauthorized` 值得单独告警：它表示控制面拒了凭据，探针**不会**降级回文件配置
+    （防认知分裂），等网络恢复也不会自愈，必须重新签发身份文件。
+- **`configuration`**: `cp` = 下发过期望版本；`file` = 从未下发（探针仍按本地文件跑）。
+
+### GET /api/v1/managed-matrix/summary
+
+- **描述**: 矩阵汇总（页头计数与筛选芯片）。
+- **响应**: `{ "total":120, "byConsistency":{...}, "byConnection":{...}, "byConfiguration":{...}, "crossMatrix":[{"configuration":"cp","connection":"connected","count":98}] }`
+
+### GET /api/v1/managed-matrix/instances/:id
+
+- **描述**: 单实例下钻——期望值、探针实际生效值、逐键来源、最近下发经历。
+- **响应**: `{ "row":{...}, "desiredValues":{...}, "observedEffective":{...}, "traced":[{"key":"collect-period-ticks","value":40,"scope":"instance","scopeRefId":5,"version":2}], "recentPushes":[...] }`
+- **用途**: 「期望 vs 观测」并排看，一眼定位是哪一层、哪一版把值改成了这样。
+
 ## 错误码
 
 | HTTP | 含义 |

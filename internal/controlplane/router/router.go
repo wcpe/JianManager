@@ -167,8 +167,12 @@ type Services struct {
 	// OrphanRuntime 实例反向对账无主运行时列表/确认处置；nil 时端点关闭。
 	OrphanRuntime *service.OrphanRuntimeTracker
 	// BotReclaim 失效 Bot 回收列表/确认处置；nil 时端点关闭。
-	BotReclaim    *service.BotReclaimService
-	ProbeUpdate   *service.ProbeUpdateService
+	BotReclaim  *service.BotReclaimService
+	ProbeUpdate *service.ProbeUpdateService
+	// 探针托管配置（三层配置 / 下发编排 / 对账矩阵）。三者任一缺失则整组端点不注册。
+	ManagedConfig *service.ManagedConfigService
+	ManagedPush   *service.ManagedPushService
+	ManagedMatrix *service.ManagedMatrixService
 	ClientChannel *service.ClientChannelService
 	ClientVersion *service.ClientVersionService
 	// ClientChunkUpload 大文件分块上传（增强）；nil 时分块端点关闭、前端回退单次上传。
@@ -509,6 +513,14 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ProbeUpdate != nil {
 			probeUpdateHandler := NewProbeUpdateHandler(svcs.ProbeUpdate, svcs.Instance, svcs.Authz, svcs.ArtifactVersion)
 			probeUpdateHandler.RegisterRoutes(permRead("instance.read", "instance.operate"))
+		}
+		// 探针托管配置：三层配置编辑、灰度下发编排（批次/熔断/回滚）、对账矩阵。
+		// 写端点会改变所有被覆盖实例的运行行为，故与「改实例配置」同档，走 instance.write。
+		if svcs.ManagedConfig != nil && svcs.ManagedPush != nil && svcs.ManagedMatrix != nil {
+			managedConfigHandler := NewManagedConfigHandler(svcs.ManagedConfig, svcs.ManagedPush, svcs.ManagedMatrix, svcs.Authz, svcs.Instance)
+			managedConfigHandler.RegisterRoutes(
+				permRead("instance.read", "instance.write"),
+				permRead("instance.write"))
 		}
 		if svcs.ArtifactVersion != nil {
 			NewArtifactVersionHandler(svcs.ArtifactVersion).RegisterSelectionRoutes(permRead("instance.read", "node.read", "node.manage"))

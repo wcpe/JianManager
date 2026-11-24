@@ -31,6 +31,9 @@ import (
 
 // setupCluster 在给定端口基址上启动 CP+Worker，建管理员、等节点注册，返回已认证 client 与节点 ID。
 // 端口分配：HTTP=base，CP gRPC=base+20，Worker gRPC=base+21，Worker WS=base+22。
+//
+// e2eWSSecret 是插件桥（/ws/plugin-bridge）的 JWT 密钥：显式下发给 CP，使假探针能在测试侧
+// 签出与 CP 同源的 token（CP 默认会生成随机密钥落盘，测试无从得知）。
 func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 	t.Helper()
 	projectRoot := findProjectRoot(t)
@@ -54,10 +57,13 @@ func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 		"JIANMANAGER_DATABASE_DSN="+dbDSN,
 		"JIANMANAGER_GRPC_PORT="+cpGRPCPort,
 		"JIANMANAGER_DATA_DIR="+dataDir,
-		"JIANMANAGER_LOG_LEVEL=info",
+		"JIANMANAGER_LOG_LEVEL="+e2eCPLogLevel,
 		"JIANMANAGER_LOG_FORMAT=text",
 		// 终端 token 由 CP 签发、Worker WS 校验，二者 JWT secret 必须一致。
 		"JIANMANAGER_JWT_SECRET=e2e-test-secret",
+		// 插件桥 token 走独立的 WS 密钥：显式指定，使假探针能在测试侧签出与 CP 同源的凭据。
+		// 不指定时 CP 会生成随机密钥落盘，测试无法得知，也就无法冒充探针连入。
+		"JIANMANAGER_JWT_WS_SECRET="+e2eWSSecret,
 	)
 	cpCmd.Stdout = os.Stdout
 	cpCmd.Stderr = os.Stderr

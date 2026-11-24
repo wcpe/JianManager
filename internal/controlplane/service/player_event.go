@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 
 	"gorm.io/gorm"
@@ -11,6 +13,14 @@ import (
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
+)
+
+// 托管模式桥事件类型（与探针侧的帧 event 名逐字一致，协议规格 §3.4.2 / §3.4.3）。
+const (
+	// ManagedBridgeEventConfigApplied 探针应用配置后的回执。
+	ManagedBridgeEventConfigApplied = "config_applied"
+	// ManagedBridgeEventConfigState 探针周期性上报的托管状态。
+	ManagedBridgeEventConfigState = "config_state"
 )
 
 // PlayerEvent 是推送给前端（SSE）的一条玩家/探针事件。
@@ -145,6 +155,37 @@ type PlayerEventService struct {
 	//
 	// 契约：回调必须是**非阻塞**的（本方法在事件流的读循环里调用），且不得 panic。
 	probeConnected func(instanceUUID string)
+
+	// managedEvent 是托管模式桥事件（config_applied / config_state）的旁路钩子。
+	//
+	// 为什么也挂在这里：这两类事件同样只经 StreamPluginEvents 到达，另起订阅会重复消费
+	// 同一条长驻流（F4 禁止）。由装配期注入 handlers，本服务不解帧、不落库，
+	// 只做「谁该收到」的路由——托管语义归 ManagedPushService 所有。
+	//
+	// 契约同 probeConnected：**非阻塞**、不得 panic（在读循环里同步调用）。
+	managedEvent func(instanceUUID, eventType string, raw map[string]any)
+
+	// bridgeState 是桥连接态变化回调（connected / disconnected 事实本身）。
+	// 供对账矩阵判定实例是否真的在线——config_state 走同一条桥，断连时发不出去，
+	// 只信自报会把掉线实例显示成在线。契约同 probeConnected：非阻塞、不得 panic。
+	bridgeState func(instanceUUID string, connected bool)
+}
+
+// SetManagedEventHook 注入托管桥事件回调（config_applied / config_state）。传 nil 关闭。
+//
+// 回调在事件流读循环内被同步调用，实现方必须自己起 goroutine——落库动作一旦阻塞
+// 读循环，会把该节点所有实例的实时事件一起拖住。
+func (s *PlayerEventService) SetManagedEventHook(fn func(instanceUUID, eventType string, raw map[string]any)) {
+	s.managedEvent = fn
+}
+
+// SetProbeBridgeStateHook 注入桥连接态变化回调（connected=true / disconnected=false）。传 nil 关闭。
+//
+// 与 SetProbeConnectedHook 的分工：那个是「探针连入 → 触发补推」的业务钩子，
+// 这个是**连接事实**本身，供对账矩阵判定实例是否真的在线上。
+// 两者语义不同，不要合并——合并会让「只想补推」和「只想知道通断」互相牵连。
+func (s *PlayerEventService) SetProbeBridgeStateHook(fn func(instanceUUID string, connected bool)) {
+	s.bridgeState = fn
 }
 
 // SetProbeConnectedHook 注入探针连入回调（自动补推入口）。传 nil 关闭。
@@ -261,6 +302,73 @@ func (s *PlayerEventService) StartWorkerStream(nodeUUID string) {
 	}()
 }
 
+// isManagedBridgeEventType 判断是否为托管模式桥事件（回执 / 周期状态）。
+//
+// 只认这两种：其它事件走名册或业务透传，不该进托管处理器。
+func isManagedBridgeEventType(eventType string) bool {
+	switch eventType {
+	case ManagedBridgeEventConfigApplied, ManagedBridgeEventConfigState:
+		return true
+	}
+	return false
+}
+
+func (s *PlayerEventService) dispatchManagedEvent(evt *workerpb.PluginEvent) {
+	raw := evt.RawJson
+	if strings.TrimSpace(raw) == "" {
+		raw = evt.Message
+	}
+	if strings.TrimSpace(raw) == "" {
+		slog.Debug("托管桥事件缺少载荷，已跳过", "instanceUuid", evt.InstanceUuid, "type", evt.Type)
+		return
+	}
+	var frame map[string]any
+	if err := json.Unmarshal([]byte(raw), &frame); err != nil {
+		slog.Warn("托管桥事件载荷非法，已跳过", "instanceUuid", evt.InstanceUuid, "type", evt.Type, "err", err)
+		return
+	}
+	payload, ok := managedEventPayload(frame)
+	if !ok {
+		slog.Warn("托管桥事件缺少 payload 段，已跳过",
+			"instanceUuid", evt.InstanceUuid, "type", evt.Type)
+		return
+	}
+	s.managedEvent(evt.InstanceUuid, evt.Type, payload)
+}
+
+// managedEventPayload 从探针上行的整帧里取出托管事件的实际载荷。
+//
+// ## 为什么不能把整帧当载荷
+//
+// 探针的 `config_applied` / `config_state` 帧是这种信封结构（ServerProbe BridgeFrames）：
+//
+//	{"type":"event","event":"config_applied","instance":"<uuid>","timestamp":<ms>,
+//	 "dedupKey":"cfg:7:applied","payload":{"configVersion":7,"result":"applied",...}}
+//
+// 结构化字段一律在 `payload` 下，与 `metric_snapshot` 一致。早期把整帧直接交给处理器，
+// `configVersion` 就恒为 0、`result` 恒为空串——每条回执都被判成 failed，
+// 而失败原因永远显示"探针未给出失败原因"，看起来像探针的问题。
+//
+// 顺序即协议优先级：
+//  1. `payload` 段（规范形态）；
+//  2. `data` 段（早期草案把字段放这里，仍有存量探针）；
+//  3. 整帧（兜底：载荷本身就是平铺对象时，例如测试或将来新增的扁平事件）。
+func managedEventPayload(frame map[string]any) (map[string]any, bool) {
+	for _, key := range []string{"payload", "data"} {
+		if nested, ok := frame[key].(map[string]any); ok && len(nested) > 0 {
+			return nested, true
+		}
+	}
+	// 兜底：整帧里已有协议要求的字段，说明是平铺载荷而非信封。
+	if _, ok := frame["configVersion"]; ok {
+		return frame, true
+	}
+	if _, ok := frame["connection"]; ok {
+		return frame, true
+	}
+	return nil, false
+}
+
 // streamFromWorker 从单个 Worker 拉取插件事件流：演进名册 + 翻译 + 扇出。
 func (s *PlayerEventService) streamFromWorker(nodeUUID string, client *cpgrpc.Client) {
 	slog.Info("PlayerEventService: 开始订阅 Worker 插件事件流", "nodeUUID", nodeUUID)
@@ -296,6 +404,15 @@ func (s *PlayerEventService) streamFromWorker(nodeUUID string, client *cpgrpc.Cl
 			// 钩子必须非阻塞，否则会卡住本节点所有实例的实时事件。
 			if evt.Type == "connected" && s.probeConnected != nil {
 				s.probeConnected(evt.InstanceUuid)
+			}
+			// 桥连接事实：独立通知，供对账矩阵判定在线与否（与上面的补推钩子语义不同）。
+			if s.bridgeState != nil && (evt.Type == "connected" || evt.Type == "disconnected") {
+				s.bridgeState(evt.InstanceUuid, evt.Type == "connected")
+			}
+			// 托管模式回执/状态：同样经本流到达，路由给托管服务的处理器。
+			// 只在 type 命中时解析 payload——托管帧几百毫秒一条，为主流路径省一次 JSON 解析。
+			if s.managedEvent != nil && isManagedBridgeEventType(evt.Type) {
+				s.dispatchManagedEvent(evt)
 			}
 			s.broadcast(s.translate(evt))
 		}

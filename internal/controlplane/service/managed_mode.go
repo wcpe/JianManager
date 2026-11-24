@@ -6,7 +6,11 @@ import (
 	"time"
 )
 
-// 外部控制面托管模式（ServerProbe PR#64 /~47）的 CP 侧实现。
+// 外部控制面托管模式的 CP 侧实现。
+//
+// 协议权威定义：docs/specs/probe-managed-mode/spec.md。
+// 运营面（三层配置 / 灰度下发 / 对账矩阵）见 specs/probe-managed-config/spec.md：
+// 本文件只负责协议地基，不含任何运营语义。
 //
 // ## 与既有插件桥的关系
 // 旧链路：CP 签发 scope=plugin-bridge 的 JWT → 写入探针 config.yml 的 `bridge:` 段 →

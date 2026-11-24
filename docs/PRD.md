@@ -665,6 +665,8 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-557 | 实例日志检索分析与字段探索 [规格][s196] | P1 | ✅ 已交付@v0.24.0 |
 | FR-558 | 实例日志安全高级查询表达式与预算控制 [规格][s197] | P1 | ✅ 已交付@v0.24.0 |
 | FR-559 | 实例日志浏览器端实时流式跟随 [规格][s198] | P1 | ✅ 已交付@v0.24.0 |
+| FR-560 | 探针托管配置运营面：三层配置、灰度下发编排、对账矩阵与可视化/YAML 编辑 [规格][s199] | P1 | 🔨 开发中 |
+| FR-561 | 探针托管协议地基与控制面接入（补录上游存量）[规格][s200] | P1 | ✅ 已交付@v0.24.0 |
 
 | FR-560 | 用户令牌数据模型与服务（feat，净新）：新建 `user_token` 表（**不复用 agent_token**，审计主体分离），字段含 user_id/name/device_label/token_hash/token_prefix/scoped_node_ids/scoped_instance_ids/capabilities/expires_at/revoked/auth_version/last_used_at；明文 `jmut_*` 仅创建时返回一次；权限 = **token scope ∩ 用户 RBAC**（不能放大，降权自动收窄，AuthVersion 递增全部失效）→ `docs/specs/user-token/spec.md`（需 spec + ADR-112） | P0 | 计划 |
 | FR-561 | 用户令牌管理 API（feat，净新）：`POST/GET/DELETE /api/v1/user/tokens`；仅操作本人，平台管理员可吊销任意；与 `/agent/tokens` 完全隔离；越权 403 → `docs/specs/user-token/spec.md`（需 spec） | P0 | 计划 |
@@ -1079,3 +1081,5 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 [s196]: specs/logs-query-workbench/spec.md
 [s197]: specs/logs-advanced-query/spec.md
 [s198]: specs/logs-live-streaming/spec.md
+[s199]: specs/probe-managed-config/spec.md
+[s200]: specs/probe-managed-mode/spec.md

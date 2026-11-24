@@ -6,7 +6,9 @@ import (
 	"strings"
 )
 
-// 探针配制键的三档分级（协议规格 §7.1，66 键权威表）。
+// 探针配制键的三档分级（协议规格 §3.3，66 键权威表）。
+//
+// 协议权威定义：docs/specs/probe-managed-mode/spec.md。
 //
 // ## 为什么 CP 侧必须自己再校一遍
 // 探针会在收到 config_push 后自行校档并拒绝整包，但等到那时已经多走一个往返；
@@ -39,6 +41,28 @@ func (t ManagedConfigTier) String() string {
 		return "安全"
 	}
 	return "未知"
+}
+
+// WireName 是档位在接口与存储里的**稳定标识**（forbidden / guarded / safe）。
+//
+// 与 String() 分工明确：String() 返回中文，给人看（日志、错误文案）；
+// WireName() 返回英文枚举，给机器判断。
+//
+// ## 为什么必须分开
+// 早期元数据接口直接把 String() 的中文塞进 JSON 的 `tier` 字段，前端据此判断
+// `tier === 'forbidden'` 永远不成立——于是**禁止档键渲染出了可编辑控件**：
+// 用户在界面上改了一个 bridge.* 键，下发时才被拒，而界面从没提示过它不能改。
+// 中文一旦进入协议字段，任何调用方都得硬编码中文才能正确比较。
+func (t ManagedConfigTier) WireName() string {
+	switch t {
+	case ConfigTierForbidden:
+		return "forbidden"
+	case ConfigTierGuarded:
+		return "guarded"
+	case ConfigTierSafe:
+		return "safe"
+	}
+	return "forbidden" // 未知档位按最严格处理（fail-close）
 }
 
 // managedConfigTiers 是探针 ConfigTier.TIER_BY_KEY 的逐条镜像（66 键）。
@@ -141,27 +165,98 @@ func ManagedConfigTierOf(key string) (ManagedConfigTier, bool) {
 	if _, ok := managedReservedGuardedKeys[key]; ok {
 		return ConfigTierGuarded, true
 	}
+	// 动态子键继承最近已登记祖先的档位：`alert.rules` 登记为危险档后，
+	// `alert.rules.<规则名>.threshold` 这类动态规则名子键若按“未收录”判禁，
+	// 规则编辑器就整组不可用。
+	//
+	// 但继承只对「登记为 object 的动态容器」开放：若换成「任意已登记祖先
+	// 都可继承」，`debug.enabled` 这类未登记子键会借 `debug` 前缀混入放行，
+	// 等于把逐键白名单降级成前缀白名单。普通标量键未登记仍 fail-close。
+	segments := strings.Split(key, ".")
+	for i := len(segments) - 1; i >= 1; i-- {
+		prefix := strings.Join(segments[:i], ".")
+		meta, isObject := managedKeyCatalog[prefix]
+		if !isObject || meta.Kind != ManagedKeyObject {
+			continue
+		}
+		if tier, ok := managedConfigTiers[prefix]; ok {
+			return tier, true
+		}
+		if _, ok := managedReservedSafeKeys[prefix]; ok {
+			return ConfigTierSafe, true
+		}
+		if _, ok := managedReservedGuardedKeys[prefix]; ok {
+			return ConfigTierGuarded, true
+		}
+	}
 	return ConfigTierForbidden, false
+}
+
+// managedForbiddenRoots 是**整组结构性禁止**的根段。
+//
+// 与"逐键禁止"不同：逐键只堵登记过的那几个叶子（`bridge.enabled`/`bridge.url`/…），
+// 而整组禁止堵的是整棵子树。探针侧 ConfigTier 的 `FORBIDDEN_ROOTS = setOf("bridge")`
+// 就是这个语义——理由是 `bridge` 段下有 line/chunk/subscribe/health/reload 等大量子键，
+// 逐键登记必然漏，而漏掉的那个键同样能改监听面与凭证行为。
+//
+// CP 侧早期只做了逐键禁止、缺了这一段，于是 `bridge.line.max-inbound-bytes` 这类
+// 未登记的深层子键会被判成"可远程写"——探针仍会拒（它有自己的 FORBIDDEN_ROOTS），
+// 但 CP 的预检就此失效，用户与探针各说各话。
+var managedForbiddenRoots = map[string]struct{}{
+	"bridge": {},
 }
 
 // IsForbiddenConfigPath 判定某路径是否属于禁止远程面。
 //
-// 逐键命中之外，还要沿点分前缀逐段回溯：`alert.channels.webhook.url` 这类深层路径
-// 若其祖先已被定档，就按祖先算。与探针 ConfigTier.isForbiddenPath 同语义。
+// 三条判定，任一命中即禁止：
+//  1. 整串命中禁止根段（整组结构性禁止，见 managedForbiddenRoots）；
+//  2. 逐键命中禁止档；
+//  3. 沿点分前缀逐段回溯，任一祖先命中上面两条。
+//
+// 第 3 条的存在理由：`alert.channels.webhook.url` 这类深层路径若其祖先已定档，
+// 就该按祖先算。与探针 ConfigTier.isForbiddenPath 同语义。
+//
+// ## 为什么不是手写索引循环
+// 曾用 `for idx := strings.IndexByte(key, '.'); idx > 0; idx = strings.IndexByte(key[idx+1:], '.') + idx + 1`
+// 这种写法，它在**三段以上**的键上会死循环：当剩余串里已无 `.` 时 `IndexByte` 返回 -1，
+// 而 `-1 + idx + 1 == idx`，索引原地踏步。两段键（`bridge.enabled`）恰好能正常退出，
+// 所以这个缺陷在只测两段键的用例里完全不可见——真机上表现为下发含
+// `alert.channels.webhook.url` 的配置时 CP 线程卡死。
+//
+// 改用 Split 逐段拼接：长度严格递减，不可能不推进；且"前缀"的定义一眼可见。
 func IsForbiddenConfigPath(key string) bool {
-	if tier, ok := ManagedConfigTierOf(key); ok && tier == ConfigTierForbidden {
+	if isForbiddenSegment(key) {
 		return true
 	}
-	for idx := strings.IndexByte(key, '.'); idx > 0; idx = strings.IndexByte(key[idx+1:], '.') + idx + 1 {
-		prefix := key[:idx]
-		if tier, ok := ManagedConfigTierOf(prefix); ok && tier == ConfigTierForbidden {
+	segments := strings.Split(key, ".")
+	if len(segments) < 2 {
+		return false
+	}
+	// 首段必须单独判：整组禁止的根段（`bridge`）只出现在这一段。
+	// 早期版本把首段直接当作初始 prefix 进入循环，于是 `bridge` 自己从未被检查过——
+	// `bridge.line.max-inbound-bytes`（三段）回溯到 `bridge.line` 就结束了，
+	// 而 `bridge.line` 没登记过档位，整条判定就此漏掉。
+	prefix := segments[0]
+	if isForbiddenSegment(prefix) {
+		return true
+	}
+	// 继续拼到倒数第二段：整串已在函数开头判过，再查一次没有意义。
+	for _, seg := range segments[1 : len(segments)-1] {
+		prefix += "." + seg
+		if isForbiddenSegment(prefix) {
 			return true
-		}
-		if idx+1 >= len(key) {
-			break
 		}
 	}
 	return false
+}
+
+// isForbiddenSegment 判定单段（整串或某个前缀）是否属于禁止面。
+func isForbiddenSegment(segment string) bool {
+	if _, ok := managedForbiddenRoots[segment]; ok {
+		return true
+	}
+	tier, known := ManagedConfigTierOf(segment)
+	return known && tier == ConfigTierForbidden
 }
 
 // ManagedConfigPushValidation 是一次下发前的校验结果。

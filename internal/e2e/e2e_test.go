@@ -346,3 +346,14 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 
 	t.Log("E2E 实例全生命周期测试通过")
 }
+
+// e2eCPLogLevel 是端到端测试里 Control Plane 的日志级别。
+//
+// 默认 info；设 E2E_CP_LOG_LEVEL=debug 可在排障时拿到托管帧解析、事件分流等细节，
+// 而不必改代码重编译。
+var e2eCPLogLevel = func() string {
+	if v := os.Getenv("E2E_CP_LOG_LEVEL"); v != "" {
+		return v
+	}
+	return "info"
+}()

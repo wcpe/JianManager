@@ -693,7 +693,71 @@ serverprobe_world_{loaded_chunks,entities,tile_entities}{world=}  → 按世界�
 
 > 地基阶段（FR-065）打通通道层（会话/握手/心跳/connected·disconnected 冒泡 + proto 一次铺齐）；实时玩家事件采集（FR-066）已落地（见上）；治理执行与 RCON 退役（FR-067）已落地，在线更新（FR-068）复用本通道、不再改 proto。
 
-### 6.2.3 QQ 网关出站 WebSocket（CP ↔ 开放平台，FR-495）
+### 6.2.3 探针托管配置（协议 FR-561 + 运营面 FR-560）
+
+> 本节讲 CP 侧如何接入与运营托管探针。**协议权威定义**（帧格式 / 载荷位置 / 字段语义 /
+> 三档分级）在 [specs/probe-managed-mode/spec.md](specs/probe-managed-mode/spec.md)，
+> 改协议先改那份；运营面设计与联调结论在
+> [specs/probe-managed-config/spec.md](specs/probe-managed-config/spec.md)。
+
+托管模式下探针**不再以本地 `config.yml` 为权威配置**：它按身份文件启动，配置由 CP 经插件桥热下发。
+独立模式（无身份文件）行为完全不变——这是 ServerProbe 作为厂商中立独立产品的前提，
+JM 只是首个控制面对接方。
+
+**三层配置与合并**：`global` → `node` → `instance`，后者覆盖前者。合并只在**扁平点分键**上进行
+（与协议 `values` 逐字一致）；每层先展平再合并，否则 `aggregation` 与 `aggregation.window`
+会变成互不相干的键。分级复用协议既有的 66 键三档与 18 个禁档键（`bridge.*`/`metrics.*`/`mcp.*`/`web.*`），
+**不重新定义键表**——两处规则各自演进必然漂移。
+
+**下发编排**：会话冻结当时的合并结果 → 逐批下发 → 等 `config_applied` 收敛 → 人工放行下一批。
+
+```
+CP: POST /managed-pushes（冻结 values/removals/逐键来源）
+ start → 逐台 pushOne：标记 pushing(baseVersion=探针上次回执版本) → SendPluginCommand(wait=false)
+探针: 应用 → 自检 → applied|failed|rejected → 上行 config_applied(payload 段)
+CP: PlayerEventService 分流 → ManagedPushService.ConsumeConfigApplied → 目标终态
+    超时未回执 → expireStaleTargets 判 timeout；失败率超阈值 → 熔断暂停
+```
+
+三个易错点，均已由测试钉住：
+
+- **版本双层语义**：会话 `configVersion` 是 CP 的代数（单调递增）；下发的 `baseVersion` 必须取
+  探针上一次 `config_applied` 回报的版本（探针自己的序号）。混用会让探针整包拒绝。
+- **下发不等待**：用 `wait=false`。探针应用可能跨多个 tick，同步等待会把它拖成 gRPC 超时，
+  于是"已应用"被误报成"未回执"。
+- **回执载荷在 `payload` 段**：`{"type":"event","event":"config_applied","instance":...,"payload":{...}}`。
+  与 `metric_snapshot` 同构。把整帧当载荷解析会让 `configVersion` 恒为 0、所有回执被判 failed。
+
+**状态消费与连接态**：`config_state` 周期上报落「每实例最新状态」（覆盖式，不是历史）；
+`connected`/`disconnected` 事件落桥连接判定。矩阵的连接维度以**桥事件**为准，不以探针自报为准——
+`config_state` 走同一条桥，断连时根本发不出去，只信自报会把"早就掉线"的实例显示成在线。
+
+**两套连接态词表**（易错）：探针上行是 `online`/`degraded`/`unauthorized`/`disconnected`，
+CP 合成值是 `connected`/`degraded`/`unauthorized`/`disconnected`——**只有"在线"拼写不同**。
+`SynthesizeManagedConnection` 必须显式归一 `online → connected`，否则该值落进 fallback，
+在当下侥幸正确但白名单残缺（任何新状态都会被静默记成"在线"）。
+
+**对账矩阵**：单条 SQL 用两个 LEFT JOIN（每实例最近目标 + 最新状态）把一致性判完，
+分页与总数交给数据库。四态判定：`failed`（最近目标失败类）→ `neverReported`（无观测）→
+`inSync`（期望=观测）→ `drift`。`null` 与 `0` 全程严格区分：
+`desiredVersion=null` 是"从未下发"（0 是首次托管前的合法版本号），
+`cacheAgeSeconds=null` 是"从未成功应用"（0 会被误读成"刚刚生效过"）。
+
+**配置编辑面（可视化）**：`GET /managed-configs/catalog` 暴露 68 个键的编辑元数据
+（类型 / 分组 / 档位 / 中文名 / 说明 / 默认值 / 数值边界 / 枚举候选），前端按 `kind` 选控件，
+把"手写 66 个点分键"变成按分组渲染的表单。三条不变量：
+
+- **元数据表与定档表键集合必须一致**（双向比对，有单测）。缺一即两种缺陷：界面上看不见
+  （用户以为不能配）或能编辑却被拒（用户白填）。
+- **`tier` 必须是英文枚举** `forbidden`/`guarded`/`safe`，不能是中文。中文进协议字段会让
+  调用方只能硬编码中文比较——曾经的缺陷正是这样让禁止档键渲染出了可编辑控件。
+- **禁止档键列出但只读**：藏起来会让人以为"没有这个配置项"，真相是"存在但不能远程改"。
+
+**页面结构**：三个动作（改配置 / 看对账 / 翻历史）收敛为**单页 3 Tab**，挂两级路由
+`/probe/managed`，Tab 状态进 URL query（可分享）。被收进来的两个页面复用而非重写；
+旧路径 `/managed-configs`、`/managed-matrix` 保留为重定向。
+
+### 6.2.4 QQ 网关出站 WebSocket（CP ↔ 开放平台，FR-495）
 
 FR-494 的 `qq` 通道是纯出站 HTTP 投递（`ChannelNotifier.Send`，token 按 `appId` 缓存）；FR-495
 另起一条 CP 直连开放平台的**出站** WSS 长连接，只为接收 `GROUP_ADD_ROBOT` 入群事件、
@@ -961,6 +1025,10 @@ QQGatewayConnection ──1:N──▶ QQDiscoveredGroup  # FR-495（逻辑归�
 | node_jdks (V2) | node_id(FK), vendor, major_version, version, arch, path, managed(下载/登记) |
 | node_runtimes (V2, FR-298) | node_id(FK), type(varchar16: nodejs/python 预留，jdk 不落本表), name(展示名如 "Node.js 22"), version, major, arch, path, managed；UNIQUE(node_id,type,path)（节点运行时库非 JDK 承载表：JDK 沿用 node_jdks 不迁移、实例外键零变更；读侧与 node_jdks 拼统一 Runtime 视图、写侧各走各表） |
 | node_pm_configs (V2, FR-306) | node_id(UNIQUE), pm(varchar16 default npm: npm/pnpm/yarn), registries(text, JSON 数组 [{name,url,scope,token}])（节点包管理器配置单例：token 入库明文、API 出参与日志脱敏（掩码回传=不改），Worker 侧落托管 .npmrc + corepack enable） |
+| managed_config_layers (FR-560) | scope(global/node/instance), scope_ref_id(global=0、node=nodes.id、instance=instances.id), scope_name(冗余可读名，列表免逐行 JOIN), config(增量 JSON 原文，显式 null=删键), version(写入代数，乐观并发基线), identity(层身份令牌，删层重建不复用，与版本配对校验防旧草稿盖新层), remark, created_by, created_at, updated_at；UNIQUE(scope,scope_ref_id)（**增量**不是全量：节点层只写自己关心的键，不被全局层后续变更覆盖成快照；逐键来源据此可查） |
+| managed_push_sessions (FR-560) | kind(push/rollback), scope, scope_ref_id, scope_name, config_version(CP 侧代数，单调递增，**不是**探针版本), values_json/removals_json/traced_json(**冻结快照**，回滚重推它而非按现层重新合并), reason, operator, batch_size(0=单批全量), failure_rate_threshold(默认 20，0=关闭熔断), ack_timeout_sec(默认 30), status, pause_kind/pause_reason, break_reason/break_threshold/break_observed, planned/applied/failed/timeout/skipped/pending_count, current_batch/total_batches, source_session_id, confirm_token, created_by, started_at/finished_at |
+| managed_push_targets (FR-560) | session_id(FK), instance_id, instance_uuid, instance_name, node_id, batch_no, state(pending/pushing/applied/rejected/failed/timeout/skipped), desired_version(本次目标版本), base_version(下发时用的探针基线，取自上次回执), ack_version(探针回执确认的版本), planned_payload_json(创建会话时冻结的合并载荷，随批推进防中途改层渗入), pushed_payload_json(实际发出载荷，回滚回放源), effective_json(探针回报的生效值), error_kind/error(分类见 API 文档), attempts, pushed_at, finished_at；UNIQUE(session_id,instance_id) |
+| managed_instance_config_states (FR-560) | instance_id(UNIQUE), instance_uuid, config_version(探针观测版本), effective_json(探针生效值), cache_age_seconds(**NULL=从未成功应用**，0=刚刚生效过), mode(managed/standalone), reported_connection(**探针自报**，词表 online/degraded/unauthorized/disconnected，断连后为过期值), bridge_connected(桥事件判定), effective_connection(合成值，矩阵连接维度**以此为准**), capabilities_json, last_error, reported_at, bridge_updated_at（每实例"最新状态"覆盖式，不是历史） |
 | instance_config_versions (V2) | instance_id(FK), file_path, content, author, created_at |
 | file_versions (V2) | instance_id(FK), file_path, content_hash, content(base64,二进制安全), size, author_id, rollback_of_version_id, created_at；INDEX(instance_id,file_path)（FR-051 通用文件改前快照） |
 | assets | type(core/plugin/image/video/archive/blob/client-file/client-pack/client-core/client-updater-core), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external/**lost**；lost=索引存在但外置对象缺失，FR-349), storage_backend(local/s3), storage_channel_id(FK artifact_storage_channels，0=本地/无渠道；位置由记录自述，FR-347), ref_count, rel_path(相对数据根=跨后端存储键), created_at, last_used_at；UNIQUE(type,sha256) |

@@ -53,6 +53,7 @@ import {
   Server,
   Settings2,
   Shield,
+  SlidersHorizontal,
   ShieldCheck,
   User,
   UsersRound,
@@ -176,6 +177,10 @@ export const WORKSPACES: WorkspaceDef[] = [
           { to: '/config-adopt', labelKey: 'nav.configAdopt', icon: FileInput, perm: ['file.read', 'instance.read'] },
           // 配置交付编排（532）：分批灰度、观察窗、熔断与回滚。
           { to: '/config-deliveries', labelKey: 'nav.configDeliveries', icon: Workflow, perm: ['file.read', 'instance.read'] },
+          // 探针托管：管的是**探针进程自己的 config.yml**（66 键定档表），
+          // 与上面四页「配置文件在实例磁盘上的形态」是两套对象，故单独一个入口。
+          // 配置编辑 / 下发编排 / 对账矩阵收进单页 3 Tab，避免一级入口继续膨胀。
+          { to: '/probe/managed', labelKey: 'nav.probeManaged', icon: SlidersHorizontal, perm: 'instance.read' },
         ],
       },
       {

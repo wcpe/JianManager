@@ -49,6 +49,28 @@ const OLD_ENTRY_BY_PATH = new Map(OLD_ENTRIES.map((e) => [e.to, e]))
 const OLD_ALL_PATHS = OLD_ENTRIES.map((e) => e.to)
 const NAV_PATH_SET = new Set(OLD_ALL_PATHS)
 
+/** 
+ * 快照冻结**之后**新增的导航目的地（必须逐条登记在这里）。
+ *
+ * 【为什么需要这份清单】`__fixtures_nav-snapshot.json` 是「旧六域当年登记了什么」的历史事实，
+ * 不得手改；但产品会继续加页面。若不允许登记新入口，要么只能改快照（等于篡改历史、
+ * 「零遗漏」这条主张随之失效），要么新页面永远进不了导航。所以新入口另立一份显式清单：
+ * 加页面必须同时改这里，快照保持只读，等价性断言仍然只对旧 41 条生效。
+ *
+ * 登记项需自带 perm 与 labelKey，供下方「不得凭空发明权限节点」与「i18n 键必须存在」两条断言消费。
+ */
+const POST_FREEZE_NAV_ENTRIES: CollectedEntry[] = [
+  // 探针托管：管的是探针进程自己的 config.yml（66 键定档表），
+  // 与「配置文件在实例磁盘上的形态」是两套对象。
+  //
+  // 原先这里是两条独立入口（/managed-configs 配置、/managed-matrix 对账），
+  // 一级路由此膨胀；现已收敛为单页 3 Tab 的两级路由 /probe/managed
+  //（配置与下发 / 对账矩阵 / 下发历史）。旧路径保留为路由重定向，不再进导航。
+  { to: '/probe/managed', labelKey: 'nav.probeManaged', perm: 'instance.read' },
+]
+/** 冻结后新增的导航目的地路径集合。 */
+const POST_FREEZE_NAV_PATHS = new Set(POST_FREEZE_NAV_ENTRIES.map((e) => e.to))
+
 const WORKSPACE_GROUP_LIST = WORKSPACES.flatMap((w) => w.groups)
 const NEW_ENTRIES = collectEntries(WORKSPACE_GROUP_LIST)
 const NEW_ENTRY_BY_PATH = new Map(NEW_ENTRIES.map((e) => [e.to, e]))
@@ -72,6 +94,18 @@ const SUB_ROUTE_PARENT: Record<string, string> = {
  * 而新增目的地自带 perm 语义（`/my-tokens` 无 perm，所有登录用户可见）。
  */
 const ADDED_NAV_PATHS = new Set<string>(['/my-tokens'])
+
+/** 
+ * 新层里「非旧快照、也非子路由」的合法新增项。
+ *
+ * 由两份显式清单合成：
+ *   1. {@link POST_FREEZE_NAV_ENTRIES}——声明了 perm 的新入口（/probe/managed）；
+ *   2. {@link ADDED_NAV_PATHS}——无 perm 的自助入口（/my-tokens）。
+ * 两者都不是子路由，也都不参与「继承旧入口页 perm」那套判定，故只在
+ * 「可见性校验」这一处合并消费；permission 语义仍各按各的清单判
+ *（/probe/managed 需要 instance.read，/my-tokens 无 perm 对所有人开放）。
+ */
+const DECLARED_NEW_NAV_SET = new Set([...POST_FREEZE_NAV_PATHS, ...ADDED_NAV_PATHS])
 
 /**
  * lucide 上游改名兼容表：同一图标组件在新版本换了 displayName（旧名保留为别名导出）。
@@ -160,11 +194,15 @@ function flattenKeys(obj: Record<string, unknown>, prefix = ''): Set<string> {
 
 const ZH_KEYS = flattenKeys(zh)
 
-/** 
+/**
  * 等价性主断言（权限口径）：
  * 1) 旧可见的每条导航目的地，新层必须同样可见（零遗漏）；
  * 2) 新层里属于旧全集的条目集合，必须与旧结果**完全相等**（零越权：不能多给一条）；
- * 3) 多出来的只能是 CSV 登记过的子路由，且其入口页同样可见（子路由继承 perm，不是放宽）。
+ * 3) 多出来的只能是「登记过的子路由」或「冻结后登记的新导航目的地」（两者都显式清单化）。
+ *
+ * 第 3 条的口径变化：旧版本只允许子路由，因为那时导航表完全等于 CSV 的 41 条。
+ * 冻结后新增页面（探针托管配置 / 对账矩阵）走 {@link POST_FREEZE_NAV_ENTRIES} 显式登记，
+ * 快照本身保持只读——否则「零遗漏」的参照物就被改动了。
  */
 function assertPermissionEquivalence(nodes: Set<string>, admin: boolean, label: string) {
   const oldPaths = oldFlatPaths(nodes, admin)
@@ -180,8 +218,23 @@ function assertPermissionEquivalence(nodes: Set<string>, admin: boolean, label: 
   const extras = newPaths.filter((to) => !NAV_PATH_SET.has(to))
 
   for (const to of extras) {
-    // 新增目的地不是深链：它自带 perm 语义，没有可继承的旧入口页
-    if (ADDED_NAV_PATHS.has(to)) continue
+    // 冻结后新增的页面分两类记账：
+    //   1. 「无 perm 自助入口」（如 /my-tokens）——所有登录用户可见，不参与权限判定；
+    //   2. 「声明了 perm 的新入口」（如 /probe/managed）——可见性必须跟随其声明的 perm。
+    // 两类都在 DECLARED_NEW_NAV_SET 里，故统一走这里的 perm 校验：
+    // perm 为 undefined 时上式直接为真，等价于第 1 类。
+    if (DECLARED_NEW_NAV_SET.has(to)) {
+      const declared = POST_FREEZE_NAV_ENTRIES.find((e) => e.to === to)
+      if (declared) {
+        const perm = declared.perm
+        const permitted =
+          admin || perm === undefined || (Array.isArray(perm) ? perm : [perm]).some((p) => nodes.has(p))
+        // 断言方向取「可见 ⇒ 有权限」：不可见可能是其它原因（如该工作区被整体裁掉），不算违规。
+        expect(permitted || !newSet.has(to), `${label}：${to} 无对应权限却可见`).toBe(true)
+      }
+      // 无 perm 的自助入口：与角色无关，可见性不该因权限集合变化。
+      continue
+    }
     expect(SUB_ROUTE_SET.has(to), `${label}：出现未登记的新增项 ${to}`).toBe(true)
     const parent = SUB_ROUTE_PARENT[to]
     expect(parent, `${label}：${to} 缺入口页登记`).toBeDefined()
@@ -232,7 +285,18 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
           {
             key: 'obsAutomation',
             labelKey: 'nav.automationGovernance',
-            pages: ['/tasks', '/schedules', '/backups', '/config-baselines', '/config-files', '/config-adopt', '/config-deliveries'],
+            // 末尾两项是冻结后新增（见 POST_FREEZE_NAV_ENTRIES）：探针托管配置与对账矩阵
+            // 与既有配置页同组——运维找「配置」时不必跨工作区。
+            pages: [
+              '/tasks',
+              '/schedules',
+              '/backups',
+              '/config-baselines',
+              '/config-files',
+              '/config-adopt',
+              '/config-deliveries',
+              '/probe/managed',
+            ],
           },
           { key: 'obsMessages', labelKey: 'nav.messages', pages: ['/notifications'] },
         ],
@@ -283,12 +347,13 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
     expect(WORKSPACE_GROUP_LIST.every((g) => g.sections === undefined)).toBe(true)
     expect(WORKSPACE_GROUP_LIST.every((g) => (g.children?.length ?? 0) > 0)).toBe(true)
 
-    // 工作区 → 组 → 页面数（对齐 CSV 的 3/3/3、3/3/1、2/1、5 分类）
+    // 工作区 → 组 → 页面数（对齐 CSV 的 3/3/3、3/3/1、2/1、5 分类；
+    // observability 的 13 里含冻结后新增的 1 条（探针托管总控），见 POST_FREEZE_NAV_ENTRIES）
     expect(
       WORKSPACES.map((w) => [w.key, w.groups.length, w.groups.reduce((n, g) => n + (g.children?.length ?? 0), 0)]),
     ).toEqual([
       ['ops', 3, 10],
-      ['observability', 3, 12],
+      ['observability', 3, 13],
       ['operation', 2, 6],
       ['platform', 5, 19],
     ])
@@ -298,14 +363,19 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
 
     const carriedNavPaths = allPaths.filter((p) => NAV_PATH_SET.has(p))
     const addedNavPaths = allPaths.filter((p) => ADDED_NAV_PATHS.has(p))
+    const postFreezePaths = allPaths.filter((p) => POST_FREEZE_NAV_PATHS.has(p))
     const subPaths = allPaths.filter((p) => SUB_ROUTE_SET.has(p))
     expect(carriedNavPaths.length, '41 个旧导航目的地').toBe(41)
-    expect(new Set(addedNavPaths), '1 条新增导航目的地').toEqual(ADDED_NAV_PATHS)
+    expect(new Set(addedNavPaths), '无 perm 自助入口全部登记').toEqual(ADDED_NAV_PATHS)
+    expect(new Set(postFreezePaths), '冻结后新增项全部登记').toEqual(POST_FREEZE_NAV_PATHS)
     expect(new Set(subPaths), '5 条子路由全部登记').toEqual(SUB_ROUTE_SET)
-    expect(carriedNavPaths.length + addedNavPaths.length + subPaths.length).toBe(allPaths.length)
+    expect(
+      carriedNavPaths.length + addedNavPaths.length + postFreezePaths.length + subPaths.length,
+      '四类路径互不相交且覆盖全部登记项',
+    ).toBe(allPaths.length)
 
-    // 50 = 42 导航 + 5 子路由 + 3 认证页
-    expect(allPaths.length + AUTH_ROUTE_PATHS.length).toBe(50)
+    // 51 = 43 导航（41 旧 + 1 自助入口 + 1 冻结后新增） + 5 子路由 + 3 认证页
+    expect(allPaths.length + AUTH_ROUTE_PATHS.length).toBe(51)
 
     // 组 key 全局唯一（折叠态 / 图标映射按 key 记账）
     const groupKeys = WORKSPACE_GROUP_LIST.map((g) => g.key)
@@ -365,8 +435,9 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
     }
   })
 
-  it('路由零遗漏：新层包含旧导航全部 41 条，新增为 5 条子路由 + 1 条新目的地', () => {
-    // 管理员全开：旧层 41 条导航目的地，新层 41 + 5 子路由 + 1 新目的地
+  it('路由零遗漏：新层包含旧导航全部 41 条，其余恰为 5 条子路由 + 2 条新增导航', () => {
+    // 管理员全开：旧层 41 条导航目的地；新层 = 41 + 5 子路由 + 2 新增导航
+    //（/my-tokens 无 perm 自助入口 + /probe/managed 冻结后新增）
     const oldAdminPaths = oldFlatPaths(adminNodes, true)
     expect(oldAdminPaths, '旧层管理员口径应为 41 条').toEqual(OLD_ALL_PATHS)
     expect(flatWorkspaceItems(adminNodes, true).map((i) => i.to)).toEqual(NEW_ALL_PATHS)
@@ -374,18 +445,19 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
     const newSet = new Set(NEW_ALL_PATHS)
     for (const to of OLD_ALL_PATHS) expect(newSet.has(to), `新层丢失了 ${to}`).toBe(true)
 
-    // 新增项 = 子路由深链 ∪ 新登记目的地（与旧 41 条快照不相交）
-    const addedPaths = new Set(NEW_ALL_PATHS.filter((p) => !NAV_PATH_SET.has(p)))
-    const expectedAdded = new Set<string>([...SUB_ROUTE_SET, ...ADDED_NAV_PATHS])
+    // 「非旧快照」的部分 = 子路由 ∪ 无 perm 自助入口 ∪ 冻结后新增
+    //（三份显式清单，不得有第四种来路）。
+    expect(new Set(NEW_ALL_PATHS.filter((p) => !NAV_PATH_SET.has(p)))).toEqual(
+      new Set([...SUB_ROUTE_SET, ...ADDED_NAV_PATHS, ...POST_FREEZE_NAV_PATHS]),
+    )
     // 旧导航目的地必须一条不落地被新层承接
-    const carriedPaths = new Set(NEW_ALL_PATHS.filter((p) => NAV_PATH_SET.has(p)))
-    expect([...carriedPaths].sort()).toEqual([...OLD_ALL_PATHS].sort())
-    // 新增目的地确实落在新层里
-    for (const to of ADDED_NAV_PATHS) expect(newSet.has(to), `新层缺新增目的地 ${to}`).toBe(true)
-    expect(addedPaths).toEqual(expectedAdded)
+    expect([...new Set(NEW_ALL_PATHS.filter((p) => NAV_PATH_SET.has(p)))].sort()).toEqual([...OLD_ALL_PATHS].sort())
+    // 新增目的地确实落在新层里（两类分别断言，避免一类掩盖另一类）
+    for (const to of ADDED_NAV_PATHS) expect(newSet.has(to), `新层缺自助入口 ${to}`).toBe(true)
+    for (const to of POST_FREEZE_NAV_PATHS) expect(newSet.has(to), `新层缺冻结后新增 ${to}`).toBe(true)
     expect(newSet.size).toBe(NEW_ALL_PATHS.length)
 
-    // 角色包装下平台管理员同样是「41 + 6」；null 走角色种子（未知角色保守清零），
+    // 角色包装下平台管理员是全开（43 导航 + 5 子路由）；null 走角色种子（未知角色保守清零），
     // 与旧 `flatNavItems(null, true)` 的老行为一致——null 不等于「管理员全开」。
     // 旧层 null 只剩首页；新层另有与角色无关的自助入口
     expect(oldFlatPaths(null, true)).toEqual(['/'])
@@ -431,7 +503,10 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
       '/config-files',
       '/config-adopt',
       '/config-deliveries',
-      // 无 perm 的自助入口对所有登录用户可见，不受上面这组权限影响
+      // 冻结后新增：单页 3 Tab 的两级入口，只要求 instance.read，故可见。
+      '/probe/managed',
+      // 无 perm 的自助入口对所有登录用户可见，不受上面这组权限影响。
+      // 顺序按工作区排列：operation 工作区在 platform 之前。
       '/my-tokens',
     ])
   })
@@ -543,6 +618,13 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
       expect(resolveWorkspacePath(path)?.groupKey, `${path} 的分组`).toBe(groupKey)
       expect(resolveWorkspacePath(path)?.pattern, `${path} 命中自身`).toBe(path)
     }
+
+    // 冻结后新增的两页同样必须归位（否则侧栏高亮与命令面板会指向别的工作区）。
+    for (const entry of POST_FREEZE_NAV_ENTRIES) {
+      expect(workspaceOfPath(entry.to), `${entry.to} 的工作区`).toBe('observability')
+      expect(resolveWorkspacePath(entry.to)?.groupKey, `${entry.to} 的分组`).toBe('obsAutomation')
+      expect(resolveWorkspacePath(entry.to)?.pattern, `${entry.to} 命中自身`).toBe(entry.to)
+    }
   })
 
   it('子路由归属：深链归入正确工作区/分组，/instances/new 不被 :id 抢走', () => {
@@ -625,11 +707,10 @@ describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', (
       const carriedNew = newPaths.filter((p) => NAV_PATH_SET.has(p))
       expect(new Set(carriedNew), `role=${role}：导航目的地集合不一致`).toEqual(oldSet)
       for (const to of newPaths.filter((p) => !NAV_PATH_SET.has(p))) {
-        if (ADDED_NAV_PATHS.has(to)) {
-          // 新增目的地自带 perm 语义：无 perm 才对所有人可见，旧层无对应入口可继承
-          expect(ADDED_NAV_PATHS.has(to), `role=${role}：新目的地 ${to}`).toBe(true)
-          continue
-        }
+        // 冻结后新增的导航目的地不属于子路由体系，不参与「入口页可见」判定：
+        //   - 无 perm 自助入口（/my-tokens）对所有登录用户开放，旧层无对应入口可继承；
+        //   - 声明了 perm 的新入口（/probe/managed）自带 perm，同样没有旧入口页。
+        if (ADDED_NAV_PATHS.has(to) || POST_FREEZE_NAV_PATHS.has(to)) continue
         expect(SUB_ROUTE_SET.has(to), `role=${role}：未登记的新增项 ${to}`).toBe(true)
         expect(oldSet.has(SUB_ROUTE_PARENT[to]), `role=${role}：入口页不可见却漏出 ${to}`).toBe(true)
       }
