@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -117,36 +118,51 @@ func stubBrokenZstdOnPath(t *testing.T) {
 func TestClientVersion_PublishGeneratesPatchViaFallbackWhenZstdFails(t *testing.T) {
 	stubBrokenZstdOnPath(t)
 	versionSvc, _, _ := newClientVersionPatchFixture(t)
-	oldContent := []byte("fallback pack version 1 -- shared payload -- shared payload")
-	newContent := []byte("fallback pack version 2 -- shared payload -- shared payload")
-
-	oldFile := publishPatchTestFile(t, versionSvc, oldContent)
+	// 三个文件同版发布,worker 并发均走 fallback——覆盖信号量串行化
+	// (单文件用例只有一个 worker,验证不到 patchInMemoryFallbackSem 的互斥)。
+	var oldFiles, newFiles []ManifestFile
+	oldContents := [][]byte{
+		[]byte("fallback pack A v1 -- shared payload -- shared payload"),
+		[]byte("fallback pack B v1 -- shared payload -- shared payload"),
+		[]byte("fallback pack C v1 -- shared payload -- shared payload"),
+	}
+	newContents := [][]byte{
+		[]byte("fallback pack A v2 -- shared payload -- shared payload"),
+		[]byte("fallback pack B v2 -- shared payload -- shared payload"),
+		[]byte("fallback pack C v2 -- shared payload -- shared payload"),
+	}
+	for i := range oldContents {
+		path := fmt.Sprintf("mods/pack-%c.bin", 'A'+i)
+		oldFiles = append(oldFiles, publishPatchTestFileNamed(t, versionSvc, oldContents[i], path))
+		newFiles = append(newFiles, publishPatchTestFileNamed(t, versionSvc, newContents[i], path))
+	}
 	_, err := versionSvc.PublishVersion("skyblock-s1", PublishVersionParams{
-		Files:       []ManifestFile{oldFile},
+		Files:       oldFiles,
 		ManagedDirs: []string{"mods"},
 	})
 	require.NoError(t, err)
 
-	newFile := publishPatchTestFile(t, versionSvc, newContent)
 	_, err = versionSvc.PublishVersion("skyblock-s1", PublishVersionParams{
-		Files:       []ManifestFile{newFile},
+		Files:       newFiles,
 		ManagedDirs: []string{"mods"},
 	})
 	require.NoError(t, err)
 
 	manifest, err := versionSvc.BuildManifest("skyblock-s1")
 	require.NoError(t, err)
-	patch := manifest.Files[0].Patch
-	require.NotNil(t, patch, "zstd CLI 失败时应回退内存编码仍产出 patch")
-
-	_, patchPath, err := versionSvc.OpenArtifact(patch.Artifact.SHA256)
-	require.NoError(t, err)
-	dec, err := zstd.NewReader(nil, zstd.WithDecoderDictRaw(0, oldContent))
-	require.NoError(t, err)
-	decoded, err := dec.DecodeAll(mustReadFile(t, patchPath), nil)
-	require.NoError(t, err)
-	dec.Close()
-	require.Equal(t, newContent, decoded)
+	require.Len(t, manifest.Files, len(newFiles))
+	for i, file := range manifest.Files {
+		patch := file.Patch
+		require.NotNil(t, patch, "zstd CLI 失败时应回退内存编码仍产出 patch")
+		_, patchPath, err := versionSvc.OpenArtifact(patch.Artifact.SHA256)
+		require.NoError(t, err)
+		dec, err := zstd.NewReader(nil, zstd.WithDecoderDictRaw(0, oldContents[i]))
+		require.NoError(t, err)
+		decoded, err := dec.DecodeAll(mustReadFile(t, patchPath), nil)
+		require.NoError(t, err)
+		dec.Close()
+		require.Equal(t, newContents[i], decoded)
+	}
 }
 
 func TestClientVersion_PublishSkipsPatchWithoutPriorVersion(t *testing.T) {
