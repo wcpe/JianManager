@@ -167,8 +167,8 @@ type Services struct {
 	// OrphanRuntime 实例反向对账无主运行时列表/确认处置；nil 时端点关闭。
 	OrphanRuntime *service.OrphanRuntimeTracker
 	// BotReclaim 失效 Bot 回收列表/确认处置；nil 时端点关闭。
-	BotReclaim    *service.BotReclaimService
-	ProbeUpdate   *service.ProbeUpdateService
+	BotReclaim  *service.BotReclaimService
+	ProbeUpdate *service.ProbeUpdateService
 	// 探针托管配置（三层配置 / 下发编排 / 对账矩阵）。三者任一缺失则整组端点不注册。
 	ManagedConfig *service.ManagedConfigService
 	ManagedPush   *service.ManagedPushService

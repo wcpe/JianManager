@@ -23,7 +23,7 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 
 import type { ManagedKeyMeta } from '@/api/managedConfig'
-import { stringifyManagedYaml, validateManagedYaml } from '@/lib/managed-config/managed-yaml'
+import { validateManagedYaml } from '@/lib/managed-config/managed-yaml'
 
 export interface ManagedYamlEditorProps {
   /**
@@ -219,8 +219,3 @@ const lightTheme = EditorView.theme({
   '.cm-activeLineGutter': { backgroundColor: 'rgba(0,0,0,0.03)' },
   '&.cm-focused': { outline: 'none' },
 })
-
-/** 供页面重建注释用：把对象重新序列化成带注释的 YAML。 */
-export function regenerateManagedYaml(doc: Record<string, unknown>, items: ManagedKeyMeta[]): string {
-  return stringifyManagedYaml(doc, items)
-}

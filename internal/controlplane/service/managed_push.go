@@ -1247,6 +1247,7 @@ func (s *ManagedPushService) failByCircuitBreak(sessionID uint, reason string, t
 //   - `run` 不会自己醒来，`pendingTargets` 里那批 `pending` 永远没人推；
 //   - `expireStaleTargets` 只扫 `pushing`，碰不到 `pending`；
 //   - `Release` 要求 `awaiting_release`，而它停在 `running`，人工也放行不了。
+//
 // 结果是页面显示「正在推」，实际上什么都不再发生，只能靠运维手动 Cancel 才脱离该态。
 //
 // 【处理方向】把 `running` 落成 `paused`（`pause_kind=restart`），而不是 completed/failed：

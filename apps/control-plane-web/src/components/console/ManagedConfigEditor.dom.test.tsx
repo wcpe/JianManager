@@ -99,9 +99,6 @@ describe('可视化字段：按类型选控件', () => {
   })
 
   it('有可选值的键渲染成下拉，避免填出探针不认的值', async () => {
-    // radix Select 用 aria-hidden + pointer-events 管理弹出层的可见性，
-    // jsdom 里必须关掉 pointerEventsCheck，否则点击会被判定为"元素不可点"。
-    const user = userEvent.setup({ pointerEventsCheck: 0 })
     const seen: unknown[] = []
     renderWithProviders(
       <FieldHarness

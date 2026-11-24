@@ -1305,7 +1305,11 @@ export default function ManagedConfigPage({ defaultTab = 'layers' }: { defaultTa
     if (scope !== 'instance' || scopeRefId !== 0) return
     if (singleInstanceQuery.data?.total !== 1) return
     const only = singleInstanceQuery.data.items?.[0]
-    if (only) setScopeRefId(only.id)
+    // 微任务推迟到渲染提交后再写状态，避免在 effect 里同步 setState 触发级联渲染。
+    if (only) {
+      const id = only.id
+      queueMicrotask(() => setScopeRefId(id))
+    }
   }, [scope, scopeRefId, singleInstanceQuery.data])
 
   // 逐成员收窄：`data?.found` 只在同一次访问里成立，跨两次访问 TS 无法保证。

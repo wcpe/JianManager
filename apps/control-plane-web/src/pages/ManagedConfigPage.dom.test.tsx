@@ -230,7 +230,6 @@ function useLayerEndpoints(options: {
 describe('托管配置层：校验 / 影响预演 / 保存', () => {
   it('保存成功后提示并回到最新版本', async () => {
     loginMockUser()
-    const user = userEvent.setup()
     useLayerEndpoints()
 
     renderWithProviders(<ManagedConfigPage />)
@@ -274,7 +273,6 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
 
   it('后端 FORBIDDEN 拒绝原因原样展示（含具体键名）', async () => {
     loginMockUser()
-    const user = userEvent.setup()
     const message = '托管配置含禁止远程写入的键: 键 "bridge.token" 属于禁止远程写入的监听面/凭证（整包拒绝）'
     let putCount = 0
     useLayerEndpoints({
@@ -303,7 +301,6 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
 
   it('版本冲突（409）提示该层已被他人更新并给出重新加载', async () => {
     loginMockUser()
-    const user = userEvent.setup()
     useLayerEndpoints({
       put: () =>
         HttpResponse.json(
@@ -326,7 +323,6 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
 
   it('影响预演展示受影响台数、倍率与危险档键', async () => {
     loginMockUser()
-    const user = userEvent.setup()
     useLayerEndpoints()
 
     renderWithProviders(<ManagedConfigPage />)
@@ -344,7 +340,6 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
 
   it('预演发现禁档键时明确拦下保存', async () => {
     loginMockUser()
-    const user = userEvent.setup()
     useLayerEndpoints({
       impact: () =>
         HttpResponse.json({
@@ -375,7 +370,6 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
 
   it('实时校验失败时逐条列出后端原因并禁用保存', async () => {
     loginMockUser()
-    const user = userEvent.setup()
     useLayerEndpoints({
       validate: () =>
         HttpResponse.json({ Errors: ['键 "bridge.token" 属于禁止远程写入的监听面/凭证（整包拒绝）'] }),
@@ -392,7 +386,6 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
 
   it('该层尚未配置时以版本 0 起步（404 不是错误）', async () => {
     loginMockUser()
-    const user = userEvent.setup()
     useLayerEndpoints({ layer: null })
 
     renderWithProviders(<ManagedConfigPage />)
@@ -582,7 +575,6 @@ describe('下发会话：推进 / 放行 / 目标 / 回滚', () => {
 
   it('会话列表端点缺失时降级为本地会话并明确提示', async () => {
     loginMockUser()
-    const user = userEvent.setup()
     server.use(
       http.get(API('/managed-configs'), () => HttpResponse.json({ items: [] })),
       http.get(API('/managed-configs/layer'), () => HttpResponse.json({}, { status: 404 })),
