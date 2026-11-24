@@ -70,6 +70,8 @@ export interface ManagedConfigLayer {
   config: string
   /** 该层写入代数（每次保存 +1）。 */
   version: number
+  /** 层身份令牌：创建时生成、删除重建不复用，与版本一起做并发校验。 */
+  identity: string
   remark?: string
   createdBy: number
   createdAt: string
@@ -84,6 +86,9 @@ export interface ManagedLayerInput {
   config: string
   /** 乐观并发基线：0 表示「我认为这层还不存在」。 */
   expectedVersion: number
+  /** 层身份令牌：草稿所基于的那层；空串仅在 expectedVersion 为 0 时用。
+   * 删层重建后版本会撞回 v1，令牌不符即 409，兜住旧草稿静默盖新层。 */
+  expectedLayerIdentity: string
   /** 备注（进审计）。 */
   remark?: string
 }

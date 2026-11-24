@@ -253,6 +253,8 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
   )
   /** 服务端当前层版本：单键保存后本地推进，不依赖重取层（重取会令编辑器重挂丢草稿）。 */
   const [serverVersion, setServerVersion] = useState(layer?.version ?? 0)
+  /** 服务端层身份令牌：随版本基线一起钉住，删层重建后旧草稿写入由后端 409 拦截。 */
+  const [serverIdentity, setServerIdentity] = useState(layer?.identity ?? '')
 
   /**
    * 层数据常在编辑器挂载后才返回（layer 从 null → 实层），「重新加载」或后台重取
@@ -273,6 +275,7 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
     if (syncedLayer === null || editedText === null) {
       setCommitted(flattenManagedConfig(parseLayerConfig(layer?.config)))
       setServerVersion(layer?.version ?? 0)
+      setServerIdentity(layer?.identity ?? '')
     }
   }
 
@@ -458,12 +461,14 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
         scopeRefId,
         config: JSON.stringify(next),
         expectedVersion: serverVersion,
+        expectedLayerIdentity: serverIdentity,
         remark: remark.trim() || undefined,
       })
       // 用返回层更新本地已存快照与乐观并发基线；父级把返回体回写层详情缓存，
       // 不重取层（重取交给「重新加载」），草稿靠 editorKey 不含版本号保住。
       setCommitted(flattenManagedConfig(parseLayerConfig(saved.config)))
       setServerVersion(saved.version)
+      setServerIdentity(saved.identity)
       onSaved(saved)
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status
@@ -486,10 +491,12 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
         scopeRefId,
         config: draftText,
         expectedVersion: serverVersion,
+        expectedLayerIdentity: serverIdentity,
         remark: remark.trim() || undefined,
       })
       setCommitted(flattenManagedConfig(parseLayerConfig(saved.config)))
       setServerVersion(saved.version)
+      setServerIdentity(saved.identity)
       onSaved(saved)
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status

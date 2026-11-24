@@ -265,15 +265,20 @@ func TestSaveLayer_VersionBumpAndConflict(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, first.Version)
 
+	assert.NotEmpty(t, first.Identity)
+
 	second, err := svc.SaveLayer(ManagedLayerInput{
 		Scope: model.ManagedScopeGlobal, Config: `{"server-name": "pool-2"}`, ExpectedVersion: 1,
+		ExpectedLayerIdentity: first.Identity,
 	}, 1)
 	require.NoError(t, err)
 	assert.Equal(t, 2, second.Version)
+	assert.Equal(t, first.Identity, second.Identity)
 
 	// 基于过期版本保存必须被拒（否则会静默覆盖别人的修改）。
 	_, err = svc.SaveLayer(ManagedLayerInput{
 		Scope: model.ManagedScopeGlobal, Config: `{"server-name": "pool-3"}`, ExpectedVersion: 1,
+		ExpectedLayerIdentity: first.Identity,
 	}, 1)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrManagedConfigConflict)
@@ -283,6 +288,52 @@ func TestSaveLayer_VersionBumpAndConflict(t *testing.T) {
 		Scope: model.ManagedScopeNode, ScopeRefID: 1, Config: `{}`, ExpectedVersion: 3,
 	}, 1)
 	require.Error(t, err)
+}
+
+// TestSaveLayer_IdentitySurvivesRecreate 删层重建后版本撞回 v1，
+// 基于旧层的草稿写入必须被身份令牌拦下（否则静默盖掉新层内容）。
+func TestSaveLayer_IdentitySurvivesRecreate(t *testing.T) {
+	db := newManagedTestDB(t)
+	svc := NewManagedConfigService(db)
+
+	old, err := svc.SaveLayer(ManagedLayerInput{
+		Scope: model.ManagedScopeGlobal, Config: `{"server-name": "pool"}`,
+	}, 1)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DeleteLayer(model.ManagedScopeGlobal, 0))
+
+	recreated, err := svc.SaveLayer(ManagedLayerInput{
+		Scope: model.ManagedScopeGlobal, Config: `{"server-name": "pool-new"}`,
+	}, 1)
+	require.NoError(t, err)
+	// 重建层回到 v1——版本号无法区分新旧层，只能靠令牌。
+	assert.Equal(t, 1, recreated.Version)
+	assert.NotEqual(t, old.Identity, recreated.Identity)
+
+	// 旧草稿写入：版本巧合对上，令牌不符必须 409。
+	_, err = svc.SaveLayer(ManagedLayerInput{
+		Scope: model.ManagedScopeGlobal, Config: `{"server-name": "stale"}`, ExpectedVersion: 1,
+		ExpectedLayerIdentity: old.Identity,
+	}, 1)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrManagedConfigConflict)
+
+	// 拿着新令牌的正常写入放行。
+	_, err = svc.SaveLayer(ManagedLayerInput{
+		Scope: model.ManagedScopeGlobal, Config: `{"server-name": "ok"}`, ExpectedVersion: 1,
+		ExpectedLayerIdentity: recreated.Identity,
+	}, 1)
+	require.NoError(t, err)
+
+	// 旧草稿对已删未重建的层写入也要拦下（层不存在但带了令牌）。
+	require.NoError(t, svc.DeleteLayer(model.ManagedScopeGlobal, 0))
+	_, err = svc.SaveLayer(ManagedLayerInput{
+		Scope: model.ManagedScopeGlobal, Config: `{"server-name": "x"}`,
+		ExpectedLayerIdentity: recreated.Identity,
+	}, 1)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrManagedConfigConflict)
 }
 
 // TestSaveLayer_ScopeRefValidation 验证作用域与引用的搭配校验。

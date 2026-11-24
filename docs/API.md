@@ -4798,13 +4798,16 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 ### PUT /api/v1/managed-configs
 
 - **描述**: 写入某一层（整体替换该层增量）。
-- **请求**: `{ "scope":"instance", "scopeRefId":5, "config":"{\"collect-period-ticks\":40}", "expectedVersion":2, "remark":"..." }`
+- **请求**: `{ "scope":"instance", "scopeRefId":5, "config":"{\"collect-period-ticks\":40}", "expectedVersion":2, "expectedLayerIdentity":"<层 identity>", "remark":"..." }`
   - `config`：嵌套对象**文本**；显式 `null` 表示删除该键。
     服务端按 YAML 解析（YAML 是 JSON 的超集），因此历史 JSON 数据与前端产出的
     带注释 YAML 都能直接提交；前端编辑器保存的是 YAML。
   - `expectedVersion`：乐观并发基线，调用方看到的当前版本；`0` 表示「我认为这层还不存在」。不符返回 **409**。
+  - `expectedLayerIdentity`：层身份令牌（层对象的 `identity`），与版本配对校验。
+    删层重建会让版本撞回 `v1`，令牌不同才能识别「这不是同一个层」——基于已删旧层
+    的草稿写入会被 409 拦下。`expectedVersion` 为 `0` 时必须为空串。
 - **响应**: 保存后的层对象（`version` 已递增）。
-- **错误**: 400 `INVALID_CONFIG`（JSON 非法 / 含禁档键）｜ 409 `VERSION_CONFLICT`（`expectedVersion` 不符）
+- **错误**: 400 `INVALID_CONFIG`（JSON 非法 / 含禁档键）｜ 409 `VERSION_CONFLICT`（`expectedVersion` 或 `expectedLayerIdentity` 不符）
 - **禁档键整包拒绝**: `bridge.*` / `metrics.*` / `mcp.*` / `web.*` 共 18 个键不得远程写入。
   探针本来也会拒，CP 提前拒是为了让错误出现在**保存时**而不是下发后——否则运维要到矩阵里才发现整批失败。
 - **与探针 `baseVersion` 的区别**: `expectedVersion` 是"这层配置的代数"，探针的 `baseVersion`

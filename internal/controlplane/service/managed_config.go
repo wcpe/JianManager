@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
@@ -64,8 +67,12 @@ type ManagedLayerInput struct {
 	//
 	// 与探针的 baseVersion 不是一回事（那是探针自己的版本序号），但对账口径一致：
 	// 两者都是「我改的是我以为的那一版」，不符即拒，避免静默覆盖别人的修改。
-	ExpectedVersion int    `json:"expectedVersion"`
-	Remark          string `json:"remark"`
+	ExpectedVersion int `json:"expectedVersion"`
+	// ExpectedLayerIdentity 层身份令牌（层 JSON 的 identity）：版本说明「第几代」，
+	// 令牌说明「同一个层」。删层重建会让版本撞回 v1，但新层令牌不同，基于旧层的
+	// 草稿写入被拒。空串仅当 ExpectedVersion 为 0（认为层尚不存在）时使用。
+	ExpectedLayerIdentity string `json:"expectedLayerIdentity"`
+	Remark                string `json:"remark"`
 }
 
 // ManagedTracedKey 是一个键的最终值与其来源。
@@ -199,12 +206,18 @@ func (s *ManagedConfigService) SaveLayer(in ManagedLayerInput, operatorID uint) 
 			if in.ExpectedVersion != 0 {
 				return fmt.Errorf("%w: 该层尚不存在，期望版本应为 0（实际 %d）", ErrManagedConfigConflict, in.ExpectedVersion)
 			}
+			// 带着身份令牌的请求说明草稿基于某个已存在的层——层没了即冲突，
+			// 不能因为版本号恰好允许就往新层上写。
+			if in.ExpectedLayerIdentity != "" {
+				return fmt.Errorf("%w: 草稿所基于的层已被删除", ErrManagedConfigConflict)
+			}
 			saved = model.ManagedConfigLayer{
 				Scope:      in.Scope,
 				ScopeRefID: in.ScopeRefID,
 				ScopeName:  scopeName,
 				Config:     normalized,
 				Version:    1,
+				Identity:   newManagedLayerIdentity(),
 				Remark:     strings.TrimSpace(in.Remark),
 				CreatedBy:  operatorID,
 			}
@@ -221,12 +234,23 @@ func (s *ManagedConfigService) SaveLayer(in ManagedLayerInput, operatorID uint) 
 			return fmt.Errorf("%w: 该层当前版本 %d，你基于 %d 保存",
 				ErrManagedConfigConflict, existing.Version, in.ExpectedVersion)
 		}
-		// 条件更新：把版本作为 WHERE 条件，避免两个并发请求都通过上面的读校验。
+		// 身份令牌校验：删层重建后版本会撞回 v1，版本相等不代表是同一个层——
+		// 令牌不符说明草稿基于的是已删的旧层，写入会静默盖掉新层内容。
+		// 老数据（identity 为空）允许空令牌放行，同时在本事务里补上令牌。
+		if existing.Identity != "" && in.ExpectedLayerIdentity != existing.Identity {
+			return fmt.Errorf("%w: 该层已被删除重建，请重新加载后基于新层编辑", ErrManagedConfigConflict)
+		}
+		identity := existing.Identity
+		if identity == "" {
+			identity = newManagedLayerIdentity()
+		}
+		// 条件更新：把版本与身份令牌作为 WHERE 条件，避免两个并发请求都通过上面的读校验。
 		res := tx.Model(&model.ManagedConfigLayer{}).
-			Where("id = ? AND version = ?", existing.ID, existing.Version).
+			Where("id = ? AND version = ? AND identity = ?", existing.ID, existing.Version, existing.Identity).
 			Updates(map[string]any{
 				"config":     normalized,
 				"version":    existing.Version + 1,
+				"identity":   identity,
 				"scope_name": scopeName,
 				"remark":     strings.TrimSpace(in.Remark),
 			})
@@ -239,6 +263,7 @@ func (s *ManagedConfigService) SaveLayer(in ManagedLayerInput, operatorID uint) 
 		saved = existing
 		saved.Config = normalized
 		saved.Version = existing.Version + 1
+		saved.Identity = identity
 		saved.ScopeName = scopeName
 		saved.Remark = strings.TrimSpace(in.Remark)
 		return nil
@@ -251,6 +276,18 @@ func (s *ManagedConfigService) SaveLayer(in ManagedLayerInput, operatorID uint) 
 
 // ErrManagedConfigConflict 层版本被其它写入者抢先更新（乐观并发失败）。
 var ErrManagedConfigConflict = errors.New("该层已被其他保存更新，请重新加载后再改")
+
+// newManagedLayerIdentity 生成层身份令牌：16 字节随机十六进制。
+// 用独立令牌而非自增主键——SQLite 会复用被删行的 rowid，单靠 ID
+// 无法区分「同一层」与「删层重建的版本撞车」。
+func newManagedLayerIdentity() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand 失败极端罕见；退化为纳秒时间戳也不复用。
+		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
 
 // DeleteLayer 删除一层（把该层的增量整体撤掉）。
 func (s *ManagedConfigService) DeleteLayer(scope model.ManagedConfigScope, scopeRefID uint) error {

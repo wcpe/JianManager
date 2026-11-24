@@ -242,6 +242,9 @@ type ManagedConfigLayer struct {
 	Config string `gorm:"type:longtext;not null" json:"config"`
 	// Version 该层的写入代数（每次保存 +1，供界面与审计对账）。
 	Version int `gorm:"not null;default:1" json:"version"`
+	// Identity 层身份令牌：创建时随机生成，删除重建不复用（自增主键会被 SQLite
+	// 复用，单靠 ID 兜不住「删层重建后版本撞回 v1」），与版本一起做乐观并发校验。
+	Identity string `gorm:"type:varchar(64);not null;default:''" json:"identity"`
 	// Remark 本次保存的备注（可选，进审计）。
 	Remark    string    `gorm:"type:varchar(255)" json:"remark,omitempty"`
 	CreatedBy uint      `gorm:"index" json:"createdBy"`

@@ -42,6 +42,7 @@ function layerOf(overrides: Partial<ManagedConfigLayer> = {}): ManagedConfigLaye
     scopeRefId: 0,
     config: '{"collect-period-ticks":10}',
     version: 1,
+    identity: 'layer-identity-1',
     createdBy: 1,
     createdAt: '2026-11-16T10:00:00Z',
     updatedAt: '2026-11-16T10:00:00Z',
@@ -166,6 +167,7 @@ function useLayerEndpoints(options: {
   // 早先这里始终返回同一个固定对象，导致「保存后版本回到 v2」这类断言永远不可能通过，
   // 看起来像实现坏了，实际是假后端不会演进。
   let current = options.layer === undefined ? layerOf() : options.layer
+  let identitySeq = 1
   server.use(
     // 配置键目录：可视化编辑器的数据源。给一份最小但完整的样例（含三种 kind 与一个禁止键），
     // 让「控件按类型渲染」「禁止键只读」这两类断言有据可依。
@@ -217,20 +219,26 @@ function useLayerEndpoints(options: {
     ),
     http.put(API('/managed-configs'), async ({ request }) => {
       if (options.put) return options.put()
-      // 捕获请求体让用例能断言 expectedVersion 与提交的键集；
-      // expectedVersion 与 current 不符时按真实后端回 409，防版本基线回归变弱。
+      // 捕获请求体让用例能断言 expectedVersion / expectedLayerIdentity 与提交的键集；
+      // 与 current 不符时按真实后端回 409，防并发基线回归变弱。
       const body = (await request.json()) as Record<string, unknown>
       options.onPut?.(body)
       const expected = typeof body.expectedVersion === 'number' ? body.expectedVersion : 0
-      if (expected !== (current?.version ?? 0)) {
+      const expectedIdentity = typeof body.expectedLayerIdentity === 'string' ? body.expectedLayerIdentity : ''
+      if (expected !== (current?.version ?? 0) || expectedIdentity !== (current?.identity ?? '')) {
         return HttpResponse.json(
-          { error: 'VERSION_CONFLICT', message: `version mismatch: 期望 ${expected} 实际 ${current?.version ?? 0}` },
+          {
+            error: 'VERSION_CONFLICT',
+            message: `layer mismatch: 期望 v${expected}/${expectedIdentity || '∅'} 实际 v${current?.version ?? 0}/${current?.identity ?? '∅'}`,
+          },
           { status: 409 },
         )
       }
       // 成功路径：配置按提交体落库、服务端版本自增，后续 GET 返回新版本。
+      // 新建（current 为空）发新令牌，更新沿用旧令牌——删除重建不再复用。
       const next = layerOf({
         version: (current?.version ?? 0) + 1,
+        identity: current ? current.identity : `layer-identity-${++identitySeq}`,
         config: typeof body.config === 'string' ? body.config : '{}',
       })
       current = next
@@ -436,6 +444,39 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
     expect(parsed.error).toBeFalsy()
     expect(parsed.value).toEqual({ debug: true })
     expect(puts[puts.length - 1].expectedVersion).toBe(0)
+  })
+
+  it('他人删层重建后旧草稿保存被 409 拦截（版本撞回 v1 靠身份令牌识别）', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const puts: Record<string, unknown>[] = []
+    useLayerEndpoints({ onPut: (body) => puts.push(body) })
+
+    renderWithProviders(<ManagedConfigPage />)
+    await waitFor(() => expect(screen.getByTestId('managed-layer-save')).toBeEnabled())
+    // 造一份绑定在旧层（identity-1 / v1）上的草稿。
+    const ticks = await screen.findByTestId('managed-field-input-collect-period-ticks')
+    fireEvent.change(ticks, { target: { value: '50' } })
+
+    // 模拟他人删层重建：绕过 UI 直接打同一个 mock 后端。
+    // 重建后版本恰好撞回 v1——单靠版本号校验会放行旧草稿，必须靠令牌拦下。
+    await fetch(API('/managed-configs'), { method: 'DELETE' })
+    await fetch(API('/managed-configs'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'global',
+        scopeRefId: 0,
+        config: '{"debug":true}',
+        expectedVersion: 0,
+        expectedLayerIdentity: '',
+      }),
+    })
+
+    // 旧草稿发起保存：版本对上了但令牌不符，后端必须 409，页面显示冲突。
+    await user.click(screen.getByTestId('managed-layer-save'))
+    await waitFor(() => expect(screen.getByTestId('managed-layer-conflict')).toBeInTheDocument())
+    expect(puts[puts.length - 1].expectedLayerIdentity).toBe('layer-identity-1')
   })
 
   it('影响预演展示受影响台数、倍率与危险档键', async () => {
