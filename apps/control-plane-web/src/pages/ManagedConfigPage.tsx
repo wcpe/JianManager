@@ -318,8 +318,7 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
   // `layerReady`：层数据到达前不能保存。此时父级 `editorKey` 仍含 version=0，
   // 数据一到就会重挂本组件；若用户恰在此刻点击并拿到后端报错，`saveError` 会随重挂
   // 一起消失，表现为「点了保存什么都没有」。与其让报错凭空蒸发，不如先把按钮关掉。
-  const canSave =
-    layerReady && !saveMut.isPending && !blockedByValidate && !blockedByForbidden && yamlValid && !draftParseError
+  // 注：canSave 移到 fieldValidations 之后定义——本地边界错误也要拦保存。
 
   /**
    * 逐字段校验态：把「后端逐键拒绝」与「本地边界检查」合并成本字段的状态。
@@ -362,6 +361,18 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
     }
     return out
   }, [catalog, draftDoc, errors])
+
+  // 任何字段处于错误态（本地越界或后端逐键拒绝）都不允许整层保存：
+  // 后端不管数值边界，这里不拦就会把界面已标红的值静默写库。
+  const hasFieldErrors = Object.values(fieldValidations).some((v) => v.state === 'error')
+  const canSave =
+    layerReady &&
+    !saveMut.isPending &&
+    !blockedByValidate &&
+    !blockedByForbidden &&
+    yamlValid &&
+    !draftParseError &&
+    !hasFieldErrors
 
   /**
    * 有未落盘改动的键。

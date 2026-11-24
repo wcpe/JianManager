@@ -506,7 +506,9 @@ func (s *ManagedMatrixService) Summary(filter ManagedMatrixFilter) (*ManagedMatr
 	// 汇总不带分页，也不受一致性/连接筛选影响（它是「这一屏能筛出什么」的引导）。
 	//
 	// 但**必须**受节点/关键字约束：否则运营盯着某个节点，汇总却在报全平台数字。
-	scopeFilter := ManagedMatrixFilter{NodeID: filter.NodeID, Keyword: filter.Keyword}
+	// 汇总也必须带实例可见性范围：只传 NodeID/Keyword 会让受限用户看到
+	// 全局连接与一致性计数，等于泄露其他组的实例状态统计。
+	scopeFilter := ManagedMatrixFilter{NodeID: filter.NodeID, Keyword: filter.Keyword, AccessibleInstanceIDs: filter.AccessibleInstanceIDs}
 	base := s.buildMatrixBase(scopeFilter)
 	if err := base.Count(&out.Total).Error; err != nil {
 		return nil, fmt.Errorf("统计对账矩阵失败: %w", err)
