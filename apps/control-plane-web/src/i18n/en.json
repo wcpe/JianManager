@@ -7084,6 +7084,7 @@
       "observed": "Observed version",
       "tracedTitle": "Per-key sources",
       "tracedEmpty": "No per-key source available (this instance has never received a push).",
+      "tracedNote": "Values come from the frozen snapshot of the last actual push; sources are merged live from current layers and may differ if layers changed since.",
       "colKey": "Key",
       "colValue": "Value",
       "colSource": "Source",

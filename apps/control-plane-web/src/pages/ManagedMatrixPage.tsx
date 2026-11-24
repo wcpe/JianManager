@@ -112,6 +112,7 @@ function InstanceDetailSheet({ instanceId, onClose }: { instanceId: number | nul
             {/* 逐键来源：回答「这个值是谁定的、哪一版定的」。 */}
             <div>
               <p className="mb-1 text-xs font-medium">{t('managedMatrix.detail.tracedTitle')}</p>
+              <p className="mb-1 text-xs text-muted-foreground">{t('managedMatrix.detail.tracedNote')}</p>
               {traced.length === 0 ? (
                 <p className="text-xs text-muted-foreground">{t('managedMatrix.detail.tracedEmpty')}</p>
               ) : (

@@ -402,10 +402,19 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
     setCommittingKey(key)
     setSaveError('')
     try {
-      // PUT 语义是整层替换：只发单键会把层里其他键全部抹掉。
-      // 必须携带当前草稿的完整扁平结果，让“提交此键”与层内其余键共存。
+      // PUT 语义是整层替换：只发单键会把层里其他键全部抹掉，发整份草稿又会
+      // 把其它键的未落盘改动一并提交——两种都不是「只写这个键」。
+      // 正确口径：服务端已存层值 + 这个键的草稿值。
       const flatDraft = flattenManagedConfig(draftDoc)
-      const next = flatDraft
+      const savedFlat = flattenManagedConfig(parseLayerConfig(layer?.config))
+      const next: Record<string, unknown> = { ...savedFlat }
+      // 草稿里删掉该键＝提交「删除这个键」：写入 undefined 会被 JSON 序列化丢成缺省，
+      // 必须显式 delete，否则删除操作会被静默吞掉。
+      if (flatDraft[key] === undefined) {
+        delete next[key]
+      } else {
+        next[key] = flatDraft[key]
+      }
       const saved = await saveMut.mutateAsync({
         scope,
         scopeRefId,

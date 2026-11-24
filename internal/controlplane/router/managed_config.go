@@ -220,7 +220,7 @@ func (h *ManagedConfigHandler) EstimateImpact(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "作用域不存在"})
 		return
 	}
-	impact, err := h.configSvc.EstimateImpact(req.Scope, req.ScopeRefID, values)
+	impact, err := h.configSvc.EstimateImpact(req.Scope, req.ScopeRefID, values, h.accessibleScopeOrNil(c))
 	if err != nil {
 		h.respondConfigError(c, err)
 		return

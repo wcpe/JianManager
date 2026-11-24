@@ -7084,6 +7084,7 @@
       "observed": "观测版本",
       "tracedTitle": "逐键来源",
       "tracedEmpty": "没有可展示的逐键来源（该实例尚未收到过一次下发）。",
+      "tracedNote": "值取自最近一次实际下发的冻结快照；来源按当前各层实时合并，若层在推送后改过可能与快照不一致。",
       "colKey": "键",
       "colValue": "值",
       "colSource": "来源",

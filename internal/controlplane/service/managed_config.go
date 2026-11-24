@@ -521,13 +521,28 @@ const (
 //
 // 倍率口径：`默认周期 / 生效周期`。周期减半 → 倍率 2（采集频率翻倍 → 指标量翻倍）。
 // 周期有下限（1 tick）：除零会让倍率变成 +Inf，界面显示成「无穷倍」比不显示更糟。
-func (s *ManagedConfigService) EstimateImpact(scope model.ManagedConfigScope, scopeRefID uint, values map[string]any) (*ManagedImpact, error) {
+func (s *ManagedConfigService) EstimateImpact(scope model.ManagedConfigScope, scopeRefID uint, values map[string]any, accessible []uint) (*ManagedImpact, error) {
 	if !model.ValidManagedConfigScope(scope) {
 		return nil, ErrManagedScopeInvalid
 	}
 	insts, err := s.instancesInScope(scope, scopeRefID)
 	if err != nil {
 		return nil, err
+	}
+	// accessible 为 nil 表示不受限；非 nil 时必须收敛到调用方可见的实例——
+	// 否则计数与「代表实例」的合并周期都会泄露他组实例的配置信息。
+	if accessible != nil {
+		allowed := make(map[uint]struct{}, len(accessible))
+		for _, id := range accessible {
+			allowed[id] = struct{}{}
+		}
+		visible := insts[:0]
+		for _, inst := range insts {
+			if _, ok := allowed[inst.ID]; ok {
+				visible = append(visible, inst)
+			}
+		}
+		insts = visible
 	}
 	out := &ManagedImpact{
 		TotalInstances:              len(insts),

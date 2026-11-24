@@ -167,10 +167,18 @@ func ManagedConfigTierOf(key string) (ManagedConfigTier, bool) {
 	}
 	// 动态子键继承最近已登记祖先的档位：`alert.rules` 登记为危险档后，
 	// `alert.rules.<规则名>.threshold` 这类动态规则名子键若按“未收录”判禁，
-	// 规则编辑器就整组不可用。未命中任何祖先仍 fail-close 返回未收录。
+	// 规则编辑器就整组不可用。
+	//
+	// 但继承只对「登记为 object 的动态容器」开放：若换成「任意已登记祖先
+	// 都可继承」，`debug.enabled` 这类未登记子键会借 `debug` 前缀混入放行，
+	// 等于把逐键白名单降级成前缀白名单。普通标量键未登记仍 fail-close。
 	segments := strings.Split(key, ".")
 	for i := len(segments) - 1; i >= 1; i-- {
 		prefix := strings.Join(segments[:i], ".")
+		meta, isObject := managedKeyCatalog[prefix]
+		if !isObject || meta.Kind != ManagedKeyObject {
+			continue
+		}
 		if tier, ok := managedConfigTiers[prefix]; ok {
 			return tier, true
 		}

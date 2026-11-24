@@ -397,16 +397,16 @@ func TestEstimateImpact_MetricMultiplier(t *testing.T) {
 		wantTicks  int
 		wantFactor float64
 	}{
-		{"默认周期", map[string]any{}, 20, 1},
-		{"周期减半→两倍", map[string]any{"collect-period-ticks": 10}, 10, 2},
-		{"周期加倍→一半", map[string]any{"collect-period-ticks": 40}, 40, 0.5},
-		{"零按默认（不除零）", map[string]any{"collect-period-ticks": 0}, 20, 1},
-		{"负数按默认", map[string]any{"collect-period-ticks": -5}, 20, 1},
-		{"字符串形式可识别", map[string]any{"collect-period-ticks": "5"}, 5, 4},
+		{"默认周期", map[string]any{}, 100, 1},
+		{"周期提速十倍→十倍", map[string]any{"collect-period-ticks": 10}, 10, 10},
+		{"周期降速四成→二点五倍", map[string]any{"collect-period-ticks": 40}, 40, 2.5},
+		{"零按默认（不除零）", map[string]any{"collect-period-ticks": 0}, 100, 1},
+		{"负数按默认", map[string]any{"collect-period-ticks": -5}, 100, 1},
+		{"字符串形式可识别", map[string]any{"collect-period-ticks": "5"}, 5, 20},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			impact, err := svc.EstimateImpact(model.ManagedScopeNode, node.ID, tc.values)
+			impact, err := svc.EstimateImpact(model.ManagedScopeNode, node.ID, tc.values, nil)
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantTicks, impact.EffectiveCollectPeriodTicks)
 			assert.Equal(t, tc.wantFactor, impact.MetricMultiplier)
@@ -416,10 +416,10 @@ func TestEstimateImpact_MetricMultiplier(t *testing.T) {
 	}
 
 	// 极激进周期必须被下限钳住，不能出现 Inf/NaN。
-	impact, err := svc.EstimateImpact(model.ManagedScopeNode, node.ID, map[string]any{"collect-period-ticks": 0.001})
+	impact, err := svc.EstimateImpact(model.ManagedScopeNode, node.ID, map[string]any{"collect-period-ticks": 0.001}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, minCollectPeriodTicks, impact.EffectiveCollectPeriodTicks)
-	assert.Equal(t, float64(defaultCollectPeriodTicks), impact.MetricMultiplier, "下限 1 tick → 倍率封顶 20")
+	assert.Equal(t, float64(defaultCollectPeriodTicks), impact.MetricMultiplier, "下限 1 tick → 倍率封顶 100")
 }
 
 // TestEstimateImpact_ForbiddenKeyReported 验证影响预估会把越界键报出来。
@@ -427,7 +427,7 @@ func TestEstimateImpact_ForbiddenKeyReported(t *testing.T) {
 	db := newManagedTestDB(t)
 	svc := NewManagedConfigService(db)
 
-	impact, err := svc.EstimateImpact(model.ManagedScopeGlobal, 0, map[string]any{"metrics.port": 9090})
+	impact, err := svc.EstimateImpact(model.ManagedScopeGlobal, 0, map[string]any{"metrics.port": 9090}, nil)
 	require.NoError(t, err)
 	assert.Contains(t, impact.ForbiddenKeys, "metrics.port")
 	assert.NotEmpty(t, impact.Notes)

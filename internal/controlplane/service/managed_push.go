@@ -1040,9 +1040,16 @@ func (s *ManagedPushService) Rollback(in ManagedRollbackInput, operatorID uint) 
 				BatchNo:      1,
 				State:        model.ManagedPushTargetPending,
 				// 带上源目标**当时实际发出去**的载荷：回滚要重推的就是它。
-				// 空值说明该目标从未真正下发过（pending/skipped），此时回滚按现场重新合并，
-				// 与「没推过的东西无所谓回到哪个状态」一致。
 				PushedPayloadJSON: src.PushedPayloadJSON,
+			}
+			if src.PushedPayloadJSON == "" {
+				// 源目标从未真正下发过（pending/skipped，如合并后无可下发内容）。
+				// 对它「回滚」语义上是什么都不做——若放任走现场重新合并，
+				// 会把**当前层**配置推给这台从没收到过推送的机器，方向反了。
+				target.State = model.ManagedPushTargetSkipped
+				target.ErrorKind = model.ManagedTargetCodeNothingToPush
+				target.Error = "源会话未对该实例实际下发，回滚无内容可重放"
+				target.FinishedAt = &now
 			}
 			if terr := tx.Create(&target).Error; terr != nil {
 				return fmt.Errorf("创建回滚目标失败: %w", terr)
