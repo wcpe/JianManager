@@ -236,8 +236,8 @@ func (s *ManagedConfigService) SaveLayer(in ManagedLayerInput, operatorID uint) 
 		}
 		// 身份令牌校验：删层重建后版本会撞回 v1，版本相等不代表是同一个层——
 		// 令牌不符说明草稿基于的是已删的旧层，写入会静默盖掉新层内容。
-		// 老数据（identity 为空）允许空令牌放行，同时在本事务里补上令牌。
-		if existing.Identity != "" && in.ExpectedLayerIdentity != existing.Identity {
+		// 老数据（identity 为空）与回传空串的网页客户端天然对上；对不上即拒。
+		if in.ExpectedLayerIdentity != existing.Identity {
 			return fmt.Errorf("%w: 该层已被删除重建，请重新加载后基于新层编辑", ErrManagedConfigConflict)
 		}
 		identity := existing.Identity

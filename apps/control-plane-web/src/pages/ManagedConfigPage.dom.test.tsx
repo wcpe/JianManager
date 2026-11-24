@@ -460,8 +460,9 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
 
     // 模拟他人删层重建：绕过 UI 直接打同一个 mock 后端。
     // 重建后版本恰好撞回 v1——单靠版本号校验会放行旧草稿，必须靠令牌拦下。
-    await fetch(API('/managed-configs'), { method: 'DELETE' })
-    await fetch(API('/managed-configs'), {
+    const delResp = await fetch(API('/managed-configs'), { method: 'DELETE' })
+    expect(delResp.ok).toBe(true)
+    const recreateResp = await fetch(API('/managed-configs'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -472,6 +473,11 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
         expectedLayerIdentity: '',
       }),
     })
+    // 先断言重建成功：版本回到 v1、令牌已换——否则后边的 409 断言没有区分度。
+    expect(recreateResp.ok).toBe(true)
+    const recreated = (await recreateResp.json()) as ManagedConfigLayer
+    expect(recreated.version).toBe(1)
+    expect(recreated.identity).not.toBe('layer-identity-1')
 
     // 旧草稿发起保存：版本对上了但令牌不符，后端必须 409，页面显示冲突。
     await user.click(screen.getByTestId('managed-layer-save'))

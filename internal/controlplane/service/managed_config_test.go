@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -334,6 +335,53 @@ func TestSaveLayer_IdentitySurvivesRecreate(t *testing.T) {
 	}, 1)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrManagedConfigConflict)
+}
+
+// TestSaveLayer_IdentityBackfillPersists 老数据迁移验收：
+// 已有层（identity 为空）首次保存时补发令牌，且令牌经多次重启保持不变。
+func TestSaveLayer_IdentityBackfillPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed-identity.db")
+	openDB := func() *gorm.DB {
+		db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+		require.NoError(t, err)
+		require.NoError(t, db.AutoMigrate(&model.ManagedConfigLayer{}))
+		return db
+	}
+	closeDB := func(db *gorm.DB) {
+		if sqlDB, err := db.DB(); err == nil {
+			require.NoError(t, sqlDB.Close())
+		}
+	}
+
+	// 老库：直接落一条没有 identity 的历史层（模拟升级前的数据）。
+	db := openDB()
+	require.NoError(t, db.Create(&model.ManagedConfigLayer{
+		Scope: model.ManagedScopeGlobal, Config: `{"debug":true}`, Version: 3,
+	}).Error)
+	closeDB(db)
+
+	// 第一次重启：对老层发起首次保存，令牌应被回补并返回给调用方。
+	db = openDB()
+	saved, err := NewManagedConfigService(db).SaveLayer(ManagedLayerInput{
+		Scope: model.ManagedScopeGlobal, Config: `{"debug":false}`,
+		ExpectedVersion: 3,
+	}, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, saved.Identity)
+	closeDB(db)
+
+	// 第二次重启：令牌必须从库里读回同一个值，再次保存也不变。
+	db = openDB()
+	var stored model.ManagedConfigLayer
+	require.NoError(t, db.First(&stored, "scope = ? AND scope_ref_id = ?", model.ManagedScopeGlobal, 0).Error)
+	assert.Equal(t, saved.Identity, stored.Identity)
+	saved2, err := NewManagedConfigService(db).SaveLayer(ManagedLayerInput{
+		Scope: model.ManagedScopeGlobal, Config: `{"debug":true}`,
+		ExpectedVersion: 4, ExpectedLayerIdentity: saved.Identity,
+	}, 1)
+	require.NoError(t, err)
+	assert.Equal(t, saved.Identity, saved2.Identity)
+	closeDB(db)
 }
 
 // TestSaveLayer_ScopeRefValidation 验证作用域与引用的搭配校验。
