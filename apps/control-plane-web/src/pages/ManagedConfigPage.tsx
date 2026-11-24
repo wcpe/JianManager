@@ -264,8 +264,16 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
   const [syncedLayer, setSyncedLayer] = useState(layer)
   if (layer !== syncedLayer) {
     setSyncedLayer(layer)
-    setCommitted(flattenManagedConfig(parseLayerConfig(layer?.config)))
-    setServerVersion(layer?.version ?? 0)
+    // 草稿绑定在生成它的那版基线上：有草稿时又收到「非首次」的真值变化
+    //（他人写入 / 后台重取），不能推进 committed 与 serverVersion——
+    // 推进了，整层保存就会拿着新版本号把草稿整包静默盖掉别人的改动。
+    // 保持旧基线，让后端 409 触发「重新加载」。自己的保存不经过这里
+    //（保存成功时已手动推进快照与版本）。syncedLayer 为 null 的首次
+    // 载入不受限：没有旧基线可保，必须先对齐才能提交。
+    if (syncedLayer === null || editedText === null) {
+      setCommitted(flattenManagedConfig(parseLayerConfig(layer?.config)))
+      setServerVersion(layer?.version ?? 0)
+    }
   }
 
   const validateMut = useValidateManagedConfig()
@@ -1574,7 +1582,15 @@ export default function ManagedConfigPage({ defaultTab = 'layers' }: { defaultTa
                 {
                   onSuccess: () => {
                     setDeleteOpen(false)
-                    void layerQuery.refetch()
+                    // 层详情回写「未配置」并重挂编辑器：若只重取，
+                    // 已编辑过的草稿会留在版本 0 的编辑器里，整层保存
+                    // 会把刚删掉的键整包写回去。
+                    qc.setQueryData(
+                      ['managed-configs', 'layer', scope, targetId],
+                      { found: false } as ManagedLayerResult,
+                    )
+                    void layersQuery.refetch()
+                    setReloadNonce((n) => n + 1)
                   },
                 },
               )

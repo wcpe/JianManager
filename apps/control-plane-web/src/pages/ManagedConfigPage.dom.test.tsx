@@ -6,6 +6,7 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
+import { validateManagedYaml } from '@/lib/managed-config/managed-yaml'
 import ManagedConfigPage from './ManagedConfigPage'
 import {
   releaseGuard,
@@ -158,6 +159,8 @@ function useLayerEndpoints(options: {
   impact?: () => Response
   /** 下发会话列表；不传给一条默认会话，避免页面挂载时的列表请求变 unhandled。 */
   pushes?: ManagedPushSession[]
+  /** 捕获每次 PUT 的请求体：断言 expectedVersion 与提交键集，防回归变弱。 */
+  onPut?: (body: Record<string, unknown>) => void
 } = {}) {
   // `current` 模拟服务端真实状态：保存成功后版本要真的递增，页面重新取数才看得到 v2。
   // 早先这里始终返回同一个固定对象，导致「保存后版本回到 v2」这类断言永远不可能通过，
@@ -212,12 +215,31 @@ function useLayerEndpoints(options: {
             notes: ['采集周期 10 tick → 指标量约为默认的 2.00 倍'],
           }),
     ),
-    http.put(API('/managed-configs'), () => {
+    http.put(API('/managed-configs'), async ({ request }) => {
       if (options.put) return options.put()
-      // 成功路径：服务端版本自增，后续 GET 才会返回新版本。
-      const next = layerOf({ version: (current?.version ?? 0) + 1 })
+      // 捕获请求体让用例能断言 expectedVersion 与提交的键集；
+      // expectedVersion 与 current 不符时按真实后端回 409，防版本基线回归变弱。
+      const body = (await request.json()) as Record<string, unknown>
+      options.onPut?.(body)
+      const expected = typeof body.expectedVersion === 'number' ? body.expectedVersion : 0
+      if (expected !== (current?.version ?? 0)) {
+        return HttpResponse.json(
+          { error: 'VERSION_CONFLICT', message: `version mismatch: 期望 ${expected} 实际 ${current?.version ?? 0}` },
+          { status: 409 },
+        )
+      }
+      // 成功路径：配置按提交体落库、服务端版本自增，后续 GET 返回新版本。
+      const next = layerOf({
+        version: (current?.version ?? 0) + 1,
+        config: typeof body.config === 'string' ? body.config : '{}',
+      })
       current = next
       return HttpResponse.json(next)
+    }),
+    // 删除层：服务端层对象消失，后续 GET 回到 404。
+    http.delete(API('/managed-configs'), () => {
+      current = null
+      return HttpResponse.json({ ok: true })
     }),
     // 页面挂载即拉取下发会话列表（「下发会话」页签的数据源）。
     // 测试只关心配置层时也必须给出这条，否则 MSW 会报 unhandled request 并中断后续交互。
@@ -326,7 +348,8 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
     // 该层尚未配置：GET 一律 404，首个 PUT 才让它变成 found。这正是旧实现踩过的坑——
     // 404 会被 query 缓存成「未配置」，首写后若不回写，删除按钮不出现、版本停在 0，
     // 下一次写入拿 expectedVersion=0 撞 409。
-    useLayerEndpoints({ layer: null })
+    const puts: Record<string, unknown>[] = []
+    useLayerEndpoints({ layer: null, onPut: (body) => puts.push(body) })
 
     renderWithProviders(<ManagedConfigPage />)
     // found=false 也是「已就绪」：等保存键可用再动，未就绪时被禁用。
@@ -348,6 +371,13 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
     await waitFor(() => expect(screen.getByTestId('managed-layer-delete')).toBeInTheDocument())
     expect(screen.getByTestId('managed-layer-version').textContent ?? '').toContain('v1')
 
+    // 首写请求体：expectedVersion=0（该层不存在），且只提交 ticks 这一个键——
+    // debug 的草稿不得被一并带走。
+    expect(puts).toHaveLength(1)
+    expect(puts[0].expectedVersion).toBe(0)
+    const firstConfig = JSON.parse(puts[0].config as string) as Record<string, unknown>
+    expect(firstConfig).toEqual({ 'collect-period-ticks': 50 })
+
     // 编辑器不重挂：debug 的草稿原样保留，仍记为未落盘。
     const debugSwitch = screen.getByTestId('managed-field-input-debug')
     expect(debugSwitch).toHaveAttribute('aria-checked', 'true')
@@ -360,6 +390,52 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
       expect(screen.getByTestId('managed-layer-version').textContent ?? '').toContain('v2')
     })
     expect(screen.queryByTestId('managed-layer-conflict')).not.toBeInTheDocument()
+    // 第二写提交「已存层全量 + debug」（commitKey 的口径是基线快照+该键），
+    // 基线是首写后的 v1。
+    expect(puts).toHaveLength(2)
+    expect(puts[1].expectedVersion).toBe(1)
+    const secondConfig = JSON.parse(puts[1].config as string) as Record<string, unknown>
+    expect(secondConfig).toEqual({ 'collect-period-ticks': 50, debug: true })
+  })
+
+  it('删除已编辑的层后整层保存只写新设的键，不把已删键整包写回', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const puts: Record<string, unknown>[] = []
+    useLayerEndpoints({ onPut: (body) => puts.push(body) })
+
+    renderWithProviders(<ManagedConfigPage />)
+    await waitFor(() => expect(screen.getByTestId('managed-layer-save')).toBeEnabled())
+
+    // 先改个键（造一份带草稿的编辑器），然后删除该层。
+    const ticks = await screen.findByTestId('managed-field-input-collect-period-ticks')
+    fireEvent.change(ticks, { target: { value: '50' } })
+    fireEvent.click(screen.getByTestId('managed-layer-delete'))
+    // DangerConfirm 二次确认。
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: '删除该层' }))
+
+    // 删除成功后编辑器应被重置：版本归零、不再有删除按钮、草稿计数清空。
+    await waitFor(() => {
+      expect(screen.queryByTestId('managed-layer-delete')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('managed-layer-dirty-count')).not.toBeInTheDocument()
+
+    // 只新设一个键再整层保存：提交体必须只含 debug，
+    // 原层的 collect-period-ticks 与刚删掉的草稿都不准被写回。
+    fireEvent.click(await screen.findByTestId('managed-field-input-debug'))
+    await waitFor(() => expect(screen.getByTestId('managed-layer-save')).toBeEnabled())
+    fireEvent.click(screen.getByTestId('managed-layer-save'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('managed-layer-version').textContent ?? '').toContain('v1')
+    })
+    // 整层保存提交的是带注释的 YAML 草稿：用页面同款解析器还原成对象再断言，
+    // 注释里的键名不算（只断言真生效的键）。
+    const parsed = validateManagedYaml(puts[puts.length - 1].config as string)
+    expect(parsed.error).toBeFalsy()
+    expect(parsed.value).toEqual({ debug: true })
+    expect(puts[puts.length - 1].expectedVersion).toBe(0)
   })
 
   it('影响预演展示受影响台数、倍率与危险档键', async () => {
