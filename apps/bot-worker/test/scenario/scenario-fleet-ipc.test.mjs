@@ -147,7 +147,10 @@ test('Mineflayer 场景适配只绑定固定监听器，移动目标不重复且
   const bot = harness.bots[0]
   const listenerCount = bot.eventNames().reduce((total, name) => total + bot.listenerCount(name), 0)
   bot.emit('spawn')
-  for (let index = 0; index < 20 && bot.pathfinderGoals.length === 0; index++) await harness.flush()
+  // move 目标的首次下发要等待 mineflayer-pathfinder 的动态 import()，用墙钟截止代替固定 tick 数，
+  // 避免套件并行跑满 CPU 时模块加载超过 20 次 flush 预算而误挂。
+  const pathfinderDeadline = Date.now() + 10_000
+  while (bot.pathfinderGoals.length === 0 && Date.now() < pathfinderDeadline) await harness.flush()
   assert.equal(bot.pathfinderGoals.length, 1)
 
   for (let index = 0; index < 1_000; index++) await harness.tick(1_000 + index)
