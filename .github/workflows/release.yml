@@ -404,10 +404,13 @@ jobs:
           for f in jmctl-linux-amd64 jmctl-windows-amd64.exe manifest.json; do
             test -s "internal/controlplane/embed/jmctl/$f" || { echo "缺少内嵌产物 $f"; exit 1; }
           done
-          # 安装脚本依赖 manifest 的 file/sha256 字段做版本比对与校验,两条目都须在。
-          grep -q 'jmctl-linux-amd64' internal/controlplane/embed/jmctl/manifest.json
-          grep -q 'jmctl-windows-amd64.exe' internal/controlplane/embed/jmctl/manifest.json
-          grep -q '"sha256"' internal/controlplane/embed/jmctl/manifest.json
+          # 安装脚本依赖 manifest 的 file/sha256 字段做版本比对与校验——
+          # 逐条目断言每个 file 后随自己的 sha256,缺一则直接失败。
+          for name in jmctl-linux-amd64 jmctl-windows-amd64.exe; do
+            grep -A 4 "\"file\": \"$name\"" internal/controlplane/embed/jmctl/manifest.json \
+              | grep -q '"sha256": "[0-9a-f]\{64\}"' \
+              || { echo "manifest 中 $name 缺 sha256"; exit 1; }
+          done
 
       - name: 交叉编译 control-plane（full）与 worker
         shell: bash

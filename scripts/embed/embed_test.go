@@ -2,6 +2,11 @@ package embed
 
 import (
 	"bytes"
+	"fmt"
+	"os/exec"
+	"regexp"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +49,48 @@ func TestInstallWorkerScript_KillModeProcess(t *testing.T) {
 		t.Fatal("KillMode=process 写在 [Service] 段外（写在段外 systemd 不生效）")
 	}
 	t.Fatal("install-worker.sh 缺少 KillMode=process（daemon wrapper 需逃过 systemd cgroup 连坐）")
+}
+
+// TestInstallWorkerScript_JmctlShaExtract 运行脚本里真实的 want_sha 提取管线,
+// 验证它能从 CP 下发的紧凑 manifest(c.JSON 无空格输出)逐条目取到 sha256。
+//
+// 回归对象:旧管线用 awk 假设美化格式 `"file": "x"`,对紧凑 JSON 输出 want_sha 恒空,
+// 导致安装脚本静默跳过 sha256 校验与同版本比对。
+func TestInstallWorkerScript_JmctlShaExtract(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("提取管线依赖 POSIX sh/tr/grep,Windows 无对应执行环境")
+	}
+	// 从内嵌脚本里抽出整段 want_sha="$(...)" 赋值,原样执行——
+	// 测的是脚本真实管线而非其复制品,改坏立即被测出。
+	scriptBody := InstallWorkerScriptSh()
+	m := regexp.MustCompile(`(?s)want_sha="\$\(.*?\)"`).Find(scriptBody)
+	if len(m) == 0 {
+		t.Fatal("install-worker.sh 里找不到 want_sha 提取管线")
+	}
+	const shaLinux = "aabbccddee001122334455667788990011223344556677889900112233445566"
+	const shaWin = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100"
+	manifest := fmt.Sprintf(
+		`{"version":"v0","assets":[`+
+			`{"os":"linux","arch":"amd64","file":"jmctl-linux-amd64","sha256":"%s","size":1},`+
+			`{"os":"windows","arch":"amd64","file":"jmctl-windows-amd64.exe","sha256":"%s","size":1}]}`,
+		shaLinux, shaWin)
+	for _, tc := range []struct {
+		file, want string
+	}{
+		{"jmctl-linux-amd64", shaLinux},
+		{"jmctl-windows-amd64.exe", shaWin},
+		{"jmctl-darwin-arm64", ""}, // 无此条目:取空而非串台
+	} {
+		snippet := fmt.Sprintf("manifest='%s'; jmctl_file='%s'; %s; printf '%%s' \"$want_sha\"",
+			manifest, tc.file, m)
+		out, err := exec.Command("sh", "-c", snippet).Output()
+		if err != nil {
+			t.Fatalf("%s: 管线执行失败: %v", tc.file, err)
+		}
+		if got := strings.TrimSpace(string(out)); got != tc.want {
+			t.Fatalf("%s: want_sha = %q,期望 %q", tc.file, got, tc.want)
+		}
+	}
 }
 
 // hasConfigLine 报告块里是否存在以 prefix 开头的**配置行**（跳过空行与 # 注释行）。
