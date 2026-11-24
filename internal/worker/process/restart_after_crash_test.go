@@ -80,7 +80,6 @@ func TestManager_MarkStrategyState_AllowsRestart(t *testing.T) {
 // 即撞 Paper SessionLock$ExceptionWorldConflict（真机复现）。运行中 Restart 必须发一次 Stop、零 Kill。
 func TestManager_Restart_GracefulStopsNotKills(t *testing.T) {
 	m := NewManager(t.TempDir())
-	t.Cleanup(func() { m.waitInstanceIndexIdle(3 * time.Second) })
 	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "restart-graceful"
 	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
@@ -104,7 +103,6 @@ func TestManager_Restart_GracefulStopsNotKills(t *testing.T) {
 // TestManager_Restart_StoppedInstanceJustStarts 已停止/崩溃实例 Restart 直接启动、不误发 Kill/Stop。
 func TestManager_Restart_StoppedInstanceJustStarts(t *testing.T) {
 	m := NewManager(t.TempDir())
-	t.Cleanup(func() { m.waitInstanceIndexIdle(3 * time.Second) })
 	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "restart-stopped"
 	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
@@ -163,7 +161,6 @@ func TestManager_Start_PreservesCrashDuringStartWindow(t *testing.T) {
 // 旧代讣告忽略，重启收尾记账 RUNNING。
 func TestManager_Restart_IgnoresStalePriorStopDuringStartWindow(t *testing.T) {
 	m := NewManager(t.TempDir())
-	t.Cleanup(func() { m.waitInstanceIndexIdle(3 * time.Second) })
 	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "restart-stale-stop"
 	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
@@ -195,7 +192,6 @@ func quickCrashCmd() string { return "exit 1" }
 // 启动窗口竞态（崩溃抢在 Start 收尾前）的根因回归见 TestManager_Start_PreservesCrashDuringStartWindow。
 func TestManager_RestartAfterCrash(t *testing.T) {
 	m := NewManager(t.TempDir())
-	t.Cleanup(func() { m.waitInstanceIndexIdle(3 * time.Second) })
 	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "crash-restart"
 	// AutoRestart=false：只验证「崩溃后可手动重启」，排除自动重启对断言的干扰。
