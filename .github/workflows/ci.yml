@@ -491,6 +491,11 @@ jobs:
       - name: 校验发布工作流契约（触发条件 / runner / 版本来源）
         run: node --test scripts/release-metadata.test.mjs
 
+      # gen-licenses 契约测试:SHIPPED_TARGETS 必须覆盖 release.yml 实际发货
+      # 矩阵(全量包 × ./apps/jm),矩阵漂移不更新清单脚本会漏/多算依赖许可。
+      - name: 校验许可清单发行目标（gen-licenses 对齐 release 矩阵）
+        run: node --test scripts/gen-licenses.test.mjs
+
       # cp-lifecycle.sh 的契约测试（2026-10-20 接入）：该脚本的 awk 转义曾把 comm
       # 字段解析错（2026-10-12 生产实测：CP 拒绝 stop/start），而行为测试发现不了这类
       # 缺陷——所以测试直接检查源码形态。但它此前**没有任何自动执行路径**（不在任何

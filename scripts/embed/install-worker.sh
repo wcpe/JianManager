@@ -265,8 +265,11 @@ install_jmctl() {
         manifest="$(wget -qO- --timeout=15 "$cp_origin/downloads/jmctl-manifest.json" 2>/dev/null || true)"
     fi
     if [ -n "$manifest" ]; then
-        want_sha="$(printf '%s\n' "$manifest" | awk -v f="\"file\": \"$jmctl_file\"" '
-            $0 ~ f { hit=1 } hit && /"sha256"/ { gsub(/[",]/, "", $2); print $2; exit }')"
+        # CP 经 c.JSON 输出紧凑 JSON("file":"x" 无空格),先去空白再按对象截取 sha256,
+        # 同时兼容紧凑与美化两种输出;字段序 file 在 sha256 前(见 embed-worker-manifest.go)。
+        want_sha="$(printf '%s' "$manifest" | tr -d '[:space:]' \
+            | grep -o "\"file\":\"$jmctl_file\"[^}]*\"sha256\":\"[0-9a-fA-F]\{64\}\"" \
+            | grep -o "[0-9a-fA-F]\{64\}" | head -n 1)"
     fi
     if [ -n "$want_sha" ] && [ -f "$jmctl_path" ]; then
         have_sha="$(sha256sum "$jmctl_path" 2>/dev/null | awk '{print $1}')"
