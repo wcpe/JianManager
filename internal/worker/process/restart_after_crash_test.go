@@ -50,6 +50,7 @@ func (f *fakeStrategy) EnableAutoRestart() error { f.rearmCount++; return nil }
 // 策略异步崩溃经 markStrategyState 同步后，Manager 记账须转为 CRASHED 且可重启（复用已注入策略）。
 func TestManager_MarkStrategyState_AllowsRestart(t *testing.T) {
 	m := NewManager(t.TempDir())
+	t.Cleanup(func() { m.waitInstanceIndexIdle(3 * time.Second) })
 	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "fake-crash"
 	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
@@ -130,6 +131,7 @@ func TestManager_Restart_StoppedInstanceJustStarts(t *testing.T) {
 // 把负载敏感的时序竞态固化为确定性用例（修复前必失败、修复后必通过）。
 func TestManager_Start_PreservesCrashDuringStartWindow(t *testing.T) {
 	m := NewManager(t.TempDir())
+	t.Cleanup(func() { m.waitInstanceIndexIdle(3 * time.Second) })
 	m.SetMemGuard(MemGuardConfig{Disabled: true})
 	uuid := "crash-in-start-window"
 	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
