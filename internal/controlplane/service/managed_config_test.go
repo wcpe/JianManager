@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -337,8 +338,27 @@ func TestSaveLayer_IdentitySurvivesRecreate(t *testing.T) {
 	assert.ErrorIs(t, err, ErrManagedConfigConflict)
 }
 
+// legacyManagedConfigLayer 复刻「identity 列还不存在」年代的旧模型，
+// 让 AutoMigrate 建出与当时一致的老表（含索引），模拟真实升级路径：
+// 只建新模型表会把「AutoMigrate 补列」这一跳直接跳过去。
+type legacyManagedConfigLayer struct {
+	ID         uint                     `gorm:"primaryKey"`
+	Scope      model.ManagedConfigScope `gorm:"type:varchar(16);not null;uniqueIndex:idx_managed_layer_scope"`
+	ScopeRefID uint                     `gorm:"not null;uniqueIndex:idx_managed_layer_scope"`
+	ScopeName  string                   `gorm:"type:varchar(255)"`
+	Config     string                   `gorm:"type:longtext;not null"`
+	Version    int                      `gorm:"not null;default:1"`
+	Remark     string                   `gorm:"type:varchar(255)"`
+	CreatedBy  uint                     `gorm:"index"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+func (legacyManagedConfigLayer) TableName() string { return "managed_config_layers" }
+
 // TestSaveLayer_IdentityBackfillPersists 老数据迁移验收：
-// 已有层（identity 为空）首次保存时补发令牌，且令牌经多次重启保持不变。
+// 从缺 identity 列的旧表出发，AutoMigrate 补列 → 已有层首次保存补发令牌，
+// 且令牌经多次重启（重复 AutoMigrate）保持不变。
 func TestSaveLayer_IdentityBackfillPersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "managed-identity.db")
 	openDB := func() *gorm.DB {
@@ -353,15 +373,22 @@ func TestSaveLayer_IdentityBackfillPersists(t *testing.T) {
 		}
 	}
 
-	// 老库：直接落一条没有 identity 的历史层（模拟升级前的数据）。
-	db := openDB()
-	require.NoError(t, db.Create(&model.ManagedConfigLayer{
-		Scope: model.ManagedScopeGlobal, Config: `{"debug":true}`, Version: 3,
-	}).Error)
-	closeDB(db)
+	// 老库：用旧模型建表（表里不会有 identity 列）并落一条历史层。
+	{
+		db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+		require.NoError(t, err)
+		require.NoError(t, db.AutoMigrate(&legacyManagedConfigLayer{}))
+		var cols []string
+		require.NoError(t, db.Raw(`SELECT name FROM pragma_table_info('managed_config_layers')`).Scan(&cols).Error)
+		assert.NotContains(t, cols, "identity")
+		require.NoError(t, db.Create(&legacyManagedConfigLayer{
+			Scope: model.ManagedScopeGlobal, Config: `{"debug":true}`, Version: 3,
+		}).Error)
+		closeDB(db)
+	}
 
-	// 第一次重启：对老层发起首次保存，令牌应被回补并返回给调用方。
-	db = openDB()
+	// 升级+第一次重启：AutoMigrate 补列；对老层发起首次保存，令牌应被回补并返回给调用方。
+	db := openDB()
 	saved, err := NewManagedConfigService(db).SaveLayer(ManagedLayerInput{
 		Scope: model.ManagedScopeGlobal, Config: `{"debug":false}`,
 		ExpectedVersion: 3,
