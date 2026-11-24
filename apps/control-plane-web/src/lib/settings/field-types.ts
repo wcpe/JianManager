@@ -72,6 +72,17 @@ export const FIELD_SPECS: Readonly<Record<string, FieldSpec>> = {
   'backup.retention_days': { type: 'numeric', effectiveImmediately: false },
   // 这一项就是"不要让我手输 JSON"的那个字段：渲染为成对行编辑器。
   'log.acq.path_overrides': { type: 'kv-pairs', effectiveImmediately: false },
+
+  /*
+    日志采集的三个开关。
+    【为什么必须登记】采集面板此前用 `BOOLEAN_KEYS` 局部集合决定"布尔用 Select 渲染"；
+    改用通用组件后，那套集合被删除，而声明表里没补上这三项 —— 于是它们退化成
+    普通文本框，用户对 "true"/"false" 可以随便敲（写错要等后端 422）。
+    这类退化在 jsdom 里能被断言发现，但更早暴露它的是一次真机截图走查。
+  */
+  'log.acq.rules_enabled': { type: 'switch', effectiveImmediately: false },
+  'log.acq.realtime_tail': { type: 'switch', effectiveImmediately: false },
+  'log.acq.gz_import_enabled': { type: 'switch', effectiveImmediately: false },
 }
 
 /** 取某个字段的渲染声明（未登记时返回默认 text）。 */

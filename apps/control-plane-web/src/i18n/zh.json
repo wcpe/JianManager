@@ -4513,7 +4513,7 @@
       "log.acq.realtime_tail": "实时采集",
       "log.acq.gz_import_enabled": "gz 归档导入（总开关）",
       "log.acq.gz_scan_interval": "gz 定时扫描周期（留空 = 未配置）",
-      "log.acq.path_overrides": "实例日志路径覆盖（JSON）",
+      "log.acq.path_overrides": "实例日志路径覆盖",
       "debug.mode": "调试模式（日志 + Gin）",
       "jdk.mirror.temurin": "JDK 镜像源（Temurin）",
       "jdk.mirror.corretto": "JDK 镜像源（Corretto）",

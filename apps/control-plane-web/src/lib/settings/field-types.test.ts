@@ -102,3 +102,27 @@ describe('FIELD_SPECS 表本身', () => {
     }
   })
 })
+
+/**
+ * 声明表必须覆盖"界面上已经存在"的结构化字段。
+ *
+ * 【这条守的是一个真实退化】采集面板原用局部 `BOOLEAN_KEYS` 集合决定布尔用 Select 渲染；
+ * 改用通用组件后集合被删，而声明表没补上这三个 key → 它们退化成普通文本框，
+ * 用户对 "true"/"false" 可以随便敲，写错要等后端 422 才知道。
+ * 静态表与"曾是布尔"的字段之间不该有这种情况。
+ */
+describe('日志采集字段的渲染声明', () => {
+  it('三个采集开关都声明为 switch（不是退化成 text）', () => {
+    for (const key of [
+      'log.acq.rules_enabled',
+      'log.acq.realtime_tail',
+      'log.acq.gz_import_enabled',
+    ]) {
+      expect(fieldSpecOf(key).type, `${key} 应为 switch`).toBe('switch')
+    }
+  })
+
+  it('path_overrides 是 kv-pairs（成对行编辑，不是 JSON 文本框）', () => {
+    expect(fieldSpecOf('log.acq.path_overrides').type).toBe('kv-pairs')
+  })
+})

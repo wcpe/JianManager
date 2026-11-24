@@ -4559,7 +4559,7 @@
       "log.acq.realtime_tail": "Realtime tailing",
       "log.acq.gz_import_enabled": "gz archive import (master switch)",
       "log.acq.gz_scan_interval": "gz scan interval (empty = unset)",
-      "log.acq.path_overrides": "Instance log path overrides (JSON)",
+      "log.acq.path_overrides": "Instance log path overrides",
       "debug.mode": "Debug mode (logs + Gin)",
       "jdk.mirror.temurin": "JDK mirror (Temurin)",
       "jdk.mirror.corretto": "JDK mirror (Corretto)",
