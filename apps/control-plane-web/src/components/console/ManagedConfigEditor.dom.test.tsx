@@ -445,8 +445,8 @@ describe('编辑器容器', () => {
       <ManagedConfigField meta={meta} value={10} onChange={() => {}} />,
     )
 
-    // 越界 → 行内出现「不通过」+ 具体原因。
-    expect(screen.getByTestId('managed-field-state-error')).toBeInTheDocument()
+    // 越界但未改动（服务端已存的历史值）→ 行内只提示「越界」不判「不通过」。
+    expect(screen.getByTestId('managed-field-state-warn')).toBeInTheDocument()
     expect(screen.getByTestId('managed-field-bounds-collect-period-ticks')).toHaveTextContent(
       '过小会放大指标量并压主线程',
     )
@@ -456,6 +456,31 @@ describe('编辑器容器', () => {
       <ManagedConfigField meta={meta} value={40} onChange={() => {}} />,
     )
     expect(screen.getAllByTestId('managed-field-state-ok').length).toBeGreaterThan(0)
+  })
+
+  it('用户把值改成越界才判不通过并禁写', () => {
+    const meta: ManagedKeyMeta = {
+      key: 'collect-period-ticks',
+      kind: 'int',
+      group: 'collect',
+      tier: 'guarded',
+      title: '指标采集周期',
+      description: '多久采集一次指标。',
+      min: 20,
+      boundsHint: '过小会放大指标量并压主线程',
+    }
+    renderWithProviders(
+      <ManagedConfigField
+        meta={meta}
+        value={10}
+        dirty
+        onChange={() => {}}
+        onCommit={() => {}}
+      />,
+    )
+
+    expect(screen.getByTestId('managed-field-state-error')).toBeInTheDocument()
+    expect(screen.getByTestId('managed-field-commit-collect-period-ticks')).toBeDisabled()
   })
 
   it('每个字段旁边都有「写入」按钮，且只在该项改动后可用', async () => {
