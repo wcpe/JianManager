@@ -44,33 +44,36 @@ func NewManagedConfigHandler(
 
 // RegisterRoutes 注册托管配置相关端点。
 //
-// 读写统一走 instance.read / instance.write：托管配置会改所有被覆盖实例的运行行为，
-// 与「改实例配置」同一风险档，故沿用既有节点，不新造权限。
-func (h *ManagedConfigHandler) RegisterRoutes(rg *gin.RouterGroup) {
+// 读端点挂 read 组（instance.read 即可），写端点挂 write 组（必须 instance.write）。
+// 两档必须分开注册：RequireAnyPerm 是「任一节点」语义，把写端点也挂进
+// instance.read|instance.write 的任一可读组，会让只有读权限的用户改层、推配置。
+// 托管配置会改所有被覆盖实例的运行行为，与「改实例配置」同一风险档，故沿用既有节点，
+// 不新造权限。
+func (h *ManagedConfigHandler) RegisterRoutes(read, write *gin.RouterGroup) {
 	// 配置键目录：66 键的类型 / 默认值 / 中文说明 / 取值范围 / 档位。
 	// 前端据此把"手写 JSON"换成可视化控件——没有它就只能给用户一个空白文本框。
-	rg.GET("/managed-configs/catalog", h.Catalog)
+	read.GET("/managed-configs/catalog", h.Catalog)
 
-	rg.GET("/managed-configs", h.ListLayers)
-	rg.GET("/managed-configs/layer", h.GetLayer)
-	rg.PUT("/managed-configs", h.SaveLayer)
-	rg.DELETE("/managed-configs", h.DeleteLayer)
-	rg.POST("/managed-configs/validate", h.Validate)
-	rg.POST("/managed-configs/impact", h.EstimateImpact)
+	read.GET("/managed-configs", h.ListLayers)
+	read.GET("/managed-configs/layer", h.GetLayer)
+	write.PUT("/managed-configs", h.SaveLayer)
+	write.DELETE("/managed-configs", h.DeleteLayer)
+	read.POST("/managed-configs/validate", h.Validate)
+	read.POST("/managed-configs/impact", h.EstimateImpact)
 
-	rg.POST("/managed-pushes", h.CreatePush)
-	rg.POST("/managed-pushes/:id/start", h.StartPush)
-	rg.POST("/managed-pushes/:id/release", h.ReleasePush)
-	rg.POST("/managed-pushes/:id/pause", h.PausePush)
-	rg.POST("/managed-pushes/:id/resume", h.ResumePush)
-	rg.POST("/managed-pushes/:id/cancel", h.CancelPush)
-	rg.POST("/managed-pushes/:id/targets", h.ListTargets)
-	rg.GET("/managed-pushes", h.ListPushes)
-	rg.POST("/managed-pushes/rollback", h.Rollback)
+	write.POST("/managed-pushes", h.CreatePush)
+	write.POST("/managed-pushes/:id/start", h.StartPush)
+	write.POST("/managed-pushes/:id/release", h.ReleasePush)
+	write.POST("/managed-pushes/:id/pause", h.PausePush)
+	write.POST("/managed-pushes/:id/resume", h.ResumePush)
+	write.POST("/managed-pushes/:id/cancel", h.CancelPush)
+	read.POST("/managed-pushes/:id/targets", h.ListTargets)
+	read.GET("/managed-pushes", h.ListPushes)
+	write.POST("/managed-pushes/rollback", h.Rollback)
 
-	rg.GET("/managed-matrix", h.Matrix)
-	rg.GET("/managed-matrix/summary", h.MatrixSummary)
-	rg.GET("/managed-matrix/instances/:id", h.MatrixDetail)
+	read.GET("/managed-matrix", h.Matrix)
+	read.GET("/managed-matrix/summary", h.MatrixSummary)
+	read.GET("/managed-matrix/instances/:id", h.MatrixDetail)
 }
 
 // Catalog GET /managed-configs/catalog — 配置键目录（可视化编辑器的数据源）。
@@ -111,7 +114,15 @@ func (h *ManagedConfigHandler) ListLayers(c *gin.Context) {
 		}
 		items = append(items, rows...)
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	// 逐行做作用域可见性过滤：与 GetLayer 的口径一致——不可见的层连存在性都不该泄露
+	//（scope_name 含节点/实例名，未过滤等于把别组的实例清单拱手送出）。
+	visible := items[:0]
+	for _, row := range items {
+		if h.scopeAccessible(c, row.Scope, row.ScopeRefID) {
+			visible = append(visible, row)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": visible})
 }
 
 // GetLayer GET /managed-configs/layer?scope=&scopeRefId= — 取某一层。
@@ -222,6 +233,12 @@ func (h *ManagedConfigHandler) CreatePush(c *gin.Context) {
 	var in service.ManagedPushInput
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	// 作用域本身也要过可见性：InstanceIDs 为空时服务按 scope 展开目标，
+	// 不校验 scope 等于让只能管自己组的运营建出 global 全平台推送。
+	if !h.scopeAccessible(c, in.Scope, in.ScopeRefID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "作用域不存在"})
 		return
 	}
 	// 逐台收敛到用户可见集合，只要有一台不可见就整包拒绝。
@@ -363,7 +380,18 @@ func (h *ManagedConfigHandler) Rollback(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
-	kept, denied := h.filterAccessibleInstances(c, in.InstanceIDs)
+	// 未显式给实例时，服务会回放源会话的全部目标——必须先按可见性整包校验，
+	// 否则受限运营能把配置回滚推到自己看不见的实例上。
+	targetIDs := in.InstanceIDs
+	if len(targetIDs) == 0 {
+		var terr error
+		targetIDs, terr = h.pushSvc.TargetInstanceIDs(in.SourceSessionID)
+		if terr != nil {
+			h.respondPushError(c, terr)
+			return
+		}
+	}
+	kept, denied := h.filterAccessibleInstances(c, targetIDs)
 	if len(denied) > 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "部分实例不存在"})
 		return

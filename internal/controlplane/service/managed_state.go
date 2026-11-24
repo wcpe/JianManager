@@ -576,7 +576,11 @@ func (s *ManagedMatrixService) Detail(instanceID uint) (*ManagedMatrixDetail, er
 
 	var stateRow model.ManagedInstanceConfigState
 	if err := s.db.Where("instance_id = ?", inst.ID).First(&stateRow).Error; err == nil {
-		out.Row.ObservedVersion = &stateRow.ConfigVersion
+		// 与矩阵行同口径：reported_at 为 null 表示从未收到过 config_state，
+		// config_version 的默认 0 不是「观测到第 0 版」，故观测版本置 null。
+		if stateRow.ReportedAt != nil {
+			out.Row.ObservedVersion = &stateRow.ConfigVersion
+		}
 		out.Row.Mode = stateRow.Mode
 		out.Row.ReportedConnection = stateRow.ReportedConnection
 		out.Row.CacheAgeSeconds = stateRow.CacheAgeSeconds

@@ -44,11 +44,15 @@ func newPushTestService(t *testing.T, db *gorm.DB) *ManagedPushService {
 // seedSession 建一个指定状态的会话。
 func seedSession(t *testing.T, db *gorm.DB, status model.ManagedPushSessionStatus, kind string) model.ManagedPushSession {
 	t.Helper()
+	// config_version 有唯一约束（生产靠 MAX+1 铸造），同库多颗种子必须各自递增。
+	var maxVersion int64
+	require.NoError(t, db.Model(&model.ManagedPushSession{}).
+		Select("COALESCE(MAX(config_version), 0)").Scan(&maxVersion).Error)
 	session := model.ManagedPushSession{
 		Kind:                 kind,
 		Scope:                model.ManagedScopeGlobal,
 		ScopeName:            "全局",
-		ConfigVersion:        7,
+		ConfigVersion:        maxVersion + 1,
 		FailureRateThreshold: 20,
 		AckTimeoutSec:        30,
 		Status:               status,
@@ -183,7 +187,7 @@ func TestRollback_ReplaysFrozenContentNotRecompute(t *testing.T) {
 	// 版本号必须换成本次会话的，否则探针按旧版本回执、CP 按新版本等，回执永远对不上。
 	assert.NotEqual(t, rollback.ConfigVersion, frozen.ConfigVersion,
 		"回滚会话应铸造新版本号，源载荷里的是旧版本")
-	assert.Greater(t, rollback.ConfigVersion, int64(7), "新版本号应大于源会话版本")
+	assert.Greater(t, rollback.ConfigVersion, source.ConfigVersion, "新版本号应大于源会话版本")
 }
 
 // TestPushedPayloadRecordedOnDispatch 守常规下发也会记录载荷原文。

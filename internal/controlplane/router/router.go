@@ -518,7 +518,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 写端点会改变所有被覆盖实例的运行行为，故与「改实例配置」同档，走 instance.write。
 		if svcs.ManagedConfig != nil && svcs.ManagedPush != nil && svcs.ManagedMatrix != nil {
 			managedConfigHandler := NewManagedConfigHandler(svcs.ManagedConfig, svcs.ManagedPush, svcs.ManagedMatrix, svcs.Authz, svcs.Instance)
-			managedConfigHandler.RegisterRoutes(permRead("instance.read", "instance.write"))
+			managedConfigHandler.RegisterRoutes(
+				permRead("instance.read", "instance.write"),
+				permRead("instance.write"))
 		}
 		if svcs.ArtifactVersion != nil {
 			NewArtifactVersionHandler(svcs.ArtifactVersion).RegisterSelectionRoutes(permRead("instance.read", "node.read", "node.manage"))

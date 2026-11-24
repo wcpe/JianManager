@@ -266,7 +266,9 @@ type ManagedPushSession struct {
 	ScopeName  string             `gorm:"type:varchar(255)" json:"scopeName,omitempty"`
 
 	// ConfigVersion 本次下发使用的 configVersion（会话级，全局单调递增）。
-	ConfigVersion int64 `gorm:"not null" json:"configVersion"`
+	// uniqueIndex 是 MAX+1 铸造并发撞号的最后防线：两个并发会话若算出同一版本，
+	// 探针的 config_applied 按版本匹配会把回执错记到另一条会话的目标上。
+	ConfigVersion int64 `gorm:"not null;uniqueIndex" json:"configVersion"`
 	// ValuesJSON 冻结的点分 values（{「collect-period-ticks」:100, ...}）。
 	ValuesJSON string `gorm:"type:longtext;not null" json:"-"`
 	// RemovalsJSON 冻结的删除路径列表。

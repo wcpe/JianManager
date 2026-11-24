@@ -229,18 +229,7 @@ func (s *ManagedPushService) Create(in ManagedPushInput, operatorID uint) (*mode
 		CurrentBatch:         1,
 	}
 
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		// ConfigVersion 会话级单调递增：取当前最大值 +1。
-		// 注意它**不是**探针的版本（那是 baseVersion），两者语义不同、不可互换。
-		var maxVersion int64
-		if qerr := tx.Model(&model.ManagedPushSession{}).
-			Select("COALESCE(MAX(config_version), 0)").Scan(&maxVersion).Error; qerr != nil {
-			return fmt.Errorf("查询配置版本序号失败: %w", qerr)
-		}
-		session.ConfigVersion = maxVersion + 1
-		if cerr := tx.Create(&session).Error; cerr != nil {
-			return fmt.Errorf("创建下发会话失败: %w", cerr)
-		}
+	err = s.createSessionTx(&session, func(tx *gorm.DB) error {
 		for _, inst := range insts {
 			target := model.ManagedPushTarget{
 				SessionID:    session.ID,
@@ -268,6 +257,47 @@ func (s *ManagedPushService) Create(in ManagedPushInput, operatorID uint) (*mode
 	// 立即推进首批（异步）：界面提交后应当马上看到进度，而不是等人再点一次「开始」。
 	s.Start(session.ID)
 	return &session, nil
+}
+
+// createSessionTx 在事务里铸造全局递增的 ConfigVersion 并写入会话 + 目标行。
+//
+// 为何要重试而不是裸 MAX+1：config_version 有唯一索引，两个并发会话可能同时读到
+// 同一个 MAX，一个提交成功另一个撞唯一约束——撞号不是业务错误，重读 MAX 再插即可。
+func (s *ManagedPushService) createSessionTx(session *model.ManagedPushSession, fillTargets func(tx *gorm.DB) error) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		err = s.db.Transaction(func(tx *gorm.DB) error {
+			// ConfigVersion 会话级单调递增：取当前最大值 +1。
+			// 注意它**不是**探针的版本（那是 baseVersion），两者语义不同、不可互换。
+			var maxVersion int64
+			if qerr := tx.Model(&model.ManagedPushSession{}).
+				Select("COALESCE(MAX(config_version), 0)").Scan(&maxVersion).Error; qerr != nil {
+				return fmt.Errorf("查询配置版本序号失败: %w", qerr)
+			}
+			session.ConfigVersion = maxVersion + 1
+			if cerr := tx.Create(session).Error; cerr != nil {
+				return cerr
+			}
+			return fillTargets(tx)
+		})
+		if !isManagedVersionConflict(err) {
+			break
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("创建下发会话失败: %w", err)
+	}
+	return nil
+}
+
+// isManagedVersionConflict 判断错误是否为 config_version 唯一约束冲突（跨方言按错误文本判定）。
+func isManagedVersionConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "config_version") &&
+		(strings.Contains(msg, "unique") || strings.Contains(msg, "duplicate") || strings.Contains(msg, "constraint"))
 }
 
 // Start 启动（或继续）会话的推进循环。
@@ -430,7 +460,7 @@ func (s *ManagedPushService) finishBatch(session *model.ManagedPushSession) (boo
 		return false, err
 	}
 	if tripped {
-		reason := fmt.Sprintf("失败率 %.1f%% 超过阈值 %.1f%%（本批已终结的失败目标）",
+		reason := fmt.Sprintf("失败率 %.1f%% 超过阈值 %.1f%%（本会话已终结的失败目标）",
 			observed, fresh.FailureRateThreshold)
 		// 熔断落 `failed`（终态），不是 `paused`。
 		//
@@ -954,16 +984,7 @@ func (s *ManagedPushService) Rollback(in ManagedRollbackInput, operatorID uint) 
 		StartedAt:            &now,
 	}
 
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		var maxVersion int64
-		if qerr := tx.Model(&model.ManagedPushSession{}).
-			Select("COALESCE(MAX(config_version), 0)").Scan(&maxVersion).Error; qerr != nil {
-			return fmt.Errorf("查询配置版本序号失败: %w", qerr)
-		}
-		session.ConfigVersion = maxVersion + 1
-		if cerr := tx.Create(&session).Error; cerr != nil {
-			return fmt.Errorf("创建回滚会话失败: %w", cerr)
-		}
+	err = s.createSessionTx(&session, func(tx *gorm.DB) error {
 		for _, src := range sourceTargets {
 			target := model.ManagedPushTarget{
 				SessionID:    session.ID,
@@ -1080,6 +1101,18 @@ func (s *ManagedPushService) Targets(sessionID uint, state string, batchNo, page
 		out = append(out, ManagedPushTargetView{ManagedPushTarget: row})
 	}
 	return out, total, nil
+}
+
+// TargetInstanceIDs 返回会话全部目标的实例 ID（回滚前的可见性整包校验用）。
+func (s *ManagedPushService) TargetInstanceIDs(sessionID uint) ([]uint, error) {
+	var ids []uint
+	if err := s.db.Model(&model.ManagedPushTarget{}).
+		Where("session_id = ?", sessionID).
+		Order("id ASC").
+		Pluck("instance_id", &ids).Error; err != nil {
+		return nil, fmt.Errorf("查询会话目标实例失败: %w", err)
+	}
+	return ids, nil
 }
 
 // refreshCounters 用会话 ID 刷新计数。
