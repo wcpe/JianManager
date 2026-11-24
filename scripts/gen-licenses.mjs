@@ -232,16 +232,22 @@ function goModules() {
   return mods
 }
 
-/** 发行覆盖的 GOOS——跨平台取链接集并集,否则平台条件依赖(如 Windows
- * 独有的 go-winio)在 Linux 上扫描时被漏掉,但发布二进制里确有它。 */
-const SHIPPED_GOOS = ['linux', 'windows', 'darwin']
+/** 发行目标(GOOS × 包集)——与 release.yml 发货矩阵一一对应:
+ * CP/Worker/jmctl 只出 linux+windows amd64;jm 客户端另发 darwin。
+ * 只扫发行的包:全量 ./... 会把「该平台不发货」的包依赖误算进来
+ * (如 darwin worker 经 gopsutil 拉入 purego,实际并无 darwin worker)。 */
+const SHIPPED_TARGETS = [
+  { goos: 'linux', pkgs: './...' },
+  { goos: 'windows', pkgs: './...' },
+  { goos: 'darwin', pkgs: './apps/jm' },
+]
 
-/** go list -deps ./... → 某 GOOS 下本仓库源码实际 import 到的外部模块路径集。
+/** go list -deps <pkgs> → 某 GOOS 下指定包集实际 import 到的外部模块路径集。
  * 用于兜底路径排除 tool/test-only 依赖(x/tools、honnef、gotest.tools 等
  * 不被任何分发二进制链接,进清单属于误报)。失败返回 null 保持旧行为。 */
-function goLinkedModulePaths(goos) {
+function goLinkedModulePaths(goos, pkgs) {
   try {
-    const out = execSync(`go list -deps -f "{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{end}}" ./...`, {
+    const out = execSync(`go list -deps -f "{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{end}}" ${pkgs}`, {
       cwd: REPO_ROOT,
       maxBuffer: MAX_BUFFER,
       env: { ...process.env, GOOS: goos },
@@ -259,12 +265,12 @@ function goLinkedModulePaths(goos) {
   }
 }
 
-/** 全部发行 GOOS 的链接模块并集;任一平台失败返回 null(退为不过滤)。 */
+/** 全部发行目标的链接模块并集;任一平台失败返回 null(退为不过滤)。 */
 function goLinkedModulePathsAll() {
   const all = new Set()
   let complete = true
-  for (const goos of SHIPPED_GOOS) {
-    const set = goLinkedModulePaths(goos)
+  for (const { goos, pkgs } of SHIPPED_TARGETS) {
+    const set = goLinkedModulePaths(goos, pkgs)
     if (set === null) {
       complete = false
       continue
