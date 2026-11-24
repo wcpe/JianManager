@@ -406,9 +406,10 @@ jobs:
           done
           # 安装脚本依赖 manifest 的 file/sha256 字段做版本比对与校验——
           # 逐条目断言每个 file 后随自己的 sha256,缺一则直接失败。
+          # 与 install-worker.sh 同一管线:先去空白再截取,不假设美化/紧凑布局。
           for name in jmctl-linux-amd64 jmctl-windows-amd64.exe; do
-            grep -A 4 "\"file\": \"$name\"" internal/controlplane/embed/jmctl/manifest.json \
-              | grep -q '"sha256": "[0-9a-f]\{64\}"' \
+            tr -d '[:space:]' < internal/controlplane/embed/jmctl/manifest.json \
+              | grep -q "\"file\":\"$name\"[^}]*\"sha256\":\"[0-9a-f]\{64\}\"" \
               || { echo "manifest 中 $name 缺 sha256"; exit 1; }
           done
 
