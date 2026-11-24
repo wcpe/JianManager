@@ -85,7 +85,10 @@ test('SHIPPED_TARGETS 覆盖 release.yml 实际发行矩阵', () => {
   for (const { marker, pkgs } of scopedSteps) {
     const start = yml.indexOf(marker)
     assert.ok(start > buildStart, `release.yml 缺少「${marker}」步骤,需同步更新本测试`)
-    const end = yml.indexOf('交叉编译', start + marker.length)
+    // 只框到本步骤边界(下一个 - name:),不能按「交叉编译」字样截:
+    // 该字样在 jmctl 之后不再出现时切片会延到 smoke/release job,把不发货
+    // 的脚本循环误算进发行目标。
+    const end = yml.indexOf('- name:', start + marker.length)
     const section = yml.slice(start, end > start ? end : undefined)
     const targets = [...section.matchAll(/for target in ([^;]+); do/g)]
       .flatMap((m) => m[1].trim().split(/\s+/))
