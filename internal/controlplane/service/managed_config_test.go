@@ -409,6 +409,20 @@ func TestSaveLayer_IdentityBackfillPersists(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, saved.Identity, saved2.Identity)
 	closeDB(db)
+
+	// 第三次重启：复用二启留下的数据——同一库文件再开，令牌仍不变，
+	// 携带旧令牌的新保存照旧放行（防止「升级后令牌逐轮漂移」回归）。
+	db = openDB()
+	var stored3 model.ManagedConfigLayer
+	require.NoError(t, db.First(&stored3, "scope = ? AND scope_ref_id = ?", model.ManagedScopeGlobal, 0).Error)
+	assert.Equal(t, saved.Identity, stored3.Identity)
+	saved3, err := NewManagedConfigService(db).SaveLayer(ManagedLayerInput{
+		Scope: model.ManagedScopeGlobal, Config: `{"debug":false}`,
+		ExpectedVersion: 5, ExpectedLayerIdentity: saved.Identity,
+	}, 1)
+	require.NoError(t, err)
+	assert.Equal(t, saved.Identity, saved3.Identity)
+	closeDB(db)
 }
 
 // TestSaveLayer_ScopeRefValidation 验证作用域与引用的搭配校验。
