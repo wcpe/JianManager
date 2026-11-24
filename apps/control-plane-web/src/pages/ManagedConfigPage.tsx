@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   ArrowRightCircle,
@@ -74,6 +75,7 @@ import {
   useValidateManagedConfig,
   validateErrors,
   type ManagedConfigLayer,
+  type ManagedLayerResult,
   type ManagedKeyMeta,
   type ManagedImpact,
   type ManagedPushSession,
@@ -212,15 +214,13 @@ interface LayerEditorProps {
   /**
    * 层数据是否已就绪（query 已成功返回，无论 found 与否）。
    *
-   * 未就绪时 `layer` 与「该层确实不存在」都是 null，无法区分；而父级 `editorKey`
-   * 里含 version，数据一到就会重挂本组件。若此刻允许保存，用户拿到的后端报错会随
-   * 重挂一起消失。故未就绪时禁用保存。
+   * 未就绪时 `layer` 与「该层确实不存在」都是 null，无法区分：此时放行保存会把
+   * expectedVersion 当 0 送出去，撞上别人刚写的版本只会报一个说不清的 409。
+   * 故未就绪时禁用保存，等查询落地后再放行。
    */
   layerReady: boolean
-  /** 保存成功回调（父级据此把新行并进列表）。 */
-  // keepDraft=true 表示这是单键写入：父级只刷新列表、不重取层，
-  // 避免 editorKey 版本变化重挂编辑器丢光其它键的草稿。
-  onSaved: (layer: ManagedConfigLayer, keepDraft?: boolean) => void
+  /** 保存成功回调：父级把返回层回写详情缓存并刷新列表，不重取层。 */
+  onSaved: (layer: ManagedConfigLayer) => void
   /** 请求删除该层（父级负责二次确认）。 */
   onRequestDelete: () => void
   /** 冲突后重新加载（父级换 key 重挂本组件）。 */
@@ -253,6 +253,20 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
   )
   /** 服务端当前层版本：单键保存后本地推进，不依赖重取层（重取会令编辑器重挂丢草稿）。 */
   const [serverVersion, setServerVersion] = useState(layer?.version ?? 0)
+
+  /**
+   * 层数据常在编辑器挂载后才返回（layer 从 null → 实层），「重新加载」或后台重取
+   * 也会换成新对象。editorKey 已不含版本号，靠渲染期状态对齐把「真值变了」接进来：
+   * prop 引用一变就同步已存快照与版本基线（React 官方认可的 adjust-state-during-
+   * render 写法，替代旧「版本变 → 重挂」的同步职责）。不碰 editedText——草稿是
+   * 用户的，committed 只是「已落盘」的参照系。
+   */
+  const [syncedLayer, setSyncedLayer] = useState(layer)
+  if (layer !== syncedLayer) {
+    setSyncedLayer(layer)
+    setCommitted(flattenManagedConfig(parseLayerConfig(layer?.config)))
+    setServerVersion(layer?.version ?? 0)
+  }
 
   const validateMut = useValidateManagedConfig()
   const impactMut = useManagedImpact()
@@ -438,11 +452,11 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
         expectedVersion: serverVersion,
         remark: remark.trim() || undefined,
       })
-      // 用返回层更新本地已存快照与乐观并发基线；并要求父级跳过层查询重取——
-      // 重取会让 editorKey 里的版本号变化从而重挂编辑器，其它键的草稿随旧实例销毁。
+      // 用返回层更新本地已存快照与乐观并发基线；父级把返回体回写层详情缓存，
+      // 不重取层（重取交给「重新加载」），草稿靠 editorKey 不含版本号保住。
       setCommitted(flattenManagedConfig(parseLayerConfig(saved.config)))
       setServerVersion(saved.version)
-      onSaved(saved, true)
+      onSaved(saved)
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status
       if (status === 409) {
@@ -1320,6 +1334,7 @@ export default function ManagedConfigPage({ defaultTab = 'layers' }: { defaultTa
   const [reloadNonce, setReloadNonce] = useState(0)
   const [deleteOpen, setDeleteOpen] = useState(false)
 
+  const qc = useQueryClient()
   const layersQuery = useManagedLayers()
   const layerQuery = useManagedLayer(scope, scopeRefId)
   const nodesQuery = useNodes({ enabled: scope === 'node' })
@@ -1361,15 +1376,15 @@ export default function ManagedConfigPage({ defaultTab = 'layers' }: { defaultTa
   const layers = layersQuery.data ?? []
   const targetId = scope === 'global' ? 0 : scopeRefId
 
-  // 编辑器重挂键：作用域切换 / 目标切换 / 版本变化 / 手动重新加载都必须重挂。
+  // 编辑器重挂键：作用域切换 / 目标切换 / 手动重新加载才重挂。
   //
-  // 依赖 `layer?.version` 而不是整个 `layer` 对象：query 每次取数都产出新的对象引用，
-  // 若依赖对象本身，任何一次后台 refetch 都会换 key 把 `LayerEditor` 整个重挂，
-  // 连带清空它本地的 `saveError` / `draft`——表现就是「保存被后端拒绝，页面却什么都不显示」。
-  // 版本号才是「配置真的换了」的判据。
+  // 刻意不含 `layer?.version`：版本号变化只代表「服务端那层被写过」，把它并进 key
+  // 会在每次保存（含单键写入）后重挂编辑器、销毁其它键的未落盘草稿。保存成功后
+  // 层数据用 PUT 返回体直接回写查询缓存（见 onSaved），编辑器靠本地 `committed`
+  // 快照跟进真值；想要服务端最新版时走「重新加载」按钮（reloadNonce 换 key）。
   const editorKey = useMemo(
-    () => `${scope}:${targetId}:${layer?.version ?? 0}:${reloadNonce}`,
-    [scope, targetId, layer?.version, reloadNonce],
+    () => `${scope}:${targetId}:${reloadNonce}`,
+    [scope, targetId, reloadNonce],
   )
 
   // ---- 下发会话 ----
@@ -1527,12 +1542,16 @@ export default function ManagedConfigPage({ defaultTab = 'layers' }: { defaultTa
               // 「拿到过结果」就算就绪：found=false（该层确实没配过）也是就绪，
               // 此时允许首次保存。只有仍在 loading/error 时才算未就绪。
               layerReady={layerQuery.isSuccess}
-              onSaved={(_saved, keepDraft) => {
-                // 版本由服务端自增；整层保存后失效重取让 editorKey 跟着变，草稿回到真值。
-                // 单键写入（keepDraft）跳过重取层：重取换版本会重挂编辑器，其它键
-                // 的未落盘草稿随旧编辑器销毁；层数据由编辑器自己用返回体推进。
+              onSaved={(saved) => {
+                // 用 PUT 返回体直接回写层详情缓存：单键写入新建层时若任由 404
+                // 缓存挂着，编辑器拿不到 layer → 删除按钮缺失，且 30s 内切走再
+                // 切回会以版本 0 打开、再写入撞 409。整层 / 单键统一回写，
+                // 不再重取层——重取交给「重新加载」按钮，保存路径是权威的。
+                qc.setQueryData(
+                  ['managed-configs', 'layer', scope, targetId],
+                  { found: true, layer: saved } as ManagedLayerResult,
+                )
                 void layersQuery.refetch()
-                if (!keepDraft) void layerQuery.refetch()
               }}
               onRequestDelete={() => setDeleteOpen(true)}
               onRequestReload={() => {

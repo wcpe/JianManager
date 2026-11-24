@@ -321,6 +321,47 @@ describe('托管配置层：校验 / 影响预演 / 保存', () => {
     expect(within(conflict).getByTestId('managed-layer-reload')).toBeInTheDocument()
   })
 
+  it('单键写入新建层后详情缓存即回写：删除按钮出现、编辑器不重挂、其它草稿保留', async () => {
+    loginMockUser()
+    // 该层尚未配置：GET 一律 404，首个 PUT 才让它变成 found。这正是旧实现踩过的坑——
+    // 404 会被 query 缓存成「未配置」，首写后若不回写，删除按钮不出现、版本停在 0，
+    // 下一次写入拿 expectedVersion=0 撞 409。
+    useLayerEndpoints({ layer: null })
+
+    renderWithProviders(<ManagedConfigPage />)
+    // found=false 也是「已就绪」：等保存键可用再动，未就绪时被禁用。
+    await waitFor(() => expect(screen.getByTestId('managed-layer-save')).toBeEnabled())
+    // 起点：未配置的层没有删除按钮。
+    expect(screen.queryByTestId('managed-layer-delete')).not.toBeInTheDocument()
+
+    // 改两个键：ticks=50（写它）+ debug 开关（留作未落盘草稿）。
+    const ticks = await screen.findByTestId('managed-field-input-collect-period-ticks')
+    fireEvent.change(ticks, { target: { value: '50' } })
+    fireEvent.click(await screen.findByTestId('managed-field-input-debug'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('managed-field-commit-collect-period-ticks')).toBeEnabled(),
+    )
+    fireEvent.click(screen.getByTestId('managed-field-commit-collect-period-ticks'))
+
+    // 首写成功后：详情缓存必须已回写——删除按钮出现、版本展示到 v1。
+    await waitFor(() => expect(screen.getByTestId('managed-layer-delete')).toBeInTheDocument())
+    expect(screen.getByTestId('managed-layer-version').textContent ?? '').toContain('v1')
+
+    // 编辑器不重挂：debug 的草稿原样保留，仍记为未落盘。
+    const debugSwitch = screen.getByTestId('managed-field-input-debug')
+    expect(debugSwitch).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByTestId('managed-layer-dirty-count')).toBeInTheDocument()
+
+    // 接着写第二个键：expectedVersion 必须跟上 v1，服务端接受并推进到 v2，
+    // 全程不得出现 409 冲突提示。
+    fireEvent.click(screen.getByTestId('managed-field-commit-debug'))
+    await waitFor(() => {
+      expect(screen.getByTestId('managed-layer-version').textContent ?? '').toContain('v2')
+    })
+    expect(screen.queryByTestId('managed-layer-conflict')).not.toBeInTheDocument()
+  })
+
   it('影响预演展示受影响台数、倍率与危险档键', async () => {
     loginMockUser()
     useLayerEndpoints()
