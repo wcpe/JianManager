@@ -459,12 +459,13 @@ func TestEstimateImpact_AccessibleFilter(t *testing.T) {
 	mkInst("a", 50)
 	b := mkInst("b", 25)
 
-	// 不受限：两台都算，代表实例取第一台（a，周期 50）。
+	// 不受限：两台都算。instancesInScope 无 ORDER BY，代表实例取哪台未指定，
+	// 周期只断言是 50 或 25 之一；精确断言放在下面的过滤场景。
 	impact, err := svc.EstimateImpact(model.ManagedScopeNode, node.ID, map[string]any{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, impact.TotalInstances)
 	assert.Equal(t, 2, impact.AffectedInstances)
-	assert.Equal(t, 50, impact.EffectiveCollectPeriodTicks)
+	assert.Contains(t, []int{50, 25}, impact.EffectiveCollectPeriodTicks)
 
 	// 只见 b：计数收敛到 1，代表周期也必须取 b 的 25，而不是借 a 的 50。
 	impact, err = svc.EstimateImpact(model.ManagedScopeNode, node.ID, map[string]any{}, []uint{b.ID})
