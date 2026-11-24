@@ -88,6 +88,11 @@ func (s *ManagedInstanceStateService) UpsertFromReport(inst model.Instance, repo
 			return fmt.Errorf("查询托管状态失败: %w", err)
 		}
 		// 覆盖式更新：这一行表达「最近一次」，不是历史。
+		// bridge_connected / bridge_updated_at 不在此处改写：连接证据只由桥的
+		// connected/disconnected 事件维护。事件与本上报在同一条流上但由并发 goroutine
+		// 落库，乱序是常态——若上报也把 bridge_connected 置真，一条迟到的 config_state
+		// 会把刚刚标记的断开重新盖成连接，矩阵显示永不掉线。
+		// 同理 effective_connection 按库里的连接证据合成，不能硬写 true。
 		return tx.Model(&model.ManagedInstanceConfigState{}).Where("id = ?", existing.ID).
 			Updates(map[string]any{
 				"instance_uuid":        inst.UUID,
@@ -96,12 +101,10 @@ func (s *ManagedInstanceStateService) UpsertFromReport(inst model.Instance, repo
 				"cache_age_seconds":    report.CacheAgeSecond,
 				"mode":                 report.Mode,
 				"reported_connection":  report.Connection,
-				"bridge_connected":     true,
-				"effective_connection": effective,
+				"effective_connection": model.SynthesizeManagedConnection(existing.BridgeConnected, report.Connection),
 				"capabilities_json":    capsJSON,
 				"last_error":           truncateManagedText(report.LastError, 1000),
 				"reported_at":          now,
-				"bridge_updated_at":    now,
 			}).Error
 	})
 }
@@ -300,9 +303,11 @@ func (s *ManagedMatrixService) Matrix(filter ManagedMatrixFilter) ([]ManagedMatr
 	base := s.db.Table("instances AS i").
 		Joins("LEFT JOIN nodes AS n ON n.id = i.node_id").
 		Joins(`LEFT JOIN managed_push_targets AS t ON t.id = (
-			SELECT MAX(t2.id) FROM managed_push_targets AS t2 WHERE t2.instance_id = i.id
+			SELECT MAX(t2.id) FROM managed_push_targets AS t2
+			WHERE t2.instance_id = i.id AND t2.desired_version > 0
 		)`).
-		Joins("LEFT JOIN managed_instance_config_states AS s ON s.instance_id = i.id")
+		Joins("LEFT JOIN managed_instance_config_states AS s ON s.instance_id = i.id").
+		Where("i.deleted_at IS NULL")
 
 	if filter.NodeID > 0 {
 		base = base.Where("i.node_id = ?", filter.NodeID)
@@ -600,15 +605,20 @@ func (s *ManagedMatrixService) Detail(instanceID uint) (*ManagedMatrixDetail, er
 		out.Row.DesiredVersion = &lastTarget.DesiredVersion
 		out.Row.LastTargetState = string(lastTarget.State)
 		out.Row.LastPushError = lastTarget.Error
-		if lastTarget.SessionID != 0 {
-			var session model.ManagedPushSession
-			if serr := s.db.First(&session, lastTarget.SessionID).Error; serr == nil {
-				if session.ValuesJSON != "" {
-					_ = json.Unmarshal([]byte(session.ValuesJSON), &out.DesiredValues)
-				}
-				if session.TracedJSON != "" {
-					_ = json.Unmarshal([]byte(session.TracedJSON), &out.Traced)
-				}
+		// 期望内容必须取**这台实例实际收到的那份**（PushedPayloadJSON）：
+		// 会话级的 ValuesJSON/TracedJSON 只是首批第一台实例的代表值，不同实例的
+		// node/instance 层合并结果不同——拿会话级值当本机期望值，既显示错，
+		// 还把另一台实例的层值泄给了这台的查看者。
+		if lastTarget.PushedPayloadJSON != "" {
+			var pushed ManagedConfigPush
+			if uerr := json.Unmarshal([]byte(lastTarget.PushedPayloadJSON), &pushed); uerr == nil {
+				out.DesiredValues = pushed.Values
+			}
+		}
+		// Traced 没有按目标留存；用本实例当前层的合并来源近似（只含本实例的值，不泄密）。
+		if s.pushes != nil && s.pushes.config != nil {
+			if merged, merr := s.pushes.config.MergeForInstance(inst); merr == nil && merged != nil {
+				out.Traced = merged.Traced
 			}
 		}
 	}
@@ -632,12 +642,18 @@ var ErrManagedInstanceNotFound = errors.New("实例不存在")
 
 // buildMatrixBase 构造矩阵的公共查询（供 Matrix 与 Summary 共用同一套筛选口径）。
 func (s *ManagedMatrixService) buildMatrixBase(filter ManagedMatrixFilter) *gorm.DB {
+	// 两个口径与 Matrix 保持一致：
+	//  - 目标行只取实际推出去过的（desired_version > 0）：待推送/被跳过的行 desired_version=0，
+	//    取它们当“最近一次下发”会把本来已同步的实例误判成期望=0；
+	//  - 软删实例不进矩阵（raw SQL 不过 GORM 的软删作用域）。
 	base := s.db.Table("instances AS i").
 		Joins("LEFT JOIN nodes AS n ON n.id = i.node_id").
 		Joins(`LEFT JOIN managed_push_targets AS t ON t.id = (
-			SELECT MAX(t2.id) FROM managed_push_targets AS t2 WHERE t2.instance_id = i.id
+			SELECT MAX(t2.id) FROM managed_push_targets AS t2
+			WHERE t2.instance_id = i.id AND t2.desired_version > 0
 		)`).
-		Joins("LEFT JOIN managed_instance_config_states AS s ON s.instance_id = i.id")
+		Joins("LEFT JOIN managed_instance_config_states AS s ON s.instance_id = i.id").
+		Where("i.deleted_at IS NULL")
 	if filter.NodeID > 0 {
 		base = base.Where("i.node_id = ?", filter.NodeID)
 	}

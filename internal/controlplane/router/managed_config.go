@@ -152,7 +152,7 @@ func (h *ManagedConfigHandler) SaveLayer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
-	if !h.scopeAccessible(c, in.Scope, in.ScopeRefID) {
+	if !h.scopeWritable(c, in.Scope, in.ScopeRefID) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "作用域不存在"})
 		return
 	}
@@ -168,7 +168,7 @@ func (h *ManagedConfigHandler) SaveLayer(c *gin.Context) {
 func (h *ManagedConfigHandler) DeleteLayer(c *gin.Context) {
 	scope := model.ManagedConfigScope(c.Query("scope"))
 	refID := uint(atoiDefault(c.Query("scopeRefId"), 0))
-	if !h.scopeAccessible(c, scope, refID) {
+	if !h.scopeWritable(c, scope, refID) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "作用域不存在"})
 		return
 	}
@@ -237,7 +237,7 @@ func (h *ManagedConfigHandler) CreatePush(c *gin.Context) {
 	}
 	// 作用域本身也要过可见性：InstanceIDs 为空时服务按 scope 展开目标，
 	// 不校验 scope 等于让只能管自己组的运营建出 global 全平台推送。
-	if !h.scopeAccessible(c, in.Scope, in.ScopeRefID) {
+	if !h.scopeWritable(c, in.Scope, in.ScopeRefID) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "作用域不存在"})
 		return
 	}
@@ -264,6 +264,10 @@ func (h *ManagedConfigHandler) StartPush(c *gin.Context) {
 	if err != nil {
 		return
 	}
+	if !h.pushSessionAccessible(c, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "会话不存在"})
+		return
+	}
 	h.pushSvc.Start(id)
 	c.JSON(http.StatusOK, gin.H{"started": true})
 }
@@ -272,6 +276,10 @@ func (h *ManagedConfigHandler) StartPush(c *gin.Context) {
 func (h *ManagedConfigHandler) ReleasePush(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
+		return
+	}
+	if !h.pushSessionAccessible(c, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "会话不存在"})
 		return
 	}
 	session, err := h.pushSvc.Release(id)
@@ -295,6 +303,10 @@ func (h *ManagedConfigHandler) PausePush(c *gin.Context) {
 	}
 	var req managedReasonRequest
 	_ = c.ShouldBindJSON(&req)
+	if !h.pushSessionAccessible(c, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "会话不存在"})
+		return
+	}
 	session, err := h.pushSvc.Pause(id, req.Reason)
 	if err != nil {
 		h.respondPushError(c, err)
@@ -307,6 +319,10 @@ func (h *ManagedConfigHandler) PausePush(c *gin.Context) {
 func (h *ManagedConfigHandler) ResumePush(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
+		return
+	}
+	if !h.pushSessionAccessible(c, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "会话不存在"})
 		return
 	}
 	session, err := h.pushSvc.Resume(id)
@@ -325,6 +341,10 @@ func (h *ManagedConfigHandler) CancelPush(c *gin.Context) {
 	}
 	var req managedReasonRequest
 	_ = c.ShouldBindJSON(&req)
+	if !h.pushSessionAccessible(c, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "会话不存在"})
+		return
+	}
 	session, err := h.pushSvc.Cancel(id, req.Reason)
 	if err != nil {
 		h.respondPushError(c, err)
@@ -337,6 +357,12 @@ func (h *ManagedConfigHandler) CancelPush(c *gin.Context) {
 func (h *ManagedConfigHandler) ListTargets(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
+		return
+	}
+	// 目标行含逐台下发的载荷原文（各实例 node/instance 层合并值），
+	// 跨组会话的载荷不能让只看得见部分目标的运营整页读出。
+	if !h.pushSessionAccessible(c, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "会话不存在"})
 		return
 	}
 	state := c.Query("state")
@@ -484,7 +510,9 @@ func (h *ManagedConfigHandler) accessibleScopeOrNil(c *gin.Context) []uint {
 	if err != nil {
 		return []uint{}
 	}
-	if all {
+	// all=false 表示不受限（平台管理员）：返回 nil 即「不过滤」。
+	// all=true 才应用 id 集合——两个方向都不得反，反了管理员被关死、受限用户被放开。
+	if !all {
 		return nil
 	}
 	if ids == nil {
@@ -578,7 +606,8 @@ func (h *ManagedConfigHandler) scopeAccessible(c *gin.Context, scope model.Manag
 
 // seesAllInstances 判定用户是否有「全部实例」的可见范围。
 //
-// 复用 AccessibleInstanceIDs 的 `all` 语义：返回 true 表示不受限，此时才允许写 global 层。
+// 复用 AccessibleInstanceIDs 的 all 语义：all=false（如平台管理员）表示不受限，
+// 此时才允许写 global 层；all=true 表示须按实例集合收敛。
 func (h *ManagedConfigHandler) seesAllInstances(c *gin.Context) bool {
 	access := getAccess(c)
 	if access == nil || h.authz == nil {
@@ -588,7 +617,7 @@ func (h *ManagedConfigHandler) seesAllInstances(c *gin.Context) bool {
 	if err != nil {
 		return false
 	}
-	return all
+	return !all
 }
 
 // nodeVisible 判定用户是否在该节点下至少可见一个实例。
@@ -604,7 +633,9 @@ func (h *ManagedConfigHandler) nodeVisible(c *gin.Context, nodeID uint) bool {
 	if err != nil {
 		return false
 	}
-	if all {
+	// all=false 是不受限：节点是否存在由 service 层判定（ManagedScopeRefNotFound），
+	// 这里只回答「这个人对这个节点下实例的可见性」，不受限即可见。
+	if !all {
 		return true
 	}
 	if len(ids) == 0 {
@@ -623,6 +654,62 @@ func (h *ManagedConfigHandler) nodeVisible(c *gin.Context, nodeID uint) bool {
 	return false
 }
 
+// nodeFullyVisible 判定节点下**全部**实例对该用户可见。
+//
+// 与 nodeVisible 的区别是读写口径：node 层是一份共享配置，写到它会合并进节点上
+// 每台实例——包括别组的。只看得见一台就能改整层，等于允许 A 组运营通过共享 node 层
+// 改到 B 组实例的探针配置。写 node 层必须能管到节点上所有实例（或不受限）。
+func (h *ManagedConfigHandler) nodeFullyVisible(c *gin.Context, nodeID uint) bool {
+	access := getAccess(c)
+	if access == nil || h.authz == nil || h.instances == nil {
+		return false
+	}
+	ids, all, err := h.authz.AccessibleInstanceIDs(access)
+	if err != nil {
+		return false
+	}
+	if !all {
+		return true
+	}
+	set := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	nodeInsts, err := h.instances.List(service.InstanceFilter{NodeID: &nodeID})
+	if err != nil || len(nodeInsts) == 0 {
+		return false
+	}
+	for _, inst := range nodeInsts {
+		if _, ok := set[inst.ID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// scopeWritable 写作用域判定：global 同 scopeAccessible；instance 同 scopeAccessible；
+// node 层共享配置写入要求节点下实例全部可见（理由见 nodeFullyVisible）。
+func (h *ManagedConfigHandler) scopeWritable(c *gin.Context, scope model.ManagedConfigScope, refID uint) bool {
+	if scope == model.ManagedScopeNode {
+		return h.nodeFullyVisible(c, refID)
+	}
+	return h.scopeAccessible(c, scope, refID)
+}
+
+// pushSessionAccessible 判定会话的所有目标实例对当前用户可见。
+//
+// 生命周期操作（开始/放行/暂停/恢复/取消/查目标）只对会话目标生效，
+// 但目标可能含有其他组的实例：受限用户不应能对跨组会话整体下达指令或读到
+// 逐台载荷原文。只要有一台不可见就按不存在处理（与整包拒绝口径一致）。
+func (h *ManagedConfigHandler) pushSessionAccessible(c *gin.Context, sessionID uint) bool {
+	ids, err := h.pushSvc.TargetInstanceIDs(sessionID)
+	if err != nil {
+		return false
+	}
+	_, denied := h.filterAccessibleInstances(c, ids)
+	return len(denied) == 0
+}
+
 // filterAccessibleInstances 把请求里的实例 ID 收敛到当前用户可见集合。
 //
 // 返回 kept（保留下来的）与 denied（存在但不可访问的）。调用方据此决定是「静默丢弃」
@@ -639,7 +726,8 @@ func (h *ManagedConfigHandler) filterAccessibleInstances(c *gin.Context, ids []u
 	if err != nil {
 		return nil, ids
 	}
-	if all {
+	// all=false 是不受限（全保留）；all=true 才按可见集合过滤。
+	if !all {
 		return ids, nil
 	}
 	set := make(map[uint]struct{}, len(allowed))

@@ -164,16 +164,25 @@ func (s *ManagedPushService) Create(in ManagedPushInput, operatorID uint) (*mode
 	}
 
 	// 逐实例合并（不同实例的 node/instance 层不同，合并结果也不同）——
-	// 因此「下发的 values」实际上是**每台一份**。这里把首台的结果作为会话展示用的代表值，
-	// 真正的每台 values 在推送到该台时重新取一次（见 pushOne）。
-	first, err := s.config.MergeForInstance(insts[0])
-	if err != nil {
-		return nil, err
+	// 因此「下发的 values」实际上是**每台一份**。这里取第一台有可下发内容的合并结果
+	// 作为会话展示用的代表值，真正的每台 values 在推送到该台时重新取一次（见 pushOne）。
+	// 只对 insts[0] 判空是错的：首台合并为空（本批仅想改别的实例层）会误报整批为空。
+	var first *ManagedMergeResult
+	mergesByID := make(map[uint]*ManagedMergeResult, len(insts))
+	for i := range insts {
+		merged, merr := s.config.MergeForInstance(insts[i])
+		if merr != nil {
+			return nil, merr
+		}
+		mergesByID[insts[i].ID] = merged
+		if len(merged.ForbiddenKeys) > 0 {
+			return nil, fmt.Errorf("%w: %s", ErrManagedConfigForbidden, strings.Join(merged.ForbiddenKeys, "、"))
+		}
+		if first == nil && (len(merged.Values) > 0 || len(merged.Removals) > 0) {
+			first = merged
+		}
 	}
-	if len(first.ForbiddenKeys) > 0 {
-		return nil, fmt.Errorf("%w: %s", ErrManagedConfigForbidden, strings.Join(first.ForbiddenKeys, "、"))
-	}
-	if len(first.Values) == 0 && len(first.Removals) == 0 {
+	if first == nil {
 		return nil, ErrManagedConfigLayerEmpty
 	}
 
@@ -229,6 +238,7 @@ func (s *ManagedPushService) Create(in ManagedPushInput, operatorID uint) (*mode
 		CurrentBatch:         1,
 	}
 
+	now := time.Now()
 	err = s.createSessionTx(&session, func(tx *gorm.DB) error {
 		for _, inst := range insts {
 			target := model.ManagedPushTarget{
@@ -239,6 +249,27 @@ func (s *ManagedPushService) Create(in ManagedPushInput, operatorID uint) (*mode
 				NodeID:       inst.NodeID,
 				BatchNo:      managedBatchOf(targetIndexByID(insts, inst.ID), batchSize),
 				State:        model.ManagedPushTargetPending,
+			}
+			// 创建时冻结该实例的合并载荷：多批会话期间改层不会渗漏进晚批实例，
+			// 同一次下发对所有批次内容一致（pushOne 下发时只换版本号与基线）。
+			merged := mergesByID[inst.ID]
+			if merged == nil || (len(merged.Values) == 0 && len(merged.Removals) == 0) {
+				target.State = model.ManagedPushTargetSkipped
+				target.ErrorKind = model.ManagedTargetCodeNothingToPush
+				target.Error = "该实例配置层合并后无可下发内容"
+				target.FinishedAt = &now
+			} else {
+				planned := ManagedConfigPush{
+					ConfigVersion: session.ConfigVersion,
+					Values:        merged.Values,
+					Removals:      merged.Removals,
+					Reason:        session.Reason,
+				}
+				raw, berr := planned.BuildConfigPushPayload()
+				if berr != nil {
+					return fmt.Errorf("构建实例 %d 冻结载荷失败: %w", inst.ID, berr)
+				}
+				target.PlannedPayloadJSON = string(raw)
 			}
 			if terr := tx.Create(&target).Error; terr != nil {
 				return fmt.Errorf("创建下发目标失败: %w", terr)
@@ -631,19 +662,22 @@ func (s *ManagedPushService) Cancel(sessionID uint, reason string) (*model.Manag
 //  2. 该实例上一次成功下发（applied）目标的 ack 版本；
 //  3. 都没有 → 0（首次下发）。
 func (s *ManagedPushService) baseVersionFor(inst model.Instance) int64 {
+	var base int64
 	if s.state != nil {
 		if st, ok, err := s.state.Get(inst.ID); err == nil && ok {
-			return st.ConfigVersion
+			base = st.ConfigVersion
 		}
 	}
 	var last model.ManagedPushTarget
 	err := s.db.Where("instance_id = ? AND state = ? AND ack_version IS NOT NULL",
 		inst.ID, model.ManagedPushTargetApplied).
 		Order("id DESC").First(&last).Error
-	if err == nil && last.AckVersion != nil {
-		return *last.AckVersion
+	if err == nil && last.AckVersion != nil && *last.AckVersion > base {
+		// 状态表可能滞后于最近一次成功下发的回执：基线取两者较大者，
+		// 否则会把探针已确认过的版本当冲突退回。
+		base = *last.AckVersion
 	}
-	return 0
+	return base
 }
 
 // pushOne 向一台实例下发 config_push。
@@ -680,11 +714,17 @@ func (s *ManagedPushService) pushOne(session *model.ManagedPushSession, target m
 	// 原样发出去，探针会按旧版本回执，而 CP 正按新版本等它——回执永远对不上，最终全批超时。
 	var raw []byte
 	base := s.baseVersionFor(inst)
+	// 回滚会话用源目标的实际发送载荷；常规会话用创建时冻结的计划载荷——
+	// 两者都只是「内容」，版本号与基线一律在下发时现场铸。
+	frozenJSON := target.PlannedPayloadJSON
 	if session.Kind == model.ManagedPushKindRollback && target.PushedPayloadJSON != "" {
+		frozenJSON = target.PushedPayloadJSON
+	}
+	if frozenJSON != "" {
 		var frozen ManagedConfigPush
-		if uerr := json.Unmarshal([]byte(target.PushedPayloadJSON), &frozen); uerr != nil {
+		if uerr := json.Unmarshal([]byte(frozenJSON), &frozen); uerr != nil {
 			s.finishTarget(target, model.ManagedPushTargetFailed,
-				model.ManagedTargetCodeApplyFailed, "回滚载荷损坏: "+uerr.Error())
+				model.ManagedTargetCodeApplyFailed, "冻结载荷损坏: "+uerr.Error())
 			return nil
 		}
 		payload := ManagedConfigPush{
@@ -758,6 +798,11 @@ func (s *ManagedPushService) pushOne(session *model.ManagedPushSession, target m
 		})
 	if res.Error != nil {
 		return fmt.Errorf("标记下发中失败: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		// 声明失败：目标在取快照后已被取消/跳过。此时再发帧会让一台
+		// 已被判 skipped 的实例实际收到配置——状态机与实际行为脱节。
+		return nil
 	}
 
 	if err := s.sendConfigPush(inst, string(raw)); err != nil {

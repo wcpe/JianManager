@@ -157,6 +157,8 @@ const (
 	ManagedTargetCodeInstanceOffline = "INSTANCE_OFFLINE"
 	// ManagedTargetCodeProbeNotApplicable 实例不适用探针（代理/Beacon/二进制），跳过。
 	ManagedTargetCodeProbeNotApplicable = "PROBE_NOT_APPLICABLE"
+	// ManagedTargetCodeNothingToPush 该实例合并后无可下发内容，创建时即跳过。
+	ManagedTargetCodeNothingToPush = "NOTHING_TO_PUSH"
 	// ManagedTargetCodeCancelledByUser 会话被人工取消，未下发目标一并跳过。
 	ManagedTargetCodeCancelledByUser = "CANCELLED_BY_USER"
 )
@@ -282,7 +284,9 @@ type ManagedPushSession struct {
 	// BatchSize 每批台数；0 = 单批全量。
 	BatchSize int `gorm:"not null;default:0" json:"batchSize"`
 	// FailureRateThreshold 失败率熔断阈值（百分比，默认 20；0 = 关闭熔断）。
-	FailureRateThreshold float64 `gorm:"not null;default:20" json:"failureRateThreshold"`
+	// 不带 gorm default：显式传 0（关闭熔断）也是合法值，
+	// 数据库默认值会把用户明确给的 0 偷换成 20。默认值由 service 层统一给。
+	FailureRateThreshold float64 `gorm:"not null" json:"failureRateThreshold"`
 	// AckTimeoutSec 单台 ACK 超时（秒，默认 30）。
 	AckTimeoutSec int `gorm:"not null;default:30" json:"ackTimeoutSec"`
 
@@ -352,6 +356,12 @@ type ManagedPushTarget struct {
 	// node/instance 层按实例求值，同一会话下 A 机器的有效配置不是 B 机器的，故会话级的
 	// ValuesJSON 只是代表值，拿它重推会让回滚变成「推一份从未存在过的配置」。
 	PushedPayloadJSON string `gorm:"type:longtext" json:"-"`
+	// PlannedPayloadJSON 创建会话时冻结的每实例合并载荷（计划值，与实际发送不同列）。
+	//
+	// 为什么不能到时再合并：多批会话跨越分钟级，期间有人改层，晚批实例就会收到一份
+	// 「创建会话时谁也没见过的配置」——同一次下发在不同批次内容不一致。冻结在创建时，
+	// 下发时只换版本号与基线。回滚不重用它（回滚的源是 PushedPayloadJSON）。
+	PlannedPayloadJSON string `gorm:"type:longtext" json:"-"`
 	// ErrorKind/Error 失败/拒绝的原因（机器码 + 人读文案）。
 	ErrorKind string `gorm:"type:varchar(48)" json:"errorKind,omitempty"`
 	Error     string `gorm:"type:varchar(1024)" json:"error,omitempty"`

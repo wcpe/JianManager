@@ -165,6 +165,22 @@ func ManagedConfigTierOf(key string) (ManagedConfigTier, bool) {
 	if _, ok := managedReservedGuardedKeys[key]; ok {
 		return ConfigTierGuarded, true
 	}
+	// 动态子键继承最近已登记祖先的档位：`alert.rules` 登记为危险档后，
+	// `alert.rules.<规则名>.threshold` 这类动态规则名子键若按“未收录”判禁，
+	// 规则编辑器就整组不可用。未命中任何祖先仍 fail-close 返回未收录。
+	segments := strings.Split(key, ".")
+	for i := len(segments) - 1; i >= 1; i-- {
+		prefix := strings.Join(segments[:i], ".")
+		if tier, ok := managedConfigTiers[prefix]; ok {
+			return tier, true
+		}
+		if _, ok := managedReservedSafeKeys[prefix]; ok {
+			return ConfigTierSafe, true
+		}
+		if _, ok := managedReservedGuardedKeys[prefix]; ok {
+			return ConfigTierGuarded, true
+		}
+	}
 	return ConfigTierForbidden, false
 }
 

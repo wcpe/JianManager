@@ -508,11 +508,11 @@ type ManagedImpact struct {
 
 // defaultCollectPeriodTicks 是探针默认采集周期（tick）。
 //
-// 与探针侧 DEFAULT_COLLECT_PERIOD_TICKS 对齐：20 tick = 1 秒。
-// 上限下限的用途只在**预估**：真正的合法区间由探针的物理边界校验，CP 不重复实现，
-// 这里只把倍率算在一个有意义的范围内，避免 0 或负数把倍率算成 Inf。
+// 与本包 key 目录里 collect-period-ticks 的 Default 对齐：100 tick（约 5 秒）。
+// 曾写 20 并注释“与探针侧对齐”——界面目录却一直对用户说默认 100，两套口径并存会让
+// 预估倍率在界面上比目录声称的基准放大 5 倍。
 const (
-	defaultCollectPeriodTicks = 20
+	defaultCollectPeriodTicks = 100
 	// minCollectPeriodTicks 是倍率计算的下限（1 tick 已经是最激进的采集，再小无意义）。
 	minCollectPeriodTicks = 1
 )
@@ -571,6 +571,16 @@ func (s *ManagedConfigService) EstimateImpact(scope model.ManagedConfigScope, sc
 			out.EffectiveCollectPeriodTicks = ticks
 		} else {
 			out.Notes = append(out.Notes, "collect-period-ticks 不是正整数，倍率按默认周期估算")
+		}
+	} else if len(insts) > 0 {
+		// 草稿没改周期时，生效周期可能来自下层（global/node/instance 已有值）：
+		// 拿作用域第一台实例的合并结果当代表，比硬按默认周期估准得多。
+		if merged, merr := s.MergeForInstance(insts[0]); merr == nil && merged != nil {
+			if raw, ok := merged.Values["collect-period-ticks"]; ok {
+				if ticks, ok := coercePositiveInt(raw); ok && ticks > 0 {
+					out.EffectiveCollectPeriodTicks = ticks
+				}
+			}
 		}
 	}
 	if out.EffectiveCollectPeriodTicks < minCollectPeriodTicks {
@@ -697,7 +707,16 @@ func flattenManagedConfig(v any, prefix string, out map[string]any) {
 	if len(obj) == 0 {
 		return
 	}
-	for k, val := range obj {
+	// 按序遍历：同一文档里 `"aggregation.window": x` 与 `aggregation: {window: y}`
+	// 会撞同一个点分键，Go map 无序遍历会让「谁赢」随机。按字典序处理后结果确定：
+	// 嵌套对象先展平（`aggregation` 排前），平铺键后写覆盖——行为固定且可测。
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		val := obj[k]
 		path := k
 		if prefix != "" {
 			path = prefix + "." + k
