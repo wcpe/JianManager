@@ -397,6 +397,18 @@ jobs:
             -o internal/controlplane/embed/jmctl/jmctl-linux-amd64 ./apps/jmctl
           go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/jmctl --version "${VERSION}" --prefix jmctl
 
+      - name: 校验 jmctl 内嵌产物（缺漏直接失败,不让 503 混进发布）
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in jmctl-linux-amd64 jmctl-windows-amd64.exe manifest.json; do
+            test -s "internal/controlplane/embed/jmctl/$f" || { echo "缺少内嵌产物 $f"; exit 1; }
+          done
+          # 安装脚本依赖 manifest 的 file/sha256 字段做版本比对与校验,两条目都须在。
+          grep -q 'jmctl-linux-amd64' internal/controlplane/embed/jmctl/manifest.json
+          grep -q 'jmctl-windows-amd64.exe' internal/controlplane/embed/jmctl/manifest.json
+          grep -q '"sha256"' internal/controlplane/embed/jmctl/manifest.json
+
       - name: 交叉编译 control-plane（full）与 worker
         shell: bash
         env:
