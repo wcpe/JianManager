@@ -218,7 +218,9 @@ interface LayerEditorProps {
    */
   layerReady: boolean
   /** 保存成功回调（父级据此把新行并进列表）。 */
-  onSaved: (layer: ManagedConfigLayer) => void
+  // keepDraft=true 表示这是单键写入：父级只刷新列表、不重取层，
+  // 避免 editorKey 版本变化重挂编辑器丢光其它键的草稿。
+  onSaved: (layer: ManagedConfigLayer, keepDraft?: boolean) => void
   /** 请求删除该层（父级负责二次确认）。 */
   onRequestDelete: () => void
   /** 冲突后重新加载（父级换 key 重挂本组件）。 */
@@ -249,6 +251,8 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
   const [committed, setCommitted] = useState<Record<string, unknown>>(() =>
     flattenManagedConfig(parseLayerConfig(layer?.config)),
   )
+  /** 服务端当前层版本：单键保存后本地推进，不依赖重取层（重取会令编辑器重挂丢草稿）。 */
+  const [serverVersion, setServerVersion] = useState(layer?.version ?? 0)
 
   const validateMut = useValidateManagedConfig()
   const impactMut = useManagedImpact()
@@ -404,26 +408,33 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
     try {
       // PUT 语义是整层替换：只发单键会把层里其他键全部抹掉，发整份草稿又会
       // 把其它键的未落盘改动一并提交——两种都不是「只写这个键」。
-      // 正确口径：服务端已存层值 + 这个键的草稿值。
+      // 正确口径：已存层快照（committed）+ 这个键的草稿值。committed 而非
+      // layer?.config：单键保存后父级不重取层（防重挂丢草稿），layer 会滞后。
       const flatDraft = flattenManagedConfig(draftDoc)
-      const savedFlat = flattenManagedConfig(parseLayerConfig(layer?.config))
-      const next: Record<string, unknown> = { ...savedFlat }
-      // 草稿里删掉该键＝提交「删除这个键」：写入 undefined 会被 JSON 序列化丢成缺省，
-      // 必须显式 delete，否则删除操作会被静默吞掉。
-      if (flatDraft[key] === undefined) {
-        delete next[key]
-      } else {
-        next[key] = flatDraft[key]
+      const next: Record<string, unknown> = { ...committed }
+      // 先剔除该键及所有 `key.` 前缀点分旧键：已存的 alert.rules.tps-warn.threshold
+      // 这类旧子键会与草稿展开的新对象在服务端展平时撞同一路径，排序后旧键反而
+      // 覆盖新值（保存成功但内容没变）。对组重置与删规则同一条路径生效。
+      for (const k of Object.keys(next)) {
+        if (k === key || k.startsWith(`${key}.`)) delete next[k]
+      }
+      // 草稿侧同样按前缀收集：object 键展平后是多个 `key.*` 子键；草稿里删掉
+      // 该键（前缀下一条都没有）＝提交「删除这个键」。
+      for (const [k, v] of Object.entries(flatDraft)) {
+        if (k === key || k.startsWith(`${key}.`)) next[k] = v
       }
       const saved = await saveMut.mutateAsync({
         scope,
         scopeRefId,
         config: JSON.stringify(next),
-        expectedVersion: layer?.version ?? 0,
+        expectedVersion: serverVersion,
         remark: remark.trim() || undefined,
       })
-      setCommitted((prev) => ({ ...prev, [key]: flatDraft[key] }))
-      onSaved(saved)
+      // 用返回层更新本地已存快照与乐观并发基线；并要求父级跳过层查询重取——
+      // 重取会让 editorKey 里的版本号变化从而重挂编辑器，其它键的草稿随旧实例销毁。
+      setCommitted(flattenManagedConfig(parseLayerConfig(saved.config)))
+      setServerVersion(saved.version)
+      onSaved(saved, true)
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status
       if (status === 409) {
@@ -444,9 +455,11 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
         scope,
         scopeRefId,
         config: draftText,
-        expectedVersion: layer?.version ?? 0,
+        expectedVersion: serverVersion,
         remark: remark.trim() || undefined,
       })
+      setCommitted(flattenManagedConfig(parseLayerConfig(saved.config)))
+      setServerVersion(saved.version)
       onSaved(saved)
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status
@@ -1506,10 +1519,12 @@ export default function ManagedConfigPage({ defaultTab = 'layers' }: { defaultTa
               // 「拿到过结果」就算就绪：found=false（该层确实没配过）也是就绪，
               // 此时允许首次保存。只有仍在 loading/error 时才算未就绪。
               layerReady={layerQuery.isSuccess}
-              onSaved={() => {
-                // 版本由服务端自增；失效后 editorKey 跟着变，草稿自动回到真值。
+              onSaved={(_saved, keepDraft) => {
+                // 版本由服务端自增；整层保存后失效重取让 editorKey 跟着变，草稿回到真值。
+                // 单键写入（keepDraft）跳过重取层：重取换版本会重挂编辑器，其它键
+                // 的未落盘草稿随旧编辑器销毁；层数据由编辑器自己用返回体推进。
                 void layersQuery.refetch()
-                void layerQuery.refetch()
+                if (!keepDraft) void layerQuery.refetch()
               }}
               onRequestDelete={() => setDeleteOpen(true)}
               onRequestReload={() => {

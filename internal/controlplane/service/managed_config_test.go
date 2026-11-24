@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -431,6 +432,52 @@ func TestEstimateImpact_ForbiddenKeyReported(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, impact.ForbiddenKeys, "metrics.port")
 	assert.NotEmpty(t, impact.Notes)
+}
+
+// TestEstimateImpact_AccessibleFilter 验证预演只统计调用方可见的实例：
+// 计数与代表实例的合并周期都必须来自可见集合，空集合则不能泄露任何信息。
+func TestEstimateImpact_AccessibleFilter(t *testing.T) {
+	db := newManagedTestDB(t)
+	svc := NewManagedConfigService(db)
+
+	node := model.Node{Name: "n1", UUID: "node-uuid-1", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(&node).Error)
+	mkInst := func(uuid string, ticks int) model.Instance {
+		inst := model.Instance{
+			UUID: uuid, NodeID: node.ID, Name: "srv-" + uuid,
+			Type: model.InstanceTypeMinecraftJava, Role: model.InstanceRoleBackend,
+			ProcessType: model.ProcessTypeDirect, Status: model.InstanceStatusRunning,
+		}
+		require.NoError(t, db.Create(&inst).Error)
+		require.NoError(t, db.Create(&model.ManagedConfigLayer{
+			Scope: model.ManagedScopeInstance, ScopeRefID: inst.ID, ScopeName: inst.Name,
+			Config:  fmt.Sprintf(`{"collect-period-ticks": %d}`, ticks),
+			Version: 1,
+		}).Error)
+		return inst
+	}
+	mkInst("a", 50)
+	b := mkInst("b", 25)
+
+	// 不受限：两台都算，代表实例取第一台（a，周期 50）。
+	impact, err := svc.EstimateImpact(model.ManagedScopeNode, node.ID, map[string]any{}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, impact.TotalInstances)
+	assert.Equal(t, 2, impact.AffectedInstances)
+	assert.Equal(t, 50, impact.EffectiveCollectPeriodTicks)
+
+	// 只见 b：计数收敛到 1，代表周期也必须取 b 的 25，而不是借 a 的 50。
+	impact, err = svc.EstimateImpact(model.ManagedScopeNode, node.ID, map[string]any{}, []uint{b.ID})
+	require.NoError(t, err)
+	assert.Equal(t, 1, impact.TotalInstances)
+	assert.Equal(t, 1, impact.AffectedInstances)
+	assert.Equal(t, 25, impact.EffectiveCollectPeriodTicks)
+
+	// 空集合（一个都不可见）：计数为 0，周期回落默认，不透露任何实例信息。
+	impact, err = svc.EstimateImpact(model.ManagedScopeNode, node.ID, map[string]any{}, []uint{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, impact.TotalInstances)
+	assert.Equal(t, defaultCollectPeriodTicks, impact.EffectiveCollectPeriodTicks)
 }
 
 // TestFlattenManagedConfig 验证嵌套对象展平为点分键、空对象不产出键。
