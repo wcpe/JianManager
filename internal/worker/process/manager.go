@@ -1280,13 +1280,44 @@ func (m *Manager) removeLocked(uuid string, inst *Instance) error {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if current, ok := m.instances[uuid]; ok && current == inst {
 		delete(m.instances, uuid)
 	}
 	// 复审项 10：实例移除时回收健康记账，避免残留记录随 UUID 复用污染后续熔断判定。
 	m.dropHealthAccounting(uuid)
+	m.mu.Unlock()
+
+	// 排空实例清单的异步写盘：崩溃记账经 markStrategyState 触发 refreshInstanceIndexAsync，
+	// Remove 返回后 serversDir 里可能仍有在飞的 instances.json 写操作，会与调用方清理
+	// 数据根（测试里的 t.TempDir）竞出 "directory not empty" 的偶发失败。
+	m.waitInstanceIndexIdle(3 * time.Second)
 	return nil
+}
+
+// waitInstanceIndexIdle 等待实例清单的异步写盘静默（无脏标记且无在飞写盘）。
+// 第二次静默复核是为覆盖窄窗口：状态变更回调已扇出、refreshInstanceIndexAsync
+// 尚未登记的瞬间，第一次检查会误判静默。写盘本就毫秒级，超时只放弃等待、不报错。
+func (m *Manager) waitInstanceIndexIdle(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		m.indexMu.Lock()
+		idle := !m.indexRunning && !m.indexDirty
+		m.indexMu.Unlock()
+		if !idle {
+			if time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		time.Sleep(15 * time.Millisecond)
+		m.indexMu.Lock()
+		stillIdle := !m.indexRunning && !m.indexDirty
+		m.indexMu.Unlock()
+		if stillIdle || time.Now().After(deadline) {
+			return
+		}
+	}
 }
 
 // StopAll 停止所有运行中的实例。
