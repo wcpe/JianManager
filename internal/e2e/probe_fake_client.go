@@ -30,7 +30,7 @@ import (
 // 这一点必须被测试覆盖——CP 曾把整帧当载荷解析，导致所有回执被判成 failed。
 
 // e2eWSSecret 是 setupCluster 下发给 CP 的插件桥密钥，假探针用它签发桥 token。
-const e2eWSSecret = "e2e-ws-secret"
+const e2eWSSecret = "test-secret-e2e-ws"
 
 // fakeProbe 是一条已建立的假探针会话。
 type fakeProbe struct {

@@ -693,7 +693,7 @@ serverprobe_world_{loaded_chunks,entities,tile_entities}{world=}  → 按世界�
 
 > 地基阶段（FR-065）打通通道层（会话/握手/心跳/connected·disconnected 冒泡 + proto 一次铺齐）；实时玩家事件采集（FR-066）已落地（见上）；治理执行与 RCON 退役（FR-067）已落地，在线更新（FR-068）复用本通道、不再改 proto。
 
-### 6.2.2.1 探针托管配置（协议 FR-561 + 运营面 FR-560）
+### 6.2.3 探针托管配置（协议 FR-561 + 运营面 FR-560）
 
 > 本节讲 CP 侧如何接入与运营托管探针。**协议权威定义**（帧格式 / 载荷位置 / 字段语义 /
 > 三档分级）在 [specs/probe-managed-mode/spec.md](specs/probe-managed-mode/spec.md)，
@@ -757,7 +757,7 @@ CP 合成值是 `connected`/`degraded`/`unauthorized`/`disconnected`——**只�
 `/probe/managed`，Tab 状态进 URL query（可分享）。被收进来的两个页面复用而非重写；
 旧路径 `/managed-configs`、`/managed-matrix` 保留为重定向。
 
-### 6.2.3 QQ 网关出站 WebSocket（CP ↔ 开放平台，FR-495）
+### 6.2.4 QQ 网关出站 WebSocket（CP ↔ 开放平台，FR-495）
 
 FR-494 的 `qq` 通道是纯出站 HTTP 投递（`ChannelNotifier.Send`，token 按 `appId` 缓存）；FR-495
 另起一条 CP 直连开放平台的**出站** WSS 长连接，只为接收 `GROUP_ADD_ROBOT` 入群事件、

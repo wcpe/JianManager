@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-// 外部控制面托管模式（ServerProbe PR#64 / FR-561）的 CP 侧实现。
+// 外部控制面托管模式的 CP 侧实现。
 //
-// 协议权威定义：docs/specs/probe-managed-mode/spec.md（FR-561）。
-// 运营面（三层配置 / 灰度下发 / 对账矩阵）见 FR-560 与 specs/probe-managed-config/spec.md：
+// 协议权威定义：docs/specs/probe-managed-mode/spec.md。
+// 运营面（三层配置 / 灰度下发 / 对账矩阵）见 specs/probe-managed-config/spec.md：
 // 本文件只负责协议地基，不含任何运营语义。
 //
 // ## 与既有插件桥的关系

@@ -5,7 +5,7 @@ import (
 	"log/slog"
 )
 
-// 托管模式（ServerProbe PR#64 / FR-561）的 CP 侧装配：把“身份文件 + 托管版 config.yml”一起下发。
+// 托管模式的 CP 侧装配：把“身份文件 + 托管版 config.yml”一起下发。
 //
 // 协议权威定义：docs/specs/probe-managed-mode/spec.md。
 //

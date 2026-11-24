@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// 托管模式的帧协议（FR-561；探针侧权威实现在 ServerProbe project:core 的 bridge/ 与 config/）。
+// 托管模式的帧协议（探针侧权威实现在 ServerProbe project:core 的 bridge/ 与 config/）。
 //
 // 协议权威定义：docs/specs/probe-managed-mode/spec.md。
 //

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// 探针配制键的三档分级（FR-561；协议规格 §3.3，66 键权威表）。
+// 探针配制键的三档分级（协议规格 §3.3，66 键权威表）。
 //
 // 协议权威定义：docs/specs/probe-managed-mode/spec.md。
 //
