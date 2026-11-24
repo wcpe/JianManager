@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -95,6 +97,56 @@ func TestClientVersion_PublishGeneratesZstdPatchFromLatest(t *testing.T) {
 	ok, err := securitySvc.IsArtifactAllowedForChannel("skyblock-s1", patch.Artifact.SHA256)
 	require.NoError(t, err)
 	require.True(t, ok, "防护授权应允许 latest manifest 引用的 patch 制品")
+}
+
+// stubBrokenZstdOnPath 在 PATH 最前放一个必然失败的 zstd 桩,
+// 强制 buildPatchFile 的 CLI 路径失败、落到内存 fallback——
+// 否则宿主 zstd 可用时测试根本没走到 fallback,回退修复点无从验证。
+// (Windows 上 .bat 桩被 Go exec 以 ErrBatch 拒绝,同样得到 err,语义一致。)
+func stubBrokenZstdOnPath(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	name, body := "zstd", "#!/bin/sh\nexit 1\n"
+	if runtime.GOOS == "windows" {
+		name, body = "zstd.bat", "@exit /b 1\r\n"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestClientVersion_PublishGeneratesPatchViaFallbackWhenZstdFails(t *testing.T) {
+	stubBrokenZstdOnPath(t)
+	versionSvc, _, _ := newClientVersionPatchFixture(t)
+	oldContent := []byte("fallback pack version 1 -- shared payload -- shared payload")
+	newContent := []byte("fallback pack version 2 -- shared payload -- shared payload")
+
+	oldFile := publishPatchTestFile(t, versionSvc, oldContent)
+	_, err := versionSvc.PublishVersion("skyblock-s1", PublishVersionParams{
+		Files:       []ManifestFile{oldFile},
+		ManagedDirs: []string{"mods"},
+	})
+	require.NoError(t, err)
+
+	newFile := publishPatchTestFile(t, versionSvc, newContent)
+	_, err = versionSvc.PublishVersion("skyblock-s1", PublishVersionParams{
+		Files:       []ManifestFile{newFile},
+		ManagedDirs: []string{"mods"},
+	})
+	require.NoError(t, err)
+
+	manifest, err := versionSvc.BuildManifest("skyblock-s1")
+	require.NoError(t, err)
+	patch := manifest.Files[0].Patch
+	require.NotNil(t, patch, "zstd CLI 失败时应回退内存编码仍产出 patch")
+
+	_, patchPath, err := versionSvc.OpenArtifact(patch.Artifact.SHA256)
+	require.NoError(t, err)
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderDictRaw(0, oldContent))
+	require.NoError(t, err)
+	decoded, err := dec.DecodeAll(mustReadFile(t, patchPath), nil)
+	require.NoError(t, err)
+	dec.Close()
+	require.Equal(t, newContent, decoded)
 }
 
 func TestClientVersion_PublishSkipsPatchWithoutPriorVersion(t *testing.T) {

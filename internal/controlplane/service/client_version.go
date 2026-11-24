@@ -326,6 +326,11 @@ const (
 	patchBuildMaxWorkers    = 4
 )
 
+// patchInMemoryFallbackSem 把内存 fallback 编码收敛到全局串行：CLI 存在但执行失败的
+// 场景下 4 个 patch worker 会同时落进 old/new/patch 全量进内存的 fallback 路径，
+// 小内存宿主会被尖刺打爆；串行后峰值约一对 old+new+patch（≈3×patchInMemoryFallbackMaxBytes）。
+var patchInMemoryFallbackSem = make(chan struct{}, 1)
+
 func (s *ClientVersionService) withPatchArtifacts(channelID string, files []ManifestFile) ([]ManifestFile, error) {
 	out := append([]ManifestFile(nil), files...)
 	ch, err := s.getChannel(channelID)
@@ -472,6 +477,9 @@ func (s *ClientVersionService) buildPatchFile(oldPath, newPath string, oldSize, 
 	if oldSize > patchInMemoryFallbackMaxBytes || newSize > patchInMemoryFallbackMaxBytes {
 		return "", nil, false, nil
 	}
+	// 内存 fallback 恒串行（见 patchInMemoryFallbackSem）：到这里 old/new/patch 将全量进内存。
+	patchInMemoryFallbackSem <- struct{}{}
+	defer func() { <-patchInMemoryFallbackSem }()
 	oldContent, err := os.ReadFile(oldPath)
 	if err != nil {
 		return "", nil, false, nil
