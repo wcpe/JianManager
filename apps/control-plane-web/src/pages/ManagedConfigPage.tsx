@@ -343,6 +343,13 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
     for (const [key, value] of Object.entries(flatDraft)) {
       const meta = catalog?.items.find((item) => item.key === key)
       if (!meta) continue
+      // 服务端已存的越界值只提示不拦截：值是历史落盘的，拦下保存会让用户
+      // 改别的东西也保存不了；只有草稿把值改成越界（或新写出越界）才拦。
+      const dirty = value !== committed[key]
+      if (!dirty) {
+        out[key] = { state: 'ok' }
+        continue
+      }
       if (typeof value === 'number' && Number.isFinite(value)) {
         if (meta.min !== undefined && value < meta.min) {
           out[key] = { state: 'error', message: meta.boundsHint || `不能小于 ${meta.min}` }
@@ -364,10 +371,11 @@ function LayerEditor({ scope, scopeRefId, layer, layerReady, onSaved, onRequestD
       }
     }
     return out
-  }, [catalog, draftDoc, errors])
+  }, [catalog, draftDoc, errors, committed])
 
-  // 任何字段处于错误态（本地越界或后端逐键拒绝）都不允许整层保存：
+  // 任何字段处于错误态（草稿改出的本地越界，或后端逐键拒绝）都不允许整层保存：
   // 后端不管数值边界，这里不拦就会把界面已标红的值静默写库。
+  // 服务端已存的越界值不算错误——那是历史数据，不该把用户拦在「保存别的改动」之外。
   const hasFieldErrors = Object.values(fieldValidations).some((v) => v.state === 'error')
   const canSave =
     layerReady &&
