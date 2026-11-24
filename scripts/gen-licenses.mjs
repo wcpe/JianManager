@@ -232,25 +232,29 @@ function goModules() {
   return mods
 }
 
-/** 发行目标(GOOS × 包集)——与 release.yml 发货矩阵一一对应:
- * CP/Worker/jmctl 只出 linux+windows amd64;jm 客户端另发 darwin。
- * 只扫发行的包:全量 ./... 会把「该平台不发货」的包依赖误算进来
- * (如 darwin worker 经 gopsutil 拉入 purego,实际并无 darwin worker)。 */
+/** 发行目标(GOOS/GOARCH × 包集)——与 release.yml 发货矩阵一一对应:
+ * CP/Worker/jmctl 只出 linux+windows amd64;jm 客户端另发
+ * linux/arm64、darwin/amd64、darwin/arm64。只扫发行的包:全量 ./...
+ * 会把「该平台不发货」的包依赖误算进来(如 darwin worker 经 gopsutil
+ * 拉入 purego,实际并无 darwin worker);arch 也需对齐,否则 arm64 独有
+ * 依赖在 amd64 宿主扫描时被漏掉。 */
 const SHIPPED_TARGETS = [
-  { goos: 'linux', pkgs: './...' },
-  { goos: 'windows', pkgs: './...' },
-  { goos: 'darwin', pkgs: './apps/jm' },
+  { goos: 'linux', arch: 'amd64', pkgs: './...' },
+  { goos: 'windows', arch: 'amd64', pkgs: './...' },
+  { goos: 'linux', arch: 'arm64', pkgs: './apps/jm' },
+  { goos: 'darwin', arch: 'amd64', pkgs: './apps/jm' },
+  { goos: 'darwin', arch: 'arm64', pkgs: './apps/jm' },
 ]
 
 /** go list -deps <pkgs> → 某 GOOS 下指定包集实际 import 到的外部模块路径集。
  * 用于兜底路径排除 tool/test-only 依赖(x/tools、honnef、gotest.tools 等
  * 不被任何分发二进制链接,进清单属于误报)。失败返回 null 保持旧行为。 */
-function goLinkedModulePaths(goos, pkgs) {
+function goLinkedModulePaths(goos, arch, pkgs) {
   try {
     const out = execSync(`go list -deps -f "{{if .Module}}{{.Module.Path}} {{.Module.Version}}{{end}}" ${pkgs}`, {
       cwd: REPO_ROOT,
       maxBuffer: MAX_BUFFER,
-      env: { ...process.env, GOOS: goos },
+      env: { ...process.env, GOOS: goos, GOARCH: arch },
       stdio: ['ignore', 'pipe', 'ignore'],
     }).toString()
     const set = new Set()
@@ -269,8 +273,8 @@ function goLinkedModulePaths(goos, pkgs) {
 function goLinkedModulePathsAll() {
   const all = new Set()
   let complete = true
-  for (const { goos, pkgs } of SHIPPED_TARGETS) {
-    const set = goLinkedModulePaths(goos, pkgs)
+  for (const { goos, arch, pkgs } of SHIPPED_TARGETS) {
+    const set = goLinkedModulePaths(goos, arch, pkgs)
     if (set === null) {
       complete = false
       continue
@@ -479,4 +483,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   main()
 }
 
-export { detectLicense }
+export { detectLicense, SHIPPED_TARGETS }

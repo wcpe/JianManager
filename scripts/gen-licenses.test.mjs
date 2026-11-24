@@ -2,7 +2,7 @@
 // 运行:node --test scripts/gen-licenses.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { detectLicense } from './gen-licenses.mjs'
+import { detectLicense, SHIPPED_TARGETS } from './gen-licenses.mjs'
 
 const APACHE_HEAD = 'Apache License\nVersion 2.0, January 2004\nhttp://www.apache.org/licenses/'
 const MIT_TEXT = 'The MIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy'
@@ -52,4 +52,14 @@ test('纯 MIT 文本', () => {
 test('不可识别文本 → Unknown', () => {
   assert.equal(detectLicense('some readme without any license text'), 'Unknown')
   assert.equal(detectLicense(''), 'Unknown')
+})
+
+test('SHIPPED_TARGETS 与 release.yml 发货矩阵一致', () => {
+  // CP/Worker/jmctl 只出 linux+windows amd64,全量包
+  const full = SHIPPED_TARGETS.filter((t) => t.pkgs === './...').map((t) => `${t.goos}/${t.arch}`).sort()
+  assert.deepEqual(full, ['linux/amd64', 'windows/amd64'])
+  // jm 客户端的其它发行平台只扫 ./apps/jm,不得把该平台不发货的包算进来
+  const jm = SHIPPED_TARGETS.filter((t) => t.pkgs !== './...')
+  assert.deepEqual(jm.map((t) => `${t.goos}/${t.arch}`).sort(), ['darwin/amd64', 'darwin/arm64', 'linux/arm64'])
+  assert.ok(jm.every((t) => t.pkgs === './apps/jm'))
 })
