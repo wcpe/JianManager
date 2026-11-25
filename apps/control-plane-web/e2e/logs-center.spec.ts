@@ -207,31 +207,18 @@ test('六项修复：真实浏览器移窗与UTC范围使用正确scope，取消
   await page.screenshot({ path: resolve(evidenceRoot, 'panel-browser-logs-1280.png'), fullPage: true })
 })
 
-test('六项修复：真实浏览器迁移首击/取消零POST，固定UTC日确认恰好一次', async ({ page }) => {
-  const migrations: string[] = []
-  page.on('request', (request) => {
-    if (new URL(request.url()).pathname === '/api/v1/nodes/1/log-runtime/migrate' && request.method() === 'POST') migrations.push(request.postData() ?? '')
-  })
-  await login(page)
-  await page.goto('/nodes?node=1&tab=runtime')
-  const day = page.getByLabel('迁移日期（该日分区）', { exact: true })
-  await expect(day).toBeVisible()
-  await day.fill('2026-10-21')
-  await page.getByRole('button', { name: '迁移分区', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '确认迁移日志分区' })
-  await expect(dialog).toContainText('节点 1 · 存储命名空间 node:1 · UTC 日 2026-10-21')
-  expect(migrations).toHaveLength(0)
-  await page.getByRole('button', { name: '取消', exact: true }).click()
-  expect(migrations).toHaveLength(0)
-  await page.getByRole('button', { name: '迁移分区', exact: true }).click()
-  await page.screenshot({ path: resolve(evidenceRoot, 'panel-browser-migration-confirm.png'), fullPage: true })
-  await page.getByRole('button', { name: '确认迁移', exact: true }).click()
-  await expect(dialog).not.toBeVisible()
-  expect(migrations).toHaveLength(1)
-  expect(JSON.parse(migrations[0])).toEqual({ storageNamespace: 'node:1', utcDay: '2026-10-21' })
-})
+/*
+  【已删除】原「真实浏览器迁移首击/取消零POST，固定UTC日确认恰好一次」用例。
 
-test('六项修复：英文深色与窄视口仍可操作两个既有设计系统Dialog', async ({ page }) => {
+  它测的是「迁移分区」（HOT → COLD）这条链路。该功能已随冷热双层废除整块移除：
+  后端 `internal/worker/logs/vlsup/cmdline.go` 明写 2026-10-29 起只剩唯一
+  `NamespaceHot`，`LogRuntimeStatus` 只遍历 `[]vlsup.Namespace{NamespaceHot}`，
+  迁移要求 `target_tier=cold` 而 cold 层不存在 —— 迁移已无业务语义。
+  CP 侧对应路由 `POST /nodes/:id/log-runtime/migrate` 也已删除。
+  留着这条用例等于给不存在的入口写断言。
+*/
+
+test('六项修复：英文深色与窄视口下导出对话框仍可操作', async ({ page }) => {
   await login(page)
   await page.evaluate(() => { localStorage.setItem('language', 'en'); localStorage.setItem('theme', 'dark') })
   await page.goto('/logs')
@@ -250,18 +237,11 @@ test('六项修复：英文深色与窄视口仍可操作两个既有设计系�
   await page.screenshot({ path: resolve(evidenceRoot, 'panel-browser-en-dark-range-390.png'), fullPage: true })
   await page.keyboard.press('Escape')
   await expect(range).not.toBeVisible()
-  await page.goto('/nodes?node=1&tab=runtime')
-  await page.getByLabel('Migration date (that day partition)', { exact: true }).fill('2026-10-21')
-  await page.getByRole('button', { name: 'Migrate partition', exact: true }).click()
-  const migration = page.getByRole('dialog', { name: 'Confirm log partition migration' })
-  await expect(migration).toContainText('entire physical UTC day on this node')
-  const migrationBounds = await migration.boundingBox()
-  expect(migrationBounds!.width).toBeLessThanOrEqual(390)
-  expect(migrationBounds!.height).toBeLessThanOrEqual(844)
-  await expect(page.getByRole('button', { name: 'Confirm migration', exact: true })).toBeVisible()
-  await page.screenshot({ path: resolve(evidenceRoot, 'panel-browser-en-dark-migration-390.png'), fullPage: true })
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect(migration).not.toBeVisible()
+  /*
+    【原先这里还测了迁移对话框，已删除】迁移分区功能随冷热双层废除整块移除
+    （见上方被删用例的说明）。本用例保留的部分仍有效：导出时间范围对话框
+    在英文 + 深色 + 390px 窄视口下宽度与高度都不溢出。
+  */
 })
 
 test('实例日志无反馈时不预留空白状态区域', async ({ page }) => {

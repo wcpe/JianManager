@@ -1,7 +1,6 @@
 package database
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -24,9 +23,27 @@ import (
 
 func newTaskIndexDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "tasks.db")),
-		&gorm.Config{Logger: logger.Discard})
+	// 内存库（shared cache）：本仓其它 database 测试的统一写法，见 node_name_unique_test.go。
+	// 用磁盘 t.TempDir() 会在 Windows 上撞「文件仍被占用无法删除」的清理失败。
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
+
+	/*
+		必须显式关闭底层 sql.DB 连接。
+
+		【为什么非关不可】Windows 不能删除仍有打开句柄的文件，而未关闭的 SQLite
+		连接会让 `t.TempDir()` 的清理失败，报：
+		    TempDir RemoveAll cleanup: unlinkat ...tasks.db: The process cannot
+		    access the file because it is being used by another process.
+		注意此时**测试断言全部通过**——失败发生在清理阶段，所以 Linux 上永远是绿的，
+		只有 go-test-windows 会红。本仓其它测试都用 `t.Cleanup` + `sqlDB.Close()`
+		的同一写法（见 beacon_type_backfill_test.go 等）。
+	*/
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+
 	require.NoError(t, db.AutoMigrate(&model.Task{}))
 	return db
 }
