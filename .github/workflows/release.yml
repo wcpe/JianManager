@@ -137,6 +137,8 @@ jobs:
     needs: [metadata, verify-ci]
     if: needs.metadata.outputs.publish_release == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # 创建 draft release 并上传产物资产
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -230,52 +232,9 @@ jobs:
           curl -fsSL -o internal/worker/embed/cfr/cfr.jar https://repo1.maven.org/maven2/org/benf/cfr/0.152/cfr-0.152.jar
           echo "f686e8f3ded377d7bc87d216a90e9e9512df4156e75b06c655a16648ae8765b2  internal/worker/embed/cfr/cfr.jar" | sha256sum -c -
 
-      - name: 上传 CP embed 产物（dist + client-updater + botworker）
-        uses: actions/cache/save@v4
-        with:
-          key: embed-controlplane-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            internal/controlplane/embed/dist/
-            internal/controlplane/embed/client-updater/
-            internal/controlplane/embed/botworker/
-
-      - name: 上传 Worker embed 产物（cfr）
-        uses: actions/cache/save@v4
-        with:
-          key: embed-worker-${{ github.run_id }}-${{ github.run_attempt }}
-          path: internal/worker/embed/cfr/
-
-  # ───────────────────────── go-test：Go 编译/静态检查/单测（发布前门禁） ─────────────────────────
-  # 前端与 Bot 门禁复用同提交 CI；此处只验证依赖完整 embed 的 Go 代码。
-  go-test:
-    needs: prepare-embeds
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout（不需子模块源，只需下载的 embed 产物）
-        uses: actions/checkout@v7
-        with:
-          submodules: false
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: 还原 CP embed 产物
-        uses: actions/cache/restore@v4
-        with:
-          key: embed-controlplane-${{ github.run_id }}-${{ github.run_attempt }}
-          path: internal/controlplane/embed/
-          fail-on-cache-miss: true
-
-      - name: 还原 Worker embed 产物
-        uses: actions/cache/restore@v4
-        with:
-          key: embed-worker-${{ github.run_id }}-${{ github.run_attempt }}
-          path: internal/worker/embed/cfr/
-          fail-on-cache-miss: true
-
+      # go-test 并入本 job：embed 资产是 go:embed 硬依赖，同 run 跨 job
+      # 传产物不可靠（cache 实证 miss），Go 门禁直接在 embed 产出的同一
+      # 工作区跑，产物不越 job 边界。
       - name: Go 构建 / vet / 测试
         shell: bash
         run: |
@@ -329,10 +288,41 @@ jobs:
             exit 1
           }
 
+      # ── draft release 产物通道：同 run 跨 job cache 传产物实测不可靠，
+      # 改走 draft release 资产（上传/下载是 GitHub 资产 API，可靠）；
+      # draft 对外不可见，流水线结尾校验齐备后才 publish。
+      - name: 创建 draft release 作为产物通道
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.metadata.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG_NAME}" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q '^true$'; then
+            echo "复用已有 draft release ${TAG_NAME}"
+          elif gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            echo "::error::Release ${TAG_NAME} 已存在且非 draft，拒绝污染" >&2
+            exit 1
+          else
+            gh release create "${TAG_NAME}" --draft --title "${TAG_NAME}" --notes "release pipeline in progress"
+          fi
+
+      - name: 打包并上传 embed 产物（运输资产，发布前删除）
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.metadata.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          tar -czf "${RUNNER_TEMP}/transport-embeds.tar.gz" internal/controlplane/embed internal/worker/embed/cfr
+          gh release upload "${TAG_NAME}" "${RUNNER_TEMP}/transport-embeds.tar.gz" --clobber
+
   # ───────────────────────── build：交叉编译 4 个二进制（matrix） ─────────────────────────
   build:
-    needs: [metadata, prepare-embeds, go-test]
+    needs: [metadata, prepare-embeds]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # 上传二进制到 draft release
     strategy:
       fail-fast: false
       matrix:
@@ -351,19 +341,16 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: 还原 CP embed 产物
-        uses: actions/cache/restore@v4
-        with:
-          key: embed-controlplane-${{ github.run_id }}-${{ github.run_attempt }}
-          path: internal/controlplane/embed/
-          fail-on-cache-miss: true
-
-      - name: 还原 Worker embed 产物
-        uses: actions/cache/restore@v4
-        with:
-          key: embed-worker-${{ github.run_id }}-${{ github.run_attempt }}
-          path: internal/worker/embed/cfr/
-          fail-on-cache-miss: true
+      # embed 产物从 draft release 取（跨 job 产物通道，替代不可靠的 cache）
+      - name: 下载 embed 产物包
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.metadata.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release download "${TAG_NAME}" -p 'transport-embeds.tar.gz' -D "${RUNNER_TEMP}" --clobber
+          tar -xzf "${RUNNER_TEMP}/transport-embeds.tar.gz"
 
       - name: 注入 CP 内嵌 Worker 资产（两平台 + manifest，full 档）
         shell: bash
@@ -491,11 +478,14 @@ jobs:
           done
           ls -l dist/jmctl-*
 
-      - name: 上传二进制产物（供 smoke 校验，retention 1 天）
-        uses: actions/cache/save@v4
-        with:
-          key: binaries-${{ matrix.os }}-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: dist/*
+      - name: 上传二进制产物到 draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.metadata.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "${TAG_NAME}" dist/* --clobber
 
   # ───────────────────────── smoke：原生执行四个发布二进制并核对版本 ─────────────────────────
   smoke:
@@ -518,11 +508,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: 下载待验二进制
-        uses: actions/cache/restore@v4
-        with:
-          key: ${{ matrix.artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: dist
-          fail-on-cache-miss: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.metadata.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release download "${TAG_NAME}" -p '${{ matrix.binary }}' -D dist --clobber
 
       - name: Linux 版本烟测
         if: runner.os == 'Linux'
@@ -562,19 +554,18 @@ jobs:
       - name: 检出仓库
         uses: actions/checkout@v5
 
-      - name: 还原 linux-amd64 二进制产物到 dist/
-        uses: actions/cache/restore@v4
-        with:
-          key: binaries-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
-          path: dist
-          fail-on-cache-miss: true
-
-      - name: 还原 windows-amd64 二进制产物到 dist/
-        uses: actions/cache/restore@v4
-        with:
-          key: binaries-windows-amd64-${{ github.run_id }}-${{ github.run_attempt }}
-          path: dist
-          fail-on-cache-miss: true
+      - name: 下载全部产物并清运输资产
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.metadata.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release download "${TAG_NAME}" -D dist --clobber
+          rm -f dist/transport-embeds.tar.gz
+          # 运输资产不进正式 release
+          gh release delete-asset "${TAG_NAME}" transport-embeds.tar.gz -y || true
+          ls -l dist/
 
       - name: 生成 checksums.txt（每件 sha256，ADR-036 §2）
         shell: bash
@@ -624,3 +615,25 @@ jobs:
           # npm 从 NODE_AUTH_TOKEN 读凭据；registry 显式指向 npmjs，避免继承镜像配置。
           printf '//registry.npmjs.org/:_authToken=%s\n' "${NODE_AUTH_TOKEN}" > ~/.npmrc
           node packages/jm-npm/scripts/build-npm-packages.js --publish
+
+  # ── 收尾：半成品 draft 不残留（失败/中断时清理；发布成功的已非 draft） ──
+  cleanup-draft:
+    needs: [metadata, release]
+    if: ${{ always() && needs.metadata.outputs.publish_release == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: 清理未发布的 draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.metadata.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG_NAME}" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q '^true$'; then
+            gh release delete "${TAG_NAME}" -y
+            echo "已清理残留 draft release ${TAG_NAME}"
+          else
+            echo "无残留 draft（已发布或未创建）"
+          fi
