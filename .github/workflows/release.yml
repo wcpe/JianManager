@@ -231,23 +231,19 @@ jobs:
           echo "f686e8f3ded377d7bc87d216a90e9e9512df4156e75b06c655a16648ae8765b2  internal/worker/embed/cfr/cfr.jar" | sha256sum -c -
 
       - name: 上传 CP embed 产物（dist + client-updater + botworker）
-        uses: actions/upload-artifact@v7
+        uses: actions/cache/save@v4
         with:
-          name: embed-controlplane
+          key: embed-controlplane-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             internal/controlplane/embed/dist/
             internal/controlplane/embed/client-updater/
             internal/controlplane/embed/botworker/
-          retention-days: 1
-          include-hidden-files: true # 保留各目录 .gitignore 占位，避免空目录被丢弃
 
       - name: 上传 Worker embed 产物（cfr）
-        uses: actions/upload-artifact@v7
+        uses: actions/cache/save@v4
         with:
-          name: embed-worker
+          key: embed-worker-${{ github.run_id }}-${{ github.run_attempt }}
           path: internal/worker/embed/cfr/
-          retention-days: 1
-          include-hidden-files: true
 
   # ───────────────────────── go-test：Go 编译/静态检查/单测（发布前门禁） ─────────────────────────
   # 前端与 Bot 门禁复用同提交 CI；此处只验证依赖完整 embed 的 Go 代码。
@@ -267,16 +263,18 @@ jobs:
           cache: true
 
       - name: 还原 CP embed 产物
-        uses: actions/download-artifact@v8
+        uses: actions/cache/restore@v4
         with:
-          name: embed-controlplane
+          key: embed-controlplane-${{ github.run_id }}-${{ github.run_attempt }}
           path: internal/controlplane/embed/
+          fail-on-cache-miss: true
 
       - name: 还原 Worker embed 产物
-        uses: actions/download-artifact@v8
+        uses: actions/cache/restore@v4
         with:
-          name: embed-worker
+          key: embed-worker-${{ github.run_id }}-${{ github.run_attempt }}
           path: internal/worker/embed/cfr/
+          fail-on-cache-miss: true
 
       - name: Go 构建 / vet / 测试
         shell: bash
@@ -354,16 +352,18 @@ jobs:
           cache: true
 
       - name: 还原 CP embed 产物
-        uses: actions/download-artifact@v8
+        uses: actions/cache/restore@v4
         with:
-          name: embed-controlplane
+          key: embed-controlplane-${{ github.run_id }}-${{ github.run_attempt }}
           path: internal/controlplane/embed/
+          fail-on-cache-miss: true
 
       - name: 还原 Worker embed 产物
-        uses: actions/download-artifact@v8
+        uses: actions/cache/restore@v4
         with:
-          name: embed-worker
+          key: embed-worker-${{ github.run_id }}-${{ github.run_attempt }}
           path: internal/worker/embed/cfr/
+          fail-on-cache-miss: true
 
       - name: 注入 CP 内嵌 Worker 资产（两平台 + manifest，full 档）
         shell: bash
@@ -492,11 +492,10 @@ jobs:
           ls -l dist/jmctl-*
 
       - name: 上传二进制产物（供 smoke 校验，retention 1 天）
-        uses: actions/upload-artifact@v7
+        uses: actions/cache/save@v4
         with:
-          name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+          key: binaries-${{ matrix.os }}-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/*
-          retention-days: 1
 
   # ───────────────────────── smoke：原生执行四个发布二进制并核对版本 ─────────────────────────
   smoke:
@@ -519,10 +518,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: 下载待验二进制
-        uses: actions/download-artifact@v8
+        uses: actions/cache/restore@v4
         with:
-          name: ${{ matrix.artifact }}
+          key: ${{ matrix.artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist
+          fail-on-cache-miss: true
 
       - name: Linux 版本烟测
         if: runner.os == 'Linux'
@@ -562,12 +562,19 @@ jobs:
       - name: 检出仓库
         uses: actions/checkout@v5
 
-      - name: 下载全部二进制产物到 dist/
-        uses: actions/download-artifact@v8
+      - name: 还原 linux-amd64 二进制产物到 dist/
+        uses: actions/cache/restore@v4
         with:
-          pattern: binaries-*
+          key: binaries-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist
-          merge-multiple: true
+          fail-on-cache-miss: true
+
+      - name: 还原 windows-amd64 二进制产物到 dist/
+        uses: actions/cache/restore@v4
+        with:
+          key: binaries-windows-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+          fail-on-cache-miss: true
 
       - name: 生成 checksums.txt（每件 sha256，ADR-036 §2）
         shell: bash

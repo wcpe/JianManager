@@ -236,15 +236,6 @@ jobs:
         working-directory: apps/control-plane-web
         run: pnpm e2e --shard=${{ matrix.shard }}/6
 
-      - name: 上传 Playwright E2E 测试产物
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: web-e2e-test-results-${{ matrix.shard }}
-          path: apps/control-plane-web/test-results
-          if-no-files-found: ignore
-          retention-days: 7
-
   web-quality:
     if: always()
     needs: [web-static, web-test-node, web-test-dom, web-e2e]
