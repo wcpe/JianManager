@@ -42,16 +42,23 @@ test('b 运行时调整免重启：改值保存后前端热回读新值', async 
   await login(page)
   await page.goto('/settings')
 
-  // 切到运行时分类，定位 graceful_stop.timeout 所在行的输入框（按键名文本锚定该行 div，避开重名键）。
+  /*
+    切到运行时分类，定位 graceful_stop.timeout 的输入框。
+
+    【选择器已更新】设置页改用通用表单组件 `SettingsFormView` 后，每个字段有稳定的
+    `data-testid="setting-field-<key>"` 容器（key 里的点折成连字符）与
+    `id="setting-input-<key>"` 控件。原先按 `div.px-3.py-2` 这类**样式类名**锚定行，
+    属于把实现细节写进测试——换布局就断，正是本次改动暴露出来的问题。
+  */
   await page.getByRole('button', { name: '运行时', exact: true }).click()
-  const row = page.locator('div.px-3.py-2').filter({ hasText: 'graceful_stop.timeout' })
+  const row = page.getByTestId('setting-field-graceful_stop-timeout')
   const box = row.locator('input').first()
   // graceful_stop.timeout 是 Go duration（须带单位，如 30s）；validateSettingDraft 拒绝裸数字，
   // 裸数字会让「保存」保持禁用（前端 422 双闸）。故用合法 duration 驱动。
   await expect(box).toHaveValue('30s')
   await box.fill('60s')
 
-  const saveButton = page.getByRole('button', { name: '保存', exact: true })
+  const saveButton = page.getByTestId('settings-save')
   await expect(saveButton).toBeEnabled()
   // 先监听保存请求，确保后续禁用态与回读值对应本次 PUT 成功响应。
   const saveResponsePromise = page.waitForResponse((response) => {
