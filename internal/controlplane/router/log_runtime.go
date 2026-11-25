@@ -85,8 +85,6 @@ func (h *LogRuntimeHandler) operatorFromRequest(c *gin.Context) (string, bool) {
 	return "", false
 }
 
-
-
 func (h *LogRuntimeHandler) client(c *gin.Context) (*cpgrpc.Client, bool) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -194,4 +192,3 @@ func (h *LogRuntimeHandler) Control(c *gin.Context) {
 	})
 	c.JSON(http.StatusAccepted, resp)
 }
-

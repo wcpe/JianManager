@@ -13,7 +13,6 @@ type JDKHandler struct{ svc *service.JDKService }
 
 func NewJDKHandler(svc *service.JDKService) *JDKHandler { return &JDKHandler{svc: svc} }
 
-
 // List 返回节点 JDK 清单。
 //
 // 默认形状不变（裸 model.NodeJDK 数组）；`?withRefs=1` 时改为携带「引用实例 + 删除可行性」

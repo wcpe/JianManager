@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/jdk"
+	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )

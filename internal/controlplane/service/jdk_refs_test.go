@@ -17,7 +17,7 @@ func TestJDKService_ListWithRefs_MatchesDeleteGuard(t *testing.T) {
 		direct         bool // 有实例 jdk_id 指向它
 		majorDep       bool // 有实例按大版本依赖
 		sameMajorOther bool // 同大版本还有另一个托管 JDK
-	expectBlocked  bool
+		expectBlocked  bool
 		expectReason   string
 	}{
 		{name: "无引用：可删", expectBlocked: false, expectReason: ""},

@@ -196,7 +196,7 @@ type TaskListFilter struct {
 	Keyword string     // 标题/详情模糊匹配
 	Since   *time.Time // 创建时间下界
 	Until   *time.Time // 创建时间上界
-	Limit      int // 每窗行数，缺省 100、钳制 [1,500]
+	Limit   int        // 每窗行数，缺省 100、钳制 [1,500]
 	Offset  int        // 偏移，负值归 0
 }
 
