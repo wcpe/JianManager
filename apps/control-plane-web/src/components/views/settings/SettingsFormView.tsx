@@ -51,8 +51,10 @@ import {
   type SettingsDraft,
 } from '@/lib/settings/settings-draft'
 import { validateSettingDraft } from '@/lib/settings/settings-form'
-import { parsePathOverrides } from '@/lib/settings/path-overrides'
+import { allRowsValid, parsePathOverrides } from '@/lib/settings/path-overrides'
 import { PathOverridesEditor, type InstanceOption } from './PathOverridesEditor'
+
+const EMPTY_SELECT_SENTINEL = '__empty__'
 
 /** 表单字段的控件锚点 id：把点号等字符折成连字符，避免成为无法用选择器命中的 id。 */
 function controlIdOf(key: string): string {
@@ -77,7 +79,18 @@ function kvRowsOf(item: SettingItem, draft: SettingsDraft): KvPairRow[] {
   const draftRows = draft.kv[item.key]
   if (draftRows !== undefined) return draftRows
   const raw = item.overridden ? item.override : item.platform
-  return parsePathOverrides(raw).map((r) => ({ key: r.instanceId, value: r.path }))
+  return parsePathOverrides(raw).map((r) => ({ rowKey: r.key, key: r.instanceId, value: r.path }))
+}
+
+/** 判断某一项是否存在校验失败（同时覆盖字符串校验与结构化行级校验/重复键检查）。 */
+function isItemInvalid(item: SettingItem, draft: SettingsDraft): boolean {
+  if (usesCustomEditor(item.key)) {
+    const draftRows = draft.kv[item.key]
+    if (draftRows !== undefined && !allRowsValid(toOverrideRows(draftRows))) {
+      return true
+    }
+  }
+  return validateSettingDraft(item.key, shownValueOf(item, draft)) !== undefined
 }
 
 /** 通用设置表单视图的 props。 */
@@ -152,17 +165,15 @@ function SettingsField({
   const { t } = useTranslation()
   const spec = fieldSpecOf(item.key)
   const value = shownValueOf(item, draft)
+  const overrideRows = spec.type === 'kv-pairs' ? toOverrideRows(kvRowsOf(item, draft)) : null
+  const kvRowsHasError = overrideRows !== null && !allRowsValid(overrideRows)
   // 唯一的校验入口：不在视图里另写一套规则，避免与后端 / 其它入口口径漂移。
-  const error = validateSettingDraft(item.key, value)
+  // kv-pairs 在行编辑器已展示具体行错时，不再叠加面向手写 JSON 的原始报错文案。
+  const error = kvRowsHasError ? undefined : validateSettingDraft(item.key, value)
   const controlId = controlIdOf(item.key)
   const testIdKey = item.key.replace(/[^A-Za-z0-9_-]/g, '-')
+  const placeholderText = spec.placeholderKey ? t(spec.placeholderKey) : spec.placeholder
   // 非即时生效的字段必须标明「什么时候才生效」，否则用户会以为保存没起作用。
-  /*
-    三态：immediate / worker / unknown。unknown **不显示**徽标。
-    这里绝不能写成 `!isEffectiveImmediately(key)`——它对未登记 key 也返回 false，
-    会把 traffic.rate_limit.* 这类其实即时生效的配置标成「Worker 侧生效」，
-    用户会去重启 Worker 找一个根本不存在的开关。标错比不标更糟。
-  */
   const workerSide = resolveEffectTiming(item.key, effectiveImmediatelyOf) === 'worker'
 
   const control = () => {
@@ -179,16 +190,19 @@ function SettingsField({
             />
             <span className="text-xs text-muted-foreground">
               {value === 'true'
-                ? (spec.onLabel ?? t('common.enabled', '开启'))
-                : (spec.offLabel ?? t('common.disabled', '关闭'))}
+                ? t(spec.onLabel ?? 'common.enabled', '开启')
+                : t(spec.offLabel ?? 'common.disabled', '关闭')}
             </span>
           </div>
         )
-      case 'select':
+      case 'select': {
+        const selectValue = spec.allowEmpty ? (value === '' ? EMPTY_SELECT_SENTINEL : value) : (value === '' ? undefined : value)
         return (
           <Select
-            value={value === '' ? undefined : value}
-            onValueChange={(next) => onTextChange(item.key, next)}
+            value={selectValue}
+            onValueChange={(next) =>
+              onTextChange(item.key, spec.allowEmpty && next === EMPTY_SELECT_SENTINEL ? '' : next)
+            }
           >
             <SelectTrigger
               id={controlId}
@@ -197,9 +211,14 @@ function SettingsField({
               aria-label={label}
               aria-invalid={error !== undefined ? true : undefined}
             >
-              <SelectValue placeholder={spec.placeholder ?? t('common.none', '未选择')} />
+              <SelectValue placeholder={placeholderText ?? t('common.none', '未选择')} />
             </SelectTrigger>
             <SelectContent>
+              {spec.allowEmpty && (
+                <SelectItem value={EMPTY_SELECT_SENTINEL}>
+                  {t('common.default', '默认')}
+                </SelectItem>
+              )}
               {(spec.options ?? []).map((opt) => (
                 <SelectItem key={opt.value} value={opt.value}>
                   {opt.label}
@@ -208,11 +227,12 @@ function SettingsField({
             </SelectContent>
           </Select>
         )
+      }
       case 'kv-pairs':
         // 结构化字段交给专门的成对行编辑器：绝不让用户手写 JSON。
         return (
           <PathOverridesEditor
-            rows={toOverrideRows(kvRowsOf(item, draft))}
+            rows={overrideRows ?? []}
             onChange={(next) => onKvChange(item.key, fromOverrideRows(next))}
             options={instanceOptions}
           />
@@ -229,7 +249,7 @@ function SettingsField({
               inputMode={spec.type === 'numeric' ? 'numeric' : undefined}
               // 凭据类输入关闭自动填充：否则密码管理器会把控制台令牌当成登录口令回填。
               autoComplete={isSecret ? 'new-password' : undefined}
-              placeholder={spec.placeholder}
+              placeholder={placeholderText}
               aria-label={label}
               aria-invalid={error !== undefined ? true : undefined}
             />
@@ -264,7 +284,14 @@ function SettingsField({
           </Badge>
         )}
       </div>
-      <p className="mt-0.5 font-mono text-xs text-muted-foreground">{item.key}</p>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+        <span className="font-mono">{item.key}</span>
+        {item.overridden && spec.type !== 'secret' && item.platform !== '' && (
+          <span data-testid={`setting-platform-default-${testIdKey}`}>
+            {t('nodeLogAcq.platformDefault', '平台默认')}: {item.platform}
+          </span>
+        )}
+      </div>
       <div className="mt-2 flex flex-wrap items-start gap-2">
         {control()}
         {actionOf?.(item.key)}
@@ -293,7 +320,7 @@ export function SettingsFormView({
 
   // 三个派生量都在渲染期算：它们都是纯函数，没有隐藏状态（也就没有 effect 里 setState 的必要）。
   const dirty = hasChanges(items, draft, defaultSerializeKv)
-  const invalid = items.some((it) => validateSettingDraft(it.key, shownValueOf(it, draft)) !== undefined)
+  const invalid = items.some((it) => isItemInvalid(it, draft))
   const canSave = dirty && !invalid && !busy
 
   const setText = (key: string, value: string) => {

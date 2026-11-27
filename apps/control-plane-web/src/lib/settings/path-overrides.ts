@@ -127,8 +127,12 @@ export function validateRow(r: PathOverrideRow): RowError {
   // 整行空白不报错（用户刚点"添加"还没填）。提交时这类行会被跳过。
   if (!id && !p) return null
   if (!id) return 'logAcqOverride.instanceRequired'
+  if (!/^\d+$/.test(id) || String(Number(id)) !== id) return 'logAcqOverride.instanceInvalid'
   if (!p) return 'logAcqOverride.pathRequired'
-  if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) return 'logAcqOverride.pathMustBeRelative'
+  // 先把 Windows 反斜杠归一成正斜杠再判绝对路径，确保 `\logs\a.log`、`\\server\share\a.log`
+  // 与后端 isWindowsAbsPath / settings-form.ts 保持完全一致。
+  const norm = p.replace(/\\/g, '/')
+  if (norm.startsWith('/') || /^[A-Za-z]:/.test(norm)) return 'logAcqOverride.pathMustBeRelative'
   /*
     折叠 `..` 后判断是否真的逃出工作目录——与 settings-form.ts 里
     `validateSettingDraft('log.acq.path_overrides', …)` 的实现**逐句对齐**。
@@ -139,7 +143,7 @@ export function validateRow(r: PathOverrideRow): RowError {
     只有折叠过程中栈被弹空（`../x`、`a/../../x`）才算逃逸。
   */
   const parts: string[] = []
-  for (const seg of p.replace(/\\/g, '/').split('/')) {
+  for (const seg of norm.split('/')) {
     if (seg === '' || seg === '.') continue
     if (seg === '..') {
       if (parts.length === 0) return 'logAcqOverride.pathEscapes'

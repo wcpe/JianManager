@@ -132,8 +132,9 @@ describe('SettingsFormView 按字段类型分派渲染器', () => {
         items={[item('log.acq.path_overrides', '', { override: '{"inst:3":"logs/server.log"}', overridden: true })]}
       />,
     )
-    expect(screen.getByTestId('path-override-path-kvrow-0')).toHaveValue('logs/server.log')
-    expect(screen.getByTestId('path-override-instance-kvrow-0')).toHaveValue('3')
+    const editor = screen.getByTestId('path-overrides-editor')
+    expect(within(editor).getByLabelText('日志路径')).toHaveValue('logs/server.log')
+    expect(within(editor).getByLabelText('实例')).toHaveValue('3')
   })
 })
 
@@ -248,8 +249,9 @@ describe('SettingsFormView 提交内容与时效徽标', () => {
     render(<Harness onSave={onSave} />)
 
     await userEvent.click(screen.getByTestId('path-overrides-add'))
-    await userEvent.type(screen.getByTestId('path-override-instance-kvrow-0'), '1')
-    await userEvent.type(screen.getByTestId('path-override-path-kvrow-0'), 'logs/a.log')
+    const editor = screen.getByTestId('path-overrides-editor')
+    await userEvent.type(within(editor).getByLabelText('实例'), '1')
+    await userEvent.type(within(editor).getByLabelText('日志路径'), 'logs/a.log')
 
     await waitFor(() => expect(saveButton()).toBeEnabled())
     await userEvent.click(saveButton())
@@ -393,5 +395,43 @@ describe('SettingsFormView 生效时机徽标', () => {
     expect(
       screen.getByTestId('setting-badge-worker-backup-retention_days'),
     ).toBeInTheDocument()
+  })
+
+  it('kv-pairs 存在重复实例 ID 或半填行时必须禁用保存按钮', () => {
+    const { rerender } = render(
+      <SettingsFormView
+        items={[item('log.acq.path_overrides', '')]}
+        draft={{
+          text: {},
+          kv: {
+            'log.acq.path_overrides': [
+              { rowKey: 'r1', key: '1', value: 'a.log' },
+              { rowKey: 'r2', key: '1', value: 'b.log' },
+            ],
+          },
+        }}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn().mockResolvedValue(true)}
+      />,
+    )
+    expect(screen.getByTestId('settings-save')).toBeDisabled()
+
+    rerender(
+      <SettingsFormView
+        items={[item('log.acq.path_overrides', '')]}
+        draft={{
+          text: {},
+          kv: {
+            'log.acq.path_overrides': [
+              { rowKey: 'r1', key: '1', value: 'a.log' },
+              { rowKey: 'r2', key: '2', value: '' },
+            ],
+          },
+        }}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn().mockResolvedValue(true)}
+      />,
+    )
+    expect(screen.getByTestId('settings-save')).toBeDisabled()
   })
 })

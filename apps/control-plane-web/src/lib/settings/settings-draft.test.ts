@@ -143,4 +143,17 @@ describe('clearSubmitted', () => {
     const next = clearSubmitted(d, { [PATH_KEY]: serializeKv(submitted) }, items, serializeKv)
     expect(next.kv[PATH_KEY]).toHaveLength(2)
   })
+
+  it('kv 字段：PUT 在途期间新增了半填行或空行时，不能误清正在编辑的草稿', () => {
+    const submitted: KvPairRow[] = [{ key: '1', value: 'a.log' }]
+    const halfFilled: KvPairRow[] = [...submitted, { key: '2', value: '' }]
+    const d1: SettingsDraft = { text: {}, kv: { [PATH_KEY]: halfFilled } }
+    const next1 = clearSubmitted(d1, { [PATH_KEY]: serializeKv(submitted) }, items, serializeKv)
+    expect(next1.kv[PATH_KEY]).toHaveLength(2)
+
+    const withBlank: KvPairRow[] = [...submitted, { key: '', value: '' }]
+    const d2: SettingsDraft = { text: {}, kv: { [PATH_KEY]: withBlank } }
+    const next2 = clearSubmitted(d2, { [PATH_KEY]: serializeKv(submitted) }, items, serializeKv)
+    expect(next2.kv[PATH_KEY]).toHaveLength(2)
+  })
 })

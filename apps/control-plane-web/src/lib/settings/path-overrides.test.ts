@@ -172,6 +172,8 @@ describe('与设置页的校验口径一致（防漂移）', () => {
     'logs/../a.log', // 折叠后仍在工作目录内 → 合法
     './x.log',
     '/abs.log', // 绝对路径 → 非法
+    '\\logs\\a.log', // Windows 根相对反斜杠 → 非法
+    '\\\\server\\share\\a.log', // Windows UNC 路径 → 非法
     'D:/x.log', // Windows 盘符 → 非法
     '../escape.log', // 逃出工作目录 → 非法
     'a/../../x.log', // 折叠后逃逸 → 非法
@@ -183,5 +185,12 @@ describe('与设置页的校验口径一致（防漂移）', () => {
     const settingsErr = validateSettingDraft('log.acq.path_overrides', JSON.stringify({ 'inst:1': p }))
     const settingsOk = settingsErr === undefined
     expect(rowOk, `路径 ${p}：行编辑器=${rowOk}，设置页=${settingsOk}`).toBe(settingsOk)
+  })
+
+  it('手输非法实例 ID（非规范整数）在行内即报错', () => {
+    expect(validateRow(row('inst:1', 'a.log'))).toBe('logAcqOverride.instanceInvalid')
+    expect(validateRow(row('007', 'a.log'))).toBe('logAcqOverride.instanceInvalid')
+    expect(validateRow(row('abc', 'a.log'))).toBe('logAcqOverride.instanceInvalid')
+    expect(validateRow(row('7', 'a.log'))).toBeNull()
   })
 })

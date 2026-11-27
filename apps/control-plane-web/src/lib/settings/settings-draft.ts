@@ -30,6 +30,8 @@ export interface SettingItem {
 
 /** 结构化的键值对行（目前只有 kv-pairs 用）。 */
 export interface KvPairRow {
+  /** 稳定行 key（删除非末行时防止 React 复用错行输入态）。 */
+  rowKey?: string
   key: string
   value: string
 }
@@ -95,6 +97,19 @@ export function hasChanges(
   return Object.keys(buildSubmitValues(items, draft, serializeKv)).length > 0
 }
 
+/** 判断结构化草稿是否不含正在编辑中的空行/半填行或重复键。 */
+function hasOnlyCompleteUniqueRows(rows: readonly KvPairRow[]): boolean {
+  const seen = new Set<string>()
+  for (const r of rows) {
+    const k = r.key.trim()
+    const v = r.value.trim()
+    if (!k || !v) return false
+    if (seen.has(k)) return false
+    seen.add(k)
+  }
+  return true
+}
+
 /**
  * 保存成功后清理草稿：**只清除仍是本次提交值的键**。
  *
@@ -112,9 +127,12 @@ export function clearSubmitted(
     const it = items.find((x) => x.key === k)
     if (!it) continue
     if (usesCustomEditor(k)) {
-      // 结构化字段：只有当前序列化结果仍等于提交值时才清掉草稿。
+      // 结构化字段：不仅序列化结果要等于提交值，还必须确认没有正在输入中的空行/半填行/重复行，
+      // 否则 PUT 返回时会把用户刚新增但尚未填完的新行直接抹掉。
       const rows = next.kv[k]
-      if (rows !== undefined && serializeKv(rows) === v) delete next.kv[k]
+      if (rows !== undefined && hasOnlyCompleteUniqueRows(rows) && serializeKv(rows) === v) {
+        delete next.kv[k]
+      }
     } else if (next.text[k] === v) {
       delete next.text[k]
     }
@@ -122,14 +140,14 @@ export function clearSubmitted(
   return next
 }
 
-/** 把一个字段的草稿行映射成 path_overrides 编辑器的行形态（编辑器用 `key` 做列表身份）。 */
+/** 把一个字段的草稿行映射成 path_overrides 编辑器的行形态（优先保留稳定 rowKey）。 */
 export function toOverrideRows(rows: readonly KvPairRow[]): PathOverrideRow[] {
-  return rows.map((r, i) => ({ key: `kvrow-${i}`, instanceId: r.key, path: r.value }))
+  return rows.map((r, i) => ({ key: r.rowKey ?? `kvrow-${i}`, instanceId: r.key, path: r.value }))
 }
 
-/** 反向映射：编辑器的行变回草稿行。**保留原串**（不 trim），否则用户打不出临时的空格。 */
+/** 反向映射：编辑器的行变回草稿行。**保留原串与稳定 rowKey**（不 trim），否则用户打不出临时的空格。 */
 export function fromOverrideRows(rows: readonly PathOverrideRow[]): KvPairRow[] {
-  return rows.map((r) => ({ key: r.instanceId, value: r.path }))
+  return rows.map((r) => ({ rowKey: r.key, key: r.instanceId, value: r.path }))
 }
 
 /**

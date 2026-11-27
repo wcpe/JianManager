@@ -120,7 +120,7 @@ export function PathOverridesEditor({ rows, onChange, options, disabled = false 
                   {t('logAcqOverride.duplicateInstance', '这个实例已在上方配置过，提交时只会保留一条。')}
                 </p>
               )}
-              <FieldError error={err ? t(err) : undefined} />
+              <FieldError error={err ?? undefined} />
             </div>
           )
         })

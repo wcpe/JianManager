@@ -38,13 +38,17 @@ export interface FieldSpec {
   type: FieldType
   /** select 的候选值。 */
   options?: readonly { value: string; label: string }[]
-  /** switch 的开启/关闭文案（缺省用通用"开启/关闭"）。 */
+  /** select 是否允许提交空串（用于可选枚举如 health.probe_kind）。 */
+  allowEmpty?: boolean
+  /** switch 的开启/关闭文案 i18n 键（缺省用 common.enabled / common.disabled）。 */
   onLabel?: string
   offLabel?: string
   /** 是否即时生效（false 时界面标注"Worker 侧生效"）。 */
   effectiveImmediately?: boolean
-  /** 额外的输入提示。 */
+  /** 额外的输入提示（字面量，如 ${ENV_VAR}）。 */
   placeholder?: string
+  /** 额外的输入提示 i18n 键（经 t() 翻译）。 */
+  placeholderKey?: string
 }
 
 /**
@@ -56,7 +60,12 @@ export interface FieldSpec {
  * 未登记的 key 落回默认类型（text），所以这张表可以逐步补全，不必一次穷举。
  */
 export const FIELD_SPECS: Readonly<Record<string, FieldSpec>> = {
-  'debug.mode': { type: 'switch', onLabel: '开启', offLabel: '关闭', effectiveImmediately: true },
+  'debug.mode': {
+    type: 'switch',
+    onLabel: 'settings.debugOn',
+    offLabel: 'settings.debugOff',
+    effectiveImmediately: true,
+  },
   'log.level': {
     type: 'select',
     options: [
@@ -67,22 +76,67 @@ export const FIELD_SPECS: Readonly<Record<string, FieldSpec>> = {
     ],
     effectiveImmediately: true,
   },
-  'invite.smtp.password': { type: 'secret', effectiveImmediately: true },
-  'github.token': { type: 'secret', effectiveImmediately: true },
+  'invite.smtp.password': { type: 'secret', placeholder: '${ENV_VAR}', effectiveImmediately: true },
+  'invite.smtp.port': { type: 'numeric', effectiveImmediately: true },
+  'github.token': {
+    type: 'secret',
+    placeholderKey: 'settings.githubTokenPlaceholder',
+    effectiveImmediately: true,
+  },
   'backup.retention_days': { type: 'numeric', effectiveImmediately: false },
+
+  // ── 健康巡检 / 额度 / 回收 / 快照（布尔、枚举与整数项） ──
+  'health.scan_enabled': { type: 'switch', effectiveImmediately: false },
+  'health.probe_kind': {
+    type: 'select',
+    allowEmpty: true,
+    options: [
+      { value: 'tcp', label: 'tcp' },
+      { value: 'http', label: 'http' },
+    ],
+    effectiveImmediately: true,
+  },
+  'health.action': {
+    type: 'select',
+    options: [
+      { value: 'warn', label: 'warn' },
+      { value: 'restart', label: 'restart' },
+    ],
+    effectiveImmediately: true,
+  },
+  'health.suspicion_threshold': { type: 'numeric', effectiveImmediately: true },
+  'health.circuit_breaker_threshold': { type: 'numeric', effectiveImmediately: true },
+  'health.self_heal_max_restarts': { type: 'numeric', effectiveImmediately: true },
+  'quota.enforce_mode': {
+    type: 'select',
+    options: [
+      { value: 'alert', label: 'alert' },
+      { value: 'throttle', label: 'throttle' },
+      { value: 'stop', label: 'stop' },
+    ],
+    effectiveImmediately: true,
+  },
+  'quota.enforce_streak': { type: 'numeric', effectiveImmediately: true },
+  'instance_reverse_reconcile.auto_dispose': { type: 'switch', effectiveImmediately: true },
+  'bot_reclaim.auto_reclaim': { type: 'switch', effectiveImmediately: true },
+  'snapshot.retention_count': { type: 'numeric', effectiveImmediately: true },
+  'snapshot.retention_days': { type: 'numeric', effectiveImmediately: true },
+  'snapshot.pre_rollback_keep': { type: 'numeric', effectiveImmediately: true },
+  'snapshot.max_per_instance': { type: 'numeric', effectiveImmediately: true },
+  'snapshot.max_total_mb': { type: 'numeric', effectiveImmediately: true },
+  'crash.stat_retention_days': { type: 'numeric', effectiveImmediately: true },
+
+  // ── 日志采集（Worker 侧心跳生效） ──
   // 这一项就是"不要让我手输 JSON"的那个字段：渲染为成对行编辑器。
   'log.acq.path_overrides': { type: 'kv-pairs', effectiveImmediately: false },
-
-  /*
-    日志采集的三个开关。
-    【为什么必须登记】采集面板此前用 `BOOLEAN_KEYS` 局部集合决定"布尔用 Select 渲染"；
-    改用通用组件后，那套集合被删除，而声明表里没补上这三项 —— 于是它们退化成
-    普通文本框，用户对 "true"/"false" 可以随便敲（写错要等后端 422）。
-    这类退化在 jsdom 里能被断言发现，但更早暴露它的是一次真机截图走查。
-  */
   'log.acq.rules_enabled': { type: 'switch', effectiveImmediately: false },
   'log.acq.realtime_tail': { type: 'switch', effectiveImmediately: false },
   'log.acq.gz_import_enabled': { type: 'switch', effectiveImmediately: false },
+  'log.acq.gz_scan_interval': {
+    type: 'text',
+    effectiveImmediately: false,
+    placeholderKey: 'nodeLogAcq.scanIntervalPlaceholder',
+  },
 }
 
 /** 取某个字段的渲染声明（未登记时返回默认 text）。 */
