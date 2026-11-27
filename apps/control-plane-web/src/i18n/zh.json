@@ -6457,7 +6457,8 @@
     "proxyHint": "支持 http / https / socks5。地址只在保存时上传，之后不回显。",
     "proxyHasAuth": "已保存过带口令的代理地址；地址与口令不会回显，留空表示保持原值。",
     "historyEditInput": "编辑消息内容",
-    "historyEditHint": "只更正文本，不会自动重新生成回复；原文保留可追溯。"
+    "historyEditHint": "只更正文本，不会自动重新生成回复；原文保留可追溯。",
+    "settingsNotLoaded": "设置尚未加载完成，请稍后重试"
   },
   "approvals": {
     "title": "审批中心",

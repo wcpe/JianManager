@@ -128,7 +128,17 @@ func storageFromRequest(req createStorageRequest) model.BackupStorage {
 	return st
 }
 
+// TestCandidate 测试未保存的存储配置。
+//
+// 必须要求 node.manage（路由组的 backup.read 只够进门）：该端点是**写侧风险**而非
+// 只读——它用控制面主机的身份向调用方给定的任意 endpoint 发起出站请求，并把
+// ${ENV_VAR} 引用的明文凭据放进 Authorization 头。只持 backup.read 的人因此可以
+// 把 CP 上任意已设置环境变量的值送到自己控制的地址，也能把 CP 当内网探测器。
+// 与 Create / Update / Delete 同口径。
 func (h *BackupStorageHandler) TestCandidate(c *gin.Context) {
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	var req createStorageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
@@ -138,7 +148,12 @@ func (h *BackupStorageHandler) TestCandidate(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// TestSaved 测试已保存的存储后端。与 TestCandidate 同理：会以 CP 身份发起真实
+// 出站探测（并把已存凭据发出去），因此同样要求 node.manage，不能只靠 backup.read。
 func (h *BackupStorageHandler) TestSaved(c *gin.Context) {
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -204,7 +219,15 @@ func (h *BackupStorageHandler) LocalStats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
+// TestConnection 让 Worker 用**已保存的凭据**做一次真实连接测试（凭证会下发给节点）。
+//
+// 与 TestCandidate 同族、更危险的一个：调用方不提供 endpoint，用的是库里已有的那套，
+// 因此拿到它的唯一门槛就是路由组的 any-of（backup.read 即可）。必须补 node.manage：
+// 它既把凭据下发到远端节点，也代表修改了该存储的 lastTest* 记录。
 func (h *BackupStorageHandler) TestConnection(c *gin.Context) {
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return

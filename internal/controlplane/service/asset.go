@@ -47,6 +47,10 @@ const (
 	AssetInUseSelectedUpdaterCore = "SELECTED_UPDATER_CORE"
 	// AssetInUsePublishedClientFile 表示资产仍被客户端发布版本引用。
 	AssetInUsePublishedClientFile = "PUBLISHED_CLIENT_FILE"
+	// AssetInUseBinaryBinding 表示资产是某二进制实例的当前版本或回滚点。
+	// 绑定用 CurrentAssetID / PreviousAssetID 两个标量列记录（无外键、也不递增
+	// ref_count），所以只看 ref_count 会把「仍有回滚来源」的资产判成没人用。
+	AssetInUseBinaryBinding = "BINARY_BINDING"
 )
 
 // AssetInUseError 携带资产删除保护的结构化原因，供前端展示准确 i18n 文案。
@@ -475,6 +479,29 @@ func (s *AssetService) ensureAssetDeletable(asset *model.Asset) error {
 		}
 		if count > 0 {
 			return &AssetInUseError{Reason: AssetInUsePublishedClientFile, Count: count, Msg: fmt.Sprintf("客户端发布版本仍引用 %d 处", count)}
+		}
+	}
+	// 二进制实例的当前版本与回滚点：这两种引用与 asset.Type 无关（client-updater-core
+	// 之外的普通 binary 制品也会被绑定），所以必须放在下面那条按类型提前返回**之前**——
+	// 否则普通二进制制品根本走不到这段检查（实测：放尾部时 bindCount=1 仍返回 nil）。
+	// 删掉之后 BinaryVersionService.Rollback 会在 resolveBinaryAsset 处失败，
+	// 按冻结版本重建也会失去来源；Worker 工作目录里那份文件不构成可回滚的版本记录。
+	// 表不存在时跳过检查而不是报错：精简部署 / 精简测试库可能没有迁移这张表，
+	// 此时「没有绑定」与「无法查询」在业务上等价（都没有实例在用它）。
+	// 但其它查询错误仍然 fail-closed——读不出来不等于里没有东西。
+	var bindCount int64
+	if err := s.db.Model(&model.InstanceBinaryBinding{}).
+		Where("current_asset_id = ? OR previous_asset_id = ?", asset.ID, asset.ID).
+		Count(&bindCount).Error; err != nil {
+		if s.db.Migrator().HasTable(&model.InstanceBinaryBinding{}) {
+			return fmt.Errorf("检查二进制版本绑定失败: %w", err)
+		}
+		slog.Warn("跳过二进制版本绑定检查（表未迁移）", "assetId", asset.ID, "error", err)
+	}
+	if bindCount > 0 {
+		return &AssetInUseError{
+			Reason: AssetInUseBinaryBinding, Count: bindCount,
+			Msg: fmt.Sprintf("仍被 %d 个实例作为当前版本或回滚点引用", bindCount),
 		}
 	}
 	if asset.Type != model.AssetTypeClientUpdaterCore {

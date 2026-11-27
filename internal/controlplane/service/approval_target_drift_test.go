@@ -67,9 +67,24 @@ func TestCaptureTargetSnapshot_Instance(t *testing.T) {
 	if snap["nodeId"] != inst.NodeID {
 		t.Fatalf("应冻结节点归属 #%d，实际 %v", inst.NodeID, snap["nodeId"])
 	}
-	// version 以十进制字符串冻结（防 float64 精度丢失，见实现文件头说明）
-	if v, ok := snap["version"].(string); !ok || v != strconv.FormatInt(inst.UpdatedAt.UnixNano(), 10) {
-		t.Fatalf("应冻结 updatedAt 纳秒版本为十进制字符串，实际 %v", snap["version"])
+	// version 现在冻结的是「审批相关配置的内容指纹」，不再用 updatedAt：
+	// 心跳每拍都会推进 updated_at，拿它当版本会让所有在线目标的票据跨一拍就失败。
+	// 仍要求十进制字符串承载（防 float64 精度丢失），并用 versionKind 标明口径。
+	if v, ok := snap["version"].(string); !ok || v == "" {
+		t.Fatalf("version 应为非空十进制字符串，实际 %v", snap["version"])
+	}
+	if v, ok := snap["version"].(string); ok {
+		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
+			t.Fatalf("version 应为可解析的十进制整数，实际 %q", v)
+		}
+	}
+	if snap["versionKind"] != fingerprintVersionKind {
+		t.Fatalf("应标记指纹口径 %q，实际 %v", fingerprintVersionKind, snap["versionKind"])
+	}
+	// 同一实例再采一次：指纹必须稳定（幂等），否则票据会在无变更时被判漂移。
+	again := CaptureTargetSnapshot(svc, nil, "instance", "7")
+	if again == nil || again["version"] != snap["version"] {
+		t.Fatalf("同一状态下的指纹应稳定，第一次 %v 第二次 %v", snap["version"], again["version"])
 	}
 }
 

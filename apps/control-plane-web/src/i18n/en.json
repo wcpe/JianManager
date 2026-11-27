@@ -6457,7 +6457,8 @@
     "proxyHint": "Supports http / https / socks5. The URL is uploaded only on save and never echoed back.",
     "proxyHasAuth": "A proxy URL with credentials is already saved; neither the URL nor the credentials are echoed back. Leave empty to keep it.",
     "historyEditInput": "Edit message content",
-    "historyEditHint": "Only corrects the text; the reply is not regenerated and the original stays traceable."
+    "historyEditHint": "Only corrects the text; the reply is not regenerated and the original stays traceable.",
+    "settingsNotLoaded": "Settings are still loading, please try again shortly"
   },
   "approvals": {
     "title": "Approvals",

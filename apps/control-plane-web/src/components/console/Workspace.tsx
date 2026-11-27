@@ -3,6 +3,8 @@ import { Suspense, lazy, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PageSkeleton } from '@jianmanager/ui/components/layout'
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
+import { isPlatformAdmin } from '@/lib/shared/roles'
 import { ROUTE_CHUNKS } from '@/lib/shared/route-chunks'
 import { parseHomeModeParam, resolveHomeMode } from '@/lib/shared/home-mode'
 import WorkspaceEmpty from '@/components/views/console/WorkspaceEmpty'
@@ -79,17 +81,24 @@ const NotificationCenterPage = lazy(ROUTE_CHUNKS['/notifications'])
 const SuperWorkbenchPage = lazy(ROUTE_CHUNKS['/super'])
 const DirectorConsolePage = lazy(ROUTE_CHUNKS['/director'])
 
-/** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
-const ROLE_PLATFORM_ADMIN = 10
-
 /** 
  * 管理页路由级角色守卫：此前仅靠侧栏按角色隐藏入口，URL 直达仍可进页。
  * 非平台管理员一律重定向首页；页内既有角色兜底（如 DatabasePage/SystemUpdatePage）保留作纵深防御，
  * 后端 RBAC 仍是最终强制。
  */
 function RequirePlatformAdmin({ children }: { children: ReactNode }) {
+  // 判据是「**有效**平台管理员」，不是 JWT 里的旧 role：后端把「role=10 或绑定
+  // platform_admin 模板」都当作超管（见 authz.go），而侧栏导航本来就是按权限节点裁剪的。
+  // 只认 role===10 会自相矛盾：侧栏出现了入口、点进去却被重定向回首页。
+  const effectiveAdmin = usePermissionsStore((s) => s.isPlatformAdmin)
+  const loaded = usePermissionsStore((s) => s.loaded)
+  // 权限尚未加载完成时不能直接判否：isPlatformAdmin 初始值是 false，
+  // 首帧就把 role=10 的管理员重定向回首页（退出再进 / 刷新后直接开深链时必现）。
+  // 沿用 store 自己的未加载语义——只有 JWT 旧角色是平台管理员时才乐观放行，
+  // 其余一律等到加载完成（加载完会重新渲染，不会长期停留在放行态）。
   const role = useAuthStore((s) => s.role)
-  if (role !== ROLE_PLATFORM_ADMIN) return <Navigate to="/" replace />
+  if (!loaded && !isPlatformAdmin(role)) return <Navigate to="/" replace />
+  if (loaded && !effectiveAdmin) return <Navigate to="/" replace />
   return <>{children}</>
 }
 /** 
