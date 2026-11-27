@@ -6,7 +6,12 @@
 
 ## [Unreleased]
 
-> 本段为 `v0.25.0` 开发版归档区；正式发版时整理为新版本段。
+## [0.25.0]（2026-11-27）
+
+> 运维前置提示（发版笔记）：
+> 1. **Bot 首次使用需在节点侧安装 npm 依赖**：bot-worker 运行依赖（mineflayer 与 mineflayer-pathfinder）不随分发包内置，首跑报错会指引到节点「全局包管理」安装；属设计内 fail-fast，装齐即可。
+> 2. **装齐依赖后若仍报「分片容量不足」，重启该节点 worker 即可恢复**：分片启动失败后暂无自愈重试（已立项 [#102](https://github.com/wcpe/JianManager/issues/102) 下版修）。
+> 另：实例启动预检对工作目录活进程的判定存在边缘误报面（无关命令行含路径字符串即误判，已立项 [#101](https://github.com/wcpe/JianManager/issues/101) 下版修），遇 PREFLIGHT_FAILED 先确认无真占用后重试。
 
 ### 修复
 - **发布版 jmctl 分发链路失效**：release.yml 未执行 jmctl 内嵌注入（go:embed 只打包编译期文件），发布版 CP 的 `/downloads/jmctl-*` 恒 503；现补齐两平台构建 + manifest 生成 + 内嵌产物校验，并修复 install-worker.sh 对紧凑 JSON manifest 的 sha256 解析（原先假设美化格式导致校验被静默跳过）。
