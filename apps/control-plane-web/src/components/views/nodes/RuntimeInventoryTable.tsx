@@ -377,14 +377,17 @@ function RowContextMenu({
       <ContextMenuContent className="w-56">
         {/* 行标识：右键后先确认「我点的是哪一行」，尤其同厂商多版本时。 */}
         <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-          {RUNTIME_TYPE_LABEL[row.type] ?? row.type} · {row.name} {row.majorVersion}
+          {RUNTIME_TYPE_LABEL[row.type] ?? row.type} ·{' '}
+          {row.type === 'jdk' ? `${row.name} ${row.majorVersion}` : row.name}
           {row.arch ? ` · ${row.arch}` : ''}
         </div>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => onEdit(row)} data-testid={`runtime-ctx-edit-${row.key}`}>
-          <Pencil className="mr-2 size-3.5" />
-          {t('nodes.runtime.edit', '编辑登记信息')}
-        </ContextMenuItem>
+        {row.type === 'jdk' && (
+          <ContextMenuItem onSelect={() => onEdit(row)} data-testid={`runtime-ctx-edit-${row.key}`}>
+            <Pencil className="mr-2 size-3.5" />
+            {t('nodes.runtime.edit', '编辑登记信息')}
+          </ContextMenuItem>
+        )}
         <ContextMenuItem onSelect={() => onCopyPath(row.path)} data-testid={`runtime-ctx-copy-${row.key}`}>
           <Copy className="mr-2 size-3.5" />
           {t('nodes.runtime.copyPath', '复制路径')}
@@ -441,11 +444,15 @@ function RowMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem onSelect={() => onEdit(row)} data-testid={`runtime-menu-edit-${row.key}`}>
-          <Pencil className="mr-2 size-3.5" />
-          {t('nodes.runtime.edit', '编辑登记信息')}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
+        {row.type === 'jdk' && (
+          <>
+            <DropdownMenuItem onSelect={() => onEdit(row)} data-testid={`runtime-menu-edit-${row.key}`}>
+              <Pencil className="mr-2 size-3.5" />
+              {t('nodes.runtime.edit', '编辑登记信息')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         {/* 删除前置：被引用时禁用并写明原因，而不是让用户「点了再吃 409」。 */}
         <DropdownMenuItem
           disabled={row.deleteBlocked}

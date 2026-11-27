@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2, FolderOpen, Loader2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
@@ -67,19 +67,27 @@ export function NodeRegisterSection({
   const [pickerOpen, setPickerOpen] = useState(false)
   const [probed, setProbed] = useState<RuntimeProbeResult | null>(null)
   const probe = useProbeRuntime(nodeId)
+  const probeSeqRef = useRef(0)
 
   const label = type === 'jdk' ? 'JDK' : 'Node.js'
   const trimmed = path.trim()
 
   const runProbe = (p: string) => {
+    const seq = ++probeSeqRef.current
     setProbed(null)
     probe.mutate(
       { type, path: p },
       {
-        onSuccess: (res) => setProbed(res),
+        onSuccess: (res) => {
+          if (probeSeqRef.current !== seq) return
+          setProbed(res)
+        },
         // 网络/服务错误才进这里；路径不对是 valid=false 的业务结果，不会抛。
-        onError: () =>
-          setProbed({ valid: false, error: t('nodes.register.probeFailed', '探测失败：无法连接节点') }),
+        onError: (err) => {
+          if (probeSeqRef.current !== seq) return
+          const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+          setProbed({ valid: false, error: msg || t('nodes.register.probeFailed', '探测失败：无法连接节点') })
+        },
       },
     )
   }
@@ -89,6 +97,7 @@ export function NodeRegisterSection({
     if (!probed?.valid || !c) return
     const ok = await onRegister(toRegisterBody(type, c))
     if (ok) {
+      probeSeqRef.current++
       setPath('')
       setProbed(null)
     }
@@ -125,8 +134,9 @@ export function NodeRegisterSection({
             id={`register-path-${type}`}
             value={path}
             onChange={(e) => {
+              probeSeqRef.current++
               setPath(e.target.value)
-              // 改了路径，之前的探测结果就过期了——留着会让人以为新路径已验证。
+              // 改了路径，之前的探测结果与在途探测都过期了——留着会让人以为新路径已验证。
               setProbed(null)
             }}
             placeholder={

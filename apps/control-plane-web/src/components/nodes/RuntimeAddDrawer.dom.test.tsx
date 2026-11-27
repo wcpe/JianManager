@@ -135,4 +135,95 @@ describe('RuntimeAddDrawer 分段与内容对应', () => {
     await userEvent.click(screen.getByTestId('runtime-add-register-node'))
     expect(onTab).toHaveBeenCalledWith('register-node')
   })
+
+  it('编辑 JDK A 取消后再编辑 JDK B 不会串入 JDK A 的残留草稿，且非 JDK 行不会弹出 JDK 编辑框', async () => {
+    const jdkA = {
+      key: 'jdk-1', id: 1, type: 'jdk', name: 'Temurin', version: '21.0.4', majorVersion: 21,
+      arch: 'x64', path: '/opt/jdk-21', managed: true, refCount: 0, refs: [], deleteBlocked: false, deleteBlockedReason: '',
+    }
+    const jdkB = {
+      key: 'jdk-2', id: 2, type: 'jdk', name: 'Zulu', version: '17.0.9', majorVersion: 17,
+      arch: 'x64', path: '/opt/jdk-17', managed: false, refCount: 0, refs: [], deleteBlocked: false, deleteBlockedReason: '',
+    }
+    const nodeRow = {
+      key: 'nodejs-1', id: 1, type: 'nodejs', name: 'Node.js 22', version: '22.17.0', majorVersion: 22,
+      arch: 'x64', path: '/opt/node-22/bin/node', managed: true, refCount: 0, refs: [], deleteBlocked: false, deleteBlockedReason: '',
+    }
+    const onSaveEdit = vi.fn(async () => true)
+    const { rerender } = render(
+      <RuntimeAddDrawer
+        open={false}
+        onOpenChange={vi.fn()}
+        nodeId={1}
+        online
+        tab="jdk"
+        onTab={vi.fn()}
+        editing={jdkA}
+        onCloseEdit={vi.fn()}
+        onSaveEdit={onSaveEdit}
+        pendingDelete={null}
+        onCloseDelete={vi.fn()}
+        onConfirmDelete={vi.fn()}
+      />,
+    )
+
+    const vendorInput = screen.getByDisplayValue('Temurin')
+    await userEvent.clear(vendorInput)
+    await userEvent.type(vendorInput, 'Corretto')
+
+    // 受控关闭后再打开 JDK B，必须展示 JDK B 自身字段，不能带出 Corretto。
+    rerender(
+      <RuntimeAddDrawer
+        open={false}
+        onOpenChange={vi.fn()}
+        nodeId={1}
+        online
+        tab="jdk"
+        onTab={vi.fn()}
+        editing={null}
+        onCloseEdit={vi.fn()}
+        onSaveEdit={onSaveEdit}
+        pendingDelete={null}
+        onCloseDelete={vi.fn()}
+        onConfirmDelete={vi.fn()}
+      />,
+    )
+    rerender(
+      <RuntimeAddDrawer
+        open={false}
+        onOpenChange={vi.fn()}
+        nodeId={1}
+        online
+        tab="jdk"
+        onTab={vi.fn()}
+        editing={jdkB}
+        onCloseEdit={vi.fn()}
+        onSaveEdit={onSaveEdit}
+        pendingDelete={null}
+        onCloseDelete={vi.fn()}
+        onConfirmDelete={vi.fn()}
+      />,
+    )
+    expect(screen.getByDisplayValue('Zulu')).toBeInTheDocument()
+    expect(screen.queryByDisplayValue('Corretto')).not.toBeInTheDocument()
+
+    // 即使上层误传非 JDK 行，也不得打开 JDK 编辑框。
+    rerender(
+      <RuntimeAddDrawer
+        open={false}
+        onOpenChange={vi.fn()}
+        nodeId={1}
+        online
+        tab="jdk"
+        onTab={vi.fn()}
+        editing={nodeRow}
+        onCloseEdit={vi.fn()}
+        onSaveEdit={onSaveEdit}
+        pendingDelete={null}
+        onCloseDelete={vi.fn()}
+        onConfirmDelete={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText('编辑 JDK 登记信息')).not.toBeInTheDocument()
+  })
 })

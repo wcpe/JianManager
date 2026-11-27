@@ -2511,15 +2511,6 @@ export const handlers = [
       ],
     })
   }),
-  domainRoute('post', '/nodes/:id/log-runtime/migrate', async (info) => {
-    const denied = requirePlatformAdmin(info)
-    if (denied) return denied
-    const body = await info.request.json() as { storageNamespace?: string; utcDay?: string }
-    if (body.storageNamespace !== `node:${info.params.id}` || !/^\d{4}-\d{2}-\d{2}$/.test(body.utcDay ?? '')) {
-      return HttpResponse.json({ error: 'INVALID_MIGRATION_TARGET' }, { status: 400 })
-    }
-    return HttpResponse.json({ state: 'migrated' })
-  }),
 
   // ===== logs 日志中心（/050/150） =====
   domainRoute('get', '/logs', (info) => {

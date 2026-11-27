@@ -65,8 +65,8 @@ export interface ReadinessInput {
   logDiskPct?: number | null
   /** 日志存储已用字节（与 pct 二选一展示，pct 缺失时兜底）。 */
   logDiskUsedBytes?: number | null
-  /** 各数据源是否已加载完（未加载完→ unknown，不误判 blocked）。 */
-  loaded: { jdks: boolean; runtimes: boolean; log: boolean }
+  /** 各数据源是否已加载完（未加载完或取数报错→ unknown，不误判 blocked/warn）。 */
+  loaded: { jdks: boolean; runtimes: boolean; log: boolean; packages?: boolean }
 }
 
 /** 阈值：与全站资源水位口径一致（≥90 危险、≥80 注意）。 */
@@ -223,6 +223,9 @@ function judgeLog(input: ReadinessInput): ReadinessItem {
  * 与前三项不同，它没有「缺失」态——只在磁盘告急时降级。
  */
 function judgePackages(input: ReadinessInput): ReadinessItem {
+  if (input.loaded.packages === false) {
+    return { key: 'packages', level: 'unknown', headline: '读取中…' }
+  }
   const used = input.logDiskUsedBytes ?? null
   const pkgCount = input.packages?.globalPackageCount
   const pm = input.packages?.pm

@@ -67,7 +67,6 @@ vi.mock('@/api/logRuntime', async (importOriginal) => {
     useControlLogRuntime: () => ({ mutateAsync: vi.fn(), isPending: false }),
     useInstallLogAsset: () => ({ mutateAsync: vi.fn(), isPending: false }),
     useUploadLogAsset: () => ({ mutateAsync: vi.fn(), isPending: false }),
-    useMigrateLogPartition: () => ({ mutateAsync: vi.fn(), isPending: false }),
     useResolveLogIngestGaps: () => ({ mutateAsync: vi.fn(), isPending: false }),
   }
 })

@@ -89,7 +89,7 @@ export interface RuntimeProbeResult {
 export function useProbeRuntime(nodeId: number) {
   return useMutation({
     mutationFn: (body: { type: string; path: string }) =>
-      api.post<RuntimeProbeResult>(`/nodes/${nodeId}/runtimes/probe`, body).then((r) => r.data),
+      api.post<RuntimeProbeResult>(`/nodes/${nodeId}/runtimes/probe`, body, { timeout: 25_000 }).then((r) => r.data),
   })
 }
 
@@ -101,8 +101,9 @@ export function useRegisterRuntime(nodeId: number) {
       api.post<NodeRuntimeItem>(`/nodes/${nodeId}/runtimes`, body).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['node-runtimes', nodeId] })
-      // type=jdk 落 node_jdks：JDK 面板列表一并失效。
+      // type=jdk 落 node_jdks：JDK 列表与带引用视图一并失效。
       qc.invalidateQueries({ queryKey: ['node-jdks', nodeId] })
+      qc.invalidateQueries({ queryKey: ['node-jdks-refs', nodeId] })
     },
   })
 }
@@ -144,6 +145,7 @@ export function useDeleteRuntime(nodeId: number) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['node-runtimes', nodeId] })
       qc.invalidateQueries({ queryKey: ['node-jdks', nodeId] })
+      qc.invalidateQueries({ queryKey: ['node-jdks-refs', nodeId] })
     },
   })
 }

@@ -112,25 +112,13 @@ export function useControlLogRuntime(nodeId: number) {
   })
 }
 
-export function useMigrateLogPartition(nodeId: number) {
-  const qc = useQueryClient()
-  return useMutation({
-    // 目标在打开确认时冻结，不能随节点面板切换而漂移；超时也不自动重放写请求。
-    mutationFn: async ({ storageNamespace, utcDay, targetNodeId = nodeId }: { storageNamespace: string; utcDay: string; targetNodeId?: number }) =>
-      (await api.post(`/nodes/${targetNodeId}/log-runtime/migrate`, { storageNamespace, utcDay }, { timeout: 180_000 })).data,
-    retry: false,
-    onSuccess: (_data, variables) => qc.invalidateQueries({ queryKey: ['log-runtime', variables.targetNodeId ?? nodeId] }),
-  })
-}
-
-
 /**
  * 日志存储容量的原始指标键（后端 `model/metric.go` 落点）。
  *
  * 【为什么前端要自己算百分比】后端 `log_vl_disk_pct` **只在配了字节上限时**才落点：
  * 部署若用 `maxDiskUsagePercent`（百分比口径），CP 只落 `log_vl_disk_limit` 且 unit=pct，
  * pct 序列永远为空。只读 `log_vl_disk_pct` 会让「百分比部署」的节点磁盘条永久空白。
- * 所以这里把 used 与 limit 都取回来自己算，pct 仅作兜底。
+ * 所以这里结合 `unit` 区分字节口径与百分比口径，避免把 `pct` 上限误当字节。
  */
 export const LOG_VL_DISK_USED = 'log_vl_disk_used'
 export const LOG_VL_DISK_LIMIT = 'log_vl_disk_limit'
@@ -141,6 +129,7 @@ export const LOG_VL_ROWS_DROPPED = 'log_vl_rows_dropped'
 /** 一条序列的取点数。 */
 export interface LogVLMetricSeries {
   metricKey: string
+  unit?: string
   points: Array<{ ts: string; avg: number | null }>
 }
 
@@ -157,22 +146,33 @@ export function lastValue(series: LogVLMetricSeries[] | undefined, key: string):
 }
 
 /**
+ * 字节口径下的日志存储上限；百分比上限部署（unit=pct）返回 null，避免把「95」渲染成「95 B」。
+ */
+export function deriveLogDiskLimitBytes(series: LogVLMetricSeries[] | undefined): number | null {
+  const limitSeries = series?.find((x) => x.metricKey === LOG_VL_DISK_LIMIT)
+  const limit = lastValue(series, LOG_VL_DISK_LIMIT)
+  if (limit == null || limit <= 0) return null
+  const unit = limitSeries?.unit?.toLowerCase()
+  if (unit === 'pct' || unit === '%') return null
+  if (unit === 'bytes' || unit === 'byte' || unit === 'b') return limit
+  // 缺 unit 字段的旧序列：百分比上限一定 <= 100，字节上限必然远大于 100 B。
+  return limit > 100 ? limit : null
+}
+
+/**
  * 日志存储占用百分比。
  *
- * 优先 used/limit（两种部署口径都成立），其次直接读 pct（旧数据/兜底）。
+ * 字节口径下优先 used/limit（即使达到或超过 100% 也准确封顶为 100%）；
+ * 百分比上限部署下不拿字节除以 pct，而是直接读 pct 序列。
  * 两者都拿不到时返回 null——**不返回 0**：0% 会被读成「磁盘全空」，
  * 而真实情况是「没有读数」，语义完全不同。
  */
 export function deriveLogDiskPct(series: LogVLMetricSeries[] | undefined): number | null {
   const used = lastValue(series, LOG_VL_DISK_USED)
-  const limit = lastValue(series, LOG_VL_DISK_LIMIT)
-  if (used != null && limit != null && limit > 0) {
-    // limit 是 lastValue 的返回值（number | null），这里已收窄，故后续可直接用。
-    // used 是字节、limit 是字节 → 百分比；两者都是字节单位时这才成立。
-    // 百分比部署下 limit 的 unit 是 pct（值如 95），此时 used/limit 会得出荒谬的数，
-    // 故用「limit 明显小于 used 一个数量级」来识别，并回落到 pct 序列。
-    const pct = (used / limit) * 100
-    if (pct <= 1000) return Math.max(0, Math.min(100, pct))
+  const limitBytes = deriveLogDiskLimitBytes(series)
+  if (used != null && limitBytes != null && limitBytes > 0) {
+    const pct = (used / limitBytes) * 100
+    return Math.max(0, Math.min(100, pct))
   }
   const direct = lastValue(series, LOG_VL_DISK_PCT)
   return direct == null ? null : Math.max(0, Math.min(100, direct))

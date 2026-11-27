@@ -130,8 +130,11 @@ export function RuntimeReadinessStrip({ items, onAction, className }: RuntimeRea
                 {t('nodes.runtime.warnCount', { count: warnCount, defaultValue: '{{count}} 项注意' })}
               </span>
             )}
-            {blockedCount === 0 && warnCount === 0 && (
+            {blockedCount === 0 && warnCount === 0 && worst === 'ok' && (
               <span className="text-status-success">{t('nodes.runtime.allReady', '全部就绪')}</span>
+            )}
+            {blockedCount === 0 && warnCount === 0 && worst === 'unknown' && (
+              <span>{t('nodes.runtime.partialUnknown', '部分数据未取到')}</span>
             )}
           </span>
         )}

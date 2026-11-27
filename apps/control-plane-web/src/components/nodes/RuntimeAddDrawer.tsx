@@ -85,19 +85,12 @@ export function RuntimeAddDrawer({
   const register = useRegisterRuntime(nodeId)
   const install = useInstallRuntime(nodeId)
 
-  // 编辑草稿：厂商 / 大版本 / 版本 / 架构 / 路径（与后端 PUT 字段一致）。
-  const [draft, setDraft] = useState<{ vendor: string; majorVersion: string; version: string; arch: string; path: string } | null>(null)
-
-  const startEdit = () => {
-    if (!editing) return
-    setDraft({
-      vendor: editing.name,
-      majorVersion: String(editing.majorVersion),
-      version: editing.version,
-      arch: editing.arch,
-      path: editing.path,
-    })
-  }
+  const editingJDK = editing && editing.type === 'jdk' ? editing : null
+  const deleteConfirmText = pendingDelete?.managed
+    ? pendingDelete.type === 'jdk'
+      ? `${pendingDelete.name} ${pendingDelete.majorVersion}`
+      : pendingDelete.name
+    : undefined
 
   /** JDK 段：直接把受控视图挂进来（下载 + 登记两件事都在它的内部分段里）。 */
   const jdkSection = (
@@ -277,12 +270,9 @@ export function RuntimeAddDrawer({
 
       {/* 编辑登记信息：只在 JDK 行出现（其它类型没有厂商/架构这些可编辑字段）。 */}
       <Dialog
-        open={editing !== null}
+        open={editingJDK !== null}
         onOpenChange={(o) => {
-          if (!o) {
-            setDraft(null)
-            onCloseEdit()
-          }
+          if (!o) onCloseEdit()
         }}
       >
         <DialogContent className="max-w-md">
@@ -292,58 +282,14 @@ export function RuntimeAddDrawer({
               {t('nodes.jdkEdit', '编辑 JDK 登记信息')}
             </DialogTitle>
           </DialogHeader>
-          {editing && draft === null && (
-            // 首次打开时用当前值初始化草稿（放在渲染里而不是 effect，避免一帧空表单）。
-            <button type="button" className="hidden" onClick={startEdit} />
+          {editingJDK && (
+            <JDKEditDialogBody
+              key={editingJDK.id}
+              editing={editingJDK}
+              onClose={onCloseEdit}
+              onSave={onSaveEdit}
+            />
           )}
-          {editing && (
-            <div className="space-y-2">
-              {(
-                [
-                  ['vendor', t('nodes.jdkVendor', '厂商')],
-                  ['majorVersion', t('nodes.jdkMajor', '大版本')],
-                  ['version', t('artifactCache.jdkVersionPick', '具体版本')],
-                  ['arch', t('nodes.jdkArch', '架构')],
-                  ['path', t('nodes.jdkPath', '路径')],
-                ] as const
-              ).map(([key, label]) => (
-                <label key={key} className="block space-y-1">
-                  <span className="text-xs font-medium">{label}</span>
-                  <Input
-                    value={draft?.[key] ?? (key === 'vendor' ? editing.name : key === 'majorVersion' ? String(editing.majorVersion) : (editing as unknown as Record<string, string>)[key] ?? '')}
-                    onChange={(e) => setDraft({ ...(draft ?? { vendor: editing.name, majorVersion: String(editing.majorVersion), version: editing.version, arch: editing.arch, path: editing.path }), [key]: e.target.value })}
-                    className="h-8"
-                  />
-                </label>
-              ))}
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={onCloseEdit}>
-              {t('common.cancel', '取消')}
-            </Button>
-            <Button
-              onClick={() => {
-                if (!editing) return
-                const body = draft ?? {
-                  vendor: editing.name,
-                  majorVersion: String(editing.majorVersion),
-                  version: editing.version,
-                  arch: editing.arch,
-                  path: editing.path,
-                }
-                void onSaveEdit(editing.id, {
-                  vendor: body.vendor.trim(),
-                  majorVersion: Number(body.majorVersion) || editing.majorVersion,
-                  version: body.version.trim(),
-                  arch: body.arch.trim(),
-                  path: body.path.trim(),
-                })
-              }}
-            >
-              {t('common.save', '保存')}
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -361,11 +307,74 @@ export function RuntimeAddDrawer({
             : t('nodes.runtimeLib.deleteRecordDesc', '外部登记的运行时仅删除平台记录，不影响磁盘上的文件。')
         }
         confirmLabel={t('common.delete', '删除')}
-        confirmText={pendingDelete?.managed ? `${pendingDelete.name} ${pendingDelete.majorVersion}` : undefined}
+        confirmText={deleteConfirmText}
         pending={deleting}
         onConfirm={onConfirmDelete}
         onCancel={onCloseDelete}
       />
+    </>
+  )
+}
+
+/** 独立挂载的 JDK 编辑表单体：通过 key={editing.id} 保证每次打开/切换 JDK 草稿自动重置。 */
+function JDKEditDialogBody({
+  editing,
+  onClose,
+  onSave,
+}: {
+  editing: RuntimeInventoryRow
+  onClose: () => void
+  onSave: RuntimeAddDrawerProps['onSaveEdit']
+}) {
+  const { t } = useTranslation()
+  const [draft, setDraft] = useState({
+    vendor: editing.name,
+    majorVersion: String(editing.majorVersion),
+    version: editing.version,
+    arch: editing.arch,
+    path: editing.path,
+  })
+
+  return (
+    <>
+      <div className="space-y-2">
+        {(
+          [
+            ['vendor', t('nodes.jdkVendor', '厂商')],
+            ['majorVersion', t('nodes.jdkMajor', '大版本')],
+            ['version', t('artifactCache.jdkVersionPick', '具体版本')],
+            ['arch', t('nodes.jdkArch', '架构')],
+            ['path', t('nodes.jdkPath', '路径')],
+          ] as const
+        ).map(([key, label]) => (
+          <label key={key} className="block space-y-1">
+            <span className="text-xs font-medium">{label}</span>
+            <Input
+              value={draft[key]}
+              onChange={(e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }))}
+              className="h-8"
+            />
+          </label>
+        ))}
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>
+          {t('common.cancel', '取消')}
+        </Button>
+        <Button
+          onClick={() => {
+            void onSave(editing.id, {
+              vendor: draft.vendor.trim(),
+              majorVersion: Number(draft.majorVersion) || editing.majorVersion,
+              version: draft.version.trim(),
+              arch: draft.arch.trim(),
+              path: draft.path.trim(),
+            })
+          }}
+        >
+          {t('common.save', '保存')}
+        </Button>
+      </DialogFooter>
     </>
   )
 }

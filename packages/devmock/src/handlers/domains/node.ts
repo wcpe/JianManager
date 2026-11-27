@@ -930,7 +930,25 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     const nodeId = Number((info.params as { id: string }).id)
-    return HttpResponse.json(jdks.list((j) => j.nodeId === nodeId))
+    const rows = jdks.list((j) => j.nodeId === nodeId)
+    if (new URL(info.request.url).searchParams.get('withRefs') === '1') {
+      const nodeInstances = db<MockRuntimeInstanceRef>('instances').list().filter((i) => i.nodeId === nodeId)
+      return HttpResponse.json(
+        rows.map((j) => {
+          const refs = nodeInstances
+            .filter((i) => i.jdkId === j.id)
+            .map((i) => ({ id: i.id, uuid: `inst-${i.id}`, name: i.name, status: 'running', binding: 'direct' as const }))
+          return {
+            ...j,
+            instances: refs,
+            refCount: refs.length,
+            deleteBlocked: refs.length > 0,
+            deleteBlockedReason: refs.length > 0 ? 'direct' : '',
+          }
+        }),
+      )
+    }
+    return HttpResponse.json(rows)
   }),
 
   domainRoute('post', '/nodes/:id/jdks', async (info) => {
@@ -969,12 +987,23 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
-  // 一键装 JDK（异步化）：受理即装入列表（mock 同步落库以便列表联动），回执 taskId（HTTP 202）。
+  // 一键装 JDK（异步化）：先判重再写入，首次返回 202，重复提交返回 200 + reused:true。
   domainRoute('post', '/nodes/:id/jdks/install', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const nodeId = Number((info.params as { id: string }).id)
     const body = (await info.request.json()) as { vendor: string; majorVersion: number; arch: string; version?: string }
+    const taskId = `task-jdk-${body.vendor}-${body.majorVersion}`
+    const dup = jdks.list(
+      (j) =>
+        j.nodeId === nodeId &&
+        j.vendor.toLowerCase() === body.vendor.toLowerCase() &&
+        j.majorVersion === body.majorVersion &&
+        j.managed,
+    )[0]
+    if (dup) {
+      return HttpResponse.json({ taskId, reused: true, task: { taskId, kind: 'jdk_install', state: 'running' } })
+    }
     jdks.insert({
       nodeId,
       vendor: body.vendor,
@@ -985,16 +1014,6 @@ export const handlers = [
       managed: true,
       createdAt: NOW,
     })
-    /*
-      幂等复用演示：真后端同参数的重复提交返回 200 + reused（复用那个在跑的任务）。
-      这里用「本节点已有同厂商同大版本 JDK」近似——够用来看前端文案分支，
-      不要把它当成真实的后端语义（真实的判定在 CP 的幂等键上）。
-    */
-    const dup = jdks.list((j) => j.nodeId === nodeId && j.vendor === body.vendor && j.majorVersion === body.majorVersion)[0]
-    const taskId = `task-jdk-${body.vendor}-${body.majorVersion}`
-    if (dup) {
-      return HttpResponse.json({ taskId, reused: true, task: { taskId, kind: 'jdk_install', state: 'running' } })
-    }
     return HttpResponse.json({ taskId }, { status: 202 })
   }),
 
@@ -1189,25 +1208,73 @@ export const handlers = [
     }
     const version = `${body.major}.0.0`
     const path = `/data/opt/runtimes/nodejs-${body.major}/node-v${version}-linux-x64/bin/node`
-    if (nodeRuntimes.list((r) => r.nodeId === nodeId && r.type === 'nodejs' && r.path === path).length === 0) {
-      nodeRuntimes.insert({
-        nodeId,
-        type: 'nodejs',
-        name: `Node.js ${body.major}`,
-        majorVersion: body.major,
-        version,
-        arch: body.arch || 'x64',
-        path,
-        managed: true,
-        createdAt: NOW,
-      })
-    }
     const taskId = `task-runtime-install-${body.major}`
-    // 幂等复用演示（同大版本已存在 → 200 + reused），对齐真后端的幂等键语义。
+    // 幂等复用演示（同大版本已存在 → 200 + reused），先判重再落库，对齐真后端语义。
     const already = nodeRuntimes.list((r) => r.nodeId === nodeId && r.type === 'nodejs' && r.majorVersion === body.major)[0]
     const payload = { taskId, task: { taskId, kind: 'runtime_install', state: 'running' } }
     if (already) return HttpResponse.json({ ...payload, reused: true })
+    nodeRuntimes.insert({
+      nodeId,
+      type: 'nodejs',
+      name: `Node.js ${body.major}`,
+      majorVersion: body.major,
+      version,
+      arch: body.arch || 'x64',
+      path,
+      managed: true,
+      createdAt: NOW,
+    })
     return HttpResponse.json(payload, { status: 202 })
+  }),
+
+  // 探测指定路径上的运行时（jdk / nodejs），对齐真后端 POST /nodes/:id/runtimes/probe。
+  domainRoute('post', '/nodes/:id/runtimes/probe', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const nodeId = Number((info.params as { id: string }).id)
+    const body = (await info.request.json()) as { type?: string; path?: string }
+    const typ = (body.type ?? '').trim().toLowerCase()
+    const rawPath = (body.path ?? '').trim()
+    if (!typ || !rawPath) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '请求参数错误：type 与 path 不能为空' }, { status: 400 })
+    }
+    if (typ !== 'jdk' && typ !== 'nodejs') {
+      return HttpResponse.json({ error: 'BUSINESS_ERROR', message: `不支持的运行时类型: ${typ}` }, { status: 422 })
+    }
+    const lower = rawPath.toLowerCase()
+    if (lower.includes('invalid') || (typ === 'nodejs' && !lower.includes('node')) || (typ === 'jdk' && !lower.includes('jdk') && !lower.includes('java'))) {
+      return HttpResponse.json({ valid: false, error: `该路径不是有效的 ${typ === 'jdk' ? 'JDK' : 'Node.js'}` })
+    }
+    if (typ === 'nodejs') {
+      const m = rawPath.match(/(\d{2})/)
+      const major = m ? Number(m[1]) : 22
+      const alreadyRegistered = nodeRuntimes.list((r) => r.nodeId === nodeId && r.type === 'nodejs' && r.path === rawPath).length > 0
+      return HttpResponse.json({
+        valid: true,
+        candidate: {
+          type: 'nodejs',
+          vendor: 'Node.js',
+          version: `${major}.14.0`,
+          majorVersion: major,
+          arch: 'x64',
+          path: rawPath,
+          alreadyRegistered,
+        },
+      })
+    }
+    const alreadyRegistered = jdks.list((j) => j.nodeId === nodeId && j.path === rawPath).length > 0
+    return HttpResponse.json({
+      valid: true,
+      candidate: {
+        type: 'jdk',
+        vendor: 'Temurin',
+        version: '21.0.4+9',
+        majorVersion: 21,
+        arch: 'x64',
+        path: rawPath,
+        alreadyRegistered,
+      },
+    })
   }),
 
   // 删除：type 定位承载表（jdk → node-jdks，其它 → node-runtimes；托管 nodejs 语义=连文件，mock 仅删记录）。
@@ -1271,15 +1338,15 @@ export const handlers = [
     if (!body.name) return HttpResponse.json({ error: 'INVALID_REQUEST', message: '缺少 name' }, { status: 400 })
     const existing = globalPkgs.list((p) => p.name === body.name)[0]
     const ver = body.version || '9.9.9'
+    const taskId = `t-pkg-${body.name}`
+    // 先判重再写入：同包同版本已在列表里 → 200 + reused；升级版本或新包 → 202。
+    if (existing && existing.version === ver) {
+      return HttpResponse.json({ taskId, reused: true })
+    }
     if (existing) {
       globalPkgs.update(existing.id, { version: ver, latest: undefined })
     } else {
       globalPkgs.insert({ name: body.name, version: ver } as Omit<MockGlobalPackage, 'id'>)
-    }
-    const taskId = `t-pkg-${body.name}`
-    // 幂等复用演示：同包同版本已在列表里 → 200 + reused。
-    if (existing && existing.version === ver) {
-      return HttpResponse.json({ taskId, reused: true })
     }
     return HttpResponse.json({ taskId }, { status: 202 })
   }),

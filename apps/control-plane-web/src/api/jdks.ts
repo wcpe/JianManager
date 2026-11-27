@@ -158,6 +158,7 @@ export function useInstallJDK(nodeId: number) {
       api.post<InstallJDKAccepted>(`/nodes/${nodeId}/jdks/install`, body).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['node-jdks', nodeId] })
+      qc.invalidateQueries({ queryKey: ['node-jdks-refs', nodeId] })
       qc.invalidateQueries({ queryKey: ['tasks'] })
     },
   })

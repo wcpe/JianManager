@@ -161,6 +161,16 @@ describe('evaluateReadiness：离线与汇总', () => {
     const keys = evaluateReadiness(base()).map((i) => i.key)
     expect(keys).toEqual(['java', 'node', 'log', 'packages'])
   })
+
+  it('包管理器未加载完或取数报错时返回 unknown，不误报「未配置」', () => {
+    const items = evaluateReadiness(
+      base({
+        packages: { pm: null },
+        loaded: { jdks: true, runtimes: true, log: true, packages: false },
+      }),
+    )
+    expect(byKey(items, 'packages').level).toBe('unknown')
+  })
 })
 
 describe('formatBytes', () => {

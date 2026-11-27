@@ -25,6 +25,7 @@ import {
   useInstallLogAsset,
   useUploadLogAsset,
   deriveLogDiskPct,
+  deriveLogDiskLimitBytes,
   lastValue,
   LOG_VL_DISK_USED,
   LOG_VL_DISK_LIMIT,
@@ -37,6 +38,7 @@ import { useMetricSeries } from '@/api/metrics'
 import { buildRuntimeInventory, type RuntimeInventoryRow } from '@/lib/nodes/runtime-inventory'
 import { evaluateReadiness, type ReadinessActionKey } from '@/lib/nodes/runtime-readiness'
 import type { RuntimeSub } from '@/lib/nodes/runtime-sub'
+import { copyToClipboard } from '@/lib/shared/clipboard'
 import { RuntimeReadinessStrip } from '@/components/views/nodes/RuntimeReadinessStrip'
 import { RuntimeInventoryTable } from '@/components/views/nodes/RuntimeInventoryTable'
 import { RuntimeAddDrawer, type RuntimeAddTab } from '@/components/nodes/RuntimeAddDrawer'
@@ -107,12 +109,11 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
   })
 
   const logSeries = (metricsQ.data?.series ?? []) as LogVLMetricSeries[]
-  const logDiskPct = sub === 'log' ? deriveLogDiskPct(logSeries) : null
-  const logDiskUsed = sub === 'log' ? lastValue(logSeries, LOG_VL_DISK_USED) : null
+  const logDiskPct = deriveLogDiskPct(logSeries)
+  const logDiskUsed = lastValue(logSeries, LOG_VL_DISK_USED)
   // 上限只在「字节口径」下有意义：百分比部署时 limit 的 unit 是 pct（值如 95），
-  // 当成字节显示会印出「95 B」这种荒谬数字，故用「比已用大一个量级」来甄别。
-  const rawLimit = sub === 'log' ? lastValue(logSeries, LOG_VL_DISK_LIMIT) : null
-  const logDiskLimit = rawLimit != null && logDiskUsed != null && rawLimit > logDiskUsed ? rawLimit : null
+  // 由 deriveLogDiskLimitBytes 按 unit 区分，磁盘 >=100% 时依然保留字节上限显示。
+  const logDiskLimit = deriveLogDiskLimitBytes(logSeries)
   const logPartitions = sub === 'log' ? lastValue(logSeries, LOG_VL_PARTITIONS) : null
   const logRowsDropped = sub === 'log' ? lastValue(logSeries, LOG_VL_ROWS_DROPPED) : null
   // 趋势：把 pct 序列点摊成数组给 Sparkline（无 pct 时用 used 字节，曲线形状仍有意义）。
@@ -139,12 +140,32 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
         logDiskPct,
         logDiskUsedBytes: logDiskUsed,
         loaded: {
-          jdks: !jdksQ.isLoading,
-          runtimes: !runtimesQ.isLoading,
-          log: !logQ.isLoading,
+          jdks: !jdksQ.isLoading && !jdksQ.isError,
+          runtimes: !runtimesQ.isLoading && !runtimesQ.isError,
+          log: !logQ.isLoading && !logQ.isError && !assetsQ.isLoading && !assetsQ.isError,
+          packages: !pmQ.isLoading && !pmQ.isError,
         },
       }),
-    [online, jdksQ.data, jdksQ.isLoading, runtimesQ.data, runtimesQ.isLoading, pmQ.data, logQ.data, logQ.isLoading, approvedAsset?.cached, logDiskPct, logDiskUsed],
+    [
+      online,
+      jdksQ.data,
+      jdksQ.isLoading,
+      jdksQ.isError,
+      runtimesQ.data,
+      runtimesQ.isLoading,
+      runtimesQ.isError,
+      pmQ.data,
+      pmQ.isLoading,
+      pmQ.isError,
+      logQ.data,
+      logQ.isLoading,
+      logQ.isError,
+      assetsQ.isLoading,
+      assetsQ.isError,
+      approvedAsset?.cached,
+      logDiskPct,
+      logDiskUsed,
+    ],
   )
 
   // ── 运行时资产 ──
@@ -307,13 +328,15 @@ export default function NodeRuntimeWorkspace({ node, sub, onSub }: NodeRuntimeWo
               setAddTab('scan')
               setAddOpen(true)
             }}
-            onEdit={(row) => setEditing(row)}
+            onEdit={(row) => {
+              if (row.type === 'jdk') setEditing(row)
+            }}
             onDelete={(row) => setPendingDelete(row)}
             onCopyPath={(p) => {
-              void navigator.clipboard?.writeText(p).then(
-                () => toast.success(t('artifactCache.pathCopied', '路径已复制')),
-                () => toast.error(t('common.copyFailed', '复制失败')),
-              )
+              void copyToClipboard(p).then((ok) => {
+                if (ok) toast.success(t('artifactCache.pathCopied', '路径已复制'))
+                else toast.error(t('common.copyFailed', '复制失败'))
+              })
             }}
           />
         </Panel>
