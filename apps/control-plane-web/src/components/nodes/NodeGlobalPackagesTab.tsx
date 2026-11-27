@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useGlobalPackages, useInstallGlobalPackage, useRemoveGlobalPackage } from '@/api/pmConfig'
 import NodeGlobalPackagesSection from '@/components/views/nodes/NodeGlobalPackagesSection'
+import { conflictText, parseTaskConflict, tasksHref, tasksHrefForNode } from '@/lib/nodes/task-conflict'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {
@@ -45,10 +46,34 @@ export default function NodeGlobalPackagesTab({
       onRefresh={() => void refetch()}
       onInstall={async (name, version) => {
         try {
-          await install.mutateAsync({ name: name.trim(), version: version?.trim() || undefined })
-          toast.success(t('pkg.installSubmitted', '安装任务已提交，进度见任务中心'))
+          const res = await install.mutateAsync({ name: name.trim(), version: version?.trim() || undefined })
+          if (res.reused) {
+            toast.info(t('pkg.installReused', '相同包的安装已在进行中，已复用该任务'), {
+              action: {
+                label: t('nodes.runtime.viewProgress', '查看进度'),
+                onClick: () => window.location.assign(`/tasks?task=${encodeURIComponent(res.taskId)}`),
+              },
+              duration: 8000,
+            })
+            return true
+          }
+          toast.success(t('pkg.installSubmitted', '安装任务已提交，进度见任务中心'), {
+            action: {
+              label: t('tasks.openCenter', '去任务中心'),
+              onClick: () => window.location.assign(tasksHrefForNode(nodeId, res.taskId)),
+            },
+            duration: 6000,
+          })
           return true
         } catch (err) {
+          const conflict = parseTaskConflict(err)
+          if (conflict) {
+            toast.warning(conflictText(conflict), {
+              action: { label: t('nodes.runtime.goTasks', '去任务中心'), onClick: () => window.location.assign(tasksHref(conflict)) },
+              duration: 8000,
+            })
+            return false
+          }
           toast.error(errMessage(err, t('pkg.installFailed', '提交安装失败')))
           return false
         }

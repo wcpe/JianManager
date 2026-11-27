@@ -90,6 +90,20 @@ type Task struct {
 	// CancelRequested 标记用户已请求强制停止：CP 据此每拍经心跳向节点下发 cancel_task_ids，
 	// 直到 Worker 确认中断并上报 canceled 终态。pending 未起 / 节点离线时直接置 canceled、不设此标记。
 	CancelRequested bool `gorm:"not null;default:false" json:"cancelRequested"`
+	// ExclusiveGroup 互斥组名（写同一批资源的任务归同组）；空串=不参与互斥。
+	//
+	// 【为什么落成一列而不是运行时用 kind 现算】因为互斥必须由数据库强约束才能真正确保：
+	// 应用层「先查有没有在跑的、再插入」在并发下两个请求都查不到，会双双插入，
+	// 队列语义当场破功（前端闸门也只挡得住同一个浏览器标签页）。落成列之后，
+	// 才能建「同节点同组仅一个非终态」的部分唯一索引，让 DB 来兜住这个窗口。
+	// 见数据库迁移 migrateTaskExclusiveIndexes。
+	ExclusiveGroup string `gorm:"type:varchar(32);not null;default:'';index" json:"exclusiveGroup"`
+	// IdemKey 幂等键：同节点 + 同 kind + 同参数的确定性摘要（SHA-256 前 16 字节 hex）。
+	//
+	// 【为什么要它】用户连点两次「安装 JDK 21」时，正确语义不是「报错拦住第二次」，
+	// 而是「第二次直接复用第一次那个任务」——它本来就在做你要的事，没必要报错，
+	// 更不能再起一个。空串=该任务不参与幂等（如备份这类每次都该新建的操作）。
+	IdemKey string `gorm:"type:varchar(64);not null;default:'';index" json:"idemKey"`
 	// CreatedBy 发起用户 ID，用于归属隔离与完成站内信收件人（0=系统）。
 	CreatedBy uint      `gorm:"index" json:"createdBy"`
 	CreatedAt time.Time `json:"createdAt"`

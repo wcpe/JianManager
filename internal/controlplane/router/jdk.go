@@ -13,7 +13,28 @@ type JDKHandler struct{ svc *service.JDKService }
 
 func NewJDKHandler(svc *service.JDKService) *JDKHandler { return &JDKHandler{svc: svc} }
 
+// List 返回节点 JDK 清单。
+//
+// 默认形状不变（裸 model.NodeJDK 数组）；`?withRefs=1` 时改为携带「引用实例 + 删除可行性」
+// 的清单（JDKWithRefs），供节点页运行时清单表直接把占用和删除守卫前置到 UI。
+// 用查询参数而不是新端点：同一资源的两种视图，权限、路径、缓存键都该一致。
 func (h *JDKHandler) List(c *gin.Context) {
+	if c.Query("withRefs") == "1" {
+		if !requirePlatformAdmin(c) {
+			return
+		}
+		nodeID, err := parseUintParam(c, "id")
+		if err != nil {
+			return
+		}
+		jdks, err := h.svc.ListWithRefs(nodeID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询 JDK 引用关系失败"})
+			return
+		}
+		c.JSON(http.StatusOK, jdks)
+		return
+	}
 	if !requireNodes(c, "node.read", "node.manage") {
 		return
 	}
@@ -70,7 +91,7 @@ func (h *JDKHandler) Install(c *gin.Context) {
 	if access != nil {
 		createdBy = access.UserID
 	}
-	task, err := h.svc.InstallAsync(nodeID, req, createdBy)
+	task, reused, err := h.svc.InstallAsync(nodeID, req, createdBy)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidJDKArch) {
 			// 未知 arch 明确 422 拒绝，不再直透下载源产出误导性 404。
@@ -85,7 +106,34 @@ func (h *JDKHandler) Install(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
 			return
 		}
+		/*
+		  同类重型任务已在跑 → 409，并把占用者一并回给前端。
+		  【为什么不是 429/423】语义上是「资源被占用、状态冲突」，409 最贴切；
+		  前端据此能区分「稍后重试的临时错误」与「需要先去任务中心处理」。
+		  `existingTask` 让界面能直接显示「是谁在占着 + 跳过去停掉」，
+		  比只给一句"任务冲突"有用得多。
+		*/
+		if errors.Is(err, service.ErrTaskExclusiveBusy) {
+			var busy *service.TaskExclusiveBusyError
+			if errors.As(err, &busy) && busy.Existing != nil {
+				c.JSON(http.StatusConflict, gin.H{
+					"error":        "TASK_EXCLUSIVE_BUSY",
+					"message":      service.DescribeExclusiveBusy(err),
+					"existingTask": busy.Existing,
+				})
+				return
+			}
+			c.JSON(http.StatusConflict, gin.H{"error": "TASK_EXCLUSIVE_BUSY", "message": service.DescribeExclusiveBusy(err)})
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "INSTALL_FAILED", "message": err.Error()})
+		return
+	}
+	// reused=true：同参数的安装已在跑，返回的是**已存在**的任务。
+	// 用 200 而不是 202 区分「这次真的受理了新任务」与「复用了一个在跑的任务」——
+	// 前端据此显示不同文案（"已提交" vs "已有相同任务，正在跳转"），而不是再起一个下载。
+	if reused {
+		c.JSON(http.StatusOK, gin.H{"taskId": task.TaskID, "task": task, "reused": true})
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})

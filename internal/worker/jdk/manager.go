@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Info Worker 本地探测到的 JDK 信息。
@@ -282,20 +283,40 @@ func (m *Manager) Remove(path string) error {
 	return os.RemoveAll(filepath.Join(rootAbs, top))
 }
 
+// detectExecTimeout 单次探测 java 进程的最长等待时间，防止异常二进制挂死 Worker 协程。
+const detectExecTimeout = 10 * time.Second
+
 // detectAt 探测给定目录是否为 JDK：找 bin/java 并运行 -XshowSettings:properties
 // 解析 java.version / os.arch / java.vendor。
 func detectAt(dir string) (Info, bool) {
+	return detectAtContext(context.Background(), dir)
+}
+
+func detectAtContext(ctx context.Context, dir string) (Info, bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	javaBin := filepath.Join(dir, "bin", "java")
 	if runtime.GOOS == "windows" {
 		javaBin += ".exe"
 	}
-	if _, err := os.Stat(javaBin); err != nil {
+	st, err := os.Stat(javaBin)
+	if err != nil || !st.Mode().IsRegular() {
 		return Info{}, false
 	}
-	out, err := exec.Command(javaBin, "-XshowSettings:properties", "-version").CombinedOutput()
+	execCtx, cancel := context.WithTimeout(ctx, detectExecTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(execCtx, javaBin, "-XshowSettings:properties", "-version")
+	cmd.WaitDelay = 500 * time.Millisecond
+	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if execCtx.Err() != nil {
+			return Info{}, false
+		}
 		// -XshowSettings:properties 在某些 JDK 不会因 -version 退出失败，但兜底再读 stdout
-		out2, err2 := exec.Command(javaBin, "-XshowSettings:properties").CombinedOutput()
+		cmd2 := exec.CommandContext(execCtx, javaBin, "-XshowSettings:properties")
+		cmd2.WaitDelay = 500 * time.Millisecond
+		out2, err2 := cmd2.CombinedOutput()
 		if err2 != nil {
 			return Info{}, false
 		}
@@ -335,11 +356,20 @@ func normalizeJDKHome(path string) string {
 // Probe 探测某路径的 JDK 信息：path 可为 JDK home 或 java 可执行文件，归一后 detectAt。
 // 找不到 bin/java 或取不到版本时返回 error，供登记前自动填厂商/版本/架构（不再手填）。
 func (m *Manager) Probe(path string) (Info, error) {
-	if strings.TrimSpace(path) == "" {
+	return m.ProbeContext(context.Background(), path)
+}
+
+// ProbeContext 带上下文取消与超时控制的 JDK 路径探测；仅允许绝对路径。
+func (m *Manager) ProbeContext(ctx context.Context, path string) (Info, error) {
+	raw := strings.TrimSpace(path)
+	if raw == "" {
 		return Info{}, fmt.Errorf("路径为空")
 	}
-	home := normalizeJDKHome(path)
-	info, ok := detectAt(home)
+	if !filepath.IsAbs(raw) {
+		return Info{}, fmt.Errorf("请提供绝对路径（%s）", raw)
+	}
+	home := normalizeJDKHome(raw)
+	info, ok := detectAtContext(ctx, home)
 	if !ok {
 		return Info{}, fmt.Errorf("该路径不是有效的 JDK：未找到 bin/java 或无法读取版本（%s）", home)
 	}

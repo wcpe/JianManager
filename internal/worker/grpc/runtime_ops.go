@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/wcpe/JianManager/internal/worker/jdk"
 	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -44,6 +45,74 @@ func (s *Server) ScanRuntimes(ctx context.Context, req *workerpb.ScanRuntimesReq
 		})
 	}
 	return &workerpb.ScanRuntimesResponse{Candidates: out}, nil
+}
+
+// ProbeRuntime 探测指定路径上的运行时（jdk/nodejs）。
+//
+// 【与 ScanRuntimes 的分工】Scan 只在硬编码的常见目录里找；用户把运行时装在别处时
+// 扫不到，但他自己知道路径。登记接口又要求提供 version 等字段，让用户手填版本号
+// 既容易错也没必要——本 RPC 就是"给一个路径，读出它是什么版本"。
+//
+// 【失败语义】节点上路径不对是**常规输入错误**，不是 RPC 异常：
+// 返回 valid=false + error 让界面直接展示，调用方据此区分
+// "节点失联"（RPC error）与"这个路径不对"（valid=false）。
+func (s *Server) ProbeRuntime(ctx context.Context, req *workerpb.ProbeRuntimeRequest) (*workerpb.ProbeRuntimeResponse, error) {
+	typ := strings.ToLower(strings.TrimSpace(req.GetType()))
+	path := strings.TrimSpace(req.GetPath())
+	if typ == "" || path == "" {
+		return &workerpb.ProbeRuntimeResponse{Valid: false, Error: "缺少 type 或 path"}, nil
+	}
+
+	switch typ {
+	case runtimescan.TypeNodeJS:
+		if s.runtimeScanner == nil {
+			return &workerpb.ProbeRuntimeResponse{Valid: false, Error: "节点未启用运行时扫描能力"}, nil
+		}
+		c, ok := s.runtimeScanner.ProbePathContext(ctx, typ, path)
+		if !ok {
+			return &workerpb.ProbeRuntimeResponse{
+				Valid: false,
+				Error: fmt.Sprintf("该路径不是有效的 Node.js：未找到可执行的 node，或无法读取版本（%s）", path),
+			}, nil
+		}
+		return &workerpb.ProbeRuntimeResponse{
+			Valid: true,
+			Candidate: &workerpb.RuntimeCandidate{
+				Type:         c.Type,
+				Vendor:       c.Vendor,
+				Version:      c.Version,
+				MajorVersion: int32(c.Major),
+				Arch:         c.Arch,
+				Path:         c.Path,
+			},
+		}, nil
+	case "jdk":
+		/*
+			JDK 的探测用 Manager.ProbeContext 而不是包级 Detect：
+			ProbeContext 会先校验绝对路径并 normalizeJDKHome，因此用户贴 home、贴 bin/java、
+			贴 java 都能认，同时响应 gRPC ctx 取消与单次执行超时。
+		*/
+		info, err := (&jdk.Manager{}).ProbeContext(ctx, path)
+		if err != nil {
+			return &workerpb.ProbeRuntimeResponse{Valid: false, Error: err.Error()}, nil
+		}
+		return &workerpb.ProbeRuntimeResponse{
+			Valid: true,
+			Candidate: &workerpb.RuntimeCandidate{
+				Type:         "jdk",
+				Vendor:       info.Vendor,
+				Version:      info.Version,
+				MajorVersion: int32(info.MajorVersion),
+				Arch:         info.Arch,
+				Path:         info.Path,
+			},
+		}, nil
+	default:
+		return &workerpb.ProbeRuntimeResponse{
+			Valid: false,
+			Error: fmt.Sprintf("不支持探测的运行时类型：%s", typ),
+		}, nil
+	}
 }
 
 // runtimeResult 是 runtime_install 任务成功时写入 TaskSnapshot.result 的 JSON 结构。

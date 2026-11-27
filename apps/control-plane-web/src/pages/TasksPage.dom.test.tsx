@@ -47,6 +47,41 @@ function scrollToBottom(el: HTMLElement) {
  * 分页信封：共 N 条/已加载数、「加载更多」增长窗口、筛选变化复位窗口。
  */
 describe('TasksPage（mock 假后端）', () => {
+  /*
+    ?nodeId= 深链：节点页发起安装后「去任务中心」落到 /tasks?nodeId=<id>&task=<taskId>。
+    不带这个，用户从节点页跳过来还得再手选一次节点——那正是"任务展示统一到任务中心"
+    之后最容易漏掉的一步。
+  */
+  it('?nodeId= 深链：进入即按该节点筛选（筛选值真的下推到请求）', async () => {
+    loginMockUser()
+    /*
+      断言方式：直接看请求 URL 里带了 nodeId，而不是猜"哪些种子任务属于别的节点"。
+      种子数据的节点归属是会变的（我第一次就猜错：以为「备份实例 survival」属于别的节点，
+      实际它也在节点 1，于是断言"它不该出现"必然失败）。
+      钉住"筛选下推"这个契约，比钉住某条种子数据更稳。
+    */
+    const seen: string[] = []
+    server.use(
+      http.get(API('/tasks'), ({ request }) => {
+        seen.push(new URL(request.url).searchParams.get('nodeId') ?? '')
+        return undefined as never
+      }),
+    )
+    renderWithProviders(<TasksPage />, { route: '/tasks?nodeId=1' })
+    // 列表能正常渲染（不是被筛选搞崩）。
+    expect(await screen.findByText('安装 JDK Temurin 21')).toBeInTheDocument()
+    // 这台节点的筛选确实进了请求。
+    await waitFor(() => expect(seen).toContain('1'))
+  })
+
+  it('?nodeId= 非法值时不炸、退回全部节点', async () => {
+    loginMockUser()
+    renderWithProviders(<TasksPage />, { route: '/tasks?nodeId=abc' })
+    // 非法 nodeId 不参与筛选：种子列表照常出现（含别的节点的任务）。
+    expect(await screen.findByText('安装 JDK Temurin 21')).toBeInTheDocument()
+    expect(await screen.findByText('备份实例 survival')).toBeInTheDocument()
+  })
+
   it('① 渲染出种子任务行', async () => {
     loginMockUser()
     renderWithProviders(<TasksPage />)

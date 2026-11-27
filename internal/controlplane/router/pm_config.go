@@ -3,6 +3,7 @@ package router
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -99,11 +100,21 @@ func (h *PMConfigHandler) InstallPackage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误（name 必填）"})
 		return
 	}
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误（name 必填）"})
+		return
+	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
-	task, err := h.svc.InstallGlobalPackageAsync(nodeID, in.Name, in.Version, userID)
+	task, reused, err := h.svc.InstallGlobalPackageAsync(nodeID, in.Name, in.Version, userID)
 	if err != nil {
 		h.mapErr(c, err)
+		return
+	}
+	// reused=true：同参数的安装已在跑，返回的是已存在的任务（200，不是 202），不重复记审计。
+	if reused {
+		c.JSON(http.StatusOK, gin.H{"taskId": task.TaskID, "task": task, "reused": true})
 		return
 	}
 	if h.audit != nil {
@@ -145,6 +156,18 @@ func (h *PMConfigHandler) mapErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
 	case errors.Is(err, service.ErrNodeOffline):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "NODE_OFFLINE", "message": "节点未连接，无法配置包管理器"})
+	case errors.Is(err, service.ErrTaskExclusiveBusy):
+		// 同节点同类重型任务在跑：409 + 占用者（与运行时安装同一套语义）。
+		var busy *service.TaskExclusiveBusyError
+		if errors.As(err, &busy) && busy.Existing != nil {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":        "TASK_EXCLUSIVE_BUSY",
+				"message":      service.DescribeExclusiveBusy(err),
+				"existingTask": busy.Existing,
+			})
+			return
+		}
+		c.JSON(http.StatusConflict, gin.H{"error": "TASK_EXCLUSIVE_BUSY", "message": service.DescribeExclusiveBusy(err)})
 	default:
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 	}

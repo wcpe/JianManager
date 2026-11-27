@@ -430,6 +430,7 @@
     "back": "Back",
     "logout": "Logout",
     "none": "None",
+    "default": "Default",
     "actions": "Actions",
     "moreActions": "More actions",
     "name": "Name",
@@ -1252,7 +1253,12 @@
       "installHint": "Downloads the latest portable archive of this major from nodejs.org dist (or the configured mirror) via the node's outbound proxy into the managed directory. Track progress in Task Center.",
       "installConfirm": "Install",
       "installDispatched": "Node.js install task dispatched; track progress in Task Center",
-      "installFailed": "Failed to dispatch install"
+      "installFailed": "Failed to dispatch install",
+      "installMajorPlaceholder": "Select the Node.js version to install",
+      "installPreview": "Will install Node.js {{major}} ({{lts}})",
+      "installDispatching": "Dispatching…",
+      "cancelWhilePending": "Dispatching — wait for acceptance",
+      "installReused": "The same install is already running; reused that task"
     },
     "enroll": {
       "addNode": "Add Node",
@@ -1537,7 +1543,106 @@
     "pageSizeAuto": "Auto",
     "monitorUnavailable": "Failed to load monitoring data",
     "pageOutOfRange": "(page out of range, showing the last page)",
-    "openNodeDetail": "Open node {{name}} details"
+    "openNodeDetail": "Open node {{name}} details",
+    "runtime": {
+      "readiness": "Runtime readiness",
+      "sections": "Runtime sections",
+      "inventoryTitle": "Runtime inventory",
+      "addRuntime": "Add runtime",
+      "addRuntimeHint": "Add an executable runtime to this node. JDK serves Java instances; Node.js serves Node-dependent plugins and tooling.",
+      "addTabs": "Add method",
+      "offlineHint": "Node offline: install and scan require the node to be online.",
+      "blockedCount": "{{count}} blocked",
+      "warnCount": "{{count}} warnings",
+      "allReady": "All ready",
+      "partialUnknown": "Some data unavailable",
+      "refsNotApplicable": "This runtime type has no instance bindings",
+      "refsTitle": "{{count}} instance(s) use this JDK",
+      "edit": "Edit registration",
+      "bindingDirect": "Instance is pinned to this JDK; it cannot start after deletion",
+      "bindingMajor": "Instance resolves by major version; it may fall back to another JDK of the same major",
+      "sub": {
+        "inventory": "Runtime assets",
+        "packages": "Package manager",
+        "log": "Log platform",
+        "logAcq": "Collection rules"
+      },
+      "item": {
+        "java": "Java runtime",
+        "node": "Node.js",
+        "log": "Log platform",
+        "packages": "Package manager"
+      },
+      "col": {
+        "type": "Type",
+        "name": "Name",
+        "version": "Version",
+        "source": "Source",
+        "refs": "Referencing instances",
+        "path": "Path"
+      },
+      "binding": {
+        "direct": "direct",
+        "major": "major"
+      },
+      "add": {
+        "install": "Download JDK",
+        "register": "Register existing JDK",
+        "scan": "Scan for runtimes",
+        "jdk": "Install JDK",
+        "node": "Install Node.js",
+        "registerNode": "Register existing Node.js"
+      },
+      "installMajorPlaceholder": "Select the Node.js version to install",
+      "installPreview": "Will install Node.js {{major}} ({{lts}})",
+      "copyPath": "Copy path",
+      "revealPath": "Copy path and reveal in file manager",
+      "refsCount": "{{count}} instance(s) using it",
+      "goTasks": "Open task center",
+      "stopRequested": "Stop requested for \"{{title}}\"",
+      "stopFailed": "Failed to stop",
+      "viewProgress": "View progress",
+      "forceStopHint": "Interrupt the running download/install; you can retry afterwards",
+      "stopping": "Stopping…",
+      "waitingWorker": "Waiting for node",
+      "nodeInstallHint": "Install a managed Node.js on this node. Plugins and bot toolchains that depend on Node need it; Java servers are unaffected.",
+      "nodeVersion": "Node.js version",
+      "nodeVersionPlaceholder": "Select a version",
+      "nodeInstallPreview": "Will install Node.js {{major}} ({{channel}})",
+      "nodeInstallPreviewEmpty": "Select a version to install",
+      "pmEdit": "Edit config",
+      "pmSummary": "Current {{pm}}, {{count}} registry source(s)",
+      "pmSummaryEmpty": "No package manager configured",
+      "logAcqEdit": "Edit rules",
+      "logAcqSummary": "Changes apply via heartbeat (≤1 cycle, ~30s); unoverridden items inherit the platform default."
+    },
+    "jdkInstalling": "Dispatching…",
+    "jdkInstallReused": "The same JDK install is already running; reused that task",
+    "register": {
+      "jdkHint": "If this node already has a JDK (installed manually, say), just point at its path to register it — no need to download again.",
+      "nodeHint": "If this node already has Node.js, point at its path to register it. Plugins and bot tooling that depend on Node need it; Java servers are unaffected.",
+      "path": "{{name}} path",
+      "jdkPlaceholder": "e.g. /opt/jdk-21 or /usr/lib/jvm/temurin-21",
+      "nodePlaceholder": "e.g. /opt/node/bin/node or /opt/node-v22",
+      "browse": "Browse node directories",
+      "probing": "Probing…",
+      "probe": "Probe",
+      "offline": "Node offline: probing and directory browsing require the node to be online.",
+      "probeFailed": "Probe failed: cannot reach node",
+      "found": "Found {{name}}",
+      "alreadyRegistered": "Registered",
+      "vendor": "Vendor",
+      "version": "Version",
+      "major": "Major",
+      "arch": "Arch",
+      "pathLabel": "Path",
+      "invalidPath": "No {{name}} found at this path",
+      "submitting": "Registering…",
+      "submit": "Register",
+      "alreadyHint": "This path is already in the list; no need to register twice.",
+      "selectDir": "Choose {{name}} directory",
+      "success": "Runtime registered"
+    }
   },
   "nodeProxy": {
     "title": "Outbound proxy",
@@ -3411,6 +3516,7 @@
       "player.whitelist.add": "Add player to whitelist",
       "player.whitelist.remove": "Remove player from whitelist",
       "node.runtime.scan": "Scan node runtimes",
+      "node.runtime.probe": "Probe node runtime path",
       "node.runtime.register": "Register node runtime",
       "node.runtime.install": "Install node runtime",
       "node.runtime.delete": "Delete node runtime",
@@ -4456,7 +4562,7 @@
       "log.acq.realtime_tail": "Realtime tailing",
       "log.acq.gz_import_enabled": "gz archive import (master switch)",
       "log.acq.gz_scan_interval": "gz scan interval (empty = unset)",
-      "log.acq.path_overrides": "Instance log path overrides (JSON)",
+      "log.acq.path_overrides": "Instance log path overrides",
       "debug.mode": "Debug mode (logs + Gin)",
       "jdk.mirror.temurin": "JDK mirror (Temurin)",
       "jdk.mirror.corretto": "JDK mirror (Corretto)",
@@ -5427,7 +5533,8 @@
     "helpStateTitle": "State and progress",
     "helpStateBody": "Progress is reported by the executor. A percentage that stays put usually means that step is waiting on something remote (download, extraction) — retrying will not help.",
     "helpStopTitle": "Force stop",
-    "helpStopBody": "Stop is only a request; a wedged executor may never answer. Force stop ends the task record, but it does not undo side effects already produced."
+    "helpStopBody": "Stop is only a request; a wedged executor may never answer. Force stop ends the task record, but it does not undo side effects already produced.",
+    "openCenter": "Open task center"
   },
   "notifications": {
     "title": "Notifications",
@@ -5800,7 +5907,9 @@
     "updatableTo": "Upgradable to {{version}}",
     "upgrade": "Upgrade",
     "versionLabel": "Version",
-    "versionPlaceholder": "Version (empty = latest)"
+    "versionPlaceholder": "Version (empty = latest)",
+    "installing": "Submitting…",
+    "installReused": "The same package install is already running; reused that task"
   },
   "permissions": {
     "title": "Permissions",
@@ -6105,14 +6214,6 @@
   },
   "logsRuntime": {
     "title": "Log platform runtime",
-    "migration": {
-      "title": "Confirm log partition migration",
-      "description": "Node {{node}} · storage namespace {{namespace}} · UTC day {{day}}. This affects the entire physical UTC day on this node, potentially across multiple storage namespaces. The namespace above is only a locator, not the migration boundary. HOT logs for the day will move to COLD. Queries may be affected; verify the target first.",
-      "confirm": "Confirm migration",
-      "denied": "Whole-day cross-namespace migration requires a platform administrator",
-      "success": "Partition migrated to COLD",
-      "unknown": "No definitive response was received; migration outcome is unknown. It will not be retried automatically. Review the runtime and partition before confirming again."
-    },
     "error": {
       "unsupported": "Log platform is not enabled on this node (install the VictoriaLogs asset first)",
       "notReady": "Log platform is starting, please retry shortly",
@@ -6128,28 +6229,20 @@
       "cached": "cached",
       "chooseFile": "no file selected",
       "dispatch": "Dispatch asset",
-      "dispatchHelp": "Push the approved VictoriaLogs asset to this node with hash verification; the runtime can start once it succeeds."
+      "dispatchHelp": "Push the approved VictoriaLogs asset to this node with hash verification; the runtime can start once it succeeds.",
+      "uploading": "Uploading…",
+      "dispatching": "Dispatching…"
     },
     "namespace": {
       "hot": "HOT",
-      "cold": "COLD",
-      "rehydrate": "Rehydrate",
-      "help": "Logs are stored in three tiers: HOT = recent data (fastest queries); COLD = migrated historical data (slower but queryable); Rehydrate = a temporary queryable copy rebuilt from archive. Tiers are enabled per config; disabled ones show \"not ready\".",
       "notReady": "not ready",
       "offline": "offline",
       "start": "Start",
       "stop": "Stop",
-      "restart": "Restart",
-      "migrate": "Migrate partition",
-      "migrateHelp": "Move a partition from HOT to COLD to free hot storage; the partition is briefly unqueryable during migration."
-    },
-    "date": {
-      "label": "Migration date (that day partition)",
-      "help": "The UTC day of the partition to migrate. Partitions are stored per UTC day, and both migration and queries operate on that unit."
+      "restart": "Restart"
     },
     "assetCached": "Approved package cached",
     "assetInstalled": "Managed asset installed",
-    "migrateDone": "Partition migrated to COLD",
     "gapsResolved": "Gaps covered by projections have been resolved",
     "opFailed": "Operation failed",
     "action": {
@@ -6162,6 +6255,35 @@
     "gaps": {
       "resolve": "Resolve covered gaps",
       "help": "Collection or delivery interruptions leave \"gaps\". Once a complete projection proves that window is intact, the gap can be resolved so it stops counting as a risk."
+    },
+    "health": {
+      "ok": "Healthy",
+      "queryable": "Queryable",
+      "recovering": "Query surface warming up"
+    },
+    "instance": {
+      "title": "VictoriaLogs instance",
+      "notEnabled": "Log platform runtime is not enabled on this node",
+      "dispatchFirst": "Approval asset is cached — dispatch it above, then start the instance",
+      "uploadFirst": "Upload an approval package and dispatch the asset before starting the runtime",
+      "hint": "The log platform runs a single VictoriaLogs instance, keeping recent logs in UTC-day partitions and evicting by retention. Hot/cold tiers no longer exist."
+    },
+    "storage": {
+      "title": "Data directory",
+      "noLimit": "No limit configured — showing absolute usage only",
+      "noData": "No capacity reading yet",
+      "trend": "Data directory usage trend"
+    },
+    "risk": {
+      "title": "Data integrity",
+      "partitions": "Day partitions",
+      "dropped": "Dropped past retention",
+      "droppedHint": "Rows/sec dropped by VictoriaLogs because they exceeded retention",
+      "listen": "Listening"
+    },
+    "ops": {
+      "title": "Manual recovery",
+      "hint": "For fault handling only; depends on whether the deployment has archive/gap backends."
     }
   },
   "instanceKind": {
@@ -7097,5 +7219,21 @@
       "recentEmpty": "No push record yet",
       "pushVersions": "desired v{{desired}} · base v{{base}}"
     }
+  },
+  "logAcqOverride": {
+    "empty": "No overrides. Each instance is collected from its rule path; only set this when logs live elsewhere.",
+    "pickInstance": "Select instance",
+    "instance": "Instance",
+    "instanceId": "Instance ID",
+    "logPath": "Log path",
+    "pathPlaceholder": "Relative to instance work dir, e.g. logs/server.log",
+    "addRow": "Add instance override",
+    "fixBeforeSave": "Fix the invalid rows before saving",
+    "duplicateInstance": "This instance is already configured above; only one entry will be kept.",
+    "instanceRequired": "Select an instance",
+    "instanceInvalid": "Instance ID must be a canonical integer (e.g. 1)",
+    "pathRequired": "Enter the log path",
+    "pathMustBeRelative": "Must be relative to the instance work dir (no leading / or drive letter)",
+    "pathEscapes": "Path must not escape the instance work dir (..)"
   }
 }

@@ -430,6 +430,7 @@
     "back": "返回",
     "logout": "退出登录",
     "none": "无",
+    "default": "默认",
     "actions": "操作",
     "moreActions": "更多操作",
     "name": "名称",
@@ -1230,7 +1231,12 @@
       "installHint": "从 nodejs.org dist（或平台设置的镜像源）下载该主版本最新便携归档，经节点出站代理安装到托管目录。下发后进度见「任务中心」。",
       "installConfirm": "下发安装",
       "installDispatched": "Node.js 安装任务已下发，进度可在「任务中心」查看",
-      "installFailed": "安装下发失败"
+      "installFailed": "安装下发失败",
+      "installMajorPlaceholder": "选择要安装的 Node.js 版本",
+      "installPreview": "将安装 Node.js {{major}}（{{lts}}）",
+      "installDispatching": "正在下发…",
+      "cancelWhilePending": "下发中，请等待受理完成",
+      "installReused": "相同版本的安装已在进行中，已复用该任务"
     },
     "enroll": {
       "addNode": "添加节点",
@@ -1515,7 +1521,106 @@
     "pageSizeAuto": "自动",
     "monitorUnavailable": "监控数据加载失败",
     "pageOutOfRange": "（页码超出范围，已显示最后一页）",
-    "openNodeDetail": "打开节点 {{name}} 详情"
+    "openNodeDetail": "打开节点 {{name}} 详情",
+    "runtime": {
+      "readiness": "运行时就绪",
+      "sections": "运行时分段",
+      "inventoryTitle": "运行时清单",
+      "addRuntime": "新增运行时",
+      "addRuntimeHint": "给这台节点添一个可执行运行时。JDK 用于 Java 实例；Node.js 用于依赖 Node 的插件与工具链。",
+      "addTabs": "新增方式",
+      "offlineHint": "节点离线：安装与扫描需要节点在线才能执行。",
+      "blockedCount": "{{count}} 项阻塞",
+      "warnCount": "{{count}} 项注意",
+      "allReady": "全部就绪",
+      "partialUnknown": "部分数据未取到",
+      "refsNotApplicable": "该运行时类型没有实例绑定",
+      "refsTitle": "{{count}} 个实例使用本 JDK",
+      "edit": "编辑登记信息",
+      "bindingDirect": "实例写死了这个 JDK，删除后它无法启动",
+      "bindingMajor": "实例按大版本解析，删除后可能解析到同版本其它 JDK",
+      "sub": {
+        "inventory": "运行时资产",
+        "packages": "包管理",
+        "log": "日志平台",
+        "logAcq": "采集规则"
+      },
+      "item": {
+        "java": "Java 运行时",
+        "node": "Node.js",
+        "log": "日志平台",
+        "packages": "包管理"
+      },
+      "col": {
+        "type": "类型",
+        "name": "名称",
+        "version": "版本",
+        "source": "来源",
+        "refs": "引用实例",
+        "path": "路径"
+      },
+      "binding": {
+        "direct": "直接",
+        "major": "大版本"
+      },
+      "add": {
+        "install": "下载安装 JDK",
+        "register": "登记已有 JDK",
+        "scan": "扫描发现",
+        "jdk": "安装 JDK",
+        "node": "安装 Node.js",
+        "registerNode": "登记已有 Node.js"
+      },
+      "installMajorPlaceholder": "选择要安装的 Node.js 版本",
+      "installPreview": "将安装 Node.js {{major}}（{{lts}}）",
+      "copyPath": "复制路径",
+      "revealPath": "复制并在文件管理器中定位",
+      "refsCount": "{{count}} 个实例在用",
+      "goTasks": "去任务中心",
+      "stopRequested": "已请求停止「{{title}}」",
+      "stopFailed": "停止失败",
+      "viewProgress": "查看进度",
+      "forceStopHint": "中断正在下载/安装的任务，本节点随后可重新发起",
+      "stopping": "停止中…",
+      "waitingWorker": "等待节点确认",
+      "nodeInstallHint": "给这台节点装一份受管 Node.js。依赖 Node 的插件与 Bot 工具链需要它；Java 服不受影响。",
+      "nodeVersion": "Node.js 版本",
+      "nodeVersionPlaceholder": "选择版本",
+      "nodeInstallPreview": "将安装 Node.js {{major}}（{{channel}}）",
+      "nodeInstallPreviewEmpty": "请选择要安装的版本",
+      "pmEdit": "编辑配置",
+      "pmSummary": "当前 {{pm}}，{{count}} 个 registry 源",
+      "pmSummaryEmpty": "尚未配置包管理器",
+      "logAcqEdit": "编辑规则",
+      "logAcqSummary": "改动经心跳下发（≤1 周期，约 30s）生效；未覆盖项继承平台默认。"
+    },
+    "jdkInstalling": "正在下发…",
+    "jdkInstallReused": "相同版本的 JDK 安装已在进行中，已复用该任务",
+    "register": {
+      "jdkHint": "如果这台节点上已经有 JDK（比如手工装过），填它的路径即可登记，不必重新下载。",
+      "nodeHint": "如果这台节点上已经有 Node.js，填它的路径即可登记。依赖 Node 的插件与 Bot 工具链需要它；Java 服不受影响。",
+      "path": "{{name}} 路径",
+      "jdkPlaceholder": "如 /opt/jdk-21 或 /usr/lib/jvm/temurin-21",
+      "nodePlaceholder": "如 /opt/node/bin/node 或 /opt/node-v22",
+      "browse": "浏览节点目录",
+      "probing": "探测中…",
+      "probe": "探测",
+      "offline": "节点离线：探测与目录浏览需要节点在线。",
+      "probeFailed": "探测失败：无法连接节点",
+      "found": "探测到 {{name}}",
+      "alreadyRegistered": "已登记",
+      "vendor": "厂商",
+      "version": "版本",
+      "major": "大版本",
+      "arch": "架构",
+      "pathLabel": "路径",
+      "invalidPath": "这个路径上没找到 {{name}}",
+      "submitting": "登记中…",
+      "submit": "确认登记",
+      "alreadyHint": "这条路径已在清单里，无需重复登记。",
+      "selectDir": "选择 {{name}} 目录",
+      "success": "已登记该运行时"
+    }
   },
   "artifactVersions": {
     "title": "ServerProbe 制品版本库",
@@ -3365,6 +3470,7 @@
       "player.whitelist.add": "添加白名单玩家",
       "player.whitelist.remove": "移除白名单玩家",
       "node.runtime.scan": "扫描节点运行时",
+      "node.runtime.probe": "探测节点运行时路径",
       "node.runtime.register": "登记节点运行时",
       "node.runtime.install": "安装节点运行时",
       "node.runtime.delete": "删除节点运行时",
@@ -4410,7 +4516,7 @@
       "log.acq.realtime_tail": "实时采集",
       "log.acq.gz_import_enabled": "gz 归档导入（总开关）",
       "log.acq.gz_scan_interval": "gz 定时扫描周期（留空 = 未配置）",
-      "log.acq.path_overrides": "实例日志路径覆盖（JSON）",
+      "log.acq.path_overrides": "实例日志路径覆盖",
       "debug.mode": "调试模式（日志 + Gin）",
       "jdk.mirror.temurin": "JDK 镜像源（Temurin）",
       "jdk.mirror.corretto": "JDK 镜像源（Corretto）",
@@ -5427,7 +5533,8 @@
     "helpStateTitle": "状态与进度",
     "helpStateBody": "进度由执行方上报，长时间停在同一百分比通常表示该步骤在等远端（如下载、解压），不必重试。",
     "helpStopTitle": "强制停止",
-    "helpStopBody": "停止只是请求，执行方可能已经卡死而无法响应。确认失败时用「强制停止」终止任务记录，但它不会回滚已经产生的副作用。"
+    "helpStopBody": "停止只是请求，执行方可能已经卡死而无法响应。确认失败时用「强制停止」终止任务记录，但它不会回滚已经产生的副作用。",
+    "openCenter": "去任务中心"
   },
   "notifications": {
     "title": "站内信",
@@ -5800,7 +5907,9 @@
     "updatableTo": "可更新到 {{version}}",
     "upgrade": "升级",
     "versionLabel": "版本",
-    "versionPlaceholder": "版本（空=latest）"
+    "versionPlaceholder": "版本（空=latest）",
+    "installing": "提交中…",
+    "installReused": "相同包的安装已在进行中，已复用该任务"
   },
   "permissions": {
     "title": "权限配置",
@@ -6105,14 +6214,6 @@
   },
   "logsRuntime": {
     "title": "日志平台运行时",
-    "migration": {
-      "title": "确认迁移日志分区",
-      "description": "节点 {{node}} · 存储命名空间 {{namespace}} · UTC 日 {{day}}。操作范围是此节点整个物理 UTC 日，可能包含多个存储命名空间；上述命名空间仅用于定位，不是搬运边界。将把该物理日的 HOT 日志迁至 COLD，过程可能影响查询，请核对目标。",
-      "confirm": "确认迁移",
-      "denied": "整日跨命名空间迁移仅平台管理员可用",
-      "success": "分区已迁移到 COLD",
-      "unknown": "请求未取得明确回执，迁移结果未知；不会自动重发。请先复核运行时与该分区状态，再决定是否重新确认。"
-    },
     "error": {
       "unsupported": "本节点尚未启用日志平台（需先下发 VictoriaLogs 资产并配置）",
       "notReady": "日志平台正在启动，请稍后重试",
@@ -6128,28 +6229,20 @@
       "cached": "已缓存",
       "chooseFile": "未选择文件",
       "dispatch": "下发资产",
-      "dispatchHelp": "把审批过的 VictoriaLogs 资产下发到该节点并校验哈希；成功后即可启动运行时。"
+      "dispatchHelp": "把审批过的 VictoriaLogs 资产下发到该节点并校验哈希；成功后即可启动运行时。",
+      "uploading": "上传中…",
+      "dispatching": "下发中…"
     },
     "namespace": {
       "hot": "HOT",
-      "cold": "COLD",
-      "rehydrate": "Rehydrate",
-      "help": "日志平台按三层存储：HOT=近期热数据（查询最快）；COLD=迁出的历史数据（查询稍慢，仍可查）；Rehydrate=把归档回灌成可查副本的临时层。三层按配置启用，未启用显示「未就绪」。",
       "notReady": "未就绪",
       "offline": "离线",
       "start": "启动",
       "stop": "停止",
-      "restart": "重启",
-      "migrate": "迁移分区",
-      "migrateHelp": "把某个分区从 HOT 迁到 COLD，释放热存储；迁移期间该分区暂不可查。"
-    },
-    "date": {
-      "label": "迁移日期（该日分区）",
-      "help": "要迁移的分区归属日（UTC）。日志按 UTC 日期分区存储，迁移与查询都以该分区为单位。"
+      "restart": "重启"
     },
     "assetCached": "审批包已缓存",
     "assetInstalled": "受管资产已安装",
-    "migrateDone": "分区已迁移到 COLD",
     "gapsResolved": "已核销已被投影覆盖的缺口",
     "opFailed": "操作失败",
     "action": {
@@ -6162,6 +6255,35 @@
     "gaps": {
       "resolve": "核销已覆盖缺口",
       "help": "采集或投递中断会留下「缺口」记录。当缺口所覆盖的时间段已有完整投影可证明数据完整时，可核销该缺口，避免它一直被计为风险。"
+    },
+    "health": {
+      "ok": "进程健康",
+      "queryable": "可查询",
+      "recovering": "查询面就绪中"
+    },
+    "instance": {
+      "title": "VictoriaLogs 实例",
+      "notEnabled": "本节点尚未启用日志平台运行时",
+      "dispatchFirst": "审批资产已缓存，可点上方「下发资产」后再启动实例",
+      "uploadFirst": "需先上传审批包并下发资产，之后才能启动运行时",
+      "hint": "日志平台只运行一个 VictoriaLogs 实例，按 UTC 日分区保存近期日志并按保留期自动淘汰；不再区分冷热双层存储。"
+    },
+    "storage": {
+      "title": "数据目录",
+      "noLimit": "未配置上限，仅显示占用绝对值",
+      "noData": "暂无容量读数",
+      "trend": "数据目录占用趋势"
+    },
+    "risk": {
+      "title": "数据完整性",
+      "partitions": "日分区数",
+      "dropped": "超保留期丢弃",
+      "droppedHint": "因超保留期被 VictoriaLogs 丢弃的行速率（rows/sec）",
+      "listen": "监听"
+    },
+    "ops": {
+      "title": "人工应急",
+      "hint": "仅特殊故障处置时使用；依赖部署是否启用归档/缺口后端。"
     }
   },
   "instanceKind": {
@@ -7097,5 +7219,21 @@
       "recentEmpty": "还没有下发记录",
       "pushVersions": "期望 v{{desired}} · 基线 v{{base}}"
     }
+  },
+  "logAcqOverride": {
+    "empty": "未配置覆盖。默认按每个实例的规则路径采集；只有日志不在规则位置时才需要在这里指定。",
+    "pickInstance": "选择实例",
+    "instance": "实例",
+    "instanceId": "实例 ID",
+    "logPath": "日志路径",
+    "pathPlaceholder": "相对实例工作目录，如 logs/server.log",
+    "addRow": "添加实例覆盖",
+    "fixBeforeSave": "有未修正的项，修正后才能保存",
+    "duplicateInstance": "这个实例已在上方配置过，提交时只会保留一条。",
+    "instanceRequired": "请选择实例",
+    "instanceInvalid": "实例 ID 须为规范整数（如 1）",
+    "pathRequired": "请填写日志路径",
+    "pathMustBeRelative": "必须是相对实例工作目录的路径（不能以 / 或盘符开头）",
+    "pathEscapes": "路径不能跳出实例工作目录（.. 越界）"
   }
 }

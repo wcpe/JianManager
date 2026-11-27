@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -58,56 +59,72 @@ func (s *PMConfigService) ListGlobalPackages(nodeID uint) ([]GlobalPackageView, 
 
 // InstallGlobalPackageAsync 异步安装/升级全局包（202 语义）：建任务 → 下发 Worker
 // 即返 → 置 running。进度/日志/终态经心跳 tasks 上报（taskreg 通道）。version 空=latest。
-func (s *PMConfigService) InstallGlobalPackageAsync(nodeID uint, name, version string, createdBy uint) (*model.Task, error) {
+func (s *PMConfigService) InstallGlobalPackageAsync(nodeID uint, name, version string, createdBy uint) (*model.Task, bool, error) {
 	if s.tasks == nil {
-		return nil, fmt.Errorf("任务中心未启用，无法异步安装")
+		return nil, false, fmt.Errorf("任务中心未启用，无法异步安装")
 	}
 	node, err := s.nodeByID(nodeID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	cfg, _, err := s.load(nodeID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		return nil, ErrNodeOffline
+		return nil, false, ErrNodeOffline
 	}
 
 	taskID := uuid.NewString()
-	ver := version
+	pkgName := strings.TrimSpace(name)
+	ver := strings.TrimSpace(version)
 	if ver == "" {
 		ver = "latest"
 	}
-	title := fmt.Sprintf("安装全局包 %s@%s", name, ver)
+	title := fmt.Sprintf("安装全局包 %s@%s", pkgName, ver)
 	detail := fmt.Sprintf("节点 %s · %s · pm=%s", node.Name, title, cfg.PM)
-	task, err := s.tasks.CreateTask(taskID, nodeID, model.TaskKindPkgInstall, title, detail, createdBy)
+	// 准入：全局包安装写 <data>/opt/runtimes/global，同组只允许一个在途；
+	// 同包管理器 + 同包名 + 同版本（空串与 latest 归一）的重复提交复用已有任务。
+	idem := BuildIdemKey(nodeID, model.TaskKindPkgInstall, fmt.Sprintf("%s|%s|%s", cfg.PM, pkgName, ver))
+	task, reused, err := s.tasks.AdmitTask(taskID, TaskAdmitSpec{
+		NodeID:    nodeID,
+		Kind:      model.TaskKindPkgInstall,
+		Title:     title,
+		Detail:    detail,
+		CreatedBy: createdBy,
+		IdemKey:   idem,
+	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if reused {
+		// 相同参数的任务已在跑：复用它的回执（HTTP 200 + reused），不再下发 Worker。
+		return task, true, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	resp, err := client.Worker.InstallGlobalPackage(ctx, &workerpb.InstallGlobalPackageRequest{
-		Pm: cfg.PM, Name: name, Version: version, TaskId: taskID,
+		Pm: cfg.PM, Name: pkgName, Version: strings.TrimSpace(version), TaskId: taskID,
 	})
 	if err != nil {
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err)); markErr != nil {
 			slog.Warn("标记全局包安装任务失败状态失败", "taskId", taskID, "error", markErr)
 		}
-		return nil, fmt.Errorf("Worker InstallGlobalPackage RPC 失败: %w", err)
+		return nil, false, fmt.Errorf("Worker InstallGlobalPackage RPC 失败: %w", err)
 	}
 	if !resp.Success {
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("Worker 拒绝安装: %s", resp.Error)); markErr != nil {
 			slog.Warn("标记全局包安装任务失败状态失败", "taskId", taskID, "error", markErr)
 		}
-		return nil, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
+		return nil, false, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
 	}
 	if err := s.tasks.MarkRunning(taskID); err != nil {
-		return nil, err
+		slog.Warn("标记全局包安装任务 running 失败", "taskId", taskID, "error", err)
 	}
-	return task, nil
+	task.State = model.TaskStateRunning
+	return task, false, nil
 }
 
 // RemoveGlobalPackage 卸载全局包（同步）。

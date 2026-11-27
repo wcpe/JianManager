@@ -71,8 +71,19 @@ export default function TasksPage() {
     if (deepLinkTask) setExpandedId(deepLinkTask)
   }, [deepLinkTask, location.key])
 
-  // 筛选条件。
-  const [filters, setFilters] = useState<TasksFilterState>(EMPTY_FILTERS)
+  /**
+   * 筛选条件。
+   *
+   * 【?nodeId= 深链】节点页的安装动作完成后，正确的去处是**任务中心**（那里有进度、
+   * 强制停止、日志与历史），而不是在节点页再长出一套并行展示。
+   * 带 nodeId 进来即可直接落在「这台节点的任务」上，省掉用户再手选一次节点。
+   * 只在首次挂载时取初值：用户在此页手动切换节点筛选后，不该被 URL 反复掰回去
+   * （与 ?task= 的展开态处理不同——那个是导航意图，这个是筛选初值）。
+   */
+  const [filters, setFilters] = useState<TasksFilterState>(() => {
+    const nid = new URLSearchParams(location.search).get('nodeId')
+    return nid && Number.isFinite(Number(nid)) ? { ...EMPTY_FILTERS, nodeId: nid } : EMPTY_FILTERS
+  })
   const [since, setSince] = useState<string | undefined>(undefined)
   // 增长窗口：「加载更多」+100 封顶 500；筛选变化复位。
   const [limit, setLimit] = useState(TASKS_WINDOW_STEP)

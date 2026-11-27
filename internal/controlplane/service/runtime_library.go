@@ -225,6 +225,73 @@ type RegisterRuntimeRequest struct {
 	Managed      bool   `json:"managed"`
 }
 
+// RuntimeProbeResult 探测指定路径的结果。
+type RuntimeProbeResult struct {
+	Valid     bool              `json:"valid"`
+	Error     string            `json:"error,omitempty"`
+	Candidate *RuntimeCandidate `json:"candidate,omitempty"`
+}
+
+// Probe 探测**指定路径**上的运行时（jdk/nodejs）。
+//
+// 【为什么要有这个】Scan 只在 Worker 硬编码的常见目录里找。用户把运行时装在
+// 别处（如 /opt/my-runtime）时扫不到，但他自己知道路径。而登记接口要求提供
+// version/majorVersion 等字段——让用户手填版本号既容易错也没必要，
+// 节点上跑一下就是准确值。本方法就是"给一个路径，问节点它是什么版本"。
+//
+// 失败语义分两级（这个区分很重要）：
+//   - 节点离线/不存在/RPC 失败 → 返回 error，由路由映射成 503/404/502；
+//   - 路径不对/不是该运行时 → Valid=false + Error 文案，**HTTP 200**。
+//     用户输错路径是常规操作，不该表现为"服务故障"。
+func (s *RuntimeLibraryService) Probe(nodeID uint, typ, path string) (*RuntimeProbeResult, error) {
+	tt := strings.ToLower(strings.TrimSpace(typ))
+	if tt == "" {
+		return nil, fmt.Errorf("%w: type 不能为空", ErrInvalidRuntimeType)
+	}
+	if !scanableRuntimeTypes[tt] {
+		return nil, fmt.Errorf("%w: %q（可探测类型：jdk、nodejs）", ErrInvalidRuntimeType, typ)
+	}
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("path 不能为空")
+	}
+
+	node, err := s.nodeByID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeOffline
+	}
+	// 探测要真跑一次 java/node（冷启动可能慢），给 20s；再长就该让用户检查节点了。
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	resp, err := client.Worker.ProbeRuntime(ctx, &workerpb.ProbeRuntimeRequest{Type: tt, Path: path})
+	if err != nil {
+		return nil, fmt.Errorf("Worker ProbeRuntime RPC 失败: %w", err)
+	}
+	if !resp.GetValid() || resp.GetCandidate() == nil {
+		return &RuntimeProbeResult{Valid: false, Error: resp.GetError()}, nil
+	}
+	c := resp.GetCandidate()
+	registered, err := s.registeredPaths(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	return &RuntimeProbeResult{
+		Valid: true,
+		Candidate: &RuntimeCandidate{
+			Type:              c.Type,
+			Vendor:            c.Vendor,
+			Version:           c.Version,
+			MajorVersion:      int(c.MajorVersion),
+			Arch:              c.Arch,
+			Path:              c.Path,
+			AlreadyRegistered: registered[c.Type+"\x00"+c.Path],
+		},
+	}, nil
+}
+
 // Register 登记运行时：type=jdk 转发 JDKService.Create（落 node_jdks），
 // 其它已知类型落 node_runtimes；未知类型 ErrInvalidRuntimeType。
 func (s *RuntimeLibraryService) Register(nodeID uint, req RegisterRuntimeRequest) (*RuntimeView, error) {
@@ -329,28 +396,28 @@ func normalizeNodeArch(arch string) (string, error) {
 // InstallAsync 异步发起运行时安装（复用 jdk_install 的任务模式）：建 Task →
 // 下发 Worker InstallRuntime（携带 task_id，启动即返回）→ 置 running → 返回 Task（HTTP 202 语义）。
 // 终态落 node_runtimes（managed=true）与站内信由心跳终态副作用完成（见 TaskService.finalizeTerminal）。
-func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequest, createdBy uint) (*model.Task, error) {
+func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequest, createdBy uint) (*model.Task, bool, error) {
 	if s.tasks == nil {
-		return nil, fmt.Errorf("任务中心未启用，无法异步安装")
+		return nil, false, fmt.Errorf("任务中心未启用，无法异步安装")
 	}
 	typ := strings.ToLower(strings.TrimSpace(req.Type))
 	if !installableRuntimeTypes[typ] {
-		return nil, fmt.Errorf("%w: %q（可安装类型：nodejs）", ErrInvalidRuntimeType, req.Type)
+		return nil, false, fmt.Errorf("%w: %q（可安装类型：nodejs）", ErrInvalidRuntimeType, req.Type)
 	}
 	if req.Major <= 0 {
-		return nil, fmt.Errorf("%w: major 须为正整数", ErrInvalidRuntimeArch)
+		return nil, false, fmt.Errorf("%w: major 须为正整数", ErrInvalidRuntimeArch)
 	}
 	arch, err := normalizeNodeArch(req.Arch)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	node, err := s.nodeByID(nodeID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		return nil, ErrNodeOffline
+		return nil, false, ErrNodeOffline
 	}
 
 	taskID := uuid.NewString()
@@ -360,9 +427,23 @@ func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequ
 		archLabel = "auto"
 	}
 	detail := fmt.Sprintf("节点 %s · %s · arch=%s", node.Name, title, archLabel)
-	task, err := s.tasks.CreateTask(taskID, nodeID, model.TaskKindRuntimeInstall, title, detail, createdBy)
+	// 准入：与 JDK 安装同一互斥组（两者都写节点级托管运行时目录），
+	// 且同类型同大版本同架构的重复提交复用已有任务。
+	idem := BuildIdemKey(nodeID, model.TaskKindRuntimeInstall, fmt.Sprintf("%s|%d|%s", typ, req.Major, archLabel))
+	task, reused, err := s.tasks.AdmitTask(taskID, TaskAdmitSpec{
+		NodeID:    nodeID,
+		Kind:      model.TaskKindRuntimeInstall,
+		Title:     title,
+		Detail:    detail,
+		CreatedBy: createdBy,
+		IdemKey:   idem,
+	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if reused {
+		// 相同参数的任务已在跑：复用它的回执（HTTP 200 + reused），不再下发 Worker。
+		return task, true, nil
 	}
 
 	mirror := ""
@@ -382,19 +463,19 @@ func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequ
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err)); markErr != nil {
 			slog.Warn("将运行时安装任务标记为失败时出错", "taskId", taskID, "error", markErr)
 		}
-		return nil, fmt.Errorf("Worker InstallRuntime RPC 失败: %w", err)
+		return nil, false, fmt.Errorf("Worker InstallRuntime RPC 失败: %w", err)
 	}
 	if !resp.Success {
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("Worker 拒绝安装: %s", resp.Error)); markErr != nil {
 			slog.Warn("将运行时安装任务标记为失败时出错", "taskId", taskID, "error", markErr)
 		}
-		return nil, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
+		return nil, false, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
 	}
 	if err := s.tasks.MarkRunning(taskID); err != nil {
 		slog.Warn("标记任务 running 失败", "taskId", taskID, "error", err)
 	}
 	task.State = model.TaskStateRunning
-	return task, nil
+	return task, false, nil
 }
 
 // defaultRuntimeName 按类型生成默认展示名（如 "Node.js 22"）。

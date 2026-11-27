@@ -126,6 +126,62 @@ func (s *JDKService) List(nodeID uint) ([]model.NodeJDK, error) {
 	return jdks, nil
 }
 
+// JDKWithRefs 是「带引用关系」的 JDK 行：在模型字段之外补上引用实例与删除可行性。
+//
+// 【为什么字段平铺而不是包一个 jdk 子对象】前端清单表每行要同时读 id/vendor/path/refs，
+// 多一层嵌套只让取值变长；且本结构只增不改，旧调用方若将来切换到它，字段名仍一致。
+type JDKWithRefs struct {
+	model.NodeJDK
+	// Instances 引用本 JDK 的实例（直接绑定 + 大版本解析命中），按实例名排序。
+	Instances []JDKRefInstance `json:"instances"`
+	// RefCount 引用实例数（= len(Instances)），便于前端排序与删除前置判断。
+	RefCount int `json:"refCount"`
+	// DeleteBlocked 当前从界面发起删除是否会被后端拒绝（与 Delete 的守卫同源）。
+	DeleteBlocked bool `json:"deleteBlocked"`
+	// DeleteBlockedReason 拒绝原因：direct=有直接绑定；major=按大版本唯一托管项。空=可删。
+	DeleteBlockedReason string `json:"deleteBlockedReason"`
+}
+
+// ListWithRefs 返回该节点 JDK 清单并附带引用实例与删除可行性（节点页运行时清单用）。
+//
+// 一次查询算出三件事，避免前端为了显示「被谁占用」再去拉实例全量：
+//   - 每行 jdk 的引用实例（direct / major 两种绑定，口径与全局矩阵完全一致）；
+//   - 该行能否删除（把 Delete 的两段守卫前置成 UI 约束，不再「先点后报 409」）；
+//   - 引用计数。
+//
+// 大版本解析必须在**该节点全部 JDK**上做（同节点同大版本取 id 最大），所以这里查的是
+// 节点全集而不是分页子集；单节点 JDK 数量级很小（个位数到几十），不需要分页。
+func (s *JDKService) ListWithRefs(nodeID uint) ([]JDKWithRefs, error) {
+	jdks, err := s.List(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	// 只取聚合所需字段：避免把实例的启动命令/环境变量等敏感列拉进内存。
+	var instances []model.Instance
+	if err := s.db.Select("id", "uuid", "name", "status", "node_id", "jdk_id", "java_major_version").
+		Where("node_id = ?", nodeID).Find(&instances).Error; err != nil {
+		return nil, fmt.Errorf("查询实例失败: %w", err)
+	}
+	refs, _ := ResolveJDKRefs(jdks, instances)
+
+	out := make([]JDKWithRefs, 0, len(jdks))
+	for _, j := range jdks {
+		insts := refs[j.ID]
+		if insts == nil {
+			insts = []JDKRefInstance{}
+		}
+		blocked, reason := JDKEvaluateDelete(j, jdks, insts)
+		out = append(out, JDKWithRefs{
+			NodeJDK:             j,
+			Instances:           insts,
+			RefCount:            len(insts),
+			DeleteBlocked:       blocked,
+			DeleteBlockedReason: reason,
+		})
+	}
+	return out, nil
+}
+
 func (s *JDKService) Create(nodeID uint, req CreateJDKRequest) (*model.NodeJDK, error) {
 	if _, err := s.nodeByID(nodeID); err != nil {
 		return nil, err
@@ -142,31 +198,56 @@ func (s *JDKService) Create(nodeID uint, req CreateJDKRequest) (*model.NodeJDK, 
 // 落 model.NodeJDK 与完成站内信由心跳终态副作用完成（见 TaskService.IngestSnapshots）。
 // createdBy 为发起用户 ID（任务归属 + 完成站内信收件人）。
 // 要求已注入 TaskService（SetTaskService）；未注入则回退同步 Install（返回错误提示）。
-func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy uint) (*model.Task, error) {
+func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy uint) (*model.Task, bool, error) {
 	if s.tasks == nil {
-		return nil, fmt.Errorf("任务中心未启用，无法异步安装")
+		return nil, false, fmt.Errorf("任务中心未启用，无法异步安装")
 	}
 	// arch 别名归一化：先于建任务/下发，未知 arch 在此拒绝。
 	arch, err := normalizeJDKArch(req.Arch)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req.Arch = arch
 	node, err := s.nodeByID(nodeID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		return nil, ErrNodeOffline
+		return nil, false, ErrNodeOffline
 	}
 
+	/*
+	  重型任务单在途闸门：必须在**建任务/下发 Worker 之前**检查。
+	  否则连点两次会各建一条任务、各下发一次安装，两个下载同时写同一个托管目录。
+	  注意闸门放在拿 client 之后：节点离线时应报"节点离线"，不该报"任务占用"。
+	*/
 	taskID := uuid.NewString()
 	title := fmt.Sprintf("安装 JDK %s %d", req.Vendor, req.MajorVersion)
 	detail := fmt.Sprintf("节点 %s · %s · arch=%s", node.Name, title, req.Arch)
-	task, err := s.tasks.CreateTask(taskID, nodeID, model.TaskKindJDKInstall, title, detail, createdBy)
+	// 幂等键参与参数：厂商 + 大版本 + 架构 + 具体版本（厂商小写归一化、首尾去空白）。
+	// 这四项相同 = 用户要的是同一件事，第二次提交应当复用第一次的任务，而不是再下一个下载。
+	idem := BuildIdemKey(nodeID, model.TaskKindJDKInstall,
+		fmt.Sprintf("%s|%d|%s|%s",
+			strings.ToLower(strings.TrimSpace(req.Vendor)),
+			req.MajorVersion,
+			req.Arch,
+			strings.TrimSpace(req.Version)))
+	task, reused, err := s.tasks.AdmitTask(taskID, TaskAdmitSpec{
+		NodeID:    nodeID,
+		Kind:      model.TaskKindJDKInstall,
+		Title:     title,
+		Detail:    detail,
+		CreatedBy: createdBy,
+		IdemKey:   idem,
+	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if reused {
+		// 同一个任务已经在跑：直接把已有的回执给前端（HTTP 200 + reused），
+		// **绝不下发第二次 Worker 调用**——那正是「连点导致两个下载」的根源。
+		return task, true, nil
 	}
 
 	// 下发 Worker：携带 task_id，Worker 启动即返回（不再等下载完成）。
@@ -184,19 +265,19 @@ func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy 
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err)); markErr != nil {
 			slog.Warn("标记 JDK 安装任务失败状态失败", "taskId", taskID, "error", markErr)
 		}
-		return nil, fmt.Errorf("Worker InstallJDK RPC 失败: %w", err)
+		return nil, false, fmt.Errorf("Worker InstallJDK RPC 失败: %w", err)
 	}
 	if !resp.Success {
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("Worker 拒绝安装: %s", resp.Error)); markErr != nil {
 			slog.Warn("标记 JDK 安装任务失败状态失败", "taskId", taskID, "error", markErr)
 		}
-		return nil, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
+		return nil, false, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
 	}
 	if err := s.tasks.MarkRunning(taskID); err != nil {
 		slog.Warn("标记任务 running 失败", "taskId", taskID, "error", err)
 	}
 	task.State = model.TaskStateRunning
-	return task, nil
+	return task, false, nil
 }
 
 // ProbeResult JDK 探测结果，对齐 workerpb.ProbeJDKResponse。
@@ -283,44 +364,38 @@ func (s *JDKService) Install(nodeID uint, req InstallJDKRequest) (*model.NodeJDK
 }
 
 func (s *JDKService) Delete(nodeID, jdkID uint) ([]model.Instance, error) {
-	var jdk model.NodeJDK
-	if err := s.db.Where("id = ? AND node_id = ?", jdkID, nodeID).First(&jdk).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrJDKNotFound
-		}
+	jdks, err := s.List(nodeID)
+	if err != nil {
 		return nil, fmt.Errorf("查询 JDK 失败: %w", err)
 	}
-	var used []model.Instance
-	if err := s.db.Where("node_id = ? AND jdk_id = ?", nodeID, jdkID).Find(&used).Error; err != nil {
-		return nil, err
+	var jdk *model.NodeJDK
+	for i := range jdks {
+		if jdks[i].ID == jdkID {
+			jdk = &jdks[i]
+			break
+		}
 	}
-	if len(used) > 0 {
-		return used, ErrJDKInUse
+	if jdk == nil {
+		return nil, ErrJDKNotFound
 	}
 
-	// 还有一条绑定路径：实例可以只声明「Java 大版本」（jdk_id=0 + java_major_version=N），
-	// 启动时由 resolveJDKPath 在该节点上按大版本挑一个托管 JDK。这条路径不写 jdk_id，
-	// 所以上面那句查不到——但删掉这个 JDK 目录后，实例下次启动就找不到运行时了。
-	// 只在托管 JDK 上有意义（外部 JDK 目录不归平台删，删记录不影响磁盘）。
-	if jdk.Managed && jdk.MajorVersion > 0 {
-		var byMajor []model.Instance
-		if err := s.db.Where("node_id = ? AND jdk_id = 0 AND java_major_version = ?", nodeID, jdk.MajorVersion).
-			Find(&byMajor).Error; err != nil {
-			return nil, err
+	var instances []model.Instance
+	if err := s.db.Where("node_id = ?", nodeID).Find(&instances).Error; err != nil {
+		return nil, err
+	}
+	refs, _ := ResolveJDKRefs(jdks, instances)
+	if blocked, _ := JDKEvaluateDelete(*jdk, jdks, refs[jdk.ID]); blocked {
+		byID := make(map[uint]model.Instance, len(instances))
+		for _, inst := range instances {
+			byID[inst.ID] = inst
 		}
-		if len(byMajor) > 0 {
-			// 同大版本还有别的托管 JDK 时不算占用：resolveJDKPath 会挑到另一个，
-			// 报占用会让「多装一个同版本再删旧的」这类正常操作被误拦。
-			var sameMajor int64
-			if err := s.db.Model(&model.NodeJDK{}).
-				Where("node_id = ? AND major_version = ? AND id <> ? AND managed = ?", nodeID, jdk.MajorVersion, jdkID, true).
-				Count(&sameMajor).Error; err != nil {
-				return nil, err
-			}
-			if sameMajor == 0 {
-				return byMajor, ErrJDKInUse
+		used := make([]model.Instance, 0, len(refs[jdk.ID]))
+		for _, r := range refs[jdk.ID] {
+			if inst, ok := byID[r.ID]; ok {
+				used = append(used, inst)
 			}
 		}
+		return used, ErrJDKInUse
 	}
 
 	// 仅「内部下载（托管）」的 JDK 才删除 Worker 上的文件；外部登记的只删记录、绝不动用户磁盘文件（细化：

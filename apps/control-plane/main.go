@@ -1117,6 +1117,15 @@ func main() {
 	botReclaimSweeper.Start()
 	defer botReclaimSweeper.Stop()
 
+	// 失联任务自动回收：重型任务（JDK/运行时/全局包安装）靠互斥组保证「同节点同类只有一个在跑」，
+	// 而这个闸门的反面是——只要在跑的那个任务永不结束，该节点就永远装不了东西。
+	// 任务进度靠 Worker 心跳上报，Worker 重启/节点掉线会让上报永久中断、记录永远停在 running。
+	// 本回收器按「多久没收到进展」判定失联并置 failed，释放互斥占用，避免需要人工改库。
+	taskReaper := service.NewTaskReaper(db)
+	taskReaper.SetTaskService(taskSvc)
+	taskReaper.Start()
+	defer taskReaper.Stop()
+
 	// 出站代理可视化配置：
 	//   - settings 保存 proxy.* 后重建 CP 出站持有者（优先级 settings DB > yaml > env）；
 	//   - 启动时若 DB 已有代理覆盖，按当前生效代理重建一次（保证重启后覆盖仍生效）；

@@ -25,6 +25,8 @@ type fakeRuntimeScanWorker struct {
 	workerpb.WorkerServiceClient
 	scanReq    *workerpb.ScanRuntimesRequest
 	candidates []*workerpb.RuntimeCandidate
+	probeReq   *workerpb.ProbeRuntimeRequest
+	probeResp  *workerpb.ProbeRuntimeResponse
 }
 
 func (f *fakeRuntimeScanWorker) ScanRuntimes(_ context.Context, req *workerpb.ScanRuntimesRequest, _ ...grpc.CallOption) (*workerpb.ScanRuntimesResponse, error) {
@@ -34,6 +36,15 @@ func (f *fakeRuntimeScanWorker) ScanRuntimes(_ context.Context, req *workerpb.Sc
 
 func (f *fakeRuntimeScanWorker) ListJDKs(context.Context, *workerpb.ListJDKsRequest, ...grpc.CallOption) (*workerpb.ListJDKsResponse, error) {
 	return &workerpb.ListJDKsResponse{}, nil
+}
+
+// ProbeRuntime 回预置结果，并记下请求供断言。
+func (f *fakeRuntimeScanWorker) ProbeRuntime(_ context.Context, req *workerpb.ProbeRuntimeRequest, _ ...grpc.CallOption) (*workerpb.ProbeRuntimeResponse, error) {
+	f.probeReq = req
+	if f.probeResp != nil {
+		return f.probeResp, nil
+	}
+	return &workerpb.ProbeRuntimeResponse{Valid: false, Error: "未预置"}, nil
 }
 
 func setupRuntimeLibraryRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
@@ -238,4 +249,114 @@ func TestJDKInUseDeleteBlocked(t *testing.T) {
 	blocked := makeRequest(r, http.MethodDelete, fmt.Sprintf("/api/v1/nodes/%d/runtimes/%d?type=jdk", node.ID, inUse.ID), nil, adminToken)
 	require.Equal(t, http.StatusConflict, blocked.Code, blocked.Body.String())
 	require.Equal(t, "JDK_IN_USE", parseJSON(t, blocked)["error"])
+}
+
+// TestRuntimeLibrary_Probe 探测指定路径的运行时（用户装到常见目录之外时的入口）。
+//
+// 覆盖四条语义，每条都是会真的错的那种：
+//  1. 探测成功 → 200 + valid + candidate（含 alreadyRegistered 补标）；
+//  2. 路径不对 → **200** + valid=false + error（不是 4xx：输错路径是常规输入）；
+//  3. 未知类型 → 422；
+//  4. 非平台管理员 → 403。
+func TestRuntimeLibrary_Probe(t *testing.T) {
+	db := setupTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	r := setupRuntimeLibraryRouter(t, db, pool)
+	adminToken := getAdminToken(t, r)
+	memberToken := getMemberToken(t, r, "member-probe", "password123")
+	node := createTestNode(t, db)
+
+	fake := &fakeRuntimeScanWorker{
+		probeResp: &workerpb.ProbeRuntimeResponse{
+			Valid: true,
+			Candidate: &workerpb.RuntimeCandidate{
+				Type: "nodejs", Vendor: "Node.js", Version: "22.17.0",
+				MajorVersion: 22, Arch: "x64", Path: "/opt/my-node/bin/node",
+			},
+		},
+	}
+	pool.SetWorkerClientForTest(node.UUID, fake)
+
+	// 非平台管理员 403。
+	forbidden := makeRequest(r, http.MethodPost, fmt.Sprintf("/api/v1/nodes/%d/runtimes/probe", node.ID), map[string]any{
+		"type": "nodejs", "path": "/opt/my-node",
+	}, memberToken)
+	require.Equal(t, http.StatusForbidden, forbidden.Code)
+
+	// 探测成功：200 + valid + candidate。
+	resp := makeRequest(r, http.MethodPost, fmt.Sprintf("/api/v1/nodes/%d/runtimes/probe", node.ID), map[string]any{
+		"type": "nodejs", "path": "/opt/my-node",
+	}, adminToken)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	require.NotNil(t, fake.probeReq, "应向 Worker 下发探测")
+	require.Equal(t, "nodejs", fake.probeReq.Type)
+	require.Equal(t, "/opt/my-node", fake.probeReq.Path)
+
+	var okBody struct {
+		Valid     bool `json:"valid"`
+		Candidate struct {
+			Type         string `json:"type"`
+			Version      string `json:"version"`
+			MajorVersion int    `json:"majorVersion"`
+			Path         string `json:"path"`
+		} `json:"candidate"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &okBody))
+	require.True(t, okBody.Valid)
+	require.Equal(t, "22.17.0", okBody.Candidate.Version)
+	require.Equal(t, "/opt/my-node/bin/node", okBody.Candidate.Path)
+
+	// 路径不对：**200** + valid=false + error 文案（不是 4xx/5xx）。
+	fake.probeResp = &workerpb.ProbeRuntimeResponse{Valid: false, Error: "该路径不是有效的 Node.js"}
+	bad := makeRequest(r, http.MethodPost, fmt.Sprintf("/api/v1/nodes/%d/runtimes/probe", node.ID), map[string]any{
+		"type": "nodejs", "path": "/nonexistent",
+	}, adminToken)
+	require.Equal(t, http.StatusOK, bad.Code, "输错路径应当是可展示的业务结果，而非服务错误: %s", bad.Body.String())
+	var badBody struct {
+		Valid bool   `json:"valid"`
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(bad.Body.Bytes(), &badBody))
+	require.False(t, badBody.Valid)
+	require.NotEmpty(t, badBody.Error)
+
+	// 未知类型 422。
+	ruby := makeRequest(r, http.MethodPost, fmt.Sprintf("/api/v1/nodes/%d/runtimes/probe", node.ID), map[string]any{
+		"type": "ruby", "path": "/opt/ruby",
+	}, adminToken)
+	require.Equal(t, http.StatusUnprocessableEntity, ruby.Code, ruby.Body.String())
+
+	// 纯空白路径应直接 400，不得穿透为 502。
+	blank := makeRequest(r, http.MethodPost, fmt.Sprintf("/api/v1/nodes/%d/runtimes/probe", node.ID), map[string]any{
+		"type": "nodejs", "path": "   ",
+	}, adminToken)
+	require.Equal(t, http.StatusBadRequest, blank.Code, blank.Body.String())
+}
+
+// TestJDKListWithRefs_RequiresPlatformAdmin 验证 ?withRefs=1 仅平台管理员可达，防止越权枚举跨租户实例。
+func TestJDKListWithRefs_RequiresPlatformAdmin(t *testing.T) {
+	db := setupTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	r := setupRuntimeLibraryRouter(t, db, pool)
+	adminToken := getAdminToken(t, r)
+	memberToken := getMemberToken(t, r, "member-jdk-refs", "password123")
+	node := createTestNode(t, db)
+
+	jdk := &model.NodeJDK{
+		NodeID: node.ID, Vendor: "Temurin", MajorVersion: 21, Version: "21.0.4", Arch: "x64", Path: "/opt/jdk-21", Managed: true,
+	}
+	require.NoError(t, db.Create(jdk).Error)
+	inst := &model.Instance{
+		NodeID: node.ID, Name: "secret-tenant-inst", Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, JDKID: jdk.ID,
+	}
+	require.NoError(t, db.Create(inst).Error)
+
+	// 非管理员拒绝 403
+	forbidden := makeRequest(r, http.MethodGet, fmt.Sprintf("/api/v1/nodes/%d/jdks?withRefs=1", node.ID), nil, memberToken)
+	require.Equal(t, http.StatusForbidden, forbidden.Code, forbidden.Body.String())
+
+	// 管理员正常返回引用详情
+	ok := makeRequest(r, http.MethodGet, fmt.Sprintf("/api/v1/nodes/%d/jdks?withRefs=1", node.ID), nil, adminToken)
+	require.Equal(t, http.StatusOK, ok.Code, ok.Body.String())
+	require.Contains(t, ok.Body.String(), "secret-tenant-inst")
 }

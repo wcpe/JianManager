@@ -102,7 +102,7 @@ func TestRuntimeLibrary_InstallAsync(t *testing.T) {
 	svc.SetSettingsReader(fixedSettings{SettingKeyRuntimeMirrorNodeJS: "https://npmmirror.com/mirrors/node"})
 
 	start := time.Now()
-	task, err := svc.InstallAsync(node.ID, InstallRuntimeRequest{Type: "nodejs", Major: 22, Arch: "amd64"}, 42)
+	task, _, err := svc.InstallAsync(node.ID, InstallRuntimeRequest{Type: "nodejs", Major: 22, Arch: "amd64"}, 42)
 	require.NoError(t, err)
 	require.Less(t, time.Since(start), 5*time.Second, "异步路径应立即返回")
 	require.Equal(t, model.TaskStateRunning, task.State)
@@ -133,17 +133,17 @@ func TestRuntimeLibrary_InstallAsync_Rejections(t *testing.T) {
 	svc := NewRuntimeLibraryService(db, pool, NewJDKService(db, pool))
 	svc.SetTaskService(NewTaskService(db))
 
-	_, err := svc.InstallAsync(node.ID, InstallRuntimeRequest{Type: "python", Major: 3}, 1)
+	_, _, err := svc.InstallAsync(node.ID, InstallRuntimeRequest{Type: "python", Major: 3}, 1)
 	require.ErrorIs(t, err, ErrInvalidRuntimeType)
 
-	_, err = svc.InstallAsync(node.ID, InstallRuntimeRequest{Type: "nodejs", Major: 22, Arch: "mips64"}, 1)
+	_, _, err = svc.InstallAsync(node.ID, InstallRuntimeRequest{Type: "nodejs", Major: 22, Arch: "mips64"}, 1)
 	require.ErrorIs(t, err, ErrInvalidRuntimeArch)
 
-	_, err = svc.InstallAsync(node.ID, InstallRuntimeRequest{Type: "nodejs", Major: 0}, 1)
+	_, _, err = svc.InstallAsync(node.ID, InstallRuntimeRequest{Type: "nodejs", Major: 0}, 1)
 	require.Error(t, err)
 
 	// 节点离线（未入连接池）。
-	_, err = svc.InstallAsync(node.ID, InstallRuntimeRequest{Type: "nodejs", Major: 22}, 1)
+	_, _, err = svc.InstallAsync(node.ID, InstallRuntimeRequest{Type: "nodejs", Major: 22}, 1)
 	require.ErrorIs(t, err, ErrNodeOffline)
 
 	var taskCount int64

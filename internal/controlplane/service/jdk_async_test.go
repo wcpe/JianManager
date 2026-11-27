@@ -63,7 +63,7 @@ func TestJDKService_InstallAsync_ReturnsTaskImmediately(t *testing.T) {
 	jdkSvc.SetTaskService(taskSvc)
 
 	start := time.Now()
-	task, err := jdkSvc.InstallAsync(node.ID, InstallJDKRequest{Vendor: "Temurin", MajorVersion: 21, Arch: "x64"}, 42)
+	task, _, err := jdkSvc.InstallAsync(node.ID, InstallJDKRequest{Vendor: "Temurin", MajorVersion: 21, Arch: "x64"}, 42)
 	require.NoError(t, err)
 	require.Less(t, time.Since(start), 5*time.Second, "异步路径应立即返回，不阻塞")
 
@@ -96,7 +96,7 @@ func TestJDKService_InstallAsync_NodeOffline(t *testing.T) {
 	jdkSvc := NewJDKService(db, pool)
 	jdkSvc.SetTaskService(taskSvc)
 
-	_, err := jdkSvc.InstallAsync(node.ID, InstallJDKRequest{Vendor: "Temurin", MajorVersion: 21, Arch: "x64"}, 1)
+	_, _, err := jdkSvc.InstallAsync(node.ID, InstallJDKRequest{Vendor: "Temurin", MajorVersion: 21, Arch: "x64"}, 1)
 	require.ErrorIs(t, err, ErrNodeOffline)
 
 	var taskCount int64

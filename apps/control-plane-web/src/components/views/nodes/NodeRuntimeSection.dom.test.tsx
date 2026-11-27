@@ -133,33 +133,11 @@ describe('NodeRuntimeSection', () => {
     await waitFor(() => expect(screen.queryByText('扫描发现运行时')).not.toBeInTheDocument())
   })
 
-  it('安装 Node.js：LTS 快选切换后上报所选主版本，成功后关闭模态', async () => {
-    const user = userEvent.setup()
-    const { onInstall } = renderSection()
-
-    await user.click(screen.getByRole('button', { name: /安装 Node\.js/ }))
-    expect(await screen.findByText('主版本')).toBeInTheDocument()
-
-    // 默认 22；切到 20 LTS 后下发。
-    await user.click(screen.getByRole('button', { name: '20 LTS' }))
-    await user.click(screen.getByRole('button', { name: /下发安装/ }))
-
-    await waitFor(() => expect(onInstall).toHaveBeenCalledWith(20))
-    await waitFor(() => expect(screen.queryByRole('button', { name: /下发安装/ })).not.toBeInTheDocument())
-  })
-
-  it('安装 Node.js：自定义主版本非法时禁用下发', async () => {
-    const user = userEvent.setup()
-    renderSection()
-
-    await user.click(screen.getByRole('button', { name: /安装 Node\.js/ }))
-    const input = await screen.findByRole('textbox', { name: '主版本' })
-    await user.clear(input)
-    expect(screen.getByRole('button', { name: /下发安装/ })).toBeDisabled()
-    await user.type(input, '24')
-    expect(screen.getByRole('button', { name: /下发安装/ })).toBeEnabled()
-  })
-
+  /*
+    【安装相关的 4 条用例已迁出】它们原先测的是本组件内嵌的安装模态。
+    用户报的「点安装 Node.js 打开的是 JDK」正是这种堆叠造成的，安装已独立成
+    NodeInstallSection；对应断言在 NodeInstallSection.dom.test.tsx 里，未放宽。
+  */
   it('重扫返回已登记候选时全部禁勾，入库按钮保持禁用', async () => {
     const user = userEvent.setup()
     const allRegistered = candidates.map((c) => ({ ...c, alreadyRegistered: true }))

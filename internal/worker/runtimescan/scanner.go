@@ -10,15 +10,20 @@
 package runtimescan
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/jdk"
 )
+
+// probeExecTimeout 单次探测外部可执行文件的最长等待时间，避免卡死进程泄漏 Worker 协程。
+const probeExecTimeout = 10 * time.Second
 
 // 支持的运行时类型（python 仅 CP 侧预留枚举，无扫描器）。
 const (
@@ -44,6 +49,7 @@ type Scanner struct {
 	managedRoots []string
 	detectJDK    func(dir string) (Candidate, bool)
 	probeNode    func(exe string) (Candidate, bool)
+	probeNodeCtx func(ctx context.Context, exe string) (Candidate, bool)
 }
 
 // New 创建扫描器：路径表按 GOOS 内置，探测器用真实现。
@@ -55,6 +61,7 @@ func New(managedRoots []string) *Scanner {
 		managedRoots: managedRoots,
 		detectJDK:    detectJDKAt,
 		probeNode:    probeNodeExecutable,
+		probeNodeCtx: probeNodeExecutableContext,
 	}
 }
 
@@ -171,10 +178,92 @@ func detectJDKAt(dir string) (Candidate, bool) {
 	}, true
 }
 
+// ProbePath 探测**指定路径**上的某个运行时（供 Worker 的 ProbeRuntime RPC 用）。
+//
+// 与 Scan 的区别：Scan 在硬编码的常见目录里找，本方法只认用户给的那一个路径。
+// 用户把运行时装在 /opt/my-runtime 这类位置时 Scan 扫不到，但他自己知道路径——
+// 让他指着路径说"就这个"，比让他手填版本号靠谱得多。
+//
+// path 的形态按类型归一：
+//   - nodejs：可以是 node 可执行文件本身，也可以是其所在目录或 ../（本方法按 bin/node、node 依次尝试）；
+//   - jdk：可以是 JDK home，也可以是 bin/java 或 java 本身（沿用 jdk.Manager 的归一逻辑）。
+//
+// 找不到/不是该类型时返回 (Candidate{}, false)，由调用方决定怎么描述错误。
+// 这里不返回 error：路径不对是常规输入错误，不是异常。
+func (s *Scanner) ProbePath(typ, path string) (Candidate, bool) {
+	return s.ProbePathContext(context.Background(), typ, path)
+}
+
+// ProbePathContext 带上下文取消与超时控制的指定路径探测。
+// 仅接受绝对路径，且仅尝试基名为 node/node.exe 的常规文件，防止执行任意调用方路径。
+func (s *Scanner) ProbePathContext(ctx context.Context, typ, path string) (Candidate, bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	p := strings.TrimSpace(path)
+	if p == "" || !filepath.IsAbs(p) {
+		return Candidate{}, false
+	}
+	clean := filepath.Clean(p)
+	probe := s.probeNodeCtx
+	if probe == nil {
+		probe = func(_ context.Context, exe string) (Candidate, bool) {
+			return s.probeNode(exe)
+		}
+	}
+	switch strings.ToLower(typ) {
+	case TypeNodeJS:
+		for _, exe := range nodeExecutableCandidates(clean) {
+			if ctx.Err() != nil {
+				return Candidate{}, false
+			}
+			if c, ok := probe(ctx, exe); ok {
+				return c, true
+			}
+		}
+		return Candidate{}, false
+	default:
+		return Candidate{}, false
+	}
+}
+
+// nodeExecutableCandidates 把用户给的路径展开成可能的 node 可执行文件路径。
+//
+// 【安全边界】仅当路径基名本身为 node / node.exe 时才把 p 当成可执行文件尝试；
+// 其它路径一律视作目录展开 <dir>/bin/node 与 <dir>/node（及 .exe），绝不把任意
+// 非 node 文件（如 /bin/cat 或任意脚本）直接传给 exec.Command。
+func nodeExecutableCandidates(p string) []string {
+	base := strings.ToLower(filepath.Base(p))
+	if base == "node" || base == "node.exe" {
+		return []string{p}
+	}
+	return []string{
+		filepath.Join(p, "bin", "node"),
+		filepath.Join(p, "node"),
+		filepath.Join(p, "bin", "node.exe"),
+		filepath.Join(p, "node.exe"),
+	}
+}
+
 // probeNodeExecutable 真 Node.js 探测：`node --version`（vX.Y.Z）+ `node -p process.arch`。
 // 任一步失败视为无效候选（静默跳过）。
 func probeNodeExecutable(exe string) (Candidate, bool) {
-	verOut, err := exec.Command(exe, "--version").Output()
+	return probeNodeExecutableContext(context.Background(), exe)
+}
+
+func probeNodeExecutableContext(ctx context.Context, exe string) (Candidate, bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	st, err := os.Stat(exe)
+	if err != nil || !st.Mode().IsRegular() {
+		return Candidate{}, false
+	}
+	execCtx, cancel := context.WithTimeout(ctx, probeExecTimeout)
+	defer cancel()
+	verCmd := exec.CommandContext(execCtx, exe, "--version")
+	verCmd.WaitDelay = 500 * time.Millisecond
+	verOut, err := verCmd.Output()
 	if err != nil {
 		return Candidate{}, false
 	}
@@ -183,7 +272,9 @@ func probeNodeExecutable(exe string) (Candidate, bool) {
 		return Candidate{}, false
 	}
 	arch := ""
-	if archOut, err := exec.Command(exe, "-p", "process.arch").Output(); err == nil {
+	archCmd := exec.CommandContext(execCtx, exe, "-p", "process.arch")
+	archCmd.WaitDelay = 500 * time.Millisecond
+	if archOut, err := archCmd.Output(); err == nil {
 		arch = strings.TrimSpace(string(archOut)) // x64 / arm64（nodejs 命名，勿与 adoptium aarch64 混归一）
 	}
 	return Candidate{

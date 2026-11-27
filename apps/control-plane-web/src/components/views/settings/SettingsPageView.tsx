@@ -29,10 +29,8 @@ import {
 } from 'lucide-react'
 import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
-import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
-import { FieldError, FieldLabel } from '@jianmanager/ui/components/field-label'
-import { Switch } from '@jianmanager/ui/components/switch'
+import { FieldLabel } from '@jianmanager/ui/components/field-label'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { PageHeader, PageShell, SettingsLayout } from '@jianmanager/ui/components/layout'
 import {
@@ -50,14 +48,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import { diffSettings, hasInvalidDraft, hasUnsavedChanges, keyCategory, validateSettingDraft } from '@/lib/settings/settings-form'
+import { keyCategory } from '@/lib/settings/settings-form'
+import { SettingsFormView } from './SettingsFormView'
+import {
+  clearSubmitted,
+  defaultSerializeKv,
+  emptyDraft,
+  hasChanges,
+  type SettingItem as DraftSettingItem,
+  type SettingsDraft,
+} from '@/lib/settings/settings-draft'
 import type { SettingCategory } from '@/lib/settings/settings-form'
 
 /** 明暗偏好三态（与主题 store 的 ThemeMode 同形；组件库不 import 应用 store，故此处自持同名常量类型）。 */
 export type SettingsThemeMode = 'light' | 'dark' | 'system'
-
-/** 日志级别可选值，用于可编辑项的下拉。 */
-const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const
 
 /** 
  * GitHub 新建 fine-grained 个人访问令牌页：官方 URL 模板预填表单——
@@ -85,6 +89,31 @@ const CATEGORY_ICON: Record<SettingCategory, LucideIcon> = {
 /** 取配置项的本地化标签，缺省回退键名本身。 */
 function settingLabel(t: TFunction, key: string): string {
   return t(`settings.keys.${key}`, key)
+}
+
+/**
+ * 把服务端快照映射成通用表单组件要的草稿模型条目。
+ *
+ * 【为什么 value 的落位要看 overridden】草稿模型的展示值是
+ * `overridden ? override : platform`。服务端只给一个 `value`，
+ * 所以"已覆盖"的项必须放进 override，否则 shownText 会返回空串。
+ */
+function toDraftItem(it: SettingsItemView): DraftSettingItem {
+  return it.overridden
+    ? { key: it.key, platform: '', override: it.value, overridden: true }
+    : { key: it.key, platform: it.value, override: '', overridden: false }
+}
+
+/**
+ * 从服务端快照里取某一项的权威生效时机。
+ *
+ * 【为什么必须从这里取而不是靠声明表猜】声明表（`FIELD_SPECS`）只登记了几个键，
+ * 而 `/settings` 的每一项都带 `effectiveImmediately`——后端逐项给，是唯一权威来源。
+ * 拿不到（分类外的键）时返回 undefined，由组件回落到声明表。
+ */
+function findEffectiveImmediately(data: SettingsDataView | undefined, key: string): boolean | undefined {
+  const all = [...(data?.editable ?? []), ...(data?.readOnly ?? [])]
+  return all.find((it) => it.key === key)?.effectiveImmediately
 }
 
 /** 
@@ -205,8 +234,16 @@ export function SettingsPageView({
   onRetry,
 }: SettingsPageViewProps) {
   const { t } = useTranslation()
-  // 可编辑项的本地草稿：仅存用户改动；展示值回退到后端当前生效值（draft[key] ?? it.value）。
-  const [draft, setDraft] = useState<Record<string, string>>({})
+  /*
+    可编辑项的本地草稿：仅存用户改动；展示值回退到后端当前生效值。
+
+    【为什么是 SettingsDraft 而不是扁平的 Record<string,string>】通用表单组件把
+    字符串字段与结构化字段（kv-pairs）分两条通道存：半填的成对行序列化后是空串，
+    若和字符串挤在一张表里，就会被当成"无覆盖"，用户刚加的行会闪一下消失。
+    设置页的「日志采集」分类里就有 `log.acq.path_overrides` 这种结构化字段，
+    所以这里必须用两通道模型，不能图省事退回扁平表。
+  */
+  const [draft, setDraft] = useState<SettingsDraft>(emptyDraft())
   // 待确认切换的目标分类（非空时弹未保存拦截对话框）。
   const [pendingCat, setPendingCat] = useState<SettingCategory | null>(null)
 
@@ -216,7 +253,7 @@ export function SettingsPageView({
 
   // 当前分类的可编辑项（appearance 无平台项）。
   const currentEditable = (data?.editable ?? []).filter((it) => keyCategory(it.key) === category)
-  const currentDirty = hasUnsavedChanges(currentEditable, draft)
+  const currentDirty = hasChanges(currentEditable.map(toDraftItem), draft, defaultSerializeKv)
 
   /** 切分类：当前分类有未保存草稿时先拦截，否则直接上报外壳。 */
   const requestSwitch = (next: SettingCategory) => {
@@ -232,8 +269,11 @@ export function SettingsPageView({
   const confirmSwitch = () => {
     if (pendingCat === null) return
     setDraft((d) => {
-      const next = { ...d }
-      for (const it of currentEditable) delete next[it.key]
+      const next: SettingsDraft = { text: { ...d.text }, kv: { ...d.kv } }
+      for (const it of currentEditable) {
+        delete next.text[it.key]
+        delete next.kv[it.key]
+      }
       return next
     })
     onCategoryChange(pendingCat)
@@ -408,10 +448,10 @@ interface PlatformCategoryProps {
   isLoading: boolean
   /** 取数失败态。 */
   isError: boolean
-  /** 全量草稿（按键唯一，跨分类共用一份）。 */
-  draft: Record<string, string>
-  /** 草稿写入（编辑行回填按键值）。 */
-  setDraft: Dispatch<SetStateAction<Record<string, string>>>
+  /** 全量草稿（按键唯一，跨分类共用一份；两通道：文本 + 结构化）。 */
+  draft: SettingsDraft
+  /** 草稿写入。 */
+  setDraft: Dispatch<SetStateAction<SettingsDraft>>
   /** 保存在途。 */
   saving: boolean
   /** 保存改动集；返回是否成功。 */
@@ -443,23 +483,19 @@ function PlatformCategory({
   const editable = (data?.editable ?? []).filter((it) => keyCategory(it.key) === category)
   const readOnly = (data?.readOnly ?? []).filter((it) => keyCategory(it.key) === category)
 
-  const changed = diffSettings(editable, draft)
-  const hasChanges = Object.keys(changed).length > 0
-  // 展示值（草稿优先）存在非法项即禁保存——前端与后端 422 双闸（验收矩阵 #3）。
-  const hasInvalid = hasInvalidDraft(editable, draft)
   const isSecurity = category === 'security'
 
-  const save = async () => {
-    if (!hasChanges) return
-    // 失败（false，外壳已弹 toast）时不清草稿，便于修正后重试。
-    const ok = await onSave(changed)
-    if (!ok) return
-    // 保存成功后清掉已落库的草稿键（回到「无改动」基线）。
-    setDraft((d) => {
-      const next = { ...d }
-      for (const k of Object.keys(changed)) delete next[k]
-      return next
-    })
+  /*
+    保存成功后清草稿：**只清仍是本次提交值的键**。
+    通用表单组件只负责"提交什么"，清草稿是容器的职责（见 settings-draft 的 clearSubmitted）。
+    整表清空会在 PUT 在途期间抹掉用户的新输入——输入框在保存时并不禁用。
+  */
+  const saveAndClear = async (values: Record<string, string>) => {
+    const ok = await onSave(values)
+    if (ok) {
+      setDraft((d) => clearSubmitted(d, values, editable.map(toDraftItem), defaultSerializeKv))
+    }
+    return ok
   }
 
   return (
@@ -529,48 +565,42 @@ function PlatformCategory({
           ) : (
             <p className="text-xs text-muted-foreground">{t('settings.editableHint', '保存后立即覆盖默认值。')}</p>
           )}
-          <div className="divide-y rounded-md border">
-            {editable.length === 0 ? (
-              <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('settings.empty', '暂无配置项')}</p>
-            ) : (
-              editable.map((it) => (
-                <EditableRow
-                  key={it.key}
-                  item={it}
-                  value={draft[it.key] ?? it.value}
-                  onChange={(v) => setDraft((d) => ({ ...d, [it.key]: v }))}
-                />
-              ))
-            )}
-          </div>
-          {editable.length > 0 && (
-            /* 
-              保存按钮旁给出「有没有改动」：原先按钮只有一个禁用态，
-              用户看不出「是没改所以灰」还是「校验没过所以灰」。
-            */
-            <div className="flex items-center justify-end gap-2">
-              <span
-                className={cn(
-                  'text-[11px]',
-                  hasInvalid
-                    ? 'text-destructive'
-                    : hasChanges
-                      ? 'text-status-warning'
-                      : 'text-muted-foreground',
-                )}
-              >
-                {hasInvalid
-                  ? t('settings.dirtyInvalid')
-                  : hasChanges
-                    ? t('settings.dirtyHint')
-                    : t('settings.cleanHint')}
-              </span>
-              <Button size="sm" onClick={save} disabled={!hasChanges || hasInvalid || saving}>
-                {saving ? t('common.saving', '保存中…') : t('common.save', '保存')}
-              </Button>
-            </div>
-          )}
-
+          {/*
+            字段渲染与保存统一走通用表单组件 SettingsFormView。
+            设置页此前自带一套 EditableRow（switch/select/text 三个 if 分支 + 独立保存按钮），
+            节点采集面板又有一套——同一件事三处实现，口径必然漂移。
+            现在只有一套：字段类型由 `lib/settings/field-types` 声明表分派，
+            校验只走 `validateSettingDraft`，保存按钮由组件自己出。
+          */}
+          <SettingsFormView
+            items={editable.map(toDraftItem)}
+            draft={draft}
+            onDraftChange={setDraft}
+            saving={saving}
+            onSave={saveAndClear}
+            labelOf={(key) => settingLabel(t, key)}
+            effectiveImmediatelyOf={(key) => findEffectiveImmediately(data, key)}
+            actionOf={(key) =>
+              /*
+                github.token 的「去 GitHub 创建」快捷按钮。
+                从 EditableRow 迁到这里：通用组件不认识外部 URL，所以由本页注入。
+                不预填 expires_in=none 的话令牌默认 30 天过期，届期 CP 同步会再次失败——
+                这个细节是当初加按钮的原因，不能随重构丢掉。
+              */
+              key === 'github.token' ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  title={t('settings.githubTokenHint')}
+                  onClick={() => window.open(GITHUB_TOKEN_NEW_URL, '_blank', 'noopener,noreferrer')}
+                >
+                  <ExternalLink className="mr-1 size-3.5" />
+                  {t('settings.githubTokenCreate')}
+                </Button>
+              ) : null
+            }
+          />
           {/* 连通性测试：代理在网络分类测出站（目标可自定义）、JDK 下载源在运行时分类测可达。
               按钮本体自带取数与 mutation，故经插槽注入（组件库不 import 应用侧实现）。 */}
           {category === 'network' && (
@@ -591,105 +621,6 @@ function PlatformCategory({
         </>
       )}
     </Panel>
-  )
-}
-
-/** 单个可编辑配置项行。 */
-interface EditableRowProps {
-  item: SettingsItemView
-  /** 当前展示值（草稿优先）。 */
-  value: string
-  /** 值变更上报（写入页面视图的草稿）。 */
-  onChange: (v: string) => void
-}
-
-/** 单个可编辑配置项行：log.level 用下拉，其余用文本框；标注是否即时生效/已覆盖。 */
-function EditableRow({ item, value, onChange }: EditableRowProps) {
-  const { t } = useTranslation()
-  // 文本类项按键做客户端校验，非法即红框+行内错误。
-  const draftError = validateSettingDraft(item.key, value)
-  // 凭据类输入：密码框遮显 + 关闭自动填充（SMTP 密码 / GitHub API 令牌）。
-  const isSecretInput = item.key === 'invite.smtp.password' || item.key === 'github.token'
-  const placeholder = item.key === 'invite.smtp.password' ? '${ENV_VAR}' : item.key === 'github.token' ? t('settings.githubTokenPlaceholder', 'github_pat_… 或 ${ENV_VAR}') : undefined
-  return (
-    <div className="flex items-center justify-between gap-4 px-3 py-2">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          {/* 用 FieldLabel 而不是 <p>：它是真正的 label 元素，屏幕阅读器可关联到控件；
-              设置项的控件在同行右侧，故用 aria-labelledby 关联而不是 htmlFor（无 id 可用）。 */}
-          <FieldLabel id={`setting-label-${item.key}`} className="truncate">
-            {settingLabel(t, item.key)}
-          </FieldLabel>
-          {item.overridden && <Badge variant="secondary">{t('settings.overridden', '已覆盖')}</Badge>}
-          {!item.effectiveImmediately && (
-            // 非即时项标注生效时机（hover 展开说明）。
-            <Badge variant="outline" title={t('settings.effectTimingHint')}>
-              {t('settings.workerSide', 'Worker 侧生效')}
-            </Badge>
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground font-mono">{item.key}</p>
-      </div>
-      {item.key === 'debug.mode' ? (
-        // 调试模式开关：开=日志 debug + Gin debug，关=info + release，运行时即时生效。
-        // 用 Switch 而非 true/false 下拉：它是开关语义，下拉把二值状态做成了「选项」，
-        // 读起来像有第三种可能。提交值仍转回字符串，保持后端契约不变。
-        <div className="flex items-center gap-2">
-          <Switch
-            checked={value === 'true'}
-            disabled={!item.editable}
-            onCheckedChange={(v) => onChange(v ? 'true' : 'false')}
-            aria-label={settingLabel(t, item.key)}
-          />
-          <span className="w-8 text-xs text-muted-foreground">
-            {value === 'true' ? t('settings.debugOn', '开启') : t('settings.debugOff', '关闭')}
-          </span>
-        </div>
-      ) : item.key === 'log.level' ? (
-        <Select value={value} onValueChange={onChange}>
-          <SelectTrigger size="sm" className="w-40" aria-label={settingLabel(t, item.key)}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {LOG_LEVELS.map((lv) => (
-              <SelectItem key={lv} value={lv}>
-                {lv}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      ) : (
-        <div className="flex items-center gap-2">
-          <div className="w-56">
-            <Input
-              type={isSecretInput ? 'password' : 'text'}
-              value={value}
-              onChange={(e) => onChange(e.target.value)}
-              className="h-8"
-              inputMode={item.key === 'backup.retention_days' ? 'numeric' : undefined}
-              placeholder={placeholder}
-              autoComplete={isSecretInput ? 'new-password' : undefined}
-              aria-invalid={!!draftError}
-              aria-label={settingLabel(t, item.key)}
-            />
-            <FieldError error={draftError} />
-          </div>
-          {item.key === 'github.token' && (
-            // 快捷创建：新标签直达 GitHub 令牌创建页（名字已预填），创建后复制回填保存。
-            <Button
-              size="sm"
-              variant="outline"
-              type="button"
-              title={t('settings.githubTokenHint')}
-              onClick={() => window.open(GITHUB_TOKEN_NEW_URL, '_blank', 'noopener,noreferrer')}
-            >
-              <ExternalLink className="mr-1 size-3.5" />
-              {t('settings.githubTokenCreate')}
-            </Button>
-          )}
-        </div>
-      )}
-    </div>
   )
 }
 

@@ -6,6 +6,7 @@ import { useJDKCatalog } from '@/api/nodeRuntime'
 import NodeJDKPanel from '@/components/views/nodes/NodeJDKPanel'
 import { PingNodeButton } from '@/components/nodes/PingNodeButton'
 import DirectoryPicker from '@/components/nodes/DirectoryPicker'
+import { conflictText, parseTaskConflict, tasksHref, tasksHrefForNode } from '@/lib/nodes/task-conflict'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {
@@ -25,9 +26,12 @@ function errMessage(err: unknown, fallback: string): string {
 export default function NodeJDKTab({
   nodeId,
   active = true,
+  initialTab,
 }: {
   nodeId: number
   active?: boolean
+  /** 初始分段（透传给视图；「新增运行时」抽屉用它直接落到下载/登记）。 */
+  initialTab?: 'list' | 'install' | 'register'
 }) {
   const { t } = useTranslation()
   const { data: jdks, isLoading, isFetching } = useNodeJDKs(nodeId)
@@ -51,6 +55,7 @@ export default function NodeJDKTab({
 
   return (
     <NodeJDKPanel
+      initialTab={initialTab}
       jdks={jdks}
       isLoading={isLoading}
       isFetching={isFetching}
@@ -69,10 +74,36 @@ export default function NodeJDKTab({
       )}
       onInstall={async (body) => {
         try {
-          await install.mutateAsync(body)
-          toast.success(t('artifactCache.jdkInstallDispatched'))
+          const res = await install.mutateAsync(body)
+          // 幂等命中：同参数的安装已在跑，回执是那个任务。提示要区别于"新下发"。
+          if (res.reused) {
+            toast.info(t('nodes.jdkInstallReused', '相同版本的 JDK 安装已在进行中，已复用该任务'), {
+              action: {
+                label: t('nodes.runtime.viewProgress', '查看进度'),
+                onClick: () => window.location.assign(`/tasks?task=${encodeURIComponent(res.taskId)}`),
+              },
+              duration: 8000,
+            })
+            return true
+          }
+          toast.success(t('artifactCache.jdkInstallDispatched'), {
+            action: {
+              label: t('tasks.openCenter', '去任务中心'),
+              onClick: () => window.location.assign(tasksHrefForNode(nodeId, res.taskId)),
+            },
+            duration: 6000,
+          })
           return true
         } catch (err) {
+          // 409：同节点已有运行时安装任务在跑 → 给出可执行的跳转，而不是重试提示。
+          const conflict = parseTaskConflict(err)
+          if (conflict) {
+            toast.warning(conflictText(conflict), {
+              action: { label: t('nodes.runtime.goTasks', '去任务中心'), onClick: () => window.location.assign(tasksHref(conflict)) },
+              duration: 8000,
+            })
+            return false
+          }
           toast.error(errMessage(err, t('nodes.jdkInstallFailed')))
           return false
         }
