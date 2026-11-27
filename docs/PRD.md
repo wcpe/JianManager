@@ -676,6 +676,11 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-565 | jm auth 与三平台 keyring（feat，净新）：`jm auth login`（device flow）/`status`/`logout`（**本地删除 + 远端吊销**）；token 存系统 keyring（Windows Credential Manager / macOS Keychain / Linux Secret Service），抽象 `internal/platform/keyring`；keyring 不可用时报错不写明文；`JM_TOKEN` 作为 CI 旁路 → `docs/specs/jm-agent-cli/spec.md`（需 spec） | P1 | 计划 |
 | FR-566 | Agent 运维知识双通道分发（feat，净新）：仓库根 `skill/`（SKILL.md + references）作为**权威源**，可直接 clone 或 `npx skills add`；CP 提供 `GET /api/v1/skill/<path>` 匿名静态路由供内网；`jm skill install` 复制到宿主 skills 目录（自动探测 claude/codex/cursor）；skill 不需要鉴权（ADR-111） → `docs/specs/jm-agent-cli/spec.md` | P1 | 计划 |
 | FR-567 | jm 客户端分发与安装（feat，净新）：`make dist-jm` 交叉编译 windows/linux/darwin × amd64/arm64 五件套并经 GitHub Releases 发布；npm 双包分发——主包 `@jianmanager/jm`（启动器，不含二进制）+ 5 个平台分包 `@jianmanager/jm-<platform>`（`os`/`cpu` 限定，经 `optionalDependencies` 自动选用），`npm i -g @jianmanager/jm` 装完即用；`jm skill install` 支持 user / project 两作用域、六个宿主目录（claude/codex/cursor/kiro/copilot/agents），含两个自带技能库应用的原生目录（NarraFork .narrafork/skills、Vantaloom .vantaloom/skills 与 <installDir>/data/skills）；`jm --version` 支持发行烟测；与 FR-565 的 keyring 三平台实现配套 → `docs/specs/jm-agent-cli/spec.md` | P1 | 计划 |
+| FR-568 | 节点运行时工作台：节点详情运行时页签重构为工作台形态——就绪带、二级寻址、运行时装扫登记探测操作集中一处、清单表与日志数据流整合 | P1 | ✅ 已交付@v0.25.0 |
+| FR-569 | 日志平台单实例化：节点日志运行时收敛为单 hot 实例形态，冷热双层（cold/rehydrate 命名空间、冷层迁移、归档再水化）整体退役 | P1 | ✅ 已交付@v0.25.0 |
+| FR-570 | 重型任务数据库级单在途队列：同节点同类重型操作在数据库层保证单在途——同参数请求幂等复用在途任务、异参冲突返回占用者信息、失联任务自愈回收、支持就地强停 | P1 | ✅ 已交付@v0.25.0 |
+| FR-571 | 通用设置组件：声明式字段类型、草稿模型与行级校验的通用设置编辑组件，落地为设置类页面唯一实现，含成对路径覆盖表的可视化编辑 | P1 | ✅ 已交付@v0.25.0 |
+| FR-572 | 运行时路径探测与本机登记：按用户给定路径探测运行时类型与版本（jdk/nodejs），支持把本机自定义路径下已有的运行时登记入库 | P1 | ✅ 已交付@v0.25.0 |
 ### 范围外（后续版本，暂不纳入 V1）
 
 | 编号 | 需求 | 预计版本 |

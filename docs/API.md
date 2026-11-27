@@ -2851,8 +2851,8 @@
 - **权限**: 平台管理员
 - **请求体**: `{ "vendor": "Temurin", "majorVersion": 21, "arch": "x64", "version": "21.0.4" }`
   - `version` 可选（FR-178）：非空时 Worker 经 foojay 按具体版本解析下载源；为空取该大版本最新 GA。
-- **响应**: `202 Accepted` `{ "taskId": "<uuid>", "task": { ...Task } }`
-- **错误码**: `503 NODE_OFFLINE`（节点未连接，不建悬挂任务）；`404 NOT_FOUND`（节点不存在）；`502 INSTALL_FAILED`（下发 Worker 失败，任务已置 failed）
+- **响应**: `202 Accepted` `{ "taskId": "<uuid>", "task": { ...Task } }`（新受理）；**幂等复用**（FR-570）：同节点同参数的安装任务已在途时**不新建任务也不报错**，返回 `200 OK` 同形响应并带 `"reused": true`——202 与 200 区分「真受理了新任务」与「复用在跑任务」，前端据此显示不同文案
+- **错误码**: `503 NODE_OFFLINE`（节点未连接，不建悬挂任务）；`404 NOT_FOUND`（节点不存在）；`409 TASK_EXCLUSIVE_BUSY`（FR-570 单在途：同节点**异参**同类重型任务在途，响应带 `existingTask` 占用者对象，前端可展示「是谁在占着」并跳转任务中心）；`502 INSTALL_FAILED`（下发 Worker 失败，任务已置 failed）
 
 ### POST /api/v1/nodes/:id/jdks/probe（FR-228）
 - **描述**: 探测节点上某路径（JDK home 目录或 java 可执行文件）的 JDK 信息，供「登记已有」自动填厂商/版本/架构（免手填）。Worker 归一路径后跑 `java -XshowSettings:properties -version` 解析。
@@ -2952,6 +2952,15 @@
 - **审计**: `node.runtime.scan`（detail 含 types 与候选数）
 - **错误码**: `422 BUSINESS_ERROR`（未知扫描类型）；`503 NODE_OFFLINE`；`404 NOT_FOUND`；`502 WORKER_ERROR`
 
+#### POST /api/v1/nodes/:id/runtimes/probe
+- **描述**: 代理 Worker `ProbeRuntime` 探测**指定路径**上的运行时（jdk/nodejs）并读出版本候选。扫描（scan）只在常见安装路径里找，装到自定义路径的运行时扫不到；登记接口又要求手填版本号——本端点让用户只给路径、由节点现场执行 `java -version` / `node --version` 读出真实版本。**探测失败不是 RPC 错误**：路径不存在、不是该类型运行时、执行失败都返回 `200 { valid: false, error }`，界面直接展示原因；只有节点失联/传输失败才是错误码路径。`path` 可传 home 目录或可执行文件（jdk=`bin/java` 所在 home 或 java 本身，nodejs=node 可执行文件），传目录时 Worker 按类型拼可执行文件。
+- **关联 FR**: FR-572
+- **权限**: 平台管理员
+- **请求体**: `{ "type": "jdk|nodejs", "path": "/opt/my-runtime" }`（`type`/`path` 去空白后必填）
+- **响应**: `200 { "valid": true, "candidate": { "type", "vendor", "version", "majorVersion", "arch", "path", "alreadyRegistered" } }` 或 `200 { "valid": false, "error": "<失败原因>" }`
+- **审计**: `node.runtime.probe`（detail 含 nodeId/type/path/valid）
+- **错误码**: `400 INVALID_REQUEST`（缺 type/path）；`404 NOT_FOUND`；`503 NODE_OFFLINE`；`502 WORKER_ERROR`
+
 #### POST /api/v1/nodes/:id/runtimes
 - **描述**: 泛化登记运行时。`type=jdk` **转发现有 JDK 登记链路**（落 `node_jdks`，需 `vendor`+`majorVersion`）；其它已知类型（nodejs / python 预留）落 `node_runtimes`（`name` 缺省自动生成如 "Node.js 22"）。未知类型拒绝。
 - **关联 FR**: FR-298
@@ -2966,9 +2975,9 @@
 - **关联 FR**: FR-299
 - **权限**: 平台管理员
 - **请求体**: `{ "type": "nodejs", "major": 22, "arch": "x64" }`（`type`/`major` 必填，`arch` 可空）
-- **响应**: `202 Accepted` `{ "taskId": "<uuid>", "task": { … } }`
+- **响应**: `202 Accepted` `{ "taskId": "<uuid>", "task": { … } }`（新受理）；同节点同参数任务在途时幂等复用，返回 `200 OK` 并带 `"reused": true`（FR-570，语义同 JDK 安装）
 - **审计**: `node.runtime.install`（detail 含 type/major/arch/taskId）
-- **错误码**: `422 BUSINESS_ERROR`（不可安装类型 / 未知 arch / 非正 major）；`503 NODE_OFFLINE`；`404 NOT_FOUND`；`502 WORKER_ERROR`（下发失败/Worker 拒绝）
+- **错误码**: `422 BUSINESS_ERROR`（不可安装类型 / 未知 arch / 非正 major）；`503 NODE_OFFLINE`；`404 NOT_FOUND`；`409 TASK_EXCLUSIVE_BUSY`（异参同类任务在途，带 `existingTask` 占用者，FR-570）；`502 WORKER_ERROR`（下发失败/Worker 拒绝）
 
 #### DELETE /api/v1/nodes/:id/runtimes/:rid?type=
 - **描述**: 删除运行时。`type` **必带**（定位承载表）：`type=jdk` 走现有 JDK 删除链路（占用守卫 + 托管连文件语义不变）；其它类型语义对齐 JDK（FR-299）——**托管的（managed=true）先经 Worker `RemoveRuntime` 删除托管目录**（归一顶层清理，FR-292；Worker 拒绝时记录保留、返回 502），再删 `node_runtimes` 记录；外部登记的只删记录、不动磁盘文件。
@@ -2993,7 +3002,7 @@
 - **描述**: 异步安装/升级全局包（任务中心 202 语义；version 空=latest，升级=对已装包再装 latest）。审计 `node.pkg.install`
 - **权限**: 平台管理员
 - **请求**: `{ "name":"mineflayer", "version":"" }`
-- **响应**: `202 { taskId, task }`；`503 NODE_OFFLINE`；`422`
+- **响应**: `202 { taskId, task }`（新受理）；同参数任务在途时幂等复用返回 `200` 带 `"reused": true`（FR-570）；异参同类任务在途 `409 TASK_EXCLUSIVE_BUSY` 带 `existingTask`；`503 NODE_OFFLINE`；`422`
 - **关联 FR**: FR-307
 
 ### DELETE /api/v1/nodes/:id/packages?name=<pkg>
@@ -3382,27 +3391,13 @@
 - **浏览器消费函数**：`subscribeLiveLogs(params: Record<string, unknown>, options: { signal: AbortSignal; onFrame: (frame: LiveLogFrame) => void }): Promise<void>`。单次连接原语刷新将到期的 token，401 最多刷新重试一次；`parseLiveSSE` 按 UTF-8 跨块解码，多行 data 合并并限制未闭合帧，不把半帧当完整事件。回看/原生选区期间保护正文 DOM，恢复及重连由页面订阅层控制。
 - **验收边界**：原生流后端、RPC、解析器及隔离真实 VL 测试与 Chromium 页面联合验收分别记录；本节不宣称主页面联合验收、部署或长时间容量验收已完成。
 
-### POST /api/v1/nodes/:id/log-runtime/migrate
+### ~~POST /api/v1/nodes/:id/log-runtime/migrate~~（已下线 2026-11-27）
 
-- **描述**：以存储 namespace 与 UTC 日定位准入，迁移 Worker 的同一物理 UTC 日固定批次到**冷层**，可能涉及多个 namespace；入口 namespace 不是物理隔离或搬运范围。`targetTier` 由服务端固定为 `cold`，请求无法指定其它层级。COLD 是受管 VL 可查询层，健康客户端与 Catalog 权威就绪时可直接查询，不等同必须 Rehydrate 的 DEEP。迁移仍会长期改变物理 owner/目录与恢复责任，须确认 UTC 日和目标范围并留审计；物理日批次/退休屏障正在联合复验。
-- **权限**：`node.manage` 路由门 + 平台管理员主体（`getAccess.IsPlatformAdmin`），并保留操作者、入口 namespace 格式与节点绑定校验；单实例组授权不代表已获同物理日全部成员授权。非平台主体返回 403 `FORBIDDEN`，message 为 `整物理 UTC 日日志迁移仅限平台管理员`，RPC 调用数为 0；不新增权限 schema，也不把此平台门扩大到普通 runtime control。授权服务未就绪仍失败关闭。
-- **请求**：`{ "storageNamespace": "inst:317", "utcDay": "2026-10-21" }`
-  - `storageNamespace` 去空白后不得为空，否则 400 `INVALID_REQUEST`
-  - `utcDay` 须为 `YYYY-MM-DD`（Go 布局 `2006-01-02`），否则 400 `INVALID_UTC_DAY`
-- **校验顺序**（handler 内；外层 `node.manage` 路由门先行，2026-10-22 整日授权收口）：
-  1. **操作人**：取认证主体（JWT 用户名 / Agent 的 `agent:<名称>`，兜底 `user:<id>`）；取不到 ⇒ 403 `OPERATOR_UNKNOWN`，且不下发 RPC。
-  2. **请求体**：JSON/namespace 非空/UTC 日格式 ⇒ 400 `INVALID_REQUEST` / `INVALID_UTC_DAY`。
-  3. **平台主体**：`getAccess.IsPlatformAdmin` 必须为真，否则 403 `FORBIDDEN`，不下发 RPC。
-  4. **入口探针归属**（保留 `authorizeArchiveTarget`，在取 Worker client 前；不是单 namespace 搬运授权）：
-     - `node:<id>`：只允许指向路由节点自身（**逐字符串比较**，不做数值归一 ⇒ `node:007` 与路由 `7` 不等而 403）；否则 403 `FORBIDDEN`（`仅允许访问本节点归档`）
-     - `inst:<id>`：须通过 `CanAccessInstance`，且该实例确实归属路由节点。`inst:` 后非十进制 ID ⇒ 400 `INVALID_REQUEST`；路由节点本身不存在 ⇒ 404 `NOT_FOUND`；实例不存在或组外 ⇒ 403 `FORBIDDEN`（不区分「不存在」与「无权限」，避免实例存在性枚举）；实例存在但不属于该路由节点 ⇒ 403 `FORBIDDEN`（`目标实例不属于该节点`）
-     - 其它形态（无 `inst:` / `node:` 前缀）⇒ 400 `INVALID_REQUEST`（`target 仅支持 inst:<id> 或 node:<id>`）
-  5. **取 client**：`:id` 非十进制 ⇒ 400 `INVALID_NODE_ID`；节点不存在或无 UUID ⇒ 404 `NODE_NOT_FOUND`；Worker 离线 ⇒ 503 `WORKER_OFFLINE`
-- **响应** (200): `{ "state": "migrated", "targetTier": "cold", "storageNamespace": "inst:317", "utcDay": "2026-10-21" }`。`storageNamespace` 仅回显入口定位目标，不是完整受影响成员清单；物理日批次/逐记录 journal 才记录固定成员与进度。
-- **错误**: Worker 返回错误或状态非 `LOG_TASK_SUCCEEDED` ⇒ 409 `MIGRATION_FAILED`（另带 `code`：缺省 `LOG_NOT_READY`，否则取 Worker 错误码）；Worker 不支持该 RPC（Unimplemented）⇒ 501 `WORKER_RPC_FAILED`；其它传输失败 ⇒ 502 `WORKER_RPC_FAILED`
-- **审计**: **仅成功分支**落 `node.log_partition.migrate`（`targetType=node`、`targetId=路由节点`），detail 含 `migrationScope=physical_utc_day`、入口 `storageNamespace`、`utcDay`、`targetTier`、`operator`；失败不写成功迁移行。审计由 handler 主动记录，不依赖通用中间件。
-- **状态**：真实 RBAC 反例已红转绿，定向 `TestSixModulePhysicalDayMigration|TestLogMigratePartition` 回归退出码 0；CP 末轮完整普通、分范围 race/vet 的准确范围见 [CP 规格](specs/cp-log-query-coordinator/spec.md)。特定真实双 VL/三启证据见 [Lifecycle 规格](specs/worker-log-lifecycle/spec.md)；真后端 Chromium 已验证确认单 POST 收 409 时无假成功/重放，准确短验范围见 [共享规格](specs/worker-log-platform-contract/spec.md#2026-10-22-有限真实联合短验与剩余门禁)，不是浏览器成功搬迁或本批全部失败矩阵、独立最终复核与生产验收通过。
+**端点已删除，请求返回 404。**
 
+冷层迁移是冷热双层（HOT/COLD）日志平台的概念：把同一物理 UTC 日的分区批次搬到 COLD 命名空间。
+2026-11-27 日志平台按「单实例」重做（FR-569），只保留 `hot` 一个命名空间——没有冷层，
+「迁移到冷层」没有作用对象。CP 侧路由与前端入口均已删除。
 ### ~~POST /api/v1/nodes/:id/log-runtime/ingest/resolve-gaps~~（已下线 2026-11-06）
 
 **端点已删除，请求返回 404。**
@@ -3507,73 +3502,18 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 - **审计**：成功受理由 handler 写 `node.log_runtime.control`，目标为路由节点，detail 包含 `namespace/action/operator/state`。Worker 错误或传输失败不写成功受理行；不依赖通用 POST 审计中间件推导动作。
 - **状态**: 已注册；前端仅使用 `start` / `stop` / `restart` 与三个命名空间（`useControlLogRuntime`）。
 
-### GET /api/v1/nodes/:id/log-archive/status
+### ~~GET /api/v1/nodes/:id/log-archive/status~~（已下线 2026-11-27）
 
-- **描述**：查询某归档分区下若干归档对象是否**存在且校验通过**，返回可用 / 缺失两组对象 ID 及覆盖情况。
-- **权限**：路由级 `node.manage`，**另有目标级授权** `authorizeArchiveTarget`（M-4B）；授权校验在**取 Worker client 之前**执行，拒绝路径不下发 RPC。
-- **Query 参数**：
-  - `target`：归档目标。空 / 全空白 = 路由节点自身（下发时补成 `node:<id>`）；非空须为 `inst:<id>` 或 `node:<id>`
-  - `from` / `to`：时间范围，原样作为 `time_range.from_utc` / `to_utc`
-  - `objectIds`：逗号分隔的归档对象 ID 列表，逐项去空白、空项丢弃（不去重）
-  - 由 CP 固定填充：`protocol_version="log-query/1"`、`budget.limit=200`
-- **目标授权规则与错误**（顺序即优先级）：
-  - 授权服务未接线 ⇒ 403 `FORBIDDEN`（`日志归档授权未就绪`）
-  - 无访问上下文 ⇒ 403 `FORBIDDEN`（`权限不足`）
-  - 空 target ⇒ 放行
-  - `inst:<id>`：`inst:` 后非十进制 ⇒ 400 `INVALID_REQUEST`（`target 无效`）；`CanAccessInstance` 内部错误 ⇒ 500 `INTERNAL_ERROR`；无权限 ⇒ 403 `FORBIDDEN`（`无权访问该实例归档`）；路由节点不存在 ⇒ 404 `NOT_FOUND`（`节点不存在`；`:id` 非数字时经 `parseUintOrZero` 归 0 同样落此分支，即返回 404 而非 400 `INVALID_NODE_ID`）；实例服务未接线 ⇒ 500 `INTERNAL_ERROR`；实例不存在 ⇒ 403（与无权限同码，不区分以避免实例存在性枚举）；实例存在但不属于该路由节点 ⇒ 403 `FORBIDDEN`（`目标实例不属于该节点`）
-  - `node:<id>`：与路由 `:id` 做**字符串逐字比较**（不做数值归一）⇒ `node:007` 对路由 `7` 判 403 `FORBIDDEN`（`仅允许访问本节点归档`）
-  - 其它形态（无 `inst:` / `node:` 前缀）⇒ 400 `INVALID_REQUEST`（`target 仅支持 inst:<id> 或 node:<id>`）
-- **后续错误**：取 client ⇒ 400 `INVALID_NODE_ID` / 404 `NODE_NOT_FOUND` / 503 `WORKER_OFFLINE`；RPC 传输失败 ⇒ 502 `WORKER_RPC_FAILED`（含 `message`）；Worker 回 `error` ⇒ **503** `{ "error": "<码名>", "message": "…" }`
-- **响应** (200)：`LogArchiveStatusResponse` 原样序列化：
-```json
-{
-  "request_id": "…",
-  "coverage": {
-    "complete": true,
-    "partial_reasons": [],
-    "targets": [
-      { "target_id": "node:1", "state": 1, "reasons": [], "closed_visible_seq": "…", "catalog_generation": "…" }
-    ],
-    "enumeration_state": 1
-  },
-  "available_archive_object_ids": ["…"],
-  "missing_archive_object_ids": ["…"]
-}
-```
-- **字段说明**：`coverage.targets[].state` 与 `coverage.enumeration_state` 在 JSON 里是**整数枚举**；`partial_reasons` / `reasons` 是字符串码（如 `ARCHIVE_NOT_RESTORED`、`ARCHIVE_PURGED`、`UNSUPPORTED`、`NO_CATALOG_AUTHORITY`）。`available_archive_object_ids` = 在 manifest 中命中且内容哈希校验通过；`missing_archive_object_ids` = manifest 无该 ID、取对象失败或哈希不符（三者不区分）。
-- **`ARCHIVE_PURGED` 与 `ARCHIVE_NOT_RESTORED` 不可互换**（FR-501 归档对象回收）：前者是「归档副本已按保留期清除，恢复不了」，后者是「副本还在归档里、只是本地未恢复，去 rehydrate」，两者的处置动作**相反**。`LogSearch` 在无任何可读 range 时据此返回 `LOG_ARCHIVE_PURGED`（proto `LogErrorCode = 11`）或 `LOG_ARCHIVE_MISSING`（= 6），**不返回空成功**；两者在 CP 侧也不归一（`normalizeCoverageReason` 保持 `ARCHIVE_PURGED` 原样）。
-- **Worker 侧语义（决定实际结果）**：planner 未就绪 ⇒ `LOG_UNSUPPORTED`（`archive status disabled on this worker`）；归档后端未接线 ⇒ `LOG_UNSUPPORTED`；registry 不可用 ⇒ `LOG_UNSUPPORTED` 且 coverage 标 `UNSUPPORTED`。分区键由**首个** `authorized_targets` 生成：单段 target（`node:1` / `inst:317`）的 UTC 日取 `from_utc` 前 10 字符，**`from` 缺失或长度不足 ⇒ `LOG_NOT_READY`（`archive target must include a UTC day or query range`）**；多段 target 形如 `<namespace>/<YYYY-MM-DD>`，可选 `/<YYYY-MM-DD>/g<N>` 指定代次。manifest 不存在 ⇒ `LOG_NOT_READY` + coverage `ARCHIVE_NOT_RESTORED`；逐对象「manifest 无该 ID / 取对象失败 / 内容哈希不符」一律计入 `missing`，任一缺失即把 coverage 标为不完整。
-- **错误映射不一致**：本端点（及下方 rehydrate）对 `LOG_UNSUPPORTED` **不做 501 映射**，一律 503；同族 `GET /log-runtime` 与 `POST /log-runtime/:namespace/:action` 会映射为 501。属当前真貌，如实记录。
-- **审计**：**无**（GET 不进审计中间件；handler 不调 `recordAudit`、不解析操作人）。
-- **状态**: 已注册；**当前无调用方**（前端与其它后端均无引用），仅有 M-4B 目标授权回归 `log_archive_authz_test.go`。
+**端点已删除，请求返回 404。**
 
-### POST /api/v1/nodes/:id/log-archive/rehydrate
+归档对象完整性核验服务的是冷热双层时代的「冷层归档 + 再水化」流程。2026-11-27 日志平台
+单实例化（FR-569）后该流程整体退役，CP 侧路由与前端入口均已删除。
+### ~~POST /api/v1/nodes/:id/log-archive/rehydrate~~（已下线 2026-11-27）
 
-- **描述**：把归档对象回灌（Rehydrate）为可查询投影，使冷 / 归档层历史重新可被查询面读取。按归档分区为单位成立受管任务。
-- **权限**：路由级 `node.manage` + 目标级授权（同 `GET /log-archive/status`）；任何 RPC 与请求体处理前解析已认证操作人，缺失返回 403 `OPERATOR_UNKNOWN`。
-- **请求体**：
-  - `archiveObjectIds`：必填且非空数组；在操作人解析通过后，缺参、空数组或非法 JSON 返回 400 `INVALID_REQUEST`（`archiveObjectIds required`），早于目标授权与取 client。
-  - `target`：可选，同 status 的 `target` 判据；空 = 本节点自身
-  - `fromUtc` / `toUtc`：可选，覆盖 `time_range`。**target 为单段时 Worker 用 `fromUtc` 前 10 字符作 UTC 日**，故留空会 503（`archive target must include a UTC day or query range`）。Query 上的 `from` / `to` 在本端点**会被 body 值无条件覆盖**（恒忽略 query 时间）
-  - CP 不校验 `archiveObjectIds` 的元素内容、不去重：空串元素只会把集合撑大，通常触发下方「完整对象集」拒绝
-  - CP 固定 `protocol_version="log-query/1"`、`budget.limit=200`
-- **校验顺序**：操作人（403）⇒ 请求体（400）⇒ 目标授权（400 / 403 / 404 / 500，见 status 节）⇒ 取 client（400 / 404 / 503）⇒ RPC（失败 502）⇒ Worker `error`（503）⇒ 成功受理审计 ⇒ 202。
-- **响应** (202)：`LogTaskResponse` 原样序列化 `{ "task_id": "…", "state": <int>, "error": {...} }`。任务状态映射兼容 `LOG_TASK_` 前缀与裸值，只剥一层前缀；成功映射 `SUCCEEDED=2`，未知状态仍失败关闭为 `FAILED=3`，不再把成功回灌统一报成失败。
-- **Worker 侧语义（决定 503 的真实条件）**：
-  - planner 未就绪 ⇒ `LOG_UNSUPPORTED`（`rehydrate disabled on this worker`）
-  - 归档后端未接线 ⇒ `LOG_UNSUPPORTED`（`rehydrate unimplemented on this worker`）
-  - 投影发布器未就绪 ⇒ `LOG_NOT_READY`（`rehydrate projection publisher is not ready`）
-  - 分区键无法成立（target 单段且无 `from`）⇒ `LOG_NOT_READY`
-  - manifest 不存在 / `coverage.complete=false` / 枚举状态非 `EXHAUSTED` ⇒ `LOG_NOT_READY`（`archive generation has no closed, verified manifest`）
-  - **`archiveObjectIds` 必须是该分区 manifest 的完整对象集合**（长度相等且逐个命中），否则 `LOG_NOT_READY`（`rehydrate requires the full closed archive object set`）——**不支持只回灌子集**
-  - 无已验证的规范化事件 ⇒ `LOG_NOT_READY`（`archive has no verified canonical events`）
-  - 加载对象失败 ⇒ `LOG_NOT_READY`（可重试），并给该分区打 `REHYDRATE_FAILED` 标记
-  - 并发合并：同分区任务已在跑（`waiters>1`）⇒ 直接返回既有 `task_id` / `state`，**不重复发布**
-  - 发布失败 ⇒ 任务置 `LOG_TASK_FAILED` + `LOG_NOT_READY`（可重试），并标记该分区回灌失败
-  - 注意：以上 `LOG_NOT_READY` 经 CP 一律变成 **503**（不是 409），与 `migrate` / `resolve-gaps` 的 409 口径不同
-- **审计**：成功受理由 handler 写 `node.log_archive.rehydrate`，目标为路由节点，detail 包含归一后的 `target`、`archiveObjectIds`、`fromUtc/toUtc`、`operator` 和任务 `state`。拒绝或 Worker/传输失败不写成功受理行。
-- **状态**: 已注册；**当前无调用方**；仅有目标授权回归 `log_archive_authz_test.go`。
+**端点已删除，请求返回 404。**
 
+再水化（rehydrate）是把冷层归档临时拉回可查询层的动作，依赖冷热双层与独立 rehydrate 命名空间。
+2026-11-27 日志平台单实例化（FR-569）后该命名空间与流程整体退役，CP 侧路由与前端入口均已删除。
 ### ~~日志入库切换与 Legacy 端点~~（FR-481，已下线 2026-10-29）
 
 > **本节描述的三个端点（`/logs/cutover` GET/PUT、`/logs/legacy` GET）已随 CP `logs` 表删除而下线：**
