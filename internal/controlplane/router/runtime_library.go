@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -139,6 +140,12 @@ func (h *RuntimeLibraryHandler) Probe(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误：需要 type 与 path"})
 		return
 	}
+	req.Type = strings.TrimSpace(req.Type)
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Type == "" || req.Path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误：type 与 path 不能为空"})
+		return
+	}
 	res, err := h.svc.Probe(nodeID, req.Type, req.Path)
 	if err != nil {
 		h.writeRuntimeLibErr(c, err)
@@ -201,14 +208,14 @@ func (h *RuntimeLibraryHandler) Install(c *gin.Context) {
 		h.writeRuntimeLibErr(c, err)
 		return
 	}
-	h.recordAudit(c, "node.runtime.install", c.Param("id"), map[string]any{
-		"nodeId": nodeID, "type": req.Type, "major": req.Major, "arch": req.Arch, "taskId": task.TaskID,
-	})
-	// reused=true：同参数的安装已在跑，返回的是已存在的任务（200，不是 202）。
+	// reused=true：同参数的安装已在跑，返回的是已存在的任务（200，不是 202），不重复记审计。
 	if reused {
 		c.JSON(http.StatusOK, gin.H{"taskId": task.TaskID, "task": task, "reused": true})
 		return
 	}
+	h.recordAudit(c, "node.runtime.install", c.Param("id"), map[string]any{
+		"nodeId": nodeID, "type": req.Type, "major": req.Major, "arch": req.Arch, "taskId": task.TaskID,
+	})
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
 }
 

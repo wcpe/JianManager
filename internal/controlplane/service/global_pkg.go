@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,15 +77,16 @@ func (s *PMConfigService) InstallGlobalPackageAsync(nodeID uint, name, version s
 	}
 
 	taskID := uuid.NewString()
-	ver := version
+	pkgName := strings.TrimSpace(name)
+	ver := strings.TrimSpace(version)
 	if ver == "" {
 		ver = "latest"
 	}
-	title := fmt.Sprintf("安装全局包 %s@%s", name, ver)
+	title := fmt.Sprintf("安装全局包 %s@%s", pkgName, ver)
 	detail := fmt.Sprintf("节点 %s · %s · pm=%s", node.Name, title, cfg.PM)
 	// 准入：全局包安装写 <data>/opt/runtimes/global，同组只允许一个在途；
-	// 同包管理器 + 同包名 + 同版本的重复提交复用已有任务。
-	idem := BuildIdemKey(nodeID, model.TaskKindPkgInstall, fmt.Sprintf("%s|%s|%s", cfg.PM, name, version))
+	// 同包管理器 + 同包名 + 同版本（空串与 latest 归一）的重复提交复用已有任务。
+	idem := BuildIdemKey(nodeID, model.TaskKindPkgInstall, fmt.Sprintf("%s|%s|%s", cfg.PM, pkgName, ver))
 	task, reused, err := s.tasks.AdmitTask(taskID, TaskAdmitSpec{
 		NodeID:    nodeID,
 		Kind:      model.TaskKindPkgInstall,
@@ -104,7 +106,7 @@ func (s *PMConfigService) InstallGlobalPackageAsync(nodeID uint, name, version s
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	resp, err := client.Worker.InstallGlobalPackage(ctx, &workerpb.InstallGlobalPackageRequest{
-		Pm: cfg.PM, Name: name, Version: version, TaskId: taskID,
+		Pm: cfg.PM, Name: pkgName, Version: strings.TrimSpace(version), TaskId: taskID,
 	})
 	if err != nil {
 		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err)); markErr != nil {
@@ -119,8 +121,9 @@ func (s *PMConfigService) InstallGlobalPackageAsync(nodeID uint, name, version s
 		return nil, false, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
 	}
 	if err := s.tasks.MarkRunning(taskID); err != nil {
-		return nil, false, err
+		slog.Warn("标记全局包安装任务 running 失败", "taskId", taskID, "error", err)
 	}
+	task.State = model.TaskStateRunning
 	return task, false, nil
 }
 

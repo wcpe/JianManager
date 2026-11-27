@@ -68,7 +68,7 @@ func (s *Server) ProbeRuntime(ctx context.Context, req *workerpb.ProbeRuntimeReq
 		if s.runtimeScanner == nil {
 			return &workerpb.ProbeRuntimeResponse{Valid: false, Error: "节点未启用运行时扫描能力"}, nil
 		}
-		c, ok := s.runtimeScanner.ProbePath(typ, path)
+		c, ok := s.runtimeScanner.ProbePathContext(ctx, typ, path)
 		if !ok {
 			return &workerpb.ProbeRuntimeResponse{
 				Valid: false,
@@ -88,13 +88,11 @@ func (s *Server) ProbeRuntime(ctx context.Context, req *workerpb.ProbeRuntimeReq
 		}, nil
 	case "jdk":
 		/*
-			JDK 的探测用 Manager.Probe 而不是包级 Detect：
-			Probe 会先 normalizeJDKHome，因此用户贴 home、贴 bin/java、贴 java 都能认；
-			Detect 只接受 home 目录，贴 bin/java 会失败。
-			Probe 不读实例状态，零值 Manager 即可（probe_test.go 里也是这么用的），
-			不必为了探测去装配带托管根的实例。
+			JDK 的探测用 Manager.ProbeContext 而不是包级 Detect：
+			ProbeContext 会先校验绝对路径并 normalizeJDKHome，因此用户贴 home、贴 bin/java、
+			贴 java 都能认，同时响应 gRPC ctx 取消与单次执行超时。
 		*/
-		info, err := (&jdk.Manager{}).Probe(path)
+		info, err := (&jdk.Manager{}).ProbeContext(ctx, path)
 		if err != nil {
 			return &workerpb.ProbeRuntimeResponse{Valid: false, Error: err.Error()}, nil
 		}

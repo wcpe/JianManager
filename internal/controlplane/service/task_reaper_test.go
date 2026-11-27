@@ -66,8 +66,8 @@ func TestTaskReaper_KeepsFreshTask(t *testing.T) {
 	require.Equal(t, model.TaskStateRunning, got.State, "刚开始的任务不该被当成失联")
 }
 
-// 已请求取消的任务交给心跳/取消链路收尾，回收器不许抢先置终态。
-func TestTaskReaper_SkipsCancelRequested(t *testing.T) {
+// 刚请求取消的任务在宽限期（taskCancelStaleAfter）内交给心跳/取消链路收尾，不抢先置终态。
+func TestTaskReaper_SkipsCancelRequestedWithinGrace(t *testing.T) {
 	db := newTaskTestDB(t)
 	svc := NewTaskService(db)
 
@@ -79,15 +79,70 @@ func TestTaskReaper_SkipsCancelRequested(t *testing.T) {
 		Updates(map[string]any{
 			"state":            model.TaskStateRunning,
 			"cancel_requested": true,
-			"updated_at":       time.Now().Add(-3 * taskStaleAfter),
+			"updated_at":       time.Now().Add(-taskStaleAfter - time.Minute),
 		}).Error)
 
 	require.Equal(t, 0, NewTaskReaper(db).sweepOnce(time.Now()),
-		"正在取消中的任务不该被回收器改写为失败")
+		"取消宽限期内不该被回收器提前收尾")
 
 	var got model.Task
 	require.NoError(t, db.Where("task_id = ?", "t-canceling").First(&got).Error)
 	require.Equal(t, model.TaskStateRunning, got.State)
+}
+
+// 取消请求超过宽限期仍无回执（如 Worker 重启丢内存任务表）必须回收为 canceled，否则永久死锁。
+func TestTaskReaper_ReclaimsStuckCancelRequested(t *testing.T) {
+	db := newTaskTestDB(t)
+	svc := NewTaskService(db)
+
+	_, _, err := svc.AdmitTask("t-cancel-stuck", TaskAdmitSpec{
+		NodeID: 1, Kind: model.TaskKindJDKInstall, Title: "安装 JDK 21",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&model.Task{}).Where("task_id = ?", "t-cancel-stuck").
+		Updates(map[string]any{
+			"state":            model.TaskStateRunning,
+			"cancel_requested": true,
+			"updated_at":       time.Now().Add(-taskCancelStaleAfter - time.Minute),
+		}).Error)
+
+	reaper := NewTaskReaper(db)
+	reaper.SetTaskService(svc)
+	require.Equal(t, 1, reaper.sweepOnce(time.Now()))
+
+	var got model.Task
+	require.NoError(t, db.Where("task_id = ?", "t-cancel-stuck").First(&got).Error)
+	require.Equal(t, model.TaskStateCanceled, got.State)
+	require.Contains(t, got.Error, "取消请求超时")
+}
+
+// 卡在 pending 的重型任务（如 CP 崩溃或 MarkRunning 失败）超时后也必须被回收。
+func TestTaskReaper_ReclaimsStalePendingAndLegacyRows(t *testing.T) {
+	db := newTaskTestDB(t)
+	svc := NewTaskService(db)
+
+	_, _, err := svc.AdmitTask("t-pending-stuck", TaskAdmitSpec{
+		NodeID: 1, Kind: model.TaskKindPkgInstall, Title: "安装全局包",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&model.Task{}).Where("task_id = ?", "t-pending-stuck").
+		UpdateColumn("updated_at", time.Now().Add(-2*taskStaleAfter)).Error)
+
+	// 兼容老库升级前 exclusive_group 为空的同类重型任务。
+	require.NoError(t, db.Create(&model.Task{
+		TaskID: "t-legacy", NodeID: 2, Kind: model.TaskKindJDKInstall,
+		State: model.TaskStateRunning, ExclusiveGroup: "", Title: "老 JDK 任务",
+	}).Error)
+	require.NoError(t, db.Model(&model.Task{}).Where("task_id = ?", "t-legacy").
+		UpdateColumn("updated_at", time.Now().Add(-2*taskStaleAfter)).Error)
+
+	require.Equal(t, 2, NewTaskReaper(db).sweepOnce(time.Now()))
+
+	for _, id := range []string{"t-pending-stuck", "t-legacy"} {
+		var got model.Task
+		require.NoError(t, db.Where("task_id = ?", id).First(&got).Error)
+		require.Equal(t, model.TaskStateFailed, got.State)
+	}
 }
 
 // 不参与互斥的长任务（备份等）不归本回收器管。

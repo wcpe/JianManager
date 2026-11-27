@@ -1122,6 +1122,7 @@ func main() {
 	// 任务进度靠 Worker 心跳上报，Worker 重启/节点掉线会让上报永久中断、记录永远停在 running。
 	// 本回收器按「多久没收到进展」判定失联并置 failed，释放互斥占用，避免需要人工改库。
 	taskReaper := service.NewTaskReaper(db)
+	taskReaper.SetTaskService(taskSvc)
 	taskReaper.Start()
 	defer taskReaper.Stop()
 

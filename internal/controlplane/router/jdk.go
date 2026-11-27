@@ -19,20 +19,27 @@ func NewJDKHandler(svc *service.JDKService) *JDKHandler { return &JDKHandler{svc
 // 的清单（JDKWithRefs），供节点页运行时清单表直接把占用和删除守卫前置到 UI。
 // 用查询参数而不是新端点：同一资源的两种视图，权限、路径、缓存键都该一致。
 func (h *JDKHandler) List(c *gin.Context) {
-	if !requireNodes(c, "node.read", "node.manage") {
-		return
-	}
-	nodeID, err := parseUintParam(c, "id")
-	if err != nil {
-		return
-	}
 	if c.Query("withRefs") == "1" {
+		if !requirePlatformAdmin(c) {
+			return
+		}
+		nodeID, err := parseUintParam(c, "id")
+		if err != nil {
+			return
+		}
 		jdks, err := h.svc.ListWithRefs(nodeID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询 JDK 引用关系失败"})
 			return
 		}
 		c.JSON(http.StatusOK, jdks)
+		return
+	}
+	if !requireNodes(c, "node.read", "node.manage") {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
 		return
 	}
 	jdks, err := h.svc.List(nodeID)

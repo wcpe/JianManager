@@ -156,3 +156,35 @@ func TestTaskExclusiveIndex_IdempotentMigration(t *testing.T) {
 		ExclusiveGroup: "runtime_install", Title: "y",
 	}).Error)
 }
+
+// 真实老库升级场景：升级前没有 exclusive_group 列，历史在途行该列为空串。
+// 迁移必须先按 kind 回填 exclusive_group 再归并，否则老行逃过自愈并永久锁死节点。
+func TestTaskExclusiveIndex_BackfillsAndHealsLegacyEmptyGroup(t *testing.T) {
+	db := newTaskIndexDB(t)
+	require.NoError(t, db.Create(&model.Task{
+		TaskID: "legacy-1", NodeID: 1, Kind: model.TaskKindJDKInstall, State: model.TaskStateRunning,
+		ExclusiveGroup: "", Title: "老库 JDK 1",
+	}).Error)
+	require.NoError(t, db.Create(&model.Task{
+		TaskID: "legacy-2", NodeID: 1, Kind: model.TaskKindRuntimeInstall, State: model.TaskStatePending,
+		ExclusiveGroup: "", Title: "老库 Node 2",
+	}).Error)
+	require.NoError(t, db.Create(&model.Task{
+		TaskID: "legacy-pkg", NodeID: 1, Kind: model.TaskKindPkgInstall, State: model.TaskStateRunning,
+		ExclusiveGroup: "", Title: "老库全局包",
+	}).Error)
+
+	require.NoError(t, migrateTaskExclusiveIndexes(db))
+
+	var t1, t2, tPkg model.Task
+	require.NoError(t, db.Where("task_id = ?", "legacy-1").First(&t1).Error)
+	require.NoError(t, db.Where("task_id = ?", "legacy-2").First(&t2).Error)
+	require.NoError(t, db.Where("task_id = ?", "legacy-pkg").First(&tPkg).Error)
+
+	require.Equal(t, "runtime_install", t1.ExclusiveGroup)
+	require.Equal(t, model.TaskStateFailed, t1.State, "同组较旧老行必须被收敛")
+	require.Equal(t, "runtime_install", t2.ExclusiveGroup)
+	require.Equal(t, model.TaskStatePending, t2.State, "同组最新老行应保留并补齐互斥组")
+	require.Equal(t, "pkg_install", tPkg.ExclusiveGroup)
+	require.Equal(t, model.TaskStateRunning, tPkg.State)
+}

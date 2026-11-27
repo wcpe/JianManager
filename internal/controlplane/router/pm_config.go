@@ -3,6 +3,7 @@ package router
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -99,6 +100,11 @@ func (h *PMConfigHandler) InstallPackage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误（name 必填）"})
 		return
 	}
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误（name 必填）"})
+		return
+	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
 	task, reused, err := h.svc.InstallGlobalPackageAsync(nodeID, in.Name, in.Version, userID)
@@ -106,13 +112,13 @@ func (h *PMConfigHandler) InstallPackage(c *gin.Context) {
 		h.mapErr(c, err)
 		return
 	}
-	if h.audit != nil {
-		h.audit.RecordSafe(userID, "node.pkg.install", "node", c.Param("id"), marshalAuditDetail(map[string]any{"name": in.Name, "version": in.Version}), c.ClientIP())
-	}
-	// reused=true：同参数的安装已在跑，返回的是已存在的任务（200，不是 202）。
+	// reused=true：同参数的安装已在跑，返回的是已存在的任务（200，不是 202），不重复记审计。
 	if reused {
 		c.JSON(http.StatusOK, gin.H{"taskId": task.TaskID, "task": task, "reused": true})
 		return
+	}
+	if h.audit != nil {
+		h.audit.RecordSafe(userID, "node.pkg.install", "node", c.Param("id"), marshalAuditDetail(map[string]any{"name": in.Name, "version": in.Version}), c.ClientIP())
 	}
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
 }

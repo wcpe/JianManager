@@ -13,12 +13,13 @@ import (
 // 真实守卫同源——否则界面会「看着能删、点了 409」。用一个表驱动用例同时校验。
 func TestJDKService_ListWithRefs_MatchesDeleteGuard(t *testing.T) {
 	cases := []struct {
-		name           string
-		direct         bool // 有实例 jdk_id 指向它
-		majorDep       bool // 有实例按大版本依赖
-		sameMajorOther bool // 同大版本还有另一个托管 JDK
-		expectBlocked  bool
-		expectReason   string
+		name              string
+		direct            bool // 有实例 jdk_id 指向它
+		majorDep          bool // 有实例按大版本依赖
+		sameMajorOther    bool // 同大版本还有另一个托管 JDK
+		sameMajorExternal bool // 同大版本有更新的外部登记 JDK
+		expectBlocked     bool
+		expectReason      string
 	}{
 		{name: "无引用：可删", expectBlocked: false, expectReason: ""},
 		{name: "直接绑定：拦", direct: true, expectBlocked: true, expectReason: JDKDeleteBlockedDirect},
@@ -28,6 +29,10 @@ func TestJDKService_ListWithRefs_MatchesDeleteGuard(t *testing.T) {
 		},
 		{
 			name: "大版本依赖 + 同版本还有托管：不拦（resolveJDKPath 会挑另一个）", majorDep: true, sameMajorOther: true,
+			expectBlocked: false, expectReason: "",
+		},
+		{
+			name: "大版本依赖 + 同版本有更新的外部 JDK：与 ListWithRefs 同源不拦", majorDep: true, sameMajorExternal: true,
 			expectBlocked: false, expectReason: "",
 		},
 	}
@@ -44,6 +49,10 @@ func TestJDKService_ListWithRefs_MatchesDeleteGuard(t *testing.T) {
 			if tc.sameMajorOther {
 				other := &model.NodeJDK{NodeID: node.ID, Vendor: "Zulu", MajorVersion: 21, Version: "21.0.3", Arch: "x64", Path: "/opt/jdk21b", Managed: true}
 				require.NoError(t, db.Create(other).Error)
+			}
+			if tc.sameMajorExternal {
+				ext := &model.NodeJDK{NodeID: node.ID, Vendor: "Temurin", MajorVersion: 21, Version: "21.0.5", Arch: "x64", Path: "/opt/jdk21-ext", Managed: false}
+				require.NoError(t, db.Create(ext).Error)
 			}
 
 			// 直接用原始 SQL 造实例，绕开 Create 的默认值逻辑（该用例只关心绑定列）。

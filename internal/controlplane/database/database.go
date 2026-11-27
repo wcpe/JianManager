@@ -906,28 +906,54 @@ func migrateTaskExclusiveIndexes(db *gorm.DB) error {
 		}
 	}
 
+	// 回填老库遗留的非终态重型任务：升级前没有 exclusive_group 列，历史行默认空串。
+	// 若不回填，collapseDuplicateActiveTasks 与 TaskReaper 会漏掉老行，
+	// 而运行期互斥检查又会按 kind 兜底拦截，导致节点永久死锁。
+	if err := backfillLegacyActiveExclusiveGroups(db); err != nil {
+		return fmt.Errorf("回填历史在途任务互斥组失败: %w", err)
+	}
+
+	needIdem := !db.Migrator().HasIndex(&model.Task{}, taskIdemIndexName)
+	needExclusive := !db.Migrator().HasIndex(&model.Task{}, taskExclusiveIndexName)
+	if needIdem || needExclusive {
+		if err := collapseDuplicateActiveTasks(db); err != nil {
+			return fmt.Errorf("归并历史重复在途任务失败: %w", err)
+		}
+	}
+
 	// 幂等键先建：它的冲突处理是「复用」，比互斥组的「拒绝」更优先。
-	if err := createTaskPartialUniqueIndex(db, taskIdemIndexName,
-		"(node_id, idem_key)", "idem_key <> ''"); err != nil {
+	if needIdem {
+		if err := createTaskPartialUniqueIndex(db, taskIdemIndexName,
+			"(node_id, idem_key)", "idem_key <> ''"); err != nil {
+			return err
+		}
+	}
+	if needExclusive {
+		return createTaskPartialUniqueIndex(db, taskExclusiveIndexName,
+			"(node_id, exclusive_group)", "exclusive_group <> ''")
+	}
+	return nil
+}
+
+// backfillLegacyActiveExclusiveGroups 为升级前残留的非终态重型任务补齐 exclusive_group。
+func backfillLegacyActiveExclusiveGroups(db *gorm.DB) error {
+	active := []model.TaskState{model.TaskStatePending, model.TaskStateRunning}
+	if err := db.Model(&model.Task{}).
+		Where("state IN ? AND exclusive_group = '' AND kind IN ?",
+			active, []string{model.TaskKindJDKInstall, model.TaskKindRuntimeInstall}).
+		UpdateColumn("exclusive_group", "runtime_install").Error; err != nil {
 		return err
 	}
-	return createTaskPartialUniqueIndex(db, taskExclusiveIndexName,
-		"(node_id, exclusive_group)", "exclusive_group <> ''")
+	return db.Model(&model.Task{}).
+		Where("state IN ? AND exclusive_group = '' AND kind = ?",
+			active, model.TaskKindPkgInstall).
+		UpdateColumn("exclusive_group", "pkg_install").Error
 }
 
 // createTaskPartialUniqueIndex 建一个「仅约束非终态行」的部分唯一索引（幂等）。
-//
-// 前置的数据自愈：老库里可能存在历史遗留的**多条同组非终态**任务（此前没有约束，
-// 而且 CP 重启会丢内存态，Worker 侧任务也跟着断，这些记录会永久停在 running）。
-// 直接建唯一索引会因为这批脏数据失败、CP 起不来——那是最糟的结果。
-// 所以建索引前先「归并」：每个 (node_id, 键) 只留最新的一条非终态，
-// 其余置为 failed 并写明原因。这不是掩盖问题，而是把无法继续的任务准确收尾。
 func createTaskPartialUniqueIndex(db *gorm.DB, name, columns, predicate string) error {
 	if db.Migrator().HasIndex(&model.Task{}, name) {
 		return nil
-	}
-	if err := collapseDuplicateActiveTasks(db); err != nil {
-		return fmt.Errorf("归并历史重复在途任务失败（索引 %s）: %w", name, err)
 	}
 	stmt := fmt.Sprintf(
 		"CREATE UNIQUE INDEX IF NOT EXISTS %s ON tasks %s WHERE state IN ('%s','%s') AND %s",
@@ -948,11 +974,6 @@ var taskCollapseKeys = []string{"exclusive_group", "idem_key"}
 //
 // 保留 id 最大（最新）的那条；其余置 failed。保留最新的理由：用户最近一次点的
 // 那次操作才是他此刻想做的，更早的那些要么已被放弃、要么本就该被覆盖。
-//
-// 【两轮收敛的结果是确定的，但可能有先后】当一个任务同时参与两个键时，第一轮留下它、
-// 第二轮可能把它收掉（若它在另一个键上不是最新）。两种顺序都收敛到"每个键只剩一条"，
-// 只是最终留下的行可能不同。这对建索引没影响（索引只要求不重复），
-// 且这本来就是对历史脏数据的一次性修复，不追求保留哪一条的确定性。
 func collapseDuplicateActiveTasks(db *gorm.DB) error {
 	// 按两个键各自收敛；用原生 SQL 一次扫描，避免把全表拉进内存。
 	for _, key := range taskCollapseKeys {
@@ -964,11 +985,10 @@ WHERE state IN ('%s','%s') AND %s <> ''
     SELECT MAX(id) FROM tasks
     WHERE state IN ('%s','%s') AND %s <> ''
     GROUP BY node_id, %s
-  )
-  AND %s <> ''`,
+  )`,
 			model.TaskStateFailed,
 			model.TaskStatePending, model.TaskStateRunning, key,
-			model.TaskStatePending, model.TaskStateRunning, key, key, key)
+			model.TaskStatePending, model.TaskStateRunning, key, key)
 		if err := db.Exec(stmt).Error; err != nil {
 			return err
 		}
