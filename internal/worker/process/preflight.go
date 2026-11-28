@@ -180,7 +180,8 @@ func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
 
 // checkWorkDirBusy 报告工作目录下是否已有活进程（防双开）。
 //
-// 判据与孤儿扫描同源（procInWorkDir）：进程 cwd 落在该目录之下，或其命令行引用了该目录。
+// 判据是**预检专用**的 preflightWorkDirOccupied（cwd 优先），**刻意比孤儿扫描的 procInWorkDir 严格**：
+// 命令行里出现工作目录路径只是「提到了它」，不代表进程在该目录运行。两者口径差异的理由见该函数注释。
 // 命中即失败，message 含占用 PID 与处置指引（接管或清理）。
 //
 // **必须排除本实例自己的进程树**（ownRootPID 及其全部后代）：重启 = 先停后启，CP 在**停止之前**
@@ -212,27 +213,71 @@ func checkWorkDirBusy(workDir string, ownRootPID int) error {
 		if _, isOwn := own[proc.PID]; isOwn {
 			continue // 本实例自己的进程（wrapper/java）：重启场景下属预期
 		}
-		if !procInWorkDir(proc, clean) {
-			continue
-		}
-		// 只把“像游戏服运行时的进程”算作占用。
-		//
-		// ## 为什么不能“目录下有东西就算占”
-		// 运维用 tmux 起的服，目录里除了 java 还有 tmux 的 shell（`-bash`）、`tee` 管道、
-		// 启动脚本外壳。它们占着这个目录但**不占端口、不持锁、不影响新进程启动**。
-		// 把它们当占用会得到真实机见过的现象：服已经停了（java 早退出），仅剩 tmux 空壳，
-		// 面板却拒绝启动并报“工作目录下已有活进程（pid=X：-bash），请先接管或清理”——
-		// 而运维对着一台已停的服根本无从“接管”，启动路径就死在了这里。
-		//
-		// 真正的冲突（端口占用、world/session.lock 被持）由后续的端口预检与运行时错误兜住，
-		// 不需要在这里用“目录非空”做代理判据。
-		if !looksLikeRuntimeCmdline(proc.Cmdline) {
+		// 占用判据（预检专用，cwd 优先 + 可执行体必须是运行时）：判据的取舍与误报现场见
+		// preflightWorkDirOccupied 的注释。这里**不**复用孤儿扫描的 procInWorkDir——
+		// 那条「命令行含工作目录路径」的子串判据会把一条无关的 cp/mkdir 命令判成占用（issue #101）。
+		if !preflightWorkDirOccupied(proc, clean) {
 			continue
 		}
 		return fmt.Errorf("工作目录下已有活进程（pid=%d：%s），可能为未纳管进程或残留，请先接管或清理：%s",
 			proc.PID, truncateCmdline(proc.Cmdline), clean)
 	}
 	return nil
+}
+
+// preflightWorkDirOccupied 报告进程是否「占着」工作目录——**启动预检专用**判据。
+//
+// ## 为什么不复用 procInWorkDir
+//
+// procInWorkDir 的第二判据是「命令行含工作目录路径」的子串匹配。那对孤儿扫描是**必需**的召回：
+// wrapper 死了而 Java 还活着时，Java 的 cwd 可能取不到（/proc 权限、进程刚 exec），只能靠 cmdline
+// 里的 jar 路径认出它；扫描漏报的后果是残留进程长期占着 session.lock 无人处置。
+//
+// 但同一判据用在预检上会**误报阻塞启动**（issue #101）：任何无关进程只要命令行里出现该路径字符串
+// 就算占用。真机现场是运维向工作目录拷贝 server.jar 的那条命令——
+//
+//	bash -c 'WD=/…/pa…; cp /tmp/jmchain/paper.jar $WD/paper.jar'
+//
+// 它同时穿透两道过滤：cmdline 含工作目录路径（procInWorkDir 命中），又含 `paper`/`.jar`
+// （looksLikeRuntimeCmdline 命中），于是**这条 cp 命令本身**被判成「工作目录下已有活进程」，
+// 启动被 PREFLIGHT_FAILED 拒掉；命令退出后重试即成功——是误报而非真占用。
+//
+// ## 判据（cwd 优先，命令行谨慎回退）
+//
+//  1. **cwd 可读时以 cwd 为准**：只有 cwd 落在工作目录之下**且**可执行体像运行时（java / 基岩版）
+//     才算占用。cwd 不在该目录之下即判不占用——命令行里出现该路径只是「提到了它」。
+//     「可执行体像运行时」这道附加条件排掉的是 cwd 恰在目录里的运维动作：运维用 tmux 起的服，
+//     目录里除了 java 还有 tmux 的 shell（`-bash`）、`tee` 管道、以及在目录里手工跑
+//     `cp paper.jar …` 的 shell。它们占着这个目录却**不占端口、不持锁、不影响新进程启动**；
+//     把它们当占用会得到真机见过的现象——服已停（java 早退出）只剩 tmux 空壳，面板却拒绝启动
+//     并报「工作目录下已有活进程（pid=X：-bash），请先接管或清理」，而运维对着一台已停的服
+//     根本无从「接管」，启动路径就死在这里。
+//  2. **cwd 取不到时**（Windows 常见、/proc 权限受限）谨慎回退：要求命令行含工作目录路径
+//     **且可执行体像运行时**，而不是「命令行任意位置出现 .jar」。后者正是上面那条 cp 命令穿透的原因。
+//
+// 已知的**刻意漏判**（换来不再误拒）：外部以 `cd /父目录 && java -jar <工作目录>/server.jar` 起的服，
+// cwd 落在父目录而非工作目录，本项不再拦。这种启动方式下游戏的世界目录也在父目录、不持工作目录的
+// world/session.lock，真正会冲突的是端口——由同一份预检里的 port_free 兜住。
+//
+// ## 取舍：预检宁可漏判，扫描不可漏报
+//
+// 两处判据**刻意不同口径**，且不得互相「统一」：
+//   - 预检漏判（少拦一次双开）有兜底——同一份预检里的 port_free，以及游戏服自身的
+//     world/session.lock 都会拦住真正的双开；反过来把正常启动误拒，运维没有任何绕过手段
+//     （面板只会回 PREFLIGHT_FAILED，且往往重试才成功，表现为随机不可启动）。
+//   - 孤儿扫描漏报没有兜底：残留进程长期占锁、平台显示停止而磁盘在跑，只能靠人工发现。
+//
+// 故收紧只发生在预检这一侧，procInWorkDir 与 looksLikeRuntimeCmdline 对扫描保持原样。
+func preflightWorkDirOccupied(proc ScannedProcess, workDir string) bool {
+	if workDir == "" {
+		return false
+	}
+	// cwd 是进程身份的一部分：取到了就以它为准，不再看命令行里是否「提到」该路径。
+	if proc.Cwd != "" {
+		return pathUnder(proc.Cwd, workDir) && looksLikeRuntimeExecutable(proc.Cmdline)
+	}
+	// cwd 取不到：只能靠命令行，但要求**可执行体**像运行时——避免「命令行任意位置含 .jar」误判。
+	return looksLikeRuntimeExecutable(proc.Cmdline) && strings.Contains(proc.Cmdline, workDir)
 }
 
 // ownProcessTree 返回以 rootPID 为根、在给定进程快照里的全部后代 PID（含 root 自身）。
