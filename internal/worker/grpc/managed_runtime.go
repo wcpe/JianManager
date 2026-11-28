@@ -39,6 +39,11 @@ func (s *Server) ManagedRuntimeSnapshot() *workerpb.ManagedRuntimeSnapshot {
 	botRuntime := manager.RuntimeSnapshot()
 	if !botRuntime.Running || botRuntime.PID <= 0 {
 		result.BotUnavailableReason = "Bot Worker 未启动"
+		// 分片部署下「全部片启动失败」（如 mineflayer 未装齐）也落进这个分支：
+		// 真实原因记在容量快照里，只报「未启动」会把运维引向错误方向（issue #102）。
+		if reason := botRuntime.Capacity.UnavailableReason; reason != "" {
+			result.BotUnavailableReason = reason
+		}
 		result.BotCapacityUnavailableReason = result.BotUnavailableReason
 		return result
 	}
