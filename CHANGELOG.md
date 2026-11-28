@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+### 修复
+- **启动预检把无关命令行判成「工作目录下已有活进程」（[#101](https://github.com/wcpe/JianManager/issues/101)）**：`work_dir_busy` 原判据与孤儿扫描同源（`procInWorkDir` 的「命令行含工作目录路径」子串匹配 + `looksLikeRuntimeCmdline` 的 `.jar`/`paper` 标记），任何无关进程只要命令行里出现该路径字符串即算占用——真机现场是运维向实例目录拷贝 `server.jar` 的那条 `bash -c 'cp … paper.jar'` 命令本身被判成活进程，启动被 `PREFLIGHT_FAILED` 拒掉，命令退出后重试即成功（误报而非真占用）。现为预检引入**独立判据**（`preflightWorkDirOccupied`）：cwd 可读时以 cwd 为准（须落在该目录之下**且**可执行体像运行时，即 `java`/`bedrock_server`），cwd 取不到时（Windows 常见、/proc 权限受限）才谨慎回退到「命令行含路径 + 可执行体像运行时」——不再因命令行任意位置出现 `.jar` 而误判。孤儿扫描的 `procInWorkDir` 与 `looksLikeRuntimeCmdline` **保持不变**：那两处需要「wrapper 死了但 Java 还活着」的宽口径召回，漏报会让残留进程长期占锁无人处置。取舍是预检宁可漏判（有 `port_free` 与游戏服自身 world/session.lock 兜底），扫描不可漏报（无兜底）。附单测：拷贝/打包命令不误报、cwd 命中即判占用（含子目录与基岩版）、cwd 在目录内但非运行时不误报、cwd 为空的两种回退行为、以及守护扫描宽口径不被收紧的护栏用例。
 ## [0.25.0]（2026-11-27）
 
 > 运维前置提示（发版笔记）：
