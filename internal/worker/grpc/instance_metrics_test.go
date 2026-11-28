@@ -426,6 +426,57 @@ func captureMetricsProcessRef(proc *psproc.Process) (metricsProcessRef, error) {
 	return metricsProcessRef{pid: proc.Pid, name: name, exe: exe, createTime: createTime}, nil
 }
 
+// treeLink 进程树快照里的一条父子线索：判定「是否真是后代」只需父 PID 与创建时间，
+// 不需要名称/可执行路径——这样即便幻影本身是无权读取身份的系统进程，剪枝也照样成立。
+type treeLink struct {
+	ppid       int32
+	createTime int64
+}
+
+// prunePhantomDescendants 从整树快照里剔除「幻影子进程」，只返回**能证明是本实例后代**的 PID。
+//
+// 为什么需要它（CI 实测成因）：gopsutil 在 Windows 上枚举子进程的方式是
+// CreateToolhelp32Snapshot + 比对 ParentProcessID，而 Windows **不会**重新挂靠孤儿进程——
+// 父进程退出后，其子进程仍保留陈旧的 ParentProcessID。一旦该 PID 被内核复用给本用例刚起的
+// 实例根进程，「旧父进程留下的那个孩子」就会被枚举成本实例的子进程。
+// 它不是本用例的进程（往往也不会退出），但 watchTree 会照样给它开句柄并纳入清理等待，
+// 于是 t.Cleanup 里那句「删除夹具临时目录前必须确认进程树退出」在 15s 后失败：
+// CI（Windows core shard 2）实测报错 "PID 6536 尚未确认退出"，而当时用例正文已全部通过。
+//
+// 判据是纯因果的、不依赖任何时钟余量：**子进程的创建时间不可能早于其父进程**。
+// 从根按 ParentProcessID 向下遍历，凡「创建时间早于其声称的父进程」的边一律不认，
+// 由此不可达的节点即幻影。真实后代（wrapper → shell → java 四层）创建时间严格递增，
+// 全部保留，断言强度不变。
+//
+// 只剔除、不杀：被剔除的 PID 属他人进程，本夹具绝不处置它。
+func prunePhantomDescendants(rootPID int32, links map[int32]treeLink) []int32 {
+	if _, ok := links[rootPID]; !ok {
+		return nil
+	}
+	children := make(map[int32][]int32, len(links))
+	for pid, link := range links {
+		children[link.ppid] = append(children[link.ppid], pid)
+	}
+	kept := make([]int32, 0, len(links))
+	seen := map[int32]bool{rootPID: true}
+	queue := []int32{rootPID}
+	for len(queue) > 0 {
+		parentPID := queue[0]
+		queue = queue[1:]
+		parentCreate := links[parentPID].createTime
+		for _, childPID := range children[parentPID] {
+			child := links[childPID]
+			if seen[childPID] || child.createTime < parentCreate {
+				continue // 创建时间早于父：不可能是该父的后代（陈旧 ParentProcessID）
+			}
+			seen[childPID] = true
+			kept = append(kept, childPID)
+			queue = append(queue, childPID)
+		}
+	}
+	return kept
+}
+
 func sameMetricsExecutable(a, b string) bool {
 	if !filepath.IsAbs(a) || !filepath.IsAbs(b) {
 		return false
@@ -560,6 +611,25 @@ func (f *metricsProcessFixture) watchTree() ([]metricsProcessWatch, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 先按「父 PID + 创建时间」剪掉幻影子进程（判据与成因见 prunePhantomDescendants），
+	// 清理阶段只等待能证明是本实例后代的 PID——否则 Windows 上父 PID 复用会把它人进程
+	// 当成自己的子进程，清理必然等不到它退出。
+	// 父 PID 或创建时间读不出来时不写入线索：该节点连父子关系都无法证明，不纳入等待；
+	// 根与 java 的退出另有独立监视（rootDone 与 .ready 身份句柄），覆盖不受影响。
+	links := make(map[int32]treeLink, len(procs))
+	for _, proc := range procs {
+		ppid, ppidErr := proc.Ppid()
+		created, createErr := proc.CreateTime()
+		if ppidErr != nil || createErr != nil {
+			continue
+		}
+		links[proc.Pid] = treeLink{ppid: ppid, createTime: created}
+	}
+	realDescendants := make(map[int32]bool, len(links))
+	for _, pid := range prunePhantomDescendants(f.rootPID, links) {
+		realDescendants[pid] = true
+	}
+
 	watches := make([]metricsProcessWatch, 0, len(procs))
 	javaInTree := false
 	adopted := false
@@ -572,8 +642,12 @@ func (f *metricsProcessFixture) watchTree() ([]metricsProcessWatch, error) {
 	}()
 	for _, proc := range procs {
 		if proc.Pid == f.javaWatch.pid {
-			javaInTree = true // Java 已有独立监测句柄，无需重复打开。
-			continue
+			// Java 身份由 .ready 记录 + 句柄复核确证（比树快照更强），此处只确认它仍在树里。
+			javaInTree = true
+			continue // Java 已有独立监测句柄，无需重复打开。
+		}
+		if proc.Pid != f.rootPID && !realDescendants[proc.Pid] {
+			continue // 幻影子进程：不是本实例的进程，既不监视也不等待
 		}
 		ref, err := captureMetricsProcessRef(proc)
 		if err != nil {

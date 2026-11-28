@@ -41,9 +41,25 @@ func TestOrphanScan_WrapperGoneJavaAlive(t *testing.T) {
 		uuid := "scan-wrapper-gone"
 		pidPath := writeOrphanPIDRecord(t, dir, uuid)
 
-		s, _, audits := newTestScanner(t, dir, OrphanPolicyWarn)
+		s, m, audits := newTestScanner(t, dir, OrphanPolicyWarn)
 		// wrapper 死，Java 活。
 		s.pidAlive = func(pid int) bool { return pid == testJavaPID }
+		// **必须把同一份存活读数也注入 Manager**（原写法只注入扫描器，是 CI 偶发红的成因）。
+		//
+		// ScanOnce 的第 0 相 autoAdoptUnmanaged 走的是 Manager 侧的 m.pidAlive
+		// （经 m.recoverPIDAlive 注入，nil 即真实 daemon.IsPIDAlive），与扫描器的
+		// s.pidAlive 是两条独立通道。不注入时，第 0 相会拿夹具的常量 PID 4242/4243 去查
+		// **真实进程表**：只要运行机器上恰好有进程占着这两个 PID，这条 PID 记录就会被判成
+		// 「wrapper 与 Java 均存活」的未纳管活进程对，于是多产出一条 unmanaged_live_runtime
+		// 发现（并连带多落审计），require.Len(findings, 1) 直接失败。
+		// CI 实测（Windows core shard 2）报错正是如此：findings 有 2 条，首条即
+		// unmanaged_live_runtime（PIDs [4242 4243]）。
+		//
+		// 注入后两相共用同一份夹具读数（wrapper 死 / Java 活），本用例的结论
+		// 「warn 档只告警不处置」不依赖运行机器的进程表，可确定性复现。
+		// 该写法与 auto 子用例（下方 m.recoverPIDAlive = s.pidAlive）及
+		// newUnmanagedDowngradeFixture 的既有惯例一致。
+		m.recoverPIDAlive = s.pidAlive
 
 		findings := s.ScanOnce()
 		require.Len(t, findings, 1)
