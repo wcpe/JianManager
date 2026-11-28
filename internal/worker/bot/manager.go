@@ -101,6 +101,10 @@ type RuntimeSnapshot struct {
 	// ShardPIDs 各分片的 bot-worker 子进程 PID；单进程部署时长度 1 且等于 PID。
 	// 由分片管理器填充，供运行时诊断确认「确实起了 N 个进程」。
 	ShardPIDs []int
+	// Shards 各分片健康与启动重试状态（仅分片管理器填充，单进程部署为 nil）。
+	// 暴露它是因为「分片启动失败 → 容量永久为 0」必须能在诊断面看到具体是哪片、
+	// 为什么失败、下次何时重试，而不是只看到一句笼统的容量不足（issue #102）。
+	Shards []ShardHealthInfo
 }
 
 // ScriptProgress 脚本进度。

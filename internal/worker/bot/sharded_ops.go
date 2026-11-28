@@ -36,6 +36,11 @@ const shardCallTimeout = 30 * time.Second
 // 合并规则：保持调用方传入的顺序（CP 侧按 assignments 顺序读取 results）。
 // 每片的回执按其收到的 configs 顺序拼接，最终按原下标回填。
 func (s *ShardedManager) ApplyBotBatch(ctx context.Context, requestID, batchID, idempotencyKey string, configs []BotConfig) (*BotWorkerEvent, error) {
+	// 要容量之前先给未就绪分片一次惰性自愈机会（带退避）。
+	// 动机（issue #102）：分片曾因 mineflayer 未装齐而启动失败，此后没有 Ready 片，
+	// 一切创建都报「分片容量不足」，运维装齐依赖后也只能重启整个 worker 才恢复。
+	// 这里把「真的要 Bot」的入口当成重试触发点：健康路径上零副作用（就绪片直接跳过）。
+	s.recoverUnreadyShards(ctx, "apply-batch")
 	if len(s.shards) == 1 {
 		event, err := s.shards[0].ApplyBotBatch(ctx, requestID, batchID, idempotencyKey, configs)
 		if err == nil {
@@ -91,13 +96,25 @@ func (s *ShardedManager) ApplyBotBatch(ctx context.Context, requestID, batchID, 
 		Accepted:       true,
 	}
 	// 容量耗尽的先标结果，保证调用方拿到完整长度的 results。
+	//
+	// 若「无片可用」的根因是分片未就绪（而不是真的塞满了），必须把根因带出来：
+	// 只报「分片容量不足」会把「依赖没装齐」误导成「容量用完了」，运维会去加容量而不是查依赖。
+	// 分片已就绪但被塞满时 unavailableDetail 返回空串，文案保持原样。
+	unreadyDetail := ""
+	if len(overflow) > 0 {
+		unreadyDetail = s.unavailableDetail()
+	}
 	for _, i := range overflow {
-		merged.Results[i] = BotItemResult{
+		result := BotItemResult{
 			BotID:     configs[i].ID,
 			Accepted:  false,
 			ErrorCode: "capacity_insufficient",
 			Error:     "分片容量不足",
 		}
+		if unreadyDetail != "" {
+			result.Error = "分片容量不足：" + unreadyDetail
+		}
+		merged.Results[i] = result
 		merged.Accepted = false
 	}
 
@@ -272,10 +289,18 @@ func (s *ShardedManager) GetBot(botID string) (*BotState, bool) {
 }
 
 // CreateBots 分配后创建（单 bot 路径旧接口）。
+//
+// 先给未就绪分片一次惰性自愈机会（见 ApplyBotBatch 同处说明）：旧路径此前在分片
+// 启动失败后必然返回「分片容量不足，无法创建 Bot」，装齐依赖也无从恢复。
 func (s *ShardedManager) CreateBots(configs []BotConfig) error {
+	// 该旧接口签名没有 ctx：传入 nil 表示只受 recoveryWait 与 rootCtx（Stop）约束。
+	s.recoverUnreadyShards(nil, "create-bots")
 	for _, cfg := range configs {
 		idx, sh := s.pickShard()
 		if sh == nil {
+			if detail := s.unavailableDetail(); detail != "" {
+				return fmt.Errorf("分片容量不足，无法创建 Bot %s：%s", cfg.ID, detail)
+			}
 			return fmt.Errorf("分片容量不足，无法创建 Bot %s", cfg.ID)
 		}
 		if err := sh.CreateBots([]BotConfig{cfg}); err != nil {
